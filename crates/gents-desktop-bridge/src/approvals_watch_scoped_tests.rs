@@ -81,7 +81,7 @@ impl Workspace {
             "kind": "command", "argv": ["echo", "approved"],
             "cwd": self.settings.workspace.path,
             "root": self.root.path().canonicalize().unwrap(),
-            "policy": gents::toolset::CommandExecutionPolicy::write_capable(),
+            "policy": gents::tools::native::CommandExecutionPolicy::write_capable(),
         });
         serde_json::from_value(value).unwrap()
     }
@@ -225,6 +225,41 @@ async fn changing_permissions_cancels_the_waiting_question() {
         .to_string()
         .contains("Workspace permissions changed"));
     assert!(!fixture.question_file().exists());
+}
+
+#[test]
+fn command_question_reports_execution_network_without_changing_approval_policy() {
+    use crate::plugin_access::{ApprovalSubjectView, PluginApprovalView};
+    use gents::tools::native::{CommandExecutionMode as Mode, CommandNetworkMode as Network};
+
+    let fixture = Workspace::new();
+    for mode in [
+        Mode::WorkspaceWrite,
+        Mode::ArtifactWrite,
+        Mode::ReadOnly,
+        Mode::Unrestricted,
+    ] {
+        for network in [Network::Inherit, Network::Enabled, Network::Disabled] {
+            let policy = gents::tools::native::CommandExecutionPolicy::write_capable()
+                .with_mode(mode)
+                .with_network_mode(network);
+            let mut wire = serde_json::to_value(fixture.command()).unwrap();
+            wire["binding"]["action"]["policy"] = serde_json::to_value(&policy).unwrap();
+            let request: Request = serde_json::from_value(wire).unwrap();
+            let view = PluginApprovalView::from(&request);
+            let ApprovalSubjectView::Command {
+                execution_mode,
+                network_mode,
+                ..
+            } = view.subject
+            else {
+                panic!("expected a command approval");
+            };
+            assert_eq!(execution_mode, mode);
+            assert_eq!(network_mode, policy.effective_network_mode());
+            assert_eq!(request.command().unwrap().policy.network_mode, network);
+        }
+    }
 }
 
 #[tokio::test]

@@ -9,6 +9,7 @@ use crate::backend_provider::BackendProviderKind;
 use crate::claude_messages_body::{build_messages_body, ADVERTISED_REASONING_EFFORTS_PARAM};
 use crate::openai_wire::OpenAiWireApi;
 use crate::provider_input::ProviderInputCounter;
+use gents_protocol::message::Message;
 
 #[derive(Clone)]
 struct ClaudeCheckpointModel {
@@ -229,8 +230,8 @@ async fn exercise(reject_guidance: bool) {
                     "a breakpoint closes the shared chunk history: {marked:?}"
                 );
                 assert!(
-                    marked.contains(&format!("messages[{prefix}]")),
-                    "{marked:?}"
+                    !marked.contains(&format!("messages[{prefix}]")),
+                    "the final instruction is never written to the cache: {marked:?}"
                 );
                 assert!(marked.contains(&"system".to_string()), "{marked:?}");
             }
@@ -238,7 +239,7 @@ async fn exercise(reject_guidance: bool) {
         for (guided, body) in requests.iter() {
             assert_eq!(body["output_config"]["effort"], "high");
             assert_eq!(body["output_config"].get("format").is_some(), *guided);
-            assert!(body.get("tools").is_none());
+            assert_eq!(body["tools"], json!([]));
         }
     }
 }

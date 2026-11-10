@@ -1,12 +1,12 @@
-use gents::config_client::GraphqlEndpoint;
+use gents::store::config_client::GraphqlEndpoint;
 use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
-use tokio::process::{Child, Command};
+use tokio::process::Child;
 
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 use gents_protocol::row::{
     decode_node_readiness_snapshot, NodeReadinessRow, NodeReadinessSnapshot,
 };
@@ -25,7 +25,7 @@ pub(super) fn spawn_server_with_args_and_env(
 ) -> Result<Child> {
     let file = std::fs::File::create(log).with_context(|| format!("creating {}", log.display()))?;
     let errfile = file.try_clone()?;
-    let mut cmd = Command::new(bin);
+    let mut cmd = tokio::process::Command::new(bin);
     cmd.args([
         "server",
         "--home",
@@ -50,7 +50,7 @@ pub(super) fn spawn_server_with_args_and_env(
     cmd.env("GENTS_REGISTRY_STALE_MS", "300000");
     cmd.env("GENTS_ENDPOINT_HEARTBEAT_MS", "1000");
     cmd.stdout(file).stderr(errfile).kill_on_drop(true);
-    cmd.spawn().context("spawning pack server")
+    gents::tools::exec::native_spawn::spawn_tokio(&mut cmd).context("spawning pack server")
 }
 
 pub(super) async fn wait_runtime_ready(

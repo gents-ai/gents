@@ -1,11 +1,12 @@
 use crate::client::{ClientStore, ClientStoreRows};
-use gents::session::canonical_rows::TranscriptMessageRow;
+use gents_protocol::output::rows::TranscriptMessageRow;
 use gents_protocol::output::{MessagePublication, MessageRole, OutputOutcome, TranscriptMessage};
 
 fn header(id: &str) -> TranscriptMessageRow {
     TranscriptMessageRow {
         doc_id: id.into(),
         message: TranscriptMessage {
+            native_request_id: None,
             message_key: id.into(),
             session_id: "session-1".into(),
             node_did: "did:node:1".into(),

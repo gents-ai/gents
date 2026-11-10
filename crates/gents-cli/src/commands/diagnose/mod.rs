@@ -52,9 +52,9 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
                 let unavailable = summary
                     .unavailable_agents
                     .iter()
-                    .map(|(agent_id, reason)| {
+                    .map(|(agent_did, reason)| {
                         json!({
-                            "agent_id": agent_id,
+                            "agent_did": agent_did,
                             "reason": reason,
                             "message": reason.public_message(),
                             "next_step": (*reason == gents_protocol::node_readiness::AgentReadinessUnavailableReason::ToolSurfaceUnavailable)
@@ -99,35 +99,47 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         .and_then(Value::as_bool)
         .unwrap_or(false);
 
-    let agent_ids = bundle
+    let agent_dids = bundle
         .as_ref()
         .into_iter()
         .flat_map(|bundle| &bundle.config.agents)
-        .map(|agent| agent.agent_id.as_str())
+        .map(|agent| agent.agent_did.as_str())
         .collect::<std::collections::BTreeSet<_>>();
-    let default_agent_id = bundle
+    let default_agent_did = bundle
         .as_ref()
-        .and_then(|bundle| bundle.config.node.default_agent_id.as_deref());
-    let default_agent_check = match default_agent_id {
-        Some(agent_id) if agent_ids.contains(agent_id) => json!({
+        .and_then(|bundle| bundle.config.node.default_agent_did.as_deref());
+    let default_agent_check = match default_agent_did {
+        Some(agent_did) if agent_dids.contains(agent_did) => json!({
             "ok": true,
-            "default_agent_id": agent_id,
+            "default_agent_did": agent_did,
         }),
-        Some(agent_id) => json!({
+        Some(agent_did) => json!({
             "ok": false,
-            "default_agent_id": agent_id,
-            "error": format!("default agent {} is not present in Agent documents", agent_id),
+            "default_agent_did": agent_did,
+            "error": format!("default agent {} is not present in Agent documents", agent_did),
         }),
         None => json!({
             "ok": false,
-            "error": format!("Node {} is missing or has no default_agent_id", node_did),
+            "error": format!("Node {} is missing or has no default_agent_did", node_did),
         }),
     };
     let tool_ceiling_check = diagnose_tool_ceiling(init_config.as_ref());
-    let accounts = gents::oauth_credential::list_accounts(&access, &node_did).await;
+    let accounts = gents::inference::auth::credential::list_accounts(&access, &node_did).await;
+    let runtime_probes = match &access {
+        gents::store::config_client::ConfigAccess::Graphql(endpoint) => {
+            crate::commands::status::load_runtime_backend_probes(endpoint, &node_did).await
+        }
+        _ => Default::default(),
+    };
     let backend_reports = match bundle.as_ref() {
         Some(bundle) => {
-            diagnose_backends(&access, bundle, accounts.as_deref().unwrap_or_default()).await
+            diagnose_backends(
+                &access,
+                bundle,
+                accounts.as_deref().unwrap_or_default(),
+                &runtime_probes,
+            )
+            .await
         }
         None => Vec::new(),
     };
@@ -187,17 +199,19 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         .unwrap_or(false);
     let principal_present = bundle.is_some();
 
-    let chatgpt_provider = gents::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
-    let mut chatgpt_auth_check = match gents::oauth_credential::resolve_oauth_credential(
+    let chatgpt_provider = gents::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
+    let mut chatgpt_auth_check = match gents::inference::auth::credential::resolve_oauth_credential(
         &access,
         &node_did,
         chatgpt_provider,
-        gents::oauth_credential::AccountPick::ProviderDefault,
+        gents::inference::auth::credential::AccountPick::ProviderDefault,
     )
     .await
     {
         Ok(Some(credential))
-            if gents::oauth_credential::token_is_fresh(credential.access_token_expires_at) =>
+            if gents::inference::auth::credential::token_is_fresh(
+                credential.access_token_expires_at,
+            ) =>
         {
             json!({
                 "ok": true,
@@ -213,19 +227,19 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
             "credential_id": credential.credential_id,
             "provider": credential.provider,
             "expires_at": credential.access_token_expires_at,
-            "guidance": gents::oauth_credential::classify_chatgpt_auth_error(
+            "guidance": gents::inference::auth::credential::classify_chatgpt_auth_error(
                 &node_did,
                 chatgpt_provider,
-                &gents::oauth_credential::OAuthAuthProblem::Expired,
+                &gents::inference::auth::credential::OAuthAuthProblem::Expired,
             ),
         }),
         Ok(None) => json!({
             "ok": false,
             "provider": chatgpt_provider,
-            "guidance": gents::oauth_credential::classify_chatgpt_auth_error(
+            "guidance": gents::inference::auth::credential::classify_chatgpt_auth_error(
                 &node_did,
                 chatgpt_provider,
-                &gents::oauth_credential::OAuthAuthProblem::Missing,
+                &gents::inference::auth::credential::OAuthAuthProblem::Missing,
             ),
         }),
         Err(error) => json!({
@@ -235,17 +249,19 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         }),
     };
 
-    let xai_provider = gents::xai_grok_oauth::XAI_OAUTH_PROVIDER;
-    let mut xai_auth_check = match gents::oauth_credential::resolve_oauth_credential(
+    let xai_provider = gents::inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
+    let mut xai_auth_check = match gents::inference::auth::credential::resolve_oauth_credential(
         &access,
         &node_did,
         xai_provider,
-        gents::oauth_credential::AccountPick::ProviderDefault,
+        gents::inference::auth::credential::AccountPick::ProviderDefault,
     )
     .await
     {
         Ok(Some(credential))
-            if gents::oauth_credential::token_is_fresh(credential.access_token_expires_at) =>
+            if gents::inference::auth::credential::token_is_fresh(
+                credential.access_token_expires_at,
+            ) =>
         {
             json!({
                 "ok": true,
@@ -259,19 +275,19 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
             "credential_id": credential.credential_id,
             "provider": credential.provider,
             "expires_at": credential.access_token_expires_at,
-            "guidance": gents::xai_grok_oauth::classify_xai_auth_error(
+            "guidance": gents::inference::clients::xai_grok::classify_xai_auth_error(
                 &node_did,
                 xai_provider,
-                &gents::oauth_credential::OAuthAuthProblem::Expired,
+                &gents::inference::auth::credential::OAuthAuthProblem::Expired,
             ),
         }),
         Ok(None) => json!({
             "ok": false,
             "provider": xai_provider,
-            "guidance": gents::xai_grok_oauth::classify_xai_auth_error(
+            "guidance": gents::inference::clients::xai_grok::classify_xai_auth_error(
                 &node_did,
                 xai_provider,
-                &gents::oauth_credential::OAuthAuthProblem::Missing,
+                &gents::inference::auth::credential::OAuthAuthProblem::Missing,
             ),
         }),
         Err(error) => json!({
@@ -281,17 +297,19 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         }),
     };
 
-    let claude_provider = gents::claude_oauth::CLAUDE_OAUTH_PROVIDER;
-    let mut claude_auth_check = match gents::oauth_credential::resolve_oauth_credential(
+    let claude_provider = gents::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
+    let mut claude_auth_check = match gents::inference::auth::credential::resolve_oauth_credential(
         &access,
         &node_did,
         claude_provider,
-        gents::oauth_credential::AccountPick::ProviderDefault,
+        gents::inference::auth::credential::AccountPick::ProviderDefault,
     )
     .await
     {
         Ok(Some(credential))
-            if gents::oauth_credential::token_is_fresh(credential.access_token_expires_at) =>
+            if gents::inference::auth::credential::token_is_fresh(
+                credential.access_token_expires_at,
+            ) =>
         {
             json!({
                 "ok": true,
@@ -305,19 +323,19 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
             "credential_id": credential.credential_id,
             "provider": credential.provider,
             "expires_at": credential.access_token_expires_at,
-            "guidance": gents::claude_oauth::classify_claude_auth_error(
+            "guidance": gents::inference::auth::claude::classify_claude_auth_error(
                 &node_did,
                 claude_provider,
-                &gents::oauth_credential::OAuthAuthProblem::Expired,
+                &gents::inference::auth::credential::OAuthAuthProblem::Expired,
             ),
         }),
         Ok(None) => json!({
             "ok": false,
             "provider": claude_provider,
-            "guidance": gents::claude_oauth::classify_claude_auth_error(
+            "guidance": gents::inference::auth::claude::classify_claude_auth_error(
                 &node_did,
                 claude_provider,
-                &gents::oauth_credential::OAuthAuthProblem::Missing,
+                &gents::inference::auth::credential::OAuthAuthProblem::Missing,
             ),
         }),
         Err(error) => json!({
@@ -331,18 +349,18 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         (
             &mut chatgpt_auth_check,
             chatgpt_provider,
-            gents::oauth_credential::classify_chatgpt_auth_error
-                as fn(&str, &str, &gents::oauth_credential::OAuthAuthProblem) -> String,
+            gents::inference::auth::credential::classify_chatgpt_auth_error
+                as fn(&str, &str, &gents::inference::auth::credential::OAuthAuthProblem) -> String,
         ),
         (
             &mut xai_auth_check,
             xai_provider,
-            gents::xai_grok_oauth::classify_xai_auth_error,
+            gents::inference::clients::xai_grok::classify_xai_auth_error,
         ),
         (
             &mut claude_auth_check,
             claude_provider,
-            gents::claude_oauth::classify_claude_auth_error,
+            gents::inference::auth::claude::classify_claude_auth_error,
         ),
     ] {
         check["accounts"] = match &accounts {
@@ -361,7 +379,9 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
 
     let chatgpt_backend_configured = backend_reports.iter().any(|report| {
         report.get("provider_kind").and_then(Value::as_str)
-            == Some(gents::backend_provider::BackendProviderKind::ChatGptCodex.as_str())
+            == Some(
+                gents::inference::backends::provider::BackendProviderKind::ChatGptCodex.as_str(),
+            )
             && report.get("enabled").and_then(Value::as_bool) == Some(true)
     });
     let chatgpt_auth_ok = !chatgpt_backend_configured
@@ -369,7 +389,9 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
 
     let xai_backend_configured = backend_reports.iter().any(|report| {
         report.get("provider_kind").and_then(Value::as_str)
-            == Some(gents::backend_provider::BackendProviderKind::XaiGrokOAuth.as_str())
+            == Some(
+                gents::inference::backends::provider::BackendProviderKind::XaiGrokOAuth.as_str(),
+            )
             && report.get("enabled").and_then(Value::as_bool) == Some(true)
     });
     let xai_auth_ok =
@@ -377,7 +399,10 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
 
     let claude_backend_configured = backend_reports.iter().any(|report| {
         report.get("provider_kind").and_then(Value::as_str)
-            == Some(gents::backend_provider::BackendProviderKind::ClaudeCliSubscription.as_str())
+            == Some(
+                gents::inference::backends::provider::BackendProviderKind::ClaudeCliSubscription
+                    .as_str(),
+            )
             && report.get("enabled").and_then(Value::as_bool) == Some(true)
     });
     let claude_auth_ok = claude_auth_gate(claude_backend_configured, &claude_auth_check);
@@ -449,12 +474,12 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
 }
 
 fn accounts_json(
-    accounts: &[&gents::oauth_credential::AccountSummary],
+    accounts: &[&gents::inference::auth::credential::AccountSummary],
     node_did: &str,
     provider: &str,
-    classify: fn(&str, &str, &gents::oauth_credential::OAuthAuthProblem) -> String,
+    classify: fn(&str, &str, &gents::inference::auth::credential::OAuthAuthProblem) -> String,
 ) -> Value {
-    use gents::oauth_credential::OAuthAuthProblem;
+    use gents::inference::auth::credential::OAuthAuthProblem;
     accounts
         .iter()
         .map(|account| {
@@ -462,7 +487,9 @@ fn accounts_json(
                 Some(OAuthAuthProblem::WrongMode {
                     found_mode: "disabled".into(),
                 })
-            } else if !gents::oauth_credential::token_is_fresh(account.access_token_expires_at) {
+            } else if !gents::inference::auth::credential::token_is_fresh(
+                account.access_token_expires_at,
+            ) {
                 Some(OAuthAuthProblem::Expired)
             } else {
                 None
@@ -486,7 +513,7 @@ mod tests {
     use serde_json::json;
 
     use super::{accounts_json, claude_auth_gate};
-    use gents::oauth_credential::AccountSummary;
+    use gents::inference::auth::credential::AccountSummary;
 
     fn account(label: &str, enabled: bool, expires_in_minutes: i64) -> AccountSummary {
         AccountSummary {
@@ -509,7 +536,7 @@ mod tests {
             &accounts.iter().collect::<Vec<_>>(),
             "did:key:z6MkT",
             "claude-subscription",
-            gents::claude_oauth::classify_claude_auth_error,
+            gents::inference::auth::claude::classify_claude_auth_error,
         )
     }
 
@@ -530,7 +557,7 @@ mod tests {
         assert!(entries[1]["guidance"]
             .as_str()
             .unwrap()
-            .contains("claude-login"));
+            .contains("accounts login claude"));
         assert_eq!(entries[2]["ok"], false);
         assert!(entries[2]["guidance"].as_str().unwrap().contains("expired"));
         assert!(entries
@@ -560,7 +587,7 @@ mod tests {
             "credential_id": "claude-subscription:did:key:z6MkT",
             "guidance": "expired or revoked",
         });
-        let missing = json!({"ok": false, "guidance": "run gents claude-login"});
+        let missing = json!({"ok": false, "guidance": "run gents accounts login claude"});
         let read_error = json!({"ok": false, "error": "querying OAuthCredential returned errors"});
         assert!(claude_auth_gate(true, &fresh));
         assert!(

@@ -187,9 +187,9 @@ mod tests {
 
         let path = fixture.ctx.home_dir.join("policy.json");
         std::fs::create_dir_all(&fixture.ctx.home_dir).unwrap();
-        let policy = gents::optimization::PolicyV2 {
+        let policy = gents::eval::optimization::PolicyV2 {
             min_pairs: 1,
-            ..gents::optimization::PolicyV2::uncalibrated()
+            ..gents::eval::optimization::PolicyV2::uncalibrated()
         };
         std::fs::write(&path, serde_json::to_vec(&policy).unwrap()).unwrap();
         let path_arg = path.display().to_string();
@@ -223,7 +223,7 @@ mod tests {
             &gents::eval::report::CompareOptions::default(),
         )
         .unwrap()
-        .with_policy(&gents::optimization::PolicyV2::uncalibrated());
+        .with_policy(&gents::eval::optimization::PolicyV2::uncalibrated());
         let gates = &mut comparison.policy.as_mut().unwrap().gates;
         gates.min_effect = None;
         gates.cost_ok = None;
@@ -336,7 +336,7 @@ mod tests {
             super::super::render::breakdown_table(&breakdown, &mut out).unwrap();
             assert_eq!(String::from_utf8(out).unwrap(), format!("\n{expected}\n"));
         }
-        let help = Cli::try_parse_from(["gents", "eval", "--help"])
+        let help = Cli::try_parse_from(["gents", "utils", "eval", "--help"])
             .err()
             .map(|error| error.to_string())
             .unwrap_or_default();
@@ -348,7 +348,7 @@ mod tests {
         let missing = eval(&fixture, &with(&["--case", "zzz"])).await.unwrap_err();
         assert_eq!(missing.to_string(), "the comparison has no case \"zzz\"");
         assert!(Cli::try_parse_from([
-            "gents", "eval", "compare", "r1", "r1", "--by", "check", "--case", "val-a"
+            "gents", "utils", "eval", "compare", "r1", "r1", "--by", "check", "--case", "val-a"
         ])
         .is_err());
     }

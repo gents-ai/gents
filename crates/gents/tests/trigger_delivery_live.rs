@@ -3,10 +3,9 @@
 mod support;
 
 use anyhow::{ensure, Context, Result};
-use gents::config_client::{
-    apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
-};
-use gents::graphql::escape_graphql_string;
+use gents::documents::apply_desired_state_plan;
+use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents::store::graphql::escape_graphql_string;
 use gents::{Collection, ConfigAccess, NodeIdentity};
 use serde_json::{json, Value};
 use std::{
@@ -36,6 +35,27 @@ fn artifact_directory(label: &str) -> Result<std::path::PathBuf> {
         format!("{source_sha}\n"),
     )?;
     Ok(directory)
+}
+
+/// The two live lanes as (OpenAI-compatible `/v1` endpoint, served model) pairs.
+/// Each workstation serves its own model, so a lane names both.
+fn delivery_lanes() -> Result<[(String, String); 2]> {
+    let lane = |n: usize| -> Result<(String, String)> {
+        Ok((
+            std::env::var(format!("GENTS_DELIVERY_ENDPOINT_{n}")).with_context(|| {
+                format!("GENTS_DELIVERY_ENDPOINT_{n}: workstation /v1 endpoint")
+            })?,
+            std::env::var(format!("GENTS_DELIVERY_MODEL_{n}")).with_context(|| {
+                format!("GENTS_DELIVERY_MODEL_{n}: model served at that endpoint")
+            })?,
+        ))
+    };
+    let lanes = [lane(1)?, lane(2)?];
+    ensure!(
+        lanes[0].0 != lanes[1].0,
+        "two distinct inference endpoints required"
+    );
+    Ok(lanes)
 }
 
 fn provider_peaks(calls: &[Value]) -> Result<BTreeMap<String, usize>> {
@@ -71,11 +91,13 @@ fn provider_peaks(calls: &[Value]) -> Result<BTreeMap<String, usize>> {
     Ok(peaks)
 }
 
-const SCHEMA: &str = r#"
+const RUN_START_SDL: &str = r#"
 type DeliveryRunStart {
     handoff_id: String @immutable
     tags: [String!]
 }
+"#;
+const WORK_SDL: &str = r#"
 type DeliveryWork {
     handoff_id: String @immutable
     tags: [String!]
@@ -85,6 +107,31 @@ type DeliveryWork {
     attempt: Int @immutable
 }
 "#;
+
+/// Installs one application collection as the household-owner User, the
+/// actor whose key signs the qualification's source documents.
+async fn install_schema(access: &ConfigAccess, sdl: &str) -> Result<()> {
+    let plan = gents::store::config_client::preview_schema_install(access, sdl).await?;
+    gents::store::config_client::apply_schema_install(access, sdl, &plan.artifact_digest).await?;
+    Ok(())
+}
+
+/// Creates one User-signed source document for an event trigger.
+async fn create_source(
+    access: &ConfigAccess,
+    collection: &str,
+    sdl: &str,
+    fields: Value,
+) -> Result<String> {
+    Ok(gents::store::config_client::create_authored_document(
+        access,
+        collection,
+        &fields,
+        gents::store::config_client::DocumentSchemaSource::UserAuthored,
+        sdl,
+    )
+    .await?)
+}
 
 async fn apply(
     access: &ConfigAccess,
@@ -139,25 +186,96 @@ fn string<'a>(row: &'a Value, field: &str) -> Result<&'a str> {
         .with_context(|| format!("missing {field} in {row}"))
 }
 
-async fn configure(
-    access: &ConfigAccess,
-    node: &std::sync::Arc<gents::defra_node::EmbeddedNode>,
-    owner: &str,
-    endpoints: &[String; 2],
-) -> Result<()> {
-    let mut principal = gents::ensure_node(node, owner).await?;
-    principal.default_agent_id = Some("delivery-lead".into());
-    let mut documents = vec![
-        (Collection::Node, serde_json::to_value(principal)?),
-        (
-            Collection::InferenceExecution,
-            json!({
-                "execution_id":"delivery-execution", "max_turns":4,
-                "deadline_duration_secs":1800, "stream_liveness_timeout_secs":180
-            }),
-        ),
+/// The qualification's provisioned Agents, identified by their derived DIDs.
+struct DeliveryAgents {
+    lead: String,
+    workers: [String; 2],
+}
+
+/// The fixture User's held access to the qualification's retained home.
+async fn user_access(db: &support::TestDb) -> ConfigAccess {
+    let user = support::load_managed_fixture_user(db).await;
+    db.client_access(&user)
+}
+
+/// Points the Node's default at the lead and each Agent at its lane profile.
+async fn bind_agents(access: &ConfigAccess, owner: &str, agents: &DeliveryAgents) -> Result<()> {
+    let profiles = [
+        (agents.lead.clone(), "delivery-profile-0".to_owned()),
+        (agents.workers[0].clone(), "delivery-profile-0".to_owned()),
+        (agents.workers[1].clone(), "delivery-profile-1".to_owned()),
     ];
-    for (lane, endpoint) in endpoints.iter().enumerate() {
+    access
+        .transact_write("test.delivery_live.bind_agents", |txn| {
+            use gents::store::config_client::read_desired_state_record_in_txn as read;
+            let profiles = &profiles;
+            let lead = &agents.lead;
+            Box::pin(async move {
+                let (_, node) = read(txn, Collection::Node, owner, owner)
+                    .await?
+                    .context("the fixture User's Node is missing")?;
+                let mut node: gents::documents::Node = serde_json::from_value(node)?;
+                node.default_agent_did = Some(lead.clone());
+                let mut documents = vec![(Collection::Node, serde_json::to_value(node)?)];
+                for (agent_did, profile_id) in profiles {
+                    let (_, agent) = read(txn, Collection::Agent, owner, agent_did)
+                        .await?
+                        .with_context(|| format!("provisioned Agent {agent_did} is missing"))?;
+                    let mut agent: gents::documents::Agent = serde_json::from_value(agent)?;
+                    agent.inference_profile_id = profile_id.clone();
+                    documents.push((Collection::Agent, serde_json::to_value(agent)?));
+                }
+                let plan = DesiredStateApplyPlan::new(
+                    documents
+                        .into_iter()
+                        .map(|(collection, value)| DesiredStateApplyDocument {
+                            collection,
+                            add: value.clone(),
+                            update: value,
+                        })
+                        .collect(),
+                )?;
+                apply_desired_state_plan(txn, &plan).await.map(|_| ())
+            })
+        })
+        .await
+}
+
+/// Provisions the lead and two worker Agents as the household-owner User and
+/// configures their lanes, tasks and triggers under that User's signature.
+async fn configure(
+    db: &support::TestDb,
+    lanes: &[(String, String); 2],
+) -> Result<(support::ManagedAgentFixture, DeliveryAgents)> {
+    let fixture = support::managed_agent_fixture(db).await;
+    support::grant_household_owner(db, &fixture.user).await;
+    let owner = db.node_identity.did().to_owned();
+    let mut workers = Vec::new();
+    for lane in 0..2 {
+        let (_, binding) = support::install_managed_agent(
+            db,
+            &fixture.access,
+            &fixture.user,
+            &format!("Delivery worker {}", lane + 1),
+        )
+        .await;
+        workers.push(binding.agent_did);
+    }
+    let agents = DeliveryAgents {
+        lead: fixture.binding.agent_did.clone(),
+        workers: [workers[0].clone(), workers[1].clone()],
+    };
+    for sdl in [RUN_START_SDL, WORK_SDL] {
+        install_schema(&fixture.access, sdl).await?;
+    }
+    let mut documents = vec![(
+        Collection::InferenceExecution,
+        json!({
+            "execution_id":"delivery-execution", "max_turns":4,
+            "deadline_duration_secs":1800, "stream_liveness_timeout_secs":180
+        }),
+    )];
+    for (lane, (endpoint, model)) in lanes.iter().enumerate() {
         documents.extend([
             (Collection::InferenceBackend, json!({
                 "backend_id":format!("delivery-backend-{lane}"), "name":format!("Delivery workstation {}", lane+1),
@@ -167,16 +285,12 @@ async fn configure(
             })),
             (Collection::InferenceProfile, json!({
                 "profile_id":format!("delivery-profile-{lane}"),
-                "backend_id":format!("delivery-backend-{lane}"), "model_name":"GLM-5.3-Flash-NVFP4",
+                "backend_id":format!("delivery-backend-{lane}"), "model_name":model,
                 "context_window":1_000_000, "max_output_tokens":2048,
                 "execution_id":"delivery-execution"
             })),
-            (Collection::Agent, json!({
-                "agent_id":format!("delivery-worker-{lane}"),
-                "inference_profile_id":format!("delivery-profile-{lane}"), "enabled":true
-            })),
             (Collection::Task, json!({
-                "task_id":format!("delivery-worker-{lane}"), "agent_id":format!("delivery-worker-{lane}"),
+                "task_id":format!("delivery-worker-{lane}"), "agent_did":&agents.workers[lane],
                 "emit_outcome":true,
                 "prompt_template":"Reply exactly WORK {{ doc.handoff_id }}. Do not call tools."
             })),
@@ -192,19 +306,18 @@ async fn configure(
         ]);
     }
     documents.extend([
-        (Collection::Agent, json!({"agent_id":"delivery-lead", "inference_profile_id":"delivery-profile-0", "enabled":true})),
         (Collection::Task, json!({
-            "task_id":"delivery-start", "agent_id":"delivery-lead", "emit_outcome":false,
+            "task_id":"delivery-start", "agent_did":&agents.lead, "emit_outcome":false,
             "prompt_template":"Reply exactly READY {{ session.session_id }} {{ doc.handoff_id }}. Do not call tools."
         })),
         (Collection::Task, json!({
-            "task_id":"delivery-inbox", "agent_id":"delivery-lead", "emit_outcome":false,
+            "task_id":"delivery-inbox", "agent_did":&agents.lead, "emit_outcome":false,
             "prompt_template":"Reply exactly ACK {{ session.session_id }} {{ doc.source_handoff_id }}. Do not call tools."
         })),
         (Collection::EventSource, json!({"event_source_id":"delivery-start", "source_collection":"DeliveryRunStart", "event_kind":"created"})),
         (Collection::EventSource, json!({
             "event_source_id":"delivery-inbox", "source_collection":"FireOutcome", "event_kind":"created",
-            "filter":format!("{{ owner_did: {{ _eq: \"{}\" }}, source_collection: {{ _eq: \"DeliveryWork\" }} }}", escape_graphql_string(owner))
+            "filter":format!("{{ owner_did: {{ _eq: \"{}\" }}, source_collection: {{ _eq: \"DeliveryWork\" }} }}", escape_graphql_string(&owner))
         })),
         (Collection::Trigger, json!({
             "trigger_id":"delivery-start", "task_id":"delivery-start", "enabled":true,
@@ -216,34 +329,28 @@ async fn configure(
             "session_id_template":"{{ doc.reply_session_id }}"
         })),
     ]);
-    apply(access, owner, documents).await?;
-    for behavior in ["delivery-lead", "delivery-worker-0", "delivery-worker-1"] {
+    apply(&fixture.access, &owner, documents).await?;
+    bind_agents(&fixture.access, &owner, &agents).await?;
+    for agent_did in [&agents.lead, &agents.workers[0], &agents.workers[1]] {
         support::fixtures::configure_agent_tools(
-            node, owner, behavior,
+            db, &owner, agent_did,
             Some("Follow the requested exact one-line response. This is a delivery qualification; never call tools.".into()),
-            gents::document_config::Tools {
-                tools_id: format!("{behavior}:tools"), node_did: owner.into(), ..Default::default()
+            gents::documents::Tools {
+                tools_id: format!("{agent_did}:tools"), node_did: owner.clone(), ..Default::default()
             }, Vec::new(),
         ).await;
     }
-    Ok(())
+    Ok((fixture, agents))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-#[ignore = "real inference: GENTS_TRIGGER_DELIVERY_LIVE=1; GENTS_DELIVERY_ENDPOINT_1 and GENTS_DELIVERY_ENDPOINT_2"]
+#[ignore = "real inference: GENTS_TRIGGER_DELIVERY_LIVE=1; GENTS_DELIVERY_ENDPOINT_1/2 and GENTS_DELIVERY_MODEL_1/2"]
 async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> Result<()> {
     ensure!(
         std::env::var("GENTS_TRIGGER_DELIVERY_LIVE").as_deref() == Ok("1"),
         "explicit live opt-in required"
     );
-    let endpoints = [
-        std::env::var("GENTS_DELIVERY_ENDPOINT_1").context("first workstation /v1 endpoint")?,
-        std::env::var("GENTS_DELIVERY_ENDPOINT_2").context("second workstation /v1 endpoint")?,
-    ];
-    ensure!(
-        endpoints[0] != endpoints[1],
-        "two distinct inference endpoints required"
-    );
+    let lanes = delivery_lanes()?;
     let artifacts = artifact_directory("burst")?;
     let home =
         gents::eval::runner::embedded::EmbeddedHome::create_retained(&artifacts.join("home"))
@@ -251,21 +358,18 @@ async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> R
     let db = support::test_db_from_home(home);
     let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
     let owner = identity.did().to_owned();
-    let access = ConfigAccess::local(db.node.clone());
-    access.add_collection(SCHEMA).await?;
-    configure(&access, &db.node, &owner, &endpoints).await?;
+    let (fixture, agents) = configure(&db, &lanes).await?;
+    let access = fixture.access;
     let runtime = boot_live_agent(&db, identity).await?;
     support::interrupt::wait_for_runtime_ready(&db.node, &owner).await;
     for label in ["lead-a", "lead-b"] {
-        access
-            .write(
-                "test.delivery_live.start",
-                &format!(
-            "mutation {{ create_DeliveryRunStart(input: {{ handoff_id: \"{}\", tags: [\"test\"] }}) {{ _docID }} }}",
-            escape_graphql_string(label)
-        ),
-            )
-            .await?;
+        create_source(
+            &access,
+            "DeliveryRunStart",
+            RUN_START_SDL,
+            json!({"handoff_id": label, "tags": ["test"]}),
+        )
+        .await?;
     }
     let deadline = tokio::time::Instant::now() + Duration::from_secs(1800);
     let leads = loop {
@@ -302,11 +406,16 @@ async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> R
         let handoff = format!("assignment-{shard:02}");
         let session = &sessions[(shard / 2) % 2];
         expected.insert(handoff.clone(), session.clone());
-        access.write("test.delivery_live.assignment", &format!(
-            "mutation {{ create_DeliveryWork(input: {{ handoff_id: \"{}\", reply_session_id: \"{}\", lane: {}, shard_id: \"{}\", attempt: 1, tags: [\"test\"] }}) {{ _docID }} }}",
-            escape_graphql_string(&handoff), escape_graphql_string(session), shard % 2,
-            escape_graphql_string(&format!("shard-{shard:02}")),
-        )).await?;
+        create_source(
+            &access,
+            "DeliveryWork",
+            WORK_SDL,
+            json!({
+                "handoff_id": handoff, "reply_session_id": session, "lane": shard % 2,
+                "shard_id": format!("shard-{shard:02}"), "attempt": 1, "tags": ["test"],
+            }),
+        )
+        .await?;
     }
     let mut observed_busy_queue = false;
     let mut next_evidence = tokio::time::Instant::now();
@@ -314,7 +423,7 @@ async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> R
         let requests = rows(
             &access,
             "AgentRequest",
-            "request_id session_id agent_id content lifecycle_state failure_reason",
+            "request_id session_id agent_did content lifecycle_state failure_reason",
             &owner,
         )
         .await?;
@@ -418,7 +527,7 @@ async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> R
     )
     .await?;
     for request in &requests {
-        let expected_backend = if request["agent_id"] == "delivery-worker-1" {
+        let expected_backend = if request["agent_did"] == agents.workers[1].as_str() {
             "delivery-backend-1"
         } else {
             "delivery-backend-0"
@@ -433,12 +542,11 @@ async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> R
             "no completed real inference on {expected_backend} for {request}"
         );
     }
-    for lane in 0..2 {
-        let behavior = format!("delivery-worker-{lane}");
+    for (lane, worker) in agents.workers.iter().enumerate() {
         ensure!(
             requests
                 .iter()
-                .filter(|row| row["agent_id"] == behavior)
+                .filter(|row| row["agent_did"] == worker.as_str())
                 .count()
                 == 32,
             "workstation {lane} did not execute 32 assignments"
@@ -461,7 +569,7 @@ async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> R
         let inboxes = requests
             .iter()
             .filter(|row| {
-                row["agent_id"] == "delivery-lead"
+                row["agent_did"] == agents.lead.as_str()
                     && row["content"]
                         .as_str()
                         .is_some_and(|text| text.contains(handoff))
@@ -475,7 +583,7 @@ async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> R
             inboxes[0]["session_id"] == target,
             "handoff reached the other lead"
         );
-        let answer = terminal_assistant_answer(&db.node, string(inboxes[0], "request_id")?).await;
+        let answer = terminal_assistant_answer(&access, string(inboxes[0], "request_id")?).await;
         ensure!(
             answer.contains(&target) && answer.contains(handoff),
             "lead inference did not acknowledge its own rendered session: {answer}"
@@ -491,7 +599,7 @@ async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> R
             string(request, "content")?.contains(string(&lead, "session_id")?),
             "lead template rendered a different session"
         );
-        let answer = terminal_assistant_answer(&db.node, string(&lead, "request_id")?).await;
+        let answer = terminal_assistant_answer(&access, string(&lead, "request_id")?).await;
         ensure!(
             answer.contains(string(&lead, "session_id")?),
             "lead did not receive its rendered session: {answer}"
@@ -505,14 +613,16 @@ async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> R
     std::fs::write(
         artifacts.join("evidence.json"),
         serde_json::to_vec_pretty(&json!({
-            "owner_did":owner, "endpoints":endpoints, "configured_backend_capacity":[32,32],
+            "owner_did":owner, "lead_agent_did":&agents.lead, "worker_agent_dids":&agents.workers,
+            "lanes":lanes.iter().map(|(endpoint, model)| json!({"endpoint":endpoint, "model":model})).collect::<Vec<_>>(),
+            "configured_backend_capacity":[32,32],
             "provider_peak_overlap":peaks, "lead_sessions":sessions, "requests":requests,
             "fires":fires, "outcomes":outcomes, "inference_calls":calls,
             "observed_busy_queue":observed_busy_queue
         }))?,
     )?;
     runtime.shutdown().await;
-    db.node.shutdown().await;
+    db.node.shutdown().await?;
     Ok(())
 }
 

@@ -35,10 +35,64 @@ example : observedStarter (some (5, 6)) (some starterReceipt) 8 (some ⟨5, 6, s
 example : observedStarter (some (5, 6)) (some starterReceipt) 8 none (some 12) true = none := by decide
 example : observedStarter none (some starterReceipt) 8 (some ⟨5, 6, some 7⟩) (some 11) true = none := by decide
 
+def admissionRequested : Document :=
+  { session with
+    title := some ⟨"task", .task⟩
+    provenance := some {
+      task := some 4
+      parentRequestDoc := some 11
+      startedBy := some ⟨5, 6, some 7⟩
+      openingRequestDoc := some 9 } }
+
+def admissionInput : AdmissionInput :=
+  { requested := admissionRequested, actor := 2, sessionDoc := 8, agentDoc := 30,
+    requestDoc := 9, receipt := some starterReceipt, authorized := true, commit := true }
+
+def unattendedRequested : Document :=
+  { admissionRequested with provenance := some { task := some 4, openingRequestDoc := some 9 } }
+
+def admissionExisting : AgentSession.AdmissionState :=
+  { session := some session, sessionOwner := some 2, sessionDoc := some 8,
+    sessionParent := some 30, sessionWorker := some 3, receipt := some starterReceipt }
+
+def admissionCases : List (String × AgentSession.AdmissionState × AdmissionInput) :=
+  [ ("client_creation", {}, admissionInput)
+  , ("agent_unattended_creation", {}, { admissionInput with actor := 3, requested := unattendedRequested })
+  , ("nested_other_agent_creation", {}, { admissionInput with actor := 7 })
+  , ("grant_denied_rolls_back", {}, { admissionInput with authorized := false })
+  , ("commit_failure_rolls_back", {}, { admissionInput with commit := false })
+  , ("reuse_preserves_title_and_receipt", admissionExisting, admissionInput)
+  , ("changed_agent_rejected", admissionExisting,
+      { admissionInput with requested := { admissionRequested with agent := 99 } })
+  , ("incomplete_session_rejected", { admissionExisting with sessionDoc := none }, admissionInput) ]
+
+example : (admitRequest {} admissionInput).requestParent = some 8 := by decide
+example : (admitRequest {} admissionInput).requestWorker = some 3 := by decide
+example : (admitRequest {} { admissionInput with actor := 3 }).sessionOwner = some 3 := by decide
+example : (admitRequest {} { admissionInput with actor := 3 }).requestWorker = none := by decide
+example : (admitRequest admissionExisting admissionInput).session = some session := by decide
+example : (admitRequest admissionExisting admissionInput).receipt = some starterReceipt := by decide
+
 def request (id time : Nat) : RequestFact :=
   { purpose := .normal, scope, agent:= 3, createdAt := time, observed := ⟨id + 100, id, .failed⟩ }
 def old := request 1 2
 def newerRequest := request 2 2
+
+/-- #3604: the predecessor finished in the same second its successor was
+admitted, and the successor's random id sorts lower. -/
+def finishedPredecessor : RequestFact :=
+  { request 9 7 with observed := ⟨109, 9, .completed⟩, terminalizedAt := some 7100 }
+def sameSecondClaim : RequestFact :=
+  { request 4 7 with observed := ⟨104, 4, .claimed⟩ }
+def sameSecondCompletion : RequestFact :=
+  { request 4 7 with observed := ⟨104, 4, .completed⟩, terminalizedAt := some 7600 }
+def sameSecondRefusal : RequestFact :=
+  { request 12 7 with observed := ⟨112, 12, .failed⟩, terminalizedAt := some 7900 }
+example : latest [finishedPredecessor, sameSecondClaim] 1 10 none = some sameSecondClaim := by decide
+example : latest [sameSecondCompletion, finishedPredecessor] 1 10 none = some sameSecondCompletion := by decide
+example : latest [sameSecondRefusal, sameSecondClaim] 1 10 none = some sameSecondClaim := by decide
+example : (advance session [finishedPredecessor, sameSecondClaim] sameSecondClaim "next" 8).observation.bind (·.latest) =
+    some sameSecondClaim.observed := by decide
 
 def titleRequest := { request 3 99 with purpose := .titleAudit }
 example : latest [old, titleRequest] scope.node scope.session none = some old := by decide
@@ -70,7 +124,7 @@ example : refresh indexed [{ completedRequest with agent:= 99 }]
 
 def retryState : SessionState :=
   { sessionId := 10
-    agentId := 3
+    agentDid := 3
     requestIds := {1}
     latest := 1
     ctx := fun _ =>
@@ -115,18 +169,22 @@ def sourceMessage (id sequence : Nat) : MessageEnvelope :=
   , key := "origin-" ++ toString id
   , sequence
   , nativeId := some "native-provider-id"
+  , nativeRequestId := some "native-request-id"
   , blocks := [.text ⟨⟨100 + id, 0⟩, .full⟩]
   , createdAt := 5 }
 def history : History :=
   { messages := [sourceMessage 1 0]
-    compactions := [⟨4, scope.session, 1, 0⟩] }
+    compactions := [⟨4, scope.session, 1, 0⟩]
+    closures := [⟨101, scope.session, 101⟩] }
 def child : Scope := { scope with session := 20 }
 def remap (id : Nat) := id + 1000
 def childKey (key : String) := "child:" ++ key
 def sourceAuthorization : SessionFork.SourceAuthorization :=
-  ⟨scope, history.messages.map (·.header.id), history.compactions.map (·.id)⟩
+  ⟨scope, history.messages.map (·.header.id), history.compactions.map (·.id),
+    history.closures.map (·.id)⟩
 def wrongAgentAuthorization : SessionFork.SourceAuthorization :=
-  ⟨{ scope with node := 99 }, history.messages.map (·.header.id), history.compactions.map (·.id)⟩
+  ⟨{ scope with node := 99 }, history.messages.map (·.header.id),
+    history.compactions.map (·.id), history.closures.map (·.id)⟩
 
 def copied := copyPrefix history child remap childKey 1
 example : publish history scope child remap childKey 1 sourceAuthorization true true = some copied := by decide
@@ -135,16 +193,30 @@ example : copied.messages.map (·.header.origin) = [some 1] := by decide
 example : copied.messages.map (·.header.request) = [none] := by decide
 example : copied.messages.map (·.blocks) = history.messages.map (·.blocks) := by decide
 example : copied.messages.map (·.nativeId) = history.messages.map (·.nativeId) := by decide
+example : copied.messages.map (·.nativeRequestId) = history.messages.map (·.nativeRequestId) := by decide
 example : copied.messages.map (·.key) = ["child:origin-1"] := by decide
 example : copied.compactions = [⟨1004, child.session, 1, 0⟩] := by decide
 example : (retentionDependencies copied).originMessages = [1] := by decide
-example : (retentionDependencies copied).closingRecords = [101] := by decide
+example : copied.closures = [⟨1101, child.session, 101⟩] := by decide
+example : (retentionDependencies copied).closingRecords = [1101] := by decide
+example : readsTranscript child.session copied child.session = true := by decide
+example : readsTranscript scope.session copied child.session = false := by decide
+example : publish { history with closures := [] } scope child remap childKey 1
+    { sourceAuthorization with closureDocuments := [] } true true = none := by decide
+
+def grandchild : Scope := { scope with session := 30 }
+def regrant (id : Nat) := id + 2000
+def nestedAuthorization : SessionFork.SourceAuthorization :=
+  ⟨child, copied.messages.map (·.header.id), copied.compactions.map (·.id),
+    copied.closures.map (·.id)⟩
+example : (publish copied child grandchild regrant childKey 1 nestedAuthorization true true).map
+    (·.closures) = some [⟨3101, grandchild.session, 101⟩] := by decide
 example : publish history scope { child with requester := none } remap childKey 1 sourceAuthorization true true = none := by decide
 example : publish history scope child remap childKey 1 sourceAuthorization false true = none := by decide
 example : publish history scope child remap childKey 1 sourceAuthorization true false = none := by decide
 example : publish history scope child remap childKey 1 wrongAgentAuthorization true true = none := by decide
 example : publish history scope { child with node := 99 } remap childKey 1 sourceAuthorization true true = none := by decide
-example : (copyPrefix history child remap childKey 0) = ⟨[], []⟩ := by decide
+example : (copyPrefix history child remap childKey 0) = ⟨[], [], []⟩ := by decide
 example : publish { history with compactions := [⟨4, scope.session, 2, 0⟩] }
     scope child remap childKey 1 sourceAuthorization true true = none := by decide
 example : publish { history with compactions := [⟨4, scope.session, 1, 99⟩] }
@@ -155,7 +227,8 @@ def duplicateSequenceHistory : History :=
 example : publish duplicateSequenceHistory scope child remap childKey 1
     (SessionFork.SourceAuthorization.mk scope
       (duplicateSequenceHistory.messages.map (·.header.id))
-      (duplicateSequenceHistory.compactions.map (·.id)))
+      (duplicateSequenceHistory.compactions.map (·.id))
+      (duplicateSequenceHistory.closures.map (·.id)))
     true true = none := by decide
 example : publish history scope child (fun _ => 1000) childKey 1 sourceAuthorization true true = none := by decide
 

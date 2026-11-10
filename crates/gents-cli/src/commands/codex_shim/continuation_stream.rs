@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 use gents_codex_protocol as codex;
 use gents_protocol::client_protocol::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
@@ -196,7 +196,7 @@ async fn project_background_continuation(
         request_id: request.request_id,
         session_id: session_id.clone(),
         node_did,
-        agent_id: request.agent_id,
+        agent_did: request.agent_did,
         request_doc_id: request
             .doc_id
             .context("continuation has no physical request")?,
@@ -265,11 +265,11 @@ async fn load_background_continuation_requests(
     thread_id: &str,
 ) -> Result<Vec<AgentRequestRow>> {
     let request_scope = gents::session::public_request_filter(&format!(
-        r#"session_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }}, agent_id: {{ _eq: "{}" }}"#,
+        r#"session_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }}, agent_did: {{ _eq: "{}" }}"#,
         escape_graphql_string(thread_id),
         escape_graphql_string(state.node_did.as_ref()),
         escape_graphql_string(state.node_did.as_ref()),
-        escape_graphql_string(state.agent_id.as_ref()),
+        escape_graphql_string(state.agent_did.as_ref()),
     ));
     let query = format!(
         r#"{{
@@ -282,14 +282,14 @@ async fn load_background_continuation_requests(
                 request_id
                 session_id
                 node_did
-                agent_id
+                agent_did
                 input
                 lifecycle_state
                 created_at
             }}
         }}"#,
     );
-    let response = query_node_json(state.node.as_ref(), &query).await?;
+    let response = query_node_json(&state.reader, &query).await?;
     response
         .pointer("/data/AgentRequest")
         .and_then(Value::as_array)
@@ -318,7 +318,7 @@ async fn load_background_continuation_requests(
 pub(super) fn is_background_completion_input(
     input: Option<&gents_protocol::request_input::RequestInput>,
 ) -> bool {
-    input.is_some_and(gents::lifecycle::is_background_completion_request)
+    input.is_some_and(gents::request::lifecycle::is_background_completion_request)
 }
 
 fn continuation_request_has_started(lifecycle_state: Option<RequestLifecycleState>) -> bool {

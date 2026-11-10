@@ -1,10 +1,7 @@
 import { useEffect } from "react";
+import { bindVisualViewport } from "@gents/shell";
 import { scrollParent } from "@gents/ui/conversation";
 
-const HEIGHT = "--mobile-visual-viewport-height";
-const WIDTH = "--mobile-visual-viewport-width";
-const TOP = "--mobile-visual-viewport-top";
-const LEFT = "--mobile-visual-viewport-left";
 const MIN_USEFUL_DIMENSION = 64;
 const FOCUSED_CONTROL_SELECTOR =
   'input:not([type="hidden"]):not([disabled]), textarea:not([disabled]), select:not([disabled]), [contenteditable="true"]';
@@ -45,11 +42,7 @@ export function useMobileVisualViewport() {
     const viewport = window.visualViewport;
     if (!viewport) return;
 
-    const root = document.documentElement;
-    let width = 0;
-    let height = 0;
     let followFocus = true;
-    let frame: number | null = null;
     let revealFrame: number | null = null;
     let settleTimer: ReturnType<typeof setTimeout> | null = null;
     const cancelReveal = () => {
@@ -77,57 +70,16 @@ export function useMobileVisualViewport() {
       followFocus = true;
       scheduleReveal();
     };
-    const apply = () => {
-      frame = null;
-      if (
-        !Number.isFinite(viewport.height) ||
-        !Number.isFinite(viewport.width) ||
-        viewport.height < MIN_USEFUL_DIMENSION ||
-        viewport.width < MIN_USEFUL_DIMENSION
-      ) {
-        root.style.removeProperty(HEIGHT);
-        root.style.removeProperty(WIDTH);
-        root.style.removeProperty(TOP);
-        root.style.removeProperty(LEFT);
-        return;
-      }
-      root.style.setProperty(HEIGHT, `${viewport.height}px`);
-      root.style.setProperty(WIDTH, `${viewport.width}px`);
-      root.style.setProperty(TOP, `${Math.max(0, viewport.offsetTop)}px`);
-      root.style.setProperty(LEFT, `${Math.max(0, viewport.offsetLeft)}px`);
-      if (width !== viewport.width || height !== viewport.height) scheduleReveal();
-      width = viewport.width;
-      height = viewport.height;
-    };
-    const schedule = () => {
-      if (frame == null) frame = requestAnimationFrame(apply);
-    };
-
-    apply();
-    schedule();
-    viewport.addEventListener("resize", schedule);
-    viewport.addEventListener("scroll", schedule);
-    window.addEventListener("resize", schedule);
-    window.addEventListener("pageshow", schedule);
-    window.addEventListener("orientationchange", schedule);
+    const unbindViewport = bindVisualViewport(document.documentElement, scheduleReveal);
     document.addEventListener("focusin", onFocus);
     document.addEventListener("touchmove", cancelReveal, { passive: true });
     document.addEventListener("wheel", cancelReveal, { passive: true });
     return () => {
-      if (frame != null) cancelAnimationFrame(frame);
+      unbindViewport();
       cancelReveal();
-      viewport.removeEventListener("resize", schedule);
-      viewport.removeEventListener("scroll", schedule);
-      window.removeEventListener("resize", schedule);
-      window.removeEventListener("pageshow", schedule);
-      window.removeEventListener("orientationchange", schedule);
       document.removeEventListener("focusin", onFocus);
       document.removeEventListener("touchmove", cancelReveal);
       document.removeEventListener("wheel", cancelReveal);
-      root.style.removeProperty(HEIGHT);
-      root.style.removeProperty(WIDTH);
-      root.style.removeProperty(TOP);
-      root.style.removeProperty(LEFT);
     };
   }, []);
 }

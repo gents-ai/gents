@@ -10,7 +10,9 @@ import type {
   RenderedToolCallView,
 } from "@source-inc/gents-desktop-client";
 import { useApp } from "@/app/AppContext";
+import { duration } from "@/lib/duration";
 import { dockScopeOf, workspace } from "@/app/workspace";
+import { usePageShown } from "@/lib/visibility";
 import {
   useSelectedSessionFields,
   useSelectedSessionValue,
@@ -155,6 +157,18 @@ export function backgroundCalls(
   );
 }
 
+/** Where the call started in the transcript: the step that started it (the
+    spawn of a spawned process) and that step's message. */
+export function transcriptPlaceOf(
+  call: BackgroundCall,
+  tools: readonly RenderedToolCallView[],
+  messages: ReadonlyMap<string, number>,
+): { itemKey: string; sequence: number } | null {
+  const step = spawnedFrom(call.toolCallId, tools) ?? call.tool;
+  const sequence = step ? messages.get(step.itemKey) : undefined;
+  return step && sequence !== undefined ? { itemKey: step.itemKey, sequence } : null;
+}
+
 /* the session's row is newer than the snapshot once the call has ended */
 export const isActive = (call: BackgroundCall) =>
   call.tool ? call.tool.statusKind === "running" : call.view !== null;
@@ -178,39 +192,51 @@ function lasted(ms: number): string {
 
 const ago = (ms: number) => (ms < 60_000 ? "just now" : `${lasted(ms)} ago`);
 
-/** A state short enough to sit at the end of a one-line row; the row's
-    title and the log carry the whole of it. */
-export function briefStateOf(call: BackgroundCall, now: number): string {
-  const { tone } = stateOf(call, now);
-  const { tool, view } = call;
-  if (tone === "stuck") return "stuck";
-  if (tone === "overdue") return "overdue";
+/** A row's second line: where the call stands, then how long it ran and
+    when it ended; the row's title and the log carry the whole state. */
+export function rowStateOf(
+  call: BackgroundCall,
+  now: number,
+): { state: string; more: string | null } {
+  const { tone, text } = stateOf(call, now);
+  const lower = text.charAt(0).toLowerCase() + text.slice(1);
+  if (tone === "stuck") return { state: "Stuck", more: lower };
+  if (tone === "overdue") return { state: "Overdue", more: lower };
   if (tone === "running") {
-    if (view?.waitStatus?.lifecycle === "pending") return "waiting";
+    if (call.view?.waitStatus?.lifecycle === "pending")
+      return { state: "Waiting to start", more: null };
     const started = at(startedAtOf(call));
-    return started ? brief(now - started) : "running";
+    return { state: "Running", more: started ? duration(now - started) : null };
   }
-  const p = tool?.presentation;
-  const command = p?.kind === "command" ? p : null;
-  if (tone === "failed") {
-    if (command?.timedOut) return "timed out";
-    return command?.exitCode != null ? `exit ${command.exitCode}` : "failed";
-  }
-  if (tone === "stopped") return "stopped";
-  const started = at(tool?.startedAt);
+  const { tool } = call;
+  const command = tool?.presentation.kind === "command" ? tool.presentation : null;
+  const state =
+    tone === "failed"
+      ? command?.timedOut
+        ? "Timed out"
+        : command?.exitCode != null
+          ? `Exit ${command.exitCode}`
+          : "Failed"
+      : tone === "done"
+        ? "Done"
+        : text;
+  const took = tookOf(call);
   const ended = at(tool?.completedAt);
-  const took =
-    command?.durationMs ??
-    (started && ended && ended > started ? ended - started : null);
-  return took != null ? brief(took) : "done";
+  const more = [took != null && `ran ${duration(took)}`, ended && ago(now - ended)]
+    .filter(Boolean)
+    .join(" · ");
+  return { state, more: more || null };
 }
 
-function brief(ms: number): string {
-  const mins = Math.floor(Math.max(0, ms) / 60_000);
-  if (mins < 1) return "<1 min";
-  if (mins < 60) return `${mins} min`;
-  const hours = Math.floor(mins / 60);
-  return hours < 24 ? `${hours} h` : `${Math.floor(hours / 24)} d`;
+/* how long a call that has ended ran */
+function tookOf({ tool }: BackgroundCall): number | null {
+  const p = tool?.presentation;
+  const started = at(tool?.startedAt);
+  const ended = at(tool?.completedAt);
+  return (
+    (p?.kind === "command" ? p.durationMs : null) ??
+    (started && ended && ended > started ? ended - started : null)
+  );
 }
 
 const at = (iso: string | null | undefined) => (iso ? Date.parse(iso) || null : null);
@@ -241,11 +267,7 @@ export function stateOf(
   }
   const p = tool?.presentation;
   const command = p?.kind === "command" ? p : null;
-  const started = at(tool?.startedAt);
-  const ended = at(tool?.completedAt);
-  const took =
-    command?.durationMs ??
-    (started && ended && ended > started ? ended - started : null);
+  const took = tookOf(call);
   const exit = command?.exitCode != null ? ` · exit code ${command.exitCode}` : "";
   switch (tool?.statusKind) {
     case "success":
@@ -330,17 +352,18 @@ export function useBackgroundCalls(sessionId: string | null): BackgroundCall[] {
   const fromRows = useMemo(() => backgroundCalls(tools ?? [], [], new Set()), [tools]);
   const watching = fromRows.length > 0 && nodeDid !== null;
   const running = fromRows.some(isActive);
+  const shown = usePageShown();
   const [held, setHeld] = useState<Held | null>(null);
   const [tick, setTick] = useState(0);
   useEffect(() => {
-    if (!watching || !running) return;
+    if (!watching || !running || !shown) return;
     const timer = setInterval(() => setTick((n) => n + 1), POLL_MS);
     return () => clearInterval(timer);
-  }, [watching, running]);
+  }, [watching, running, shown]);
   /* read again as calls start or end, not on every line they write */
   const shape = fromRows.map((c) => `${c.key}\u0000${c.tool?.statusKind}`).join("\n");
   useEffect(() => {
-    if (!watching || !nodeDid) return;
+    if (!watching || !nodeDid || !shown) return;
     let live = true;
     void fetchOperationsSnapshot({ nodeDid }).then(
       (value) => live && setHeld({ scope: nodeDid, value }),
@@ -349,7 +372,7 @@ export function useBackgroundCalls(sessionId: string | null): BackgroundCall[] {
     return () => {
       live = false;
     };
-  }, [fetchOperationsSnapshot, watching, nodeDid, shape, tick]);
+  }, [fetchOperationsSnapshot, watching, nodeDid, shown, shape, tick]);
   const views =
     watching && held?.scope === nodeDid ? held.value.backgroundedTools : null;
   const latestRequestId = session?.latestRequestId ?? null;
@@ -405,17 +428,20 @@ export function useAskedLog(sessionId: string | null, take: (key: string) => voi
 }
 
 /* where the reader was in each session's Background tab, while the app runs:
-   the log they had open and how far above its newest line */
-const places = new Map<string, { log: string | null; above: number }>();
+   the log they had open and how far above its newest line, and how far down
+   the list they were */
+type Place = { log: string | null; above: number; listTop: number };
+const places = new Map<string, Place>();
+const NO_PLACE: Place = { log: null, above: 0, listTop: 0 };
 
 export const backgroundPlace = (sessionId: string | null) =>
-  (sessionId && places.get(sessionId)) || { log: null, above: 0 };
+  (sessionId && places.get(sessionId)) || NO_PLACE;
 
 export function rememberBackgroundPlace(
   sessionId: string | null,
-  place: { log: string | null; above: number },
+  place: Partial<Place>,
 ) {
-  if (sessionId) places.set(sessionId, place);
+  if (sessionId) places.set(sessionId, { ...backgroundPlace(sessionId), ...place });
 }
 
 export const resetBackgroundPlaces = () => places.clear();

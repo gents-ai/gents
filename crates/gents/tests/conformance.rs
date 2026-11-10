@@ -3,21 +3,21 @@ use std::time::Duration;
 
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 
-use gents::defra_node::EmbeddedNode;
-use gents::event_delivery_contract::{
-    runtime_event_delivery_source_contracts, EventDeliverySourceContract,
-};
-use gents::graphql::escape_graphql_string;
-use gents::lifecycle::{ClaimOutcome, ExecutionOrigin, TriggerLineage};
-use gents::llm::message::{
+use gents::defra_node::Node as EmbeddedNode;
+use gents::inference::llm::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
     UserContent,
+};
+use gents::request::lifecycle::{ClaimOutcome, ExecutionOrigin, TriggerLineage};
+use gents::store::graphql::escape_graphql_string;
+use gents::triggers::event_delivery::{
+    runtime_event_delivery_source_contracts, EventDeliverySourceContract,
 };
 use gents::{write_manual_agent_request, InferenceCall, RequestLifecycle};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-#[path = "../src/admission/slot_accounting.rs"]
+#[path = "../src/inference/admission/slot_accounting.rs"]
 mod admission_slot_accounting;
 #[path = "../src/lean_vocab_test/support.rs"]
 mod lean_vocab_test;
@@ -31,32 +31,30 @@ use lean_vocab_test::{
     assert_lifecycle_transition_cases_partition, assert_state_machine_contract_is_complete,
     lean_backend_health_cases, lean_client_agent_readiness_cases,
     lean_codex_shim_agent_selection_cases, lean_codex_shim_binding_cases,
-    lean_codex_shim_compaction_projection_cases, lean_codex_shim_context_usage_cases,
-    lean_codex_shim_projection_case, lean_codex_shim_projection_cases,
-    lean_codex_shim_reasoning_projection_cases, lean_codex_shim_thread_status_cases,
-    lean_codex_shim_tool_metadata_cases, lean_codex_shim_turn_lifecycle_cases,
-    lean_command_env_case, lean_command_policy_case, lean_command_sandbox_case,
-    lean_compaction_cursor_cases, lean_compaction_reducer_cases, lean_contract_snapshot,
-    lean_event_delivery_convergence_traces, lean_event_delivery_source_instances,
-    lean_event_delivery_transition_cases, lean_inference_slot_accounting_cases,
-    lean_interrupt_disposition_cases, lean_mcp_health_cases, lean_queue_deadline_cases,
-    lean_r4c_background_work_cases, lean_r6_background_theorem_witnesses,
-    lean_r6_backgrounding_case, lean_r6_backgrounding_cases, lean_recovery_sweep_cases,
-    lean_request_transition_cases, lean_restart_disposition_cases, lean_session_control_cases,
-    lean_startup_readiness_cases, lean_tool_output_paging_cases, lean_transcript_cases,
-    lean_vocabulary_values, LeanEventDeliveryAction, LeanLifecycleTransitionCase,
+    lean_codex_shim_compaction_projection_cases, lean_codex_shim_connection_admission_cases,
+    lean_codex_shim_context_usage_cases, lean_codex_shim_projection_case,
+    lean_codex_shim_projection_cases, lean_codex_shim_reasoning_projection_cases,
+    lean_codex_shim_thread_status_cases, lean_codex_shim_tool_metadata_cases,
+    lean_codex_shim_turn_lifecycle_cases, lean_command_env_case, lean_command_policy_case,
+    lean_command_sandbox_case, lean_compaction_cursor_cases, lean_compaction_reducer_cases,
+    lean_contract_snapshot, lean_event_delivery_convergence_traces,
+    lean_event_delivery_source_instances, lean_event_delivery_transition_cases,
+    lean_inference_slot_accounting_cases, lean_interrupt_disposition_cases, lean_mcp_health_cases,
+    lean_queue_deadline_cases, lean_r4c_background_work_cases,
+    lean_r6_background_theorem_witnesses, lean_r6_backgrounding_case, lean_r6_backgrounding_cases,
+    lean_recovery_sweep_cases, lean_request_transition_cases, lean_restart_disposition_cases,
+    lean_session_control_cases, lean_startup_readiness_cases, lean_tool_output_paging_cases,
+    lean_transcript_cases, lean_vocabulary_values, LeanEventDeliveryAction,
+    LeanLifecycleTransitionCase,
 };
 use support::conformance_consumers::assert_registered_conformance_consumers_resolve;
 use support::snapshots::{
-    fetch_request_lineage_snapshot, fetch_request_lineage_snapshot_by_tuple,
-    fetch_request_snapshot, fetch_request_snapshot_raw, fetch_session_snapshot,
-    RequestLineageSnapshot, RequestSnapshot,
+    fetch_request_lineage_snapshot, fetch_request_snapshot, fetch_request_snapshot_raw,
+    fetch_session_snapshot, RequestLineageSnapshot, RequestSnapshot,
 };
 use support::{
-    build_request, create_agent_session, create_request, create_request_with_signed_fields,
-    create_request_with_valid_until, first_optional_row, first_row, materialization_identity,
-    set_interrupt_requested_at, set_request_lifecycle_state, test_db, AGENT_NAME, BACKEND_ID,
-    DEADLINE_SECS, NODE_DID,
+    build_request, first_optional_row, first_row, test_db, AGENT_NAME, BACKEND_ID, DEADLINE_SECS,
+    NODE_DID,
 };
 
 #[path = "conformance/backend_health.rs"]
@@ -75,16 +73,12 @@ mod command_policy;
 mod compaction_gate;
 #[path = "conformance/completion_retry.rs"]
 mod completion_retry;
-#[path = "conformance/config_replication.rs"]
-mod config_replication;
 #[path = "conformance/coverage.rs"]
 mod coverage;
 #[path = "conformance/directory_projection.rs"]
 mod directory_projection;
 #[path = "conformance/enrollment.rs"]
 mod enrollment;
-#[path = "conformance/eth_submission.rs"]
-mod eth_submission;
 #[path = "conformance/eval.rs"]
 mod eval;
 #[path = "conformance/event_delivery.rs"]
@@ -113,16 +107,14 @@ mod plugin_job;
 mod prompt_template;
 #[path = "conformance/recovery_sweeps.rs"]
 mod recovery_sweeps;
-#[path = "conformance/replicated_request_convergence.rs"]
-mod replicated_request_convergence;
 #[path = "conformance/request_input.rs"]
 mod request_input;
 #[path = "conformance/request_lifecycle.rs"]
 mod request_lifecycle;
+#[path = "conformance/request_owner_scope.rs"]
+mod request_owner_scope;
 #[path = "conformance/session_control.rs"]
 mod session_control;
-#[path = "conformance/session_hydration.rs"]
-mod session_hydration;
 #[path = "conformance/startup_readiness.rs"]
 mod startup_readiness;
 #[path = "conformance/streaming_compaction.rs"]
@@ -147,38 +139,28 @@ async fn startup_recovery_order_terminalizes_crash_orphaned_calls() {
 
 #[tokio::test]
 async fn single_claimer_watcher_never_claims_foreign_replica() {
-    replicated_request_convergence::single_claimer_watcher_never_claims_foreign_replica().await;
-}
-
-#[tokio::test]
-async fn terminal_convergence_redrive_reasserts_unconverged_terminal() {
-    replicated_request_convergence::terminal_convergence_redrive_reasserts_unconverged_terminal()
-        .await;
-}
-
-#[tokio::test]
-async fn terminal_redrive_window_advances_past_sixty_four_rows() {
-    replicated_request_convergence::terminal_redrive_window_advances_past_sixty_four_rows().await;
+    request_owner_scope::single_claimer_watcher_never_claims_foreign_replica().await;
 }
 
 #[tokio::test]
 async fn canonical_recovery_repairs_expired_request_after_terminal_write_gap() {
-    replicated_request_convergence::canonical_recovery_repairs_expired_request_after_terminal_write_gap().await;
+    request_owner_scope::canonical_recovery_repairs_expired_request_after_terminal_write_gap()
+        .await;
 }
 
 #[tokio::test]
 async fn recover_stuck_requests_recovers_claimed_lifecycle_state() {
-    replicated_request_convergence::recover_stuck_requests_recovers_claimed_lifecycle_state().await;
+    request_owner_scope::recover_stuck_requests_recovers_claimed_lifecycle_state().await;
 }
 
 #[tokio::test]
 async fn reconcile_coalesce_never_supersedes_foreign_replica() {
-    replicated_request_convergence::reconcile_coalesce_never_supersedes_foreign_replica().await;
+    request_owner_scope::reconcile_coalesce_never_supersedes_foreign_replica().await;
 }
 
 #[tokio::test]
 async fn drain_wakeups_never_interrupts_foreign_replica() {
-    replicated_request_convergence::drain_wakeups_never_interrupts_foreign_replica().await;
+    request_owner_scope::drain_wakeups_never_interrupts_foreign_replica().await;
 }
 
 #[tokio::test]
@@ -194,6 +176,11 @@ fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
 #[test]
 fn generated_codex_shim_binding_cases_pin_runnable_gated_binding() {
     codex_shim::generated_codex_shim_binding_cases_pin_runnable_gated_binding();
+}
+
+#[test]
+fn generated_codex_shim_connection_admission_cases_pin_runnable_gate() {
+    codex_shim::generated_codex_shim_connection_admission_cases_pin_runnable_gate();
 }
 
 #[test]

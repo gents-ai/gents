@@ -1,13 +1,16 @@
 use anyhow::{anyhow, bail, Context, Result};
-use defra_node::EmbeddedNode;
-use gents::document_config::{
-    Agent, AgentContext, AgentTargetDocument, ChainKeyBindingDocument, CompactionConfig,
-    DatastoreToolSurfaceDocument, EventSource, InferenceBackend, InferenceBackendObservation,
-    InferenceExecution, InferenceProfile, InferenceSampling, Node, Schedule, ScheduleObservation,
-    SkillDocument, Task, ToolServiceRegistry, Tools, Trigger, TriggerObservation,
+use defra_node::Node as EmbeddedNode;
+use gents::documents::{
+    Agent, AgentContext, AgentTargetDocument, CompactionConfig, DatastoreToolSurfaceDocument,
+    EventSource, InferenceBackend, InferenceBackendObservation, InferenceExecution,
+    InferenceProfile, InferenceSampling, Node, Schedule, ScheduleObservation, SkillDocument, Task,
+    ToolServiceRegistry, Tools, Trigger, TriggerObservation,
 };
+use gents::store::config_client::TransactionFailure;
+use gents_protocol::client_protocol::SessionRowObservation;
 use gents_protocol::graphql::escape_graphql_string;
 use gents_protocol::output::reconstruction::DependencyDenial;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::{
     AgentRequestRow, AgentToolCallRow, CompactionEntryRow, GoalRow, MailboxItemRow,
     NodeReadinessRow, NodeRuntimeRow,
@@ -15,9 +18,9 @@ use gents_protocol::row::{
 use gents_protocol::schemas::{
     AGENT_MESSAGE_NAME, AGENT_NAME, AGENT_OUTPUT_SEGMENT_NAME, AGENT_REQUEST_NAME,
     AGENT_SESSION_NAME, AGENT_TARGET_NAME, AGENT_TOOL_CALL_NAME, COMPACTION_ENTRY_NAME, GOAL_NAME,
-    INFERENCE_BACKEND_NAME, INFERENCE_PROFILE_NAME, MAILBOX_ITEM_NAME, NODE_NAME,
-    NODE_READINESS_NAME, NODE_RUNTIME_NAME, SCHEDULE_NAME, SKILL_NAME, TASK_NAME, TOOLS_NAME,
-    TOOL_SERVICE_REGISTRY_NAME, TRIGGER_NAME,
+    INFERENCE_BACKEND_METADATA_NAME as INFERENCE_BACKEND_NAME, INFERENCE_BACKEND_OBSERVATION_NAME,
+    INFERENCE_PROFILE_NAME, MAILBOX_ITEM_NAME, NODE_NAME, NODE_READINESS_NAME, NODE_RUNTIME_NAME,
+    SCHEDULE_NAME, SKILL_NAME, TASK_NAME, TOOLS_NAME, TOOL_SERVICE_REGISTRY_NAME, TRIGGER_NAME,
 };
 use gents_protocol::session::AgentSession;
 use serde::de::DeserializeOwned;
@@ -40,19 +43,23 @@ pub use session_tip::{
     RequestPromptFact, RequestPromptOwnership,
 };
 mod snapshot_loaders;
+pub use snapshot_loaders::{load_node_snapshot_on, SnapshotReadError};
+#[cfg(test)]
+pub(crate) use snapshot_loaders::{snapshot_query, SNAPSHOT_ROOTS};
 
 pub use agent_scope::load_node_scoped_snapshot;
+#[cfg(test)]
 pub use document_patches::fetch_doc_patch;
-pub(crate) use document_patches::{
-    is_transcript_content_collection, supports_doc_patch_collection,
-};
+#[cfg(test)]
+pub(crate) use document_patches::supports_doc_patch_collection;
+pub(crate) use document_patches::{is_transcript_content_collection, OBSERVED_COLLECTIONS};
 pub(crate) use request_closure::{close_request_rows, close_request_rows_on};
 pub use session_transcript::{
     load_session_compaction_entries, load_session_compaction_entries_on,
     load_session_context_store, load_session_context_store_on, load_session_diagnostics_store,
-    load_session_transcript_page, load_session_transcript_page_on, load_session_transcript_window,
-    load_session_transcript_window_on, session_transcript_requester_scope,
-    session_unreadable_reason, session_unsendable_reason, TranscriptWindow,
+    load_session_diagnostics_store_on, load_session_transcript_page,
+    load_session_transcript_page_on, load_session_transcript_window,
+    load_session_transcript_window_on, TranscriptWindow,
 };
 pub(crate) use snapshot_loaders::*;
 
@@ -80,7 +87,7 @@ pub struct SessionTranscriptQueryPage {
     pub requests: Vec<AgentRequestRow>,
     /// Delivery messages outside the page that carry results for its tool
     /// calls: sources for those results, never rows of their own.
-    pub result_messages: Vec<gents::session::canonical_rows::TranscriptMessageRow>,
+    pub result_messages: Vec<gents_protocol::output::rows::TranscriptMessageRow>,
 }
 
 /// The message numbers a transcript read proves, inclusive. Every message in
@@ -94,10 +101,10 @@ pub struct TranscriptSpan {
 
 #[derive(Debug, Default)]
 pub struct CanonicalTranscriptDependencies {
-    pub origin_headers: Vec<gents::session::canonical_rows::TranscriptMessageRow>,
+    pub origin_headers: Vec<gents_protocol::output::rows::TranscriptMessageRow>,
     /// Exact source request metadata supplies attribution, never child turn membership.
     pub origin_requests: Vec<AgentRequestRow>,
-    pub output_segments: Vec<gents::session::canonical_rows::OutputSegmentRow>,
+    pub output_segments: Vec<gents_protocol::output::rows::OutputSegmentRow>,
     pub denied_header_doc_ids: Vec<String>,
     pub denied_segment_doc_ids: Vec<String>,
     pub dependency_denials: Vec<DependencyDenial>,
@@ -109,16 +116,16 @@ pub(super) struct TranscriptCursorRow {
 }
 
 pub(super) const NODE_FIELDS: &str =
-    "node_did display_name default_agent_id enabled created_at created_by max_request_hop tags";
-pub(super) const AGENT_FIELDS: &str = "agent_id node_did display_name description context_id inference_profile_id enabled tags created_at";
+    "node_did display_name avatar default_agent_did enabled created_at created_by max_request_hop tags";
+pub(super) const AGENT_FIELDS: &str = "agent_did creation_nonce node_did display_name description context_id inference_profile_id enabled tags created_at";
 pub(super) const NODE_RUNTIME_FIELDS: &str = "node_did reconcile_phase agent_executor_capacity agent_executor_queue_depth agent_executor_status_json last_reconcile_result last_reconcile_error last_reconcile_completed_at updated_at";
 pub(super) const NODE_READINESS_FIELDS: &str = "node_did snapshot_json updated_at";
-pub(super) const AGENT_REQUEST_FIELDS: &str = "_docID request_id purpose node_did requester_did agent_id session_id retry_parent_request retry_parent_request_doc_id retry_root_request superseded_by_request superseded_by_request_doc_id content max_total_tokens input lifecycle_state backend_id execution_origin execution_generation execution_lease_secs execution_lease_expires_at caused_by_trigger_id caused_by_trigger_kind caused_by_correlation caused_by_trigger_context caused_by_source_doc_id caused_by_parent_request_id caused_by_parent_request_doc_id caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id failure_reason terminalized_at terminal_output stopped_before_running terminal_redrive_attempts created_at claimed_at deadline retry_count max_retries interrupt_requested_at valid_until request_hop workspace_id workspace_authority workspace_owner_node_did workspace_seal_hash retry_key caused_by_trigger_doc_id admission_kind admission_signer_did admission_signature enrollment_request_id enrollment_request_digest enrollment_admin_did enrollment_authorization_sequence enrollment_authorization_expires_at runtime_issuer_did runtime_source_request_id runtime_source_kind";
-pub(super) const AGENT_SESSION_FIELDS: &str = "session_id node_did requester_did agent_id created_at closed_at stopped_at archived_at archive_revision title tags provenance observation";
+pub(super) const AGENT_REQUEST_FIELDS: &str = "_docID request_id purpose node_did requester_did agent_did session_id session_doc_id agent_doc_id retry_parent_request retry_parent_request_doc_id retry_root_request superseded_by_request superseded_by_request_doc_id content max_total_tokens input lifecycle_state backend_id execution_origin execution_generation execution_lease_secs execution_lease_expires_at caused_by_trigger_id caused_by_trigger_kind caused_by_correlation caused_by_trigger_context caused_by_source_doc_id caused_by_parent_request_id caused_by_parent_request_doc_id caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id failure_reason terminalized_at terminal_output stopped_before_running terminal_redrive_attempts created_at claimed_at deadline retry_count max_retries interrupt_requested_at valid_until request_hop workspace_id workspace_authority workspace_owner_node_did workspace_seal_hash retry_key caused_by_trigger_doc_id admission_kind admission_signer_did admission_signature enrollment_request_id enrollment_request_digest enrollment_admin_did enrollment_authorization_sequence enrollment_authorization_expires_at runtime_issuer_did runtime_source_request_id runtime_source_kind";
+pub(super) const AGENT_SESSION_FIELDS: &str = "session_id node_did requester_did agent_did created_at closed_at stopped_at archived_at archive_revision title tags provenance observation";
 pub(super) const GOAL_FIELDS: &str = "goal_id session_id node_did creation_key objective status token_budget tokens_used active_time_seconds active_started_at consecutive_blocked_audits last_blocked_request_id last_blocked_reason last_continued_from_request_id continuation_sequence wrapup_requested wrapup_completed infrastructure_retry_count last_failure completion_evidence created_at updated_at";
 pub(super) const AGENT_TOOL_CALL_FIELDS: &str = "_docID tool_call_key node_did session_id request_id request_doc_id requester_did message_sequence tool_name tool_call_id status lifecycle_state await_mode deadline_at cancel_cause started_at completed_at selected_service_id selected_tool_name tool_failure_class denial_reason denied_argv denied_command denied_argument denied_subcommand denied_prefix policy_mode policy_network latency_ms job_pin job_progress spawned_by_tool_call_doc_id plugin_parent_tool_call_doc_id terminal_output";
 pub(super) const COMPACTION_ENTRY_FIELDS: &str = "compaction_key session_id requester_did sequence summary files_read files_modified messages_compacted compacted_through_sequence original_tokens compacted_tokens created_at";
-pub(super) const TASK_FIELDS: &str = "task_id node_did display_name description agent_id prompt_template emit_outcome goal_objective_template goal_token_budget hooks enabled output_schema_ref created_at updated_at tags";
+pub(super) const TASK_FIELDS: &str = "task_id node_did display_name description agent_did prompt_template emit_outcome goal_objective_template goal_token_budget hooks enabled output_schema_ref created_at updated_at tags";
 pub(super) const SKILL_FIELDS: &str = "skill_id node_did name description instructions source_directory tool_refs display_name interface_json enabled created_at tags";
 pub(super) const SCHEDULE_FIELDS: &str =
     "schedule_id node_did display_name cadence created_at updated_at tags";
@@ -129,30 +136,37 @@ pub(super) const TRIGGER_OBSERVATION_FIELDS: &str =
 pub(super) const TOOLS_FIELDS: &str = "tools_id node_did display_name host remote agents built_ins datastore integrations self_config tags";
 pub(super) const AGENT_CONTEXT_FIELDS: &str = "context_id node_did display_name description system_prompt tools_id compaction_id skill_ids tags";
 pub(super) const COMPACTION_CONFIG_FIELDS: &str = "compaction_id node_did display_name strategy threshold keep_recent_tokens tool_result_max_chars summary_max_output_tokens summary_file_list_max inference_profile_id tags";
-pub(super) const INFERENCE_BACKEND_FIELDS: &str = "backend_id node_did name provider_kind openai_wire_api endpoint auth connect_timeout_secs discovery_timeout_secs max_concurrent max_queue_depth enabled tags";
+pub(super) const INFERENCE_BACKEND_FIELDS: &str = "_docID backend_id node_did name provider_kind openai_wire_api endpoint auth_kind credential_id credential_version environment_variable oauth_account_ref oauth_allow_overage claude_platform connect_timeout_secs discovery_timeout_secs max_concurrent max_queue_depth enabled tags";
 pub(super) const INFERENCE_BACKEND_OBSERVATION_FIELDS: &str =
-    "backend_id catalogs catalog_freshness last_probe probe_status";
+    "metadata_doc_id backend_id catalogs catalog_freshness last_probe probe_status";
 pub(super) const INFERENCE_PROFILE_FIELDS: &str = "profile_id node_did display_name description backend_id model_name reasoning_effort service_tier context_window max_output_tokens sampling_id execution_id tags";
 pub(super) const INFERENCE_SAMPLING_FIELDS: &str = "sampling_id node_did display_name temperature top_p top_k seed min_p frequency_penalty presence_penalty repetition_penalty tags";
 pub(super) const INFERENCE_EXECUTION_FIELDS: &str = "execution_id node_did display_name max_turns max_total_tokens stream_batch_ms stream_liveness_timeout_secs provider_idle_timeout_secs deadline_duration_secs retry_policy_id tags";
-pub(super) const TOOL_SERVICE_REGISTRY_FIELDS: &str = "service_id node_did display_name description hostname tailscale_ip lan_ip mcp_port mcp_path send_node_did enabled tags";
+pub(super) const TOOL_SERVICE_REGISTRY_FIELDS: &str = "service_id node_did display_name description hostname tailscale_ip lan_ip mcp_port mcp_path endpoint_url send_node_did enabled tags";
 pub(super) const EVENT_SOURCE_FIELDS: &str = "event_source_id node_did display_name source_collection event_kind filter correlation_field group workspace_authority created_at updated_at tags";
 pub(super) const AGENT_TARGET_FIELDS: &str =
-    "target_id node_did target_node_did agent_id name description tags";
+    "target_id node_did target_node_did agent_did name description tags";
 pub(super) const DATASTORE_TOOL_SURFACE_FIELDS: &str =
     "surface_id node_did display_name enabled entries created_at tags";
-pub(super) const CHAIN_KEY_BINDING_FIELDS: &str =
-    "binding_id node_did address key_backend attestation created_at revoked_at tags";
-pub(super) const MAILBOX_ITEM_FIELDS: &str = "_docID item_key requester_did node_did status kind action title summary payload source_kind source_id session_id request_id cause_doc_id target_node_did target_agent_id expected_collection parent_item_id deadline_at created_at updated_at resolved_at resolved_doc_id";
+pub(super) const MAILBOX_ITEM_FIELDS: &str = "_docID item_key requester_did node_did status kind action title summary payload source_kind source_id session_id request_id cause_doc_id target_node_did target_agent_did expected_collection parent_item_id deadline_at created_at updated_at resolved_at resolved_doc_id";
+
+/// What a selected-session read found in one read transaction.
+#[derive(Debug)]
+pub enum SelectedSessionRead {
+    /// The node's canonical session row and the requests it selects.
+    Visible(Box<ClientStore>),
+    /// The runtime returned no visible session for this scope.
+    Absent,
+}
 
 pub async fn load_chat_patch(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     node_did: &str,
     session_id: &str,
     request_id: Option<&str>,
     fallback_request_id: Option<&str>,
     page_request_doc_ids: &[String],
-) -> Result<ClientStore> {
+) -> Result<SelectedSessionRead> {
     access
         .transact_readonly("desktop.selected_request_refresh", |txn| {
             let node_did = node_did.to_owned();
@@ -193,7 +207,7 @@ async fn load_chat_patch_with<'a>(
     fallback_request_id: Option<&str>,
     page_request_doc_ids: &[String],
     execute: &mut (impl FnMut(String, &'static str) -> QueryFuture<'a> + 'a),
-) -> Result<ClientStore> {
+) -> Result<SelectedSessionRead> {
     let node_did = node_did.trim();
     let session_id = session_id.trim();
     let request_id = request_id.map(str::trim).filter(|id| !id.is_empty());
@@ -201,12 +215,14 @@ async fn load_chat_patch_with<'a>(
         .map(str::trim)
         .filter(|id| !id.is_empty());
     if node_did.is_empty() || session_id.is_empty() {
-        return Ok(ClientStore::default());
+        return Ok(SelectedSessionRead::Visible(Box::default()));
     }
 
     let session_query = selected_session_query(node_did, session_id);
     let session_data = execute(session_query, "selected session owner").await?;
-    let session = selected_session_from_data(&session_data, node_did, session_id)?;
+    let Some(session) = selected_session_from_data(&session_data, node_did, session_id)? else {
+        return Ok(SelectedSessionRead::Absent);
+    };
     let requester_did = session.requester_did.clone();
     let lookup = selected_request_lookup(
         node_did,
@@ -238,19 +254,22 @@ async fn load_chat_patch_with<'a>(
     .await?;
     let scopes = request_context_scopes(&requests);
     if scopes.is_empty() {
-        return Ok(ClientStore::from_rows(ClientStoreRows {
-            requests,
-            sessions: vec![session],
-            ..ClientStoreRows::default()
-        }));
+        return Ok(SelectedSessionRead::Visible(Box::new(
+            ClientStore::from_rows(ClientStoreRows {
+                requests,
+                sessions: vec![session],
+                ..ClientStoreRows::default()
+            }),
+        )));
     }
     let query = request_context_query(&scopes);
     let data = execute(query, "request session context").await?;
     request_patch_from_context_data(&data, requests, vec![session], requester_did, &scopes)
+        .map(|patch| SelectedSessionRead::Visible(Box::new(patch)))
 }
 
 pub(crate) async fn load_request_documents_on(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     doc_ids: &[String],
 ) -> Result<Vec<AgentRequestRow>> {
     let (rows, expected) = session_transcript::read_request_documents(
@@ -401,30 +420,32 @@ fn selected_session_query(node_did: &str, session_id: &str) -> String {
     )
 }
 
+/// An empty authorized read may mean absent or hidden. Duplicate or
+/// out-of-scope rows are integrity faults.
 fn selected_session_from_data(
     data: &Value,
     node_did: &str,
     session_id: &str,
-) -> Result<AgentSession> {
+) -> Result<Option<AgentSession>> {
     let (sessions, complete) = snapshot_loaders::parse_query_rows_with_completeness::<AgentSession>(
         data,
         AGENT_SESSION_NAME,
     )?;
     anyhow::ensure!(complete, "selected session query returned malformed rows");
-    anyhow::ensure!(
-        sessions.len() == 1,
-        "selected session refresh requires exactly one canonical AgentSession row for node/session; found {}",
-        sessions.len()
-    );
-    let session = sessions
-        .into_iter()
-        .next()
-        .expect("one session was checked");
-    anyhow::ensure!(
-        session.node_did == node_did && session.session_id == session_id,
-        "selected session refresh returned a row outside its exact node/session scope"
-    );
-    Ok(session)
+    let in_scope = sessions
+        .iter()
+        .all(|session| session.node_did == node_did && session.session_id == session_id);
+    match SessionRowObservation::observe(sessions.len(), in_scope) {
+        SessionRowObservation::Absent => Ok(None),
+        SessionRowObservation::Canonical => Ok(sessions.into_iter().next()),
+        SessionRowObservation::Duplicate => bail!(
+            "selected session refresh found {} canonical AgentSession rows for one node/session",
+            sessions.len()
+        ),
+        SessionRowObservation::OutOfScope => {
+            bail!("selected session refresh returned a row outside its exact node/session scope")
+        }
+    }
 }
 
 fn session_request_seed_query(
@@ -449,7 +470,10 @@ fn session_request_seed_query(
             .map(|did| format!("\"{}\"", escape_graphql_string(did)))
             .unwrap_or_else(|| "null".to_string());
         let mut predicates = vec![
-            "lifecycle_state: { _neq: \"completed\" }".to_string(),
+            format!(
+                "lifecycle_state: {{ _neq: \"{}\" }}",
+                RequestLifecycleState::Completed.as_str()
+            ),
             "lifecycle_state: { _eq: null }".to_string(),
             "retry_parent_request: { _neq: null }".to_string(),
             "retry_parent_request_doc_id: { _neq: null }".to_string(),
@@ -568,27 +592,15 @@ pub(super) async fn execute_local_graphql_query(
     query: &str,
     operation: &str,
 ) -> Result<Value> {
-    let response = gents::graphql::graphql_with_transaction_retry(node, query, operation).await?;
+    let response =
+        gents::store::graphql::graphql_with_transaction_retry(node, query, operation).await?;
     response
         .data
         .with_context(|| format!("{operation} returned no data"))
 }
 
-pub(super) async fn load_rows<T>(node: &EmbeddedNode, root: &str, query: &str) -> Result<Vec<T>>
-where
-    T: DeserializeOwned,
-{
-    let operation = format!("query for {root}");
-    let response = gents::graphql::graphql_with_transaction_retry(node, query, &operation).await?;
-
-    let data = response
-        .data
-        .with_context(|| format!("query for {root} returned no data"))?;
-    parse_query_rows(&data, root)
-}
-
 pub(super) async fn execute_access_graphql_query(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     query: &str,
     operation: &str,
 ) -> Result<Value> {
@@ -620,16 +632,21 @@ where
     parse_row_array(rows, root)
 }
 
-pub(super) fn parse_canonical_rows<T>(
+pub(super) fn parse_canonical_rows<T, E>(
     data: &Value,
     root: &str,
-    decode: impl Fn(&Value) -> Result<T>,
-) -> Result<Vec<T>> {
+    decode: impl Fn(&Value) -> std::result::Result<T, E>,
+) -> Result<Vec<T>>
+where
+    E: Into<anyhow::Error>,
+{
     let rows = data
         .get(root)
         .and_then(Value::as_array)
         .ok_or_else(|| anyhow!("query result missing canonical row array {root}"))?;
-    rows.iter().map(decode).collect()
+    rows.iter()
+        .map(|row| decode(row).map_err(Into::into))
+        .collect()
 }
 
 pub(super) fn parse_row_array<T>(rows: &Value, root: &str) -> Result<Vec<T>>

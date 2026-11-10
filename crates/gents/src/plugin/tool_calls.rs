@@ -5,7 +5,7 @@ use gents_loop::tool_effects::{ToolEffectDispatcher, ToolEffectError};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
-use crate::tool_call_lifecycle::ToolOutcome;
+use crate::tools::call::lifecycle::ToolOutcome;
 
 pub(crate) const MAX_EFFECTS: u32 = 64;
 pub(crate) const MAX_PAYLOAD_BYTES: usize = 1024 * 1024;
@@ -15,7 +15,8 @@ pub(super) fn available(granted: bool, live_dispatcher: bool) -> bool {
 }
 
 pub fn supported(name: &str, job_tools: &BTreeSet<String>) -> bool {
-    crate::hook::persistence::HookOwnedTool::of(name).is_none() && !job_tools.contains(name)
+    crate::tools::call::hook::persistence::HookOwnedTool::of(name).is_none()
+        && !job_tools.contains(name)
 }
 
 pub(super) fn composition_note() -> String {
@@ -173,7 +174,7 @@ mod tests {
             arguments: &'a str,
         ) -> gents_loop::tool::BoxFuture<
             'a,
-            Result<crate::tool_call_lifecycle::ToolOutcome, ToolEffectError>,
+            Result<crate::tools::call::lifecycle::ToolOutcome, ToolEffectError>,
         > {
             Box::pin(async move {
                 assert!(
@@ -200,7 +201,7 @@ mod tests {
                         ));
                     }
                 };
-                Ok(crate::tool_call_lifecycle::ToolOutcome::Completed(
+                Ok(crate::tools::call::lifecycle::ToolOutcome::Completed(
                     result.to_string(),
                 ))
             })
@@ -238,7 +239,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_installed_wasm_plugin_gets_only_explicitly_granted_tool_calls() {
-        use crate::llm::tool::ToolDyn;
+        use crate::inference::llm::tool::ToolDyn;
         use crate::plugin::tests::executor::{asking_plugin_wat, installed_plugin};
         let request =
             json!({"tool_calls":{"requests":[{"id":"table","tool_name":"query","arguments":{}}]}});
@@ -249,7 +250,7 @@ mod tests {
         )));
         let tools = Arc::new(Tools::default());
         for granted in [false, true] {
-            let selected = crate::document_config::PluginToolRef {
+            let selected = crate::documents::PluginToolRef {
                 plugin: "team/plugin".into(),
                 digest: None,
                 input_fields: vec![],
@@ -272,7 +273,7 @@ mod tests {
 
     #[tokio::test]
     async fn receipt_records_effective_tool_service_and_exact_first_guest_input() {
-        use crate::llm::tool::ToolDyn;
+        use crate::inference::llm::tool::ToolDyn;
         use crate::plugin::tests::executor::installed_echo;
         use sha2::{Digest, Sha256};
 
@@ -284,7 +285,7 @@ mod tests {
         let input = json!({"value": 1, "state": "caller", "tool_calls": false,
             "tool_results": {"forged": true}});
         for (granted, live) in [(false, true), (true, false), (true, true)] {
-            let selected = crate::document_config::PluginToolRef {
+            let selected = crate::documents::PluginToolRef {
                 plugin: "team/plugin".into(),
                 digest: None,
                 input_fields: vec![],
@@ -309,7 +310,7 @@ mod tests {
             assert_eq!(observed, expected);
             let receipt = call.plugin_receipt.unwrap();
             assert_eq!(receipt.authority.unwrap().host_tools, granted && live);
-            let canonical = crate::workspace::canonical_json_string(&observed).unwrap();
+            let canonical = crate::tools::workspace::canonical_json_string(&observed).unwrap();
             assert_eq!(
                 receipt.input_digest,
                 format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))
@@ -334,7 +335,7 @@ mod tests {
                 _: &'a str,
             ) -> gents_loop::tool::BoxFuture<
                 'a,
-                Result<crate::tool_call_lifecycle::ToolOutcome, ToolEffectError>,
+                Result<crate::tools::call::lifecycle::ToolOutcome, ToolEffectError>,
             > {
                 Box::pin(async {
                     Err(ToolEffectError::Fatal(
@@ -367,7 +368,7 @@ mod tests {
         for case in cases["supported"].as_array().unwrap() {
             let expected = case["expected"].as_bool().unwrap();
             let names: Vec<&str> = match case["route"].as_str().unwrap() {
-                "hook_owned" => crate::hook::persistence::HookOwnedTool::ROUTES
+                "hook_owned" => crate::tools::call::hook::persistence::HookOwnedTool::ROUTES
                     .iter()
                     .map(|(name, _)| *name)
                     .collect(),
@@ -417,7 +418,7 @@ mod tests {
             let outcome = match case["outcome"].as_str().unwrap() {
                 "completed" => Ok(ToolOutcome::Completed("{}".into())),
                 "failed" => Ok(ToolOutcome::Failed {
-                    class: crate::tool_call_lifecycle::FailureClass::External,
+                    class: crate::tools::call::lifecycle::FailureClass::External,
                     denial: None,
                     text: "boom".into(),
                 }),

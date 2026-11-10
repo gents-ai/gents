@@ -1,7 +1,8 @@
 /* Reactive reads and writes over `ctx.data`, for a page. `useQuery` runs
    one declared query tool, holds loading/error/data, cancels a stale
    answer when its inputs change or the page unmounts, re-runs on the
-   shell's `client-updated` events (debounced) and on a bounded interval
+   declared query stream, or the shell's `client-updated` events if the
+   stream is unavailable, and on a bounded interval
    while mounted. The tool answers one page of at most 1,000 rows and
    truncates a string past 2,000 bytes; the hook can follow both — the
    `next_offset` of a full page and the `field_recovery` of a cut string —
@@ -11,10 +12,19 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { UxContext, UxDataCallResult } from "./contract";
 
+/** the live stream behind a query: `live` while snapshots arrive, `reconnecting`
+    after a failed attempt (the data refreshes on client updates meanwhile),
+    `unavailable` once the stream ended for good (reopen the page), `off` when
+    the query is not watched */
+export type QueryStream = "off" | "live" | "reconnecting" | "unavailable";
+
 export interface QueryState<T = unknown> {
   data: T | null;
   error: string | null;
   loading: boolean;
+  stream: QueryStream;
+  /** why the stream ended, when it is `unavailable` */
+  streamError: string | null;
   /** run again now */
   refresh: () => void;
 }
@@ -146,20 +156,25 @@ async function allPages(
   recover: boolean,
 ) {
   const first = (await call(args)).output as QueryPage;
-  if (!Array.isArray(first.results)) return first;
+  if (!Array.isArray(first.results)) throw new Error("Invalid query results.");
   const results: unknown[] = [];
   const left: FieldRecovery[] = [];
   let page = first;
+  let offset = typeof args.offset === "number" ? args.offset : 0;
   for (;;) {
     if (recover) page = await recoverFields(call, args, page);
     for (const entry of page.field_recovery ?? []) {
       left.push({ ...entry, row: entry.row + results.length });
     }
     results.push(...page.results!);
-    if (typeof page.next_offset !== "number" || results.length >= maxRows) break;
+    if (page.next_offset == null) break;
+    if (!Number.isSafeInteger(page.next_offset) || page.next_offset <= offset)
+      throw new Error("Invalid query continuation.");
+    if (results.length >= maxRows) break;
+    offset = page.next_offset;
     const next = (await call({ ...args, offset: page.next_offset }))
       .output as QueryPage;
-    if (!Array.isArray(next.results)) break;
+    if (!Array.isArray(next.results)) throw new Error("Invalid query continuation.");
     page = next;
   }
   const out: QueryPage = { ...first, results: results.slice(0, maxRows) };
@@ -201,11 +216,36 @@ export function useQuery<T = unknown>(
     loading: enabled,
   });
   const [tick, setTick] = useState(0);
+  const currentNode = () => ctx.shell?.selectedDeployment?.()?.nodeDid ?? null;
+  const [node, setNode] = useState(currentNode);
+  const observedNode = useRef(node);
+  const [stream, setStream] = useState<{ state: QueryStream; error: string | null }>({
+    state: "off",
+    error: null,
+  });
+  const watching = stream.state === "live";
+  const loadedNode = useRef(node);
   const generation = useRef(0);
 
   const refresh = useCallback(() => setTick((n) => n + 1), []);
 
   useEffect(() => {
+    const updateNode = () => {
+      const next = currentNode();
+      if (observedNode.current !== next) {
+        observedNode.current = next;
+        generation.current++;
+        setNode(next);
+      }
+    };
+    updateNode();
+    return ctx.onEvent("shell-changed", updateNode);
+  }, [ctx]);
+
+  useEffect(() => {
+    const nodeChanged = loadedNode.current !== node;
+    loadedNode.current = node;
+    if (nodeChanged) setState({ data: null, error: null, loading: enabled });
     if (!enabled) return;
     const mine = ++generation.current;
     setState((s) => ({ ...s, loading: true }));
@@ -232,10 +272,55 @@ export function useQuery<T = unknown>(
       /* a later run or the unmount makes this answer stale */
       if (generation.current === mine) generation.current++;
     };
-  }, [ctx, surface, tool, argsKey, enabled, tick, pages, maxRows, recover]);
+  }, [ctx, surface, tool, argsKey, enabled, tick, pages, maxRows, recover, node]);
 
   useEffect(() => {
-    if (!enabled || !live) return;
+    setStream({ state: "off", error: null });
+    if (!enabled || !live || typeof ctx.data.watch !== "function") return;
+    let disposed = false;
+    let failed = false;
+    let stop: (() => void) | undefined;
+    const cancelWatch = () => {
+      const cancel = stop;
+      stop = undefined;
+      cancel?.();
+    };
+    Promise.resolve()
+      .then(() =>
+        ctx.data.watch(surface, tool, JSON.parse(argsKey), (event) => {
+          if (disposed || failed) return;
+          if (event.kind === "snapshot") {
+            setStream({ state: "live", error: null });
+            refresh();
+          } else if (event.kind === "reconnecting") {
+            setStream({ state: "reconnecting", error: null });
+          } else {
+            failed = true;
+            setStream({ state: "unavailable", error: event.message });
+            cancelWatch();
+          }
+        }),
+      )
+      .then((cancel) => {
+        if (disposed || failed) cancel();
+        else {
+          stop = cancel;
+          setStream((current) =>
+            current.state === "off" ? { state: "live", error: null } : current,
+          );
+        }
+      })
+      .catch(() => {
+        if (!disposed) setStream({ state: "off", error: null });
+      });
+    return () => {
+      disposed = true;
+      cancelWatch();
+    };
+  }, [ctx, surface, tool, argsKey, enabled, live, node, refresh]);
+
+  useEffect(() => {
+    if (!enabled || !live || watching) return;
     let timer: ReturnType<typeof setTimeout> | null = null;
     const off = ctx.onEvent("client-updated", () => {
       if (timer) clearTimeout(timer);
@@ -245,7 +330,7 @@ export function useQuery<T = unknown>(
       off();
       if (timer) clearTimeout(timer);
     };
-  }, [ctx, enabled, live, refresh]);
+  }, [ctx, enabled, live, watching, refresh]);
 
   useEffect(() => {
     if (!enabled || intervalMs <= 0) return;
@@ -253,7 +338,7 @@ export function useQuery<T = unknown>(
     return () => clearInterval(timer);
   }, [enabled, intervalMs, refresh]);
 
-  return { ...state, refresh };
+  return { ...state, stream: stream.state, streamError: stream.error, refresh };
 }
 
 export interface WriteState {

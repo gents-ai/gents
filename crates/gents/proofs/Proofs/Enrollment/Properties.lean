@@ -123,6 +123,14 @@ theorem canonical_fields_exclude_ticket_peer (r : Request) (value : String) :
     canonicalRequestFields { r with candidateTicketPeer := value } =
       canonicalRequestFields r := by rfl
 
+theorem removing_candidate_name_changes_signed_fields (r : Request) (name : String) :
+    canonicalRequestFields { r with candidateName := some name } ≠
+      canonicalRequestFields { r with candidateName := none } := by
+  intro h
+  have hlen := congrArg List.length h
+  simp [canonicalRequestFields, canonicalRequestTextFields, candidateNameFields,
+    textFieldsToBytes] at hlen
+
 theorem canonical_fields_exclude_signature_observation (r : Request) (value : Bool) :
     canonicalRequestFields { r with candidateSigned := value } =
       canonicalRequestFields r := by rfl
@@ -451,6 +459,12 @@ theorem revocation_retracts_exact_member_routes
     serverToClientRoute r d ∉ (revoke s r revision).appliedRoutes := by
   simp [revoke, hrevoke, routeOwnedBy, clientToServerRoute, serverToClientRoute]
 
+theorem revocation_preserves_all_replicated_copies
+    (s : State) (r : Request) (revision : AuthorizationRevision) :
+    (revoke s r revision).replicatedCopies = s.replicatedCopies := by
+  unfold revoke
+  split <;> rfl
+
 theorem revocation_preserves_unrelated_operations
     {s : State} {r : Request} {revision : AuthorizationRevision}
     {membership : Membership} {route : AppliedRoute}
@@ -487,111 +501,5 @@ theorem receipt_route_growth_is_exact {s : State} {r : Request} {d : Decision}
     · exact hclient
     · exact False.elim (hold hpre)
   · exact False.elim (hold hnew)
-
-theorem enrollment_ready_refines_directional_hydration_admission
-    {s : State} {r : Request} {session : String} {direction : RouteDirection}
-    {sessions : Finset SessionHydration.SessionOwner}
-    (hready : enrollmentReady s r)
-    (howner : SessionHydration.ownedSession
-      (hydrationRequestForDirection r session direction) ∈ sessions) :
-    SessionHydration.admits (projectedHydrationCatalogFor s r.networkId direction sessions)
-      (hydrationRequestForDirection r session direction) := by
-  rcases hready with ⟨d, hd, hcurrent, hmembership, _, hclient, hserver⟩
-  have hrequest : r ∈ s.acceptedRequests := hcurrent.1
-  cases direction with
-  | clientToServer =>
-      refine ⟨?_, ?_, Or.inl howner⟩
-      · unfold projectedHydrationCatalogFor SessionHydration.appliedPairingRoute
-          hydrationRequestForDirection
-        simp only [Finset.mem_image, Finset.mem_filter]
-        exact ⟨clientToServerRoute r d,
-          ⟨hclient, rfl, rfl, rfl,
-            ⟨r, hrequest, d, hd, hcurrent, hmembership, rfl⟩⟩, rfl⟩
-      · unfold projectedHydrationCatalogFor SessionHydration.verifiedMembership
-          hydrationRequestForDirection
-        simp only [Finset.mem_image, Finset.mem_filter]
-        exact ⟨membershipFor r d,
-          ⟨hmembership, rfl, rfl, rfl, rfl,
-            ⟨r, hrequest, d, hd, hcurrent, rfl⟩⟩, rfl⟩
-  | serverToClient =>
-      refine ⟨?_, ?_, Or.inl howner⟩
-      · unfold projectedHydrationCatalogFor SessionHydration.appliedPairingRoute
-          hydrationRequestForDirection
-        simp only [Finset.mem_image, Finset.mem_filter]
-        exact ⟨serverToClientRoute r d,
-          ⟨hserver, rfl, rfl, rfl,
-            ⟨r, hrequest, d, hd, hcurrent, hmembership, rfl⟩⟩, rfl⟩
-      · unfold projectedHydrationCatalogFor SessionHydration.verifiedMembership
-          hydrationRequestForDirection
-        simp only [Finset.mem_image, Finset.mem_filter]
-        exact ⟨membershipFor r d,
-          ⟨hmembership, rfl, rfl, rfl, rfl,
-            ⟨r, hrequest, d, hd, hcurrent, rfl⟩⟩, rfl⟩
-
-theorem client_ready_refines_hydration_admission
-    {s : State} {r : Request} {session : String}
-    {sessions : Finset SessionHydration.SessionOwner}
-    (hready : enrollmentReady s r)
-    (howner : SessionHydration.ownedSession (hydrationRequestFor r session) ∈ sessions) :
-    SessionHydration.admits (projectedClientToServerHydrationCatalog s r.networkId sessions)
-      (hydrationRequestFor r session) := by
-  exact enrollment_ready_refines_directional_hydration_admission hready howner
-
-theorem server_ready_refines_hydration_admission
-    {s : State} {r : Request} {session : String}
-    {sessions : Finset SessionHydration.SessionOwner}
-    (hready : enrollmentReady s r)
-    (howner : SessionHydration.ownedSession (reverseHydrationRequestFor r session) ∈ sessions) :
-    SessionHydration.admits (projectedServerToClientHydrationCatalog s r.networkId sessions)
-      (reverseHydrationRequestFor r session) := by
-  exact enrollment_ready_refines_directional_hydration_admission hready howner
-
-theorem projected_hydration_admission_requires_exact_current_approval
-    {s : State} {selectedNetwork : String} {direction : RouteDirection}
-    {sessions : Finset SessionHydration.SessionOwner}
-    {request : SessionHydration.Request}
-    (hadmits : SessionHydration.admits
-      (projectedHydrationCatalogFor s selectedNetwork direction sessions) request) :
-    ∃ r ∈ s.acceptedRequests, ∃ d ∈ s.decisions,
-      currentApproval s r d ∧ membershipFor r d ∈ s.memberships ∧
-      r.networkId = selectedNetwork ∧
-      toHydrationRoute (routeForDirection r d direction) =
-        SessionHydration.appliedPairingRoute request := by
-  rcases hadmits.1 with hroute
-  unfold projectedHydrationCatalogFor at hroute
-  simp only [Finset.mem_image, Finset.mem_filter] at hroute
-  rcases hroute with ⟨route, ⟨_, hnetwork, _, _, hauthorized⟩, heq⟩
-  rcases hauthorized with ⟨r, hr, d, hd, hcurrent, hmembership, hrouteeq⟩
-  subst route
-  have hrnetwork : r.networkId = selectedNetwork := by
-    cases direction <;>
-      simpa [routeForDirection, clientToServerRoute, serverToClientRoute] using hnetwork
-  exact ⟨r, hr, d, hd, hcurrent, hmembership, hrnetwork, heq⟩
-
-theorem client_hydration_admission_requires_exact_current_approval
-    {s : State} {selectedNetwork : String}
-    {sessions : Finset SessionHydration.SessionOwner}
-    {request : SessionHydration.Request}
-    (hadmits : SessionHydration.admits
-      (projectedClientToServerHydrationCatalog s selectedNetwork sessions) request) :
-    ∃ r ∈ s.acceptedRequests, ∃ d ∈ s.decisions,
-      currentApproval s r d ∧ membershipFor r d ∈ s.memberships ∧
-      r.networkId = selectedNetwork ∧
-      toHydrationRoute (clientToServerRoute r d) =
-        SessionHydration.appliedPairingRoute request := by
-  exact projected_hydration_admission_requires_exact_current_approval hadmits
-
-theorem server_hydration_admission_requires_exact_current_approval
-    {s : State} {selectedNetwork : String}
-    {sessions : Finset SessionHydration.SessionOwner}
-    {request : SessionHydration.Request}
-    (hadmits : SessionHydration.admits
-      (projectedServerToClientHydrationCatalog s selectedNetwork sessions) request) :
-    ∃ r ∈ s.acceptedRequests, ∃ d ∈ s.decisions,
-      currentApproval s r d ∧ membershipFor r d ∈ s.memberships ∧
-      r.networkId = selectedNetwork ∧
-      toHydrationRoute (serverToClientRoute r d) =
-        SessionHydration.appliedPairingRoute request := by
-  exact projected_hydration_admission_requires_exact_current_approval hadmits
 
 end Enrollment

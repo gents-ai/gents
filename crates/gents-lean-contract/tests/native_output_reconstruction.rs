@@ -207,6 +207,7 @@ fn lean_payload_kind(
         LeanPayloadKind::Text => StreamPayload::Text,
         LeanPayloadKind::Reasoning => StreamPayload::Reasoning,
         LeanPayloadKind::Signature => StreamPayload::ReasoningSignature,
+        LeanPayloadKind::ReasoningStop => StreamPayload::ReasoningStop,
         LeanPayloadKind::Summary => StreamPayload::ReasoningSummary,
         LeanPayloadKind::Encrypted => StreamPayload::ReasoningEncrypted,
         LeanPayloadKind::Redacted => StreamPayload::ReasoningRedacted,
@@ -383,6 +384,7 @@ fn lean_message(message: &LeanCanonicalMessage<LeanPayloadSpec>) -> TranscriptMe
         sequence: u32::try_from(message.sequence).expect("generated sequence fits u32"),
         role: lean_role(&message.header.role),
         native_id: message.native_id.clone(),
+        native_request_id: message.native_request_id.clone(),
         blocks: message.blocks.iter().map(lean_block).collect(),
         created_at: rfc3339(message.created_at),
     }
@@ -1247,6 +1249,7 @@ fn generated_reasoning_signature_cases_drive_native_header_validation() {
             sequence: 0,
             role: MessageRole::Assistant,
             native_id: None,
+            native_request_id: None,
             blocks: vec![MessageBlock::Reasoning {
                 id: None,
                 parts: vec![ReasoningPart::Text {

@@ -16,7 +16,7 @@ use crate::cli::EvalWatchArgs;
 
 pub(crate) enum Documents<'a> {
     Open(&'a EvalContext),
-    Reopened(EvalContext),
+    Reopened(Box<EvalContext>),
     Locked(String),
 }
 
@@ -24,7 +24,7 @@ pub(crate) enum Documents<'a> {
 /// (or this one) holds it. The texts are regolith's (`env/db_lock.rs`);
 /// they arrive only as text through the node builder's error.
 pub(crate) fn store_locked(error: &anyhow::Error) -> bool {
-    if gents::home::store_lock_held(error.as_ref()).is_some() {
+    if gents::store::local::home::store_lock_held(error.as_ref()).is_some() {
         return true;
     }
     const LOCKED: [&str; 2] = [
@@ -41,7 +41,7 @@ where
     Fut: Future<Output = Result<EvalContext>>,
 {
     match resolve().await {
-        Ok(ctx) => Ok(Documents::Reopened(ctx)),
+        Ok(ctx) => Ok(Documents::Reopened(Box::new(ctx))),
         Err(error) if store_locked(&error) => Ok(Documents::Locked(format!("{error:#}"))),
         Err(error) => Err(error),
     }
@@ -197,7 +197,7 @@ where
             }
             let ctx = match &documents {
                 Documents::Open(ctx) => *ctx,
-                Documents::Reopened(ctx) => ctx,
+                Documents::Reopened(ctx) => &**ctx,
                 Documents::Locked(reason) => {
                     anyhow::bail!("stopped: report unavailable: {reason}")
                 }
@@ -252,7 +252,7 @@ async fn ending(
     let trials = load_trials(&ctx.access, &ctx.owner, run_id).await?;
     anyhow::ensure!(
         run_finished(&record, &trials, dir),
-        "stopped: {} slots owed (gents eval resume {run_id})",
+        "stopped: {} slots owed (gents utils eval resume {run_id})",
         slots_owed(&record, &trials)
     );
     if !json {

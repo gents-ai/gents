@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use gents::tool_surface::ToolPolicySurface;
-use gents::tool_surface::{BashMode, EndpointScope, FileToolMode, ToolPolicyBash};
-use gents::toolset::{CommandExecutionMode, CommandNetworkMode};
+use gents::tools::native::{CommandExecutionMode, CommandNetworkMode};
+use gents::tools::surface::ToolPolicySurface;
+use gents::tools::surface::{BashMode, EndpointScope, FileToolMode, ToolPolicyBash};
 
 use crate::lean_vocab_test::{
     LeanToolPolicySurfaceView as View, LeanToolPolicyWriteGrant as WriteGrant,
@@ -183,7 +183,6 @@ fn surface_from_view(view: &View) -> ToolPolicySurface {
         goal_create: view.goal_create,
         defra_query: view.defra_query,
         self_config: view.self_config,
-        memory: view.memory,
         schema_management: view.schema_management,
         p2p_read: view.p2p_read,
         p2p_mutate: view.p2p_mutate,
@@ -197,10 +196,6 @@ fn surface_from_view(view: &View) -> ToolPolicySurface {
         defra_collections: unit_scope_from_strings(
             &view.defra_collections_scope_kind,
             &view.defra_collections_keys,
-        ),
-        p2p_collections: unit_scope_from_strings(
-            &view.p2p_collections_scope_kind,
-            &view.p2p_collections_keys,
         ),
         self_config_categories: unit_scope_from_strings(
             &view.self_config_categories_scope_kind,
@@ -216,14 +211,6 @@ fn surface_from_view(view: &View) -> ToolPolicySurface {
         ),
         write_tools: write_scope_from_grants(&view.write_scope_kind, &view.write_grants),
         query_tools: write_scope_from_grants(&view.query_scope_kind, &view.query_grants),
-        eth_query_methods: unit_scope_from_strings(
-            &view.eth_query_methods_kind,
-            &view.eth_query_methods_keys,
-        ),
-        eth_call_tools: unit_scope_from_strings(
-            &view.eth_call_tools_kind,
-            &view.eth_call_tools_keys,
-        ),
         plugin_tools: unit_scope_from_strings(&view.plugin_tools_kind, &view.plugin_tools_keys),
     }
 }
@@ -233,8 +220,6 @@ fn view_from_surface(
     mcp_probe: String,
     write_probe_tool: String,
     write_probe_collection: String,
-    p2p_overlay_before: Vec<String>,
-    p2p_overlay_after: Vec<String>,
 ) -> View {
     let write_probe = (write_probe_tool.clone(), write_probe_collection.clone());
     let write_fields = surface
@@ -250,15 +235,10 @@ fn view_from_surface(
         goal_create: surface.goal_create,
         defra_query: surface.defra_query,
         self_config: surface.self_config,
-        memory: surface.memory,
         schema_management: surface.schema_management,
         p2p_read: surface.p2p_read,
         p2p_mutate: surface.p2p_mutate,
         p2p_mutation_allowed: surface.permits_p2p_mutation(),
-        p2p_overlay_allowed: surface
-            .permits_p2p_overlay_mutation(&p2p_overlay_before, &p2p_overlay_after),
-        p2p_overlay_before,
-        p2p_overlay_after,
         session_history: surface.session_history,
         context_budget: surface.context_budget,
         session_messages: surface.session_messages,
@@ -285,8 +265,6 @@ fn view_from_surface(
         mcp_services: surface.mcp_services.keys(),
         defra_collections_scope_kind: surface.defra_collections.kind().to_string(),
         defra_collections_keys: surface.defra_collections.keys(),
-        p2p_collections_scope_kind: surface.p2p_collections.kind().to_string(),
-        p2p_collections_keys: surface.p2p_collections.keys(),
         self_config_categories_scope_kind: surface.self_config_categories.kind().to_string(),
         self_config_categories_keys: surface.self_config_categories.keys(),
         agent_targets_scope_kind: surface.agent_targets.kind().to_string(),
@@ -307,10 +285,6 @@ fn view_from_surface(
             .lookup(&query_probe)
             .map(|fields| fields.iter().cloned().collect())
             .unwrap_or_default(),
-        eth_query_methods_kind: surface.eth_query_methods.kind().to_string(),
-        eth_query_methods_keys: surface.eth_query_methods.keys(),
-        eth_call_tools_kind: surface.eth_call_tools.kind().to_string(),
-        eth_call_tools_keys: surface.eth_call_tools.keys(),
         plugin_tools_kind: surface.plugin_tools.kind().to_string(),
         plugin_tools_keys: surface.plugin_tools.keys(),
     }
@@ -326,7 +300,5 @@ pub(super) fn compose(agent: &View, ceiling: &View, runtime: &View) -> View {
         agent.mcp_probe.clone(),
         agent.write_probe_tool.clone(),
         agent.write_probe_collection.clone(),
-        agent.p2p_overlay_before.clone(),
-        agent.p2p_overlay_after.clone(),
     )
 }

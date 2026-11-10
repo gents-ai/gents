@@ -222,6 +222,7 @@ pub(crate) struct LeanCompletionRetryCase {
     pub(crate) expected_transport_used: Option<usize>,
     pub(crate) expected_resample_used: Option<usize>,
     pub(crate) expected_attempt: Option<usize>,
+    pub(crate) expected_account_used: Option<usize>,
     pub(crate) expected_repair_used: Option<bool>,
     pub(crate) expected_usage_charged: Option<usize>,
 }

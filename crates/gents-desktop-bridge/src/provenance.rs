@@ -1,15 +1,16 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use gents::config_client::ConfigAccess;
-use gents::graphql::graphql_string_list_literal;
-use gents::session::{public_request_filter, session_scope_filter};
-use gents::session_origin::{
-    group_caused, lineage, single_caused, starting_request, SessionLink, SessionScope,
-};
-use gents::toolset::is_session_message_tool;
+use gents::session::origin::{group_caused, lineage, single_caused, starting_request, SessionLink};
+use gents::session::public_request_filter;
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::graphql_string_list_literal;
+use gents::tools::native::is_session_message_tool;
 use gents_desktop_core::client::ClientCore;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
+use gents_protocol::session::session_scope_filter;
+use gents_protocol::session::SessionScope;
 use serde_json::Value;
 
 use crate::types::{
@@ -27,7 +28,6 @@ pub async fn session_provenance_request(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
-        .or_else(|| core.selected_node_did())
         .ok_or("no node selected; pass nodeDid explicitly")?;
     session_provenance(
         core,
@@ -44,8 +44,8 @@ pub async fn session_provenance(
     core: &Arc<ClientCore>,
     scope: SessionScope,
 ) -> Result<SessionProvenanceView, String> {
-    let access = crate::snapshot::node_reads(core, &scope.node_did);
     let fail = |error: anyhow::Error| format!("session provenance: {error:#}");
+    let access = crate::snapshot::node_reads(core, &scope.node_did).map_err(fail)?;
     let lineage = lineage(&access, &scope).await.map_err(fail)?;
     let calls = caused_calls(&access, &scope).await.map_err(fail)?;
     let opening_request_id = match &lineage.started_by {
@@ -109,7 +109,7 @@ fn text(row: &Value, field: &str) -> Option<String> {
 }
 
 /// The request that opened `link.scope`'s session from `link`'s cause, as
-/// `gents::session_origin::starting_request` selects it (C7, Lean
+/// `gents::session::origin::starting_request` selects it (C7, Lean
 /// `DurableLineage.openingRequest`); `session_provenance` and the lineage
 /// cases both read it here.
 async fn opening_request(
@@ -159,10 +159,6 @@ async fn caused_calls(
     if caused.is_empty() {
         return Ok(Vec::new());
     }
-    let state_of = states
-        .iter()
-        .filter_map(|row| Some((text(row, "_docID")?, row)))
-        .collect::<BTreeMap<_, _>>();
     let call_doc_ids = caused.keys().map(String::as_str).collect::<Vec<_>>();
     let mut calls = Vec::new();
     // Bounded lookups, never an empty list literal in a database operation.
@@ -179,6 +175,27 @@ async fn caused_calls(
             .await?,
         );
     }
+    project_caused_calls(&states, &calls)
+}
+
+/// Each tool call's view of the requests it caused, from the caused request
+/// rows and the calls they name: a session-message call shows its one
+/// unambiguous request, any other call every request it caused.
+pub(crate) fn project_caused_calls(
+    states: &[Value],
+    calls: &[Value],
+) -> anyhow::Result<Vec<CausedCallView>> {
+    let caused = group_caused(states);
+    let state_of = states
+        .iter()
+        .filter_map(|row| Some((text(row, "_docID")?, row)))
+        .map(|(doc_id, row)| {
+            let state = text(row, "lifecycle_state")
+                .map(|state| RequestLifecycleState::parse(&state))
+                .transpose()?;
+            Ok((doc_id, state))
+        })
+        .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
     Ok(calls
         .iter()
         .filter_map(|call| {
@@ -194,7 +211,7 @@ async fn caused_calls(
         .flat_map(|(call, shown)| {
             let state_of = &state_of;
             shown.into_iter().filter_map(move |request| {
-                let state = state_of.get(&request.request_doc_id)?;
+                let lifecycle_state = *state_of.get(&request.request_doc_id)?;
                 Some(CausedCallView {
                     request_id: text(call, "request_id")?,
                     tool_call_id: text(call, "tool_call_id")?,
@@ -203,7 +220,7 @@ async fn caused_calls(
                         node_did: request.scope.node_did,
                         session_id: request.scope.session_id,
                         requester_did: request.scope.requester_did,
-                        lifecycle_state: text(state, "lifecycle_state"),
+                        lifecycle_state,
                         created_at: Some(request.created_at),
                     },
                 })
@@ -212,7 +229,7 @@ async fn caused_calls(
         .collect())
 }
 
-fn turn_senders(lineage: &gents::session_origin::SessionLineage) -> Vec<(String, &SessionLink)> {
+fn turn_senders(lineage: &gents::session::origin::SessionLineage) -> Vec<(String, &SessionLink)> {
     let links = lineage
         .started_by
         .iter()
@@ -256,7 +273,7 @@ async fn related_session_metadata<'a>(
     }
     let mut result = Vec::new();
     for (node, scopes) in scopes {
-        let access = crate::snapshot::node_reads(core, &node);
+        let access = crate::snapshot::node_reads(core, &node)?;
         let filters: Vec<_> = scopes
             .iter()
             .map(|(session, requester)| {
@@ -270,12 +287,14 @@ async fn related_session_metadata<'a>(
             let query = format!(
                 "{{ AgentSession(filter: {{_or: [{}]}}) {{ {} }} }}",
                 filters.join(","),
-                gents::session::AGENT_SESSION_FIELDS
+                gents_protocol::session::AGENT_SESSION_FIELDS
             );
             let sessions: Vec<_> = rows(&access, &query, "AgentSession")
                 .await?
                 .iter()
-                .map(gents::session::decode_session_row)
+                .map(|row| {
+                    gents_protocol::session::decode_session_row(row).map_err(anyhow::Error::from)
+                })
                 .collect::<anyhow::Result<Vec<_>>>()?
                 .into_iter()
                 .map(|row| row.session)
@@ -302,17 +321,13 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use gents::graphql::escape_graphql_string;
+    use gents::store::graphql::escape_graphql_string;
     use gents_protocol::request_admission::RequestPurpose;
 
-    async fn run(
-        node: &gents::defra_node::EmbeddedNode,
-        mutation: String,
-        collection: &str,
-    ) -> String {
+    async fn run(node: &gents::defra_node::Node, mutation: String, collection: &str) -> String {
         let response = node.execute(&mutation).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
-        gents::graphql::single_mutation_document(&response, &format!("create_{collection}"))
+        gents::store::graphql::single_mutation_document(&response, &format!("create_{collection}"))
             .unwrap()
             .and_then(|document| document["_docID"].as_str().map(str::to_owned))
             .expect("created doc id")
@@ -332,7 +347,7 @@ mod tests {
         let mut input = vec![
             format!("node_did: {}", quoted(did)),
             format!("requester_did: {}", quoted(did)),
-            r#"agent_id: "worker", content: "work", lifecycle_state: "completed", backend_id: "", execution_origin: "interactive", failure_reason: "", retry_count: 0"#.to_owned(),
+            r#"agent_did: "worker", content: "work", lifecycle_state: "completed", backend_id: "", execution_origin: "interactive", failure_reason: "", retry_count: 0"#.to_owned(),
             format!("max_retries: {max_retries}"),
         ];
         for (field, value) in row.as_object().expect("case row") {
@@ -391,7 +406,7 @@ mod tests {
     /// are written as one group, re-created with a different `max_retries`
     /// (which no reader selects) until their native order matches the model's.
     async fn seed_lineage_case(
-        node: &gents::defra_node::EmbeddedNode,
+        node: &gents::defra_node::Node,
         case: &Value,
         did: &str,
     ) -> BTreeMap<String, String> {
@@ -488,7 +503,7 @@ mod tests {
             run(
                 node,
                 format!(
-                    r#"mutation {{ create_AgentSession(input: {{ session_id: "{session}", node_did: "{did}", requester_did: "{did}", agent_id: "worker", created_at: "2026-09-26T00:00:00Z"{provenance} }}) {{ _docID }} }}"#
+                    r#"mutation {{ create_AgentSession(input: {{ session_id: "{session}", node_did: "{did}", requester_did: "{did}", agent_did: "worker", created_at: "2026-09-26T00:00:00Z"{provenance} }}) {{ _docID }} }}"#
                 ),
                 "AgentSession",
             )
@@ -512,7 +527,7 @@ mod tests {
                     .await
                     .unwrap(),
             );
-            gents::schema::ensure_runtime_schemas(node.as_ref())
+            gents::store::schema::ensure_runtime_schemas(node.as_ref())
                 .await
                 .unwrap();
             let ids = seed_lineage_case(&node, case, did).await;
@@ -536,7 +551,7 @@ mod tests {
                     .and_then(|row| row.doc_id);
                 assert_eq!(found, expected, "{}: {query}", case["name"]);
             }
-            node.shutdown().await;
+            node.shutdown().await.unwrap();
         }
     }
 }

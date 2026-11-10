@@ -59,7 +59,7 @@ pub(crate) fn plugin_entry(language: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::pack_archive::PackArchive;
+    use gents::pack::archive::PackArchive;
 
     fn write_plain_pack(root: &Path, name: &str) {
         std::fs::create_dir_all(root).unwrap();

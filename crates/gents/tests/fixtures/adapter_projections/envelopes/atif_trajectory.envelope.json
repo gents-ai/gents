@@ -5,7 +5,7 @@
       "agent": {
         "extra": {
           "node_did": "did:test:planner",
-          "agent_id": "terminal-bench",
+          "agent_did": "terminal-bench",
           "runtime": "gents"
         },
         "model_name": "deepseek-ai/DeepSeek-V4-Flash-0731",
@@ -92,7 +92,7 @@
   },
   "redaction_mode": "training_safe",
   "source_node_did": "did:test:planner",
-  "source_agent_id": "terminal-bench",
+  "source_agent_did": "terminal-bench",
   "source_request_id": "req-atif-1",
   "source_session_id": "session-atif-1"
 }

@@ -22,21 +22,25 @@ use crate::lean_vocab_test::{
     LeanPluginJobResume, LeanPluginJobRootCall, LeanPluginJobRow, LeanPluginJobScope,
     LeanPluginJobTarget, LeanPluginJobToolCall, LeanPluginJobWireCase, LeanPluginJobWireKind,
 };
-use gents::background_tools::ProcessControlScope;
 use gents::pack::home_install::{record_after_install_via, recorded_provenance, InstalledVia};
 use gents::pack::PackKind;
 use gents::plugin::data::StampContext;
 use gents::plugin::job_calls;
-use gents::plugin_job::admit::{
+use gents::tools::background::job::admit::{
     self, HostFacts, RootCall, StepCall, StepChild, StepContext, StepRow,
 };
-use gents::plugin_job::control::{self, KillAction, KillCause, KillObservation};
-use gents::plugin_job::dispatch::{host_pin, split_address, unique_handle, Delivery, ToolCallView};
-use gents::plugin_job::driver;
-use gents::plugin_job::origin::call_origin;
-use gents::plugin_job::settings::{job_block_admissible, policy_valid, wire_targets_from};
-use gents::tool_call_lifecycle::{AwaitMode, ToolCallState, ToolRowKind};
-use gents::tool_surface::EndpointScope;
+use gents::tools::background::job::control::{self, KillAction, KillCause, KillObservation};
+use gents::tools::background::job::dispatch::{
+    host_pin, split_address, unique_handle, Delivery, ToolCallView,
+};
+use gents::tools::background::job::driver;
+use gents::tools::background::job::origin::call_origin;
+use gents::tools::background::job::settings::{
+    job_block_admissible, policy_valid, wire_targets_from,
+};
+use gents::tools::background::status::ProcessControlScope;
+use gents::tools::call::lifecycle::{ToolCallState, ToolRowKind};
+use gents::tools::surface::EndpointScope;
 use gents_protocol::job::keys::{
     decode_job_retry_key, job_message_key, job_session_id, job_spawn_key,
 };
@@ -49,6 +53,7 @@ use gents_protocol::job::{
     JobState, JobStepInput, JobStepOutput, JobSuspend, JobView, PluginDataDeclaration,
     PluginJobDeclaration, PluginJobSettings, RoundResult, StampedField,
 };
+use gents_protocol::tool_call::AwaitMode;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -456,8 +461,8 @@ fn generated_plugin_job_admission_cases_drive_admit_step() {
     let cases = lean_plugin_job_admission_cases();
     assert_eq!(
         cases.len(),
-        220,
-        "Lean supplies 28 admission regressions and 192 interrupted wire-to-recovery traces"
+        222,
+        "Lean supplies 30 admission regressions and 192 interrupted wire-to-recovery traces"
     );
     let mut names = BTreeSet::new();
     for case in cases {
@@ -488,63 +493,81 @@ fn generated_plugin_job_admission_cases_drive_admit_step() {
             .map(|kill| kill.retry_key.as_str())
             .collect();
         expected_kills.sort_unstable();
-        let settled = match gents::plugin_job::admit::admit_step(&context, &job, &output) {
-            Ok(admitted) => {
-                assert!(expected.admitted, "{}: admitted a refused step", case.name);
-                assert!(!expected.dynamic_code_disabled, "{}", case.name);
-                assert_eq!(expected.code, None, "{}", case.name);
-                assert_eq!(
-                    Some(&admitted),
-                    expected_job.as_ref(),
-                    "{}: admitted row",
-                    case.name
-                );
-                assert_eq!(admitted.state, expected_state, "{}", case.name);
-                assert!(expected_kills.is_empty(), "{}: kill", case.name);
-                admitted
-            }
-            Err(refusal) => {
-                assert!(
-                    !expected.admitted,
-                    "{}: refused an admitted step",
-                    case.name
-                );
-                assert_eq!(
-                    refusal.code(),
-                    expected.code.as_deref(),
-                    "{}: refusal code",
-                    case.name
-                );
-                assert_eq!(
-                    refusal.refusal == gents::plugin_job::admit::Refusal::DynamicCodeDisabled,
-                    expected.dynamic_code_disabled,
-                    "{}: dynamic-source refusal detail",
-                    case.name
-                );
-                assert!(expected.job.is_none(), "{}", case.name);
-                assert_eq!(
-                    refusal.closed_row().state,
-                    expected_state,
-                    "{}: row state",
-                    case.name
-                );
-                let mut kills: Vec<&str> = refusal.kills().iter().map(String::as_str).collect();
-                kills.sort_unstable();
-                assert_eq!(kills, expected_kills, "{}: killed children", case.name);
-                refusal.closed_row().clone()
-            }
-        };
+        let settled =
+            match gents::tools::background::job::admit::admit_step(&context, &job, &output) {
+                Ok(admitted) => {
+                    assert!(expected.admitted, "{}: admitted a refused step", case.name);
+                    assert!(!expected.dynamic_code_disabled, "{}", case.name);
+                    assert_eq!(expected.code, None, "{}", case.name);
+                    assert_eq!(
+                        Some(&admitted),
+                        expected_job.as_ref(),
+                        "{}: admitted row",
+                        case.name
+                    );
+                    assert_eq!(admitted.state, expected_state, "{}", case.name);
+                    assert!(expected_kills.is_empty(), "{}: kill", case.name);
+                    admitted
+                }
+                Err(refusal) => {
+                    assert!(
+                        !expected.admitted,
+                        "{}: refused an admitted step",
+                        case.name
+                    );
+                    assert_eq!(
+                        refusal.code(),
+                        expected.code.as_deref(),
+                        "{}: refusal code",
+                        case.name
+                    );
+                    use gents::tools::background::job::admit::PolicyDenialDetail;
+                    match case.name.as_str() {
+                        "dynamic_check_spawn_refused" => assert_eq!(
+                            refusal.detail,
+                            Some(PolicyDenialDetail::DynamicCheck),
+                            "{}",
+                            case.name
+                        ),
+                        "caller_target_unconfigured_refused" => assert_eq!(
+                            refusal.detail,
+                            Some(PolicyDenialDetail::TargetUnavailable),
+                            "{}",
+                            case.name
+                        ),
+                        _ => {}
+                    }
+                    assert_eq!(
+                        refusal.refusal
+                            == gents::tools::background::job::admit::Refusal::DynamicCodeDisabled,
+                        expected.dynamic_code_disabled,
+                        "{}: dynamic-source refusal detail",
+                        case.name
+                    );
+                    assert!(expected.job.is_none(), "{}", case.name);
+                    assert_eq!(
+                        refusal.closed_row().state,
+                        expected_state,
+                        "{}: row state",
+                        case.name
+                    );
+                    let mut kills: Vec<&str> = refusal.kills().iter().map(String::as_str).collect();
+                    kills.sort_unstable();
+                    assert_eq!(kills, expected_kills, "{}: killed children", case.name);
+                    refusal.closed_row().clone()
+                }
+            };
         if let Some(trace) = &case.wire_trace {
             let durable = match trace.interruption.as_str() {
                 "before_kill" if !expected.admitted => &job,
                 "before_kill" | "after_kill" => &settled,
                 other => panic!("unknown interruption {other}"),
             };
-            let facts = gents::plugin_job::recovery::facts_from_durable_read(
+            let facts = gents::tools::background::job::recovery::facts_from_durable_read(
                 durable,
                 durable.state == JobState::Running,
                 durable.pin.as_ref().expect("wire trace has a durable pin"),
-                gents::plugin_job::recovery::DurableRead {
+                gents::tools::background::job::recovery::DurableRead {
                     session_stopped: trace.read.session_stopped,
                     now_millis: trace.read.now_millis,
                     available: if trace.read.available {
@@ -608,7 +631,7 @@ fn generated_plugin_job_adoption_cases_drive_adopt() {
                 expected,
             } => {
                 let call = tool_call(call);
-                match gents::plugin_job::dispatch::adopt(
+                match gents::tools::background::job::dispatch::adopt(
                     &context(ctx, job, out),
                     &call,
                     &row(job),
@@ -734,26 +757,26 @@ fn by_retry_key(mut kills: Vec<(String, KillAction)>) -> Vec<(String, KillAction
 /// Lean `PluginData.Invocation` as the native call context that carries the
 /// stamp values available there. The values are placeholders.
 fn stamp_context(invocation: &str) -> StampContext {
-    let node_did = "did:key:node".to_owned();
+    let caller_did = "did:key:node".to_owned();
     let session_id = "session".to_owned();
     let request_doc_id = "request".to_owned();
     let tool_call_doc_id = "tool-call".to_owned();
     match invocation {
         "tool_call" => StampContext::ToolOutput {
-            node_did,
+            caller_did,
             session_id,
             request_doc_id,
             tool_call_doc_id,
         },
         "job_step" => StampContext::JobStep {
-            node_did,
+            caller_did,
             session_id,
             request_doc_id,
             tool_call_doc_id,
             job_row_doc_id: "job-row".to_owned(),
             chain_root_doc_id: "chain-root".to_owned(),
         },
-        "callback" => StampContext::Callback { node_did },
+        "callback" => StampContext::Callback { caller_did },
         other => panic!("unknown Lean invocation {other}"),
     }
 }
@@ -1117,6 +1140,27 @@ fn generated_plugin_job_authority_cases_drive_origin_and_provenance() {
                     "{name}: valid"
                 );
             }
+            LeanPluginJobAuthorityCase::PublishedRead {
+                name,
+                publication_in_progress,
+                expected,
+            } => {
+                *kinds.entry("published_read").or_default() += 1;
+                let home = tempfile::tempdir().expect("plugin home");
+                let _stage = publication_in_progress.then(|| {
+                    gents::plugin::store::try_lock_store(home.path()).expect("stage lock")
+                });
+                let result =
+                    gents::plugin::store::read_published_record(home.path(), "fixture", "absent");
+                assert_eq!(
+                    matches!(
+                        result,
+                        Err(gents::plugin::store::PublishedPluginReadError::Busy)
+                    ),
+                    expected.deferred,
+                    "{name}: defer staged read"
+                );
+            }
             LeanPluginJobAuthorityCase::WireTargetsFrom {
                 name,
                 pack,
@@ -1153,6 +1197,7 @@ fn generated_plugin_job_authority_cases_drive_origin_and_provenance() {
             ("pack_job_block", 5),
             ("policy_valid", 4),
             ("provenance", 12),
+            ("published_read", 2),
             ("wire_targets_from", 2),
         ]),
         "Lean pins these authority rows in `authority_regressions`"
@@ -1260,7 +1305,7 @@ fn generated_plugin_job_lineage_cases_decode_strictly() {
 }
 
 /// `strip_secret_fields` drops a field whose upper-cased name contains one of
-/// these (`toolset::shared::command::is_secret_env_name`), so no job field may.
+/// these (`documents::callback::is_secret_env_name`), so no job field may.
 const SECRET_SUBSTRINGS: [&str; 4] = ["KEY", "SECRET", "TOKEN", "PASSWORD"];
 
 fn collect_field_names(value: &serde_json::Value, names: &mut BTreeSet<String>) {
@@ -1379,7 +1424,7 @@ fn plugin_job_protocol_field_names_are_secret_free() {
         serde_json::to_value(PluginDataDeclaration {
             collections: vec!["c".to_owned()],
             ops: vec!["query".to_owned()],
-            stamped: BTreeMap::from([("f".to_owned(), StampedField::NodeDid)]),
+            stamped: BTreeMap::from([("f".to_owned(), StampedField::CallerDid)]),
         }),
     ] {
         collect_field_names(&constructed.expect("constructed value encodes"), &mut names);

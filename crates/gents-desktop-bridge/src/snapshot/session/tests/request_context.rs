@@ -69,95 +69,37 @@ fn newest_accounted_call_survives_a_newer_unaccounted_request() {
 
 #[tokio::test]
 async fn shared_snapshot_keeps_previous_accounting_until_new_request_dispatches() {
-    let (core, _tempdir) = crate::tests::support::boot_core().await;
-    let node_did = "did:test:context-node";
+    // The User's requests come through client admission and the working
+    // Agent records each inference call as a session child. A logical request
+    // id names one physical request per User, so the newer accounting of the
+    // same request is a later call of it, and another session's later
+    // accounting is a request of that session.
+    let served = crate::tests::support::served_desktop().await;
+    let core = &served.core;
+    // Subscription events cannot supersede the direct reads under test.
+    core.stop_observer_for_test().await;
+    let node_did = served.node_did().to_owned();
     let session_id = "session-context-side-channel";
-    let requester_did = "did:test:context-requester";
-    let requests = format!(
-        r#"mutation {{
-            accounted: create_AgentRequest(input: {{ purpose: "normal", request_id: "request-accounted", node_did: "{node_did}", requester_did: "{requester_did}", agent_id: "default", session_id: "{session_id}", content: "test", lifecycle_state: "pending", backend_id: "backend", created_at: "2026-08-24T12:00:00Z", retry_count: 0 }}) {{ _docID }}
-            pending: create_AgentRequest(input: {{ purpose: "normal", request_id: "request-pending", node_did: "{node_did}", requester_did: "{requester_did}", agent_id: "default", session_id: "{session_id}", content: "test", lifecycle_state: "pending", backend_id: "backend", created_at: "2026-08-24T12:02:00Z", retry_count: 0 }}) {{ _docID }}
-            twin: create_AgentRequest(input: {{ purpose: "normal", request_id: "request-accounted", node_did: "{node_did}", requester_did: "{requester_did}", agent_id: "default", session_id: "{session_id}", content: "physical twin", lifecycle_state: "pending", backend_id: "backend", created_at: "2026-08-24T12:00:30Z", retry_count: 0 }}) {{ _docID }}
-            foreign: create_AgentRequest(input: {{ purpose: "normal", request_id: "request-accounted", node_did: "{node_did}", requester_did: "{requester_did}", agent_id: "default", session_id: "session-other-owner", content: "other session", lifecycle_state: "pending", backend_id: "backend", created_at: "2026-08-24T12:01:00Z", retry_count: 0 }}) {{ _docID }}
-            other_requester: create_AgentRequest(input: {{ purpose: "normal", request_id: "request-accounted", node_did: "{node_did}", requester_did: "did:foreign:requester", agent_id: "default", session_id: "{session_id}", content: "other requester", lifecycle_state: "pending", backend_id: "backend", created_at: "2026-08-24T12:01:30Z", retry_count: 0 }}) {{ _docID }}
-        }}"#
-    );
-    let response = core.node().execute(&requests).await;
-    assert!(
-        !response.has_errors(),
-        "seed requests failed: {:?}",
-        response.errors
-    );
-    let doc_id = |field: &str| {
-        gents::graphql::single_mutation_document(&response, field)
-            .expect("decode create response")
-            .and_then(|row| row.get("_docID"))
-            .and_then(serde_json::Value::as_str)
-            .expect("created request has physical identity")
-            .to_owned()
+    let requester_did = core.node_identity().did().to_owned();
+    let submit = |session: &'static str, request: &'static str| {
+        crate::tests::support::submit_request(
+            core,
+            &served.runtime,
+            &served.agent,
+            session,
+            request,
+        )
     };
-    let accounted_doc = doc_id("accounted");
-    let pending_doc = doc_id("pending");
-    let twin_doc = doc_id("twin");
-    let foreign_doc = doc_id("foreign");
-    let other_requester_doc = doc_id("other_requester");
+    let accounted_doc = submit(session_id, "request-accounted").await;
+    let pending_doc = submit(session_id, "request-pending").await;
+    let foreign_doc = submit("session-other-owner", "request-foreign").await;
 
-    let session = gents_protocol::session::AgentSession {
-        session_id: session_id.into(),
-        node_did: node_did.into(),
-        requester_did: Some(requester_did.into()),
-        agent_id: "default".into(),
-        created_at: "2026-08-24T12:00:00Z".into(),
-        closed_at: None,
-        archived_at: None,
-        archive_revision: 0,
-        stopped_at: None,
-        title: None,
-        tags: Vec::new(),
-        provenance: None,
-        observation: None,
-    };
-    let session_input = gents_protocol::graphql::graphql_input_literal(
-        &serde_json::to_value(&session).expect("session json"),
-    )
-    .expect("session input");
-    let mut updates = core.store_updates();
-    let response = core
-        .node()
-        .execute(&format!(
-            "mutation {{ create_AgentSession(input: {session_input}) {{ _docID }} }}"
-        ))
-        .await;
-    assert!(
-        !response.has_errors(),
-        "seed session failed: {:?}",
-        response.errors
-    );
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        loop {
-            if core
-                .store()
-                .snapshot()
-                .sessions
-                .iter()
-                .any(|row| row.node_did == node_did && row.session_id == session_id)
-            {
-                break;
-            }
-            updates
-                .changed()
-                .await
-                .expect("observed store remains open while waiting for session projection");
-        }
-    })
-    .await
-    .expect("session projection arrives");
     for request_id in ["request-accounted", "request-pending"] {
         refresh_request_and_assert_fresh_projection(
-            &core,
-            node_did,
+            core,
+            &node_did,
             session_id,
-            Some(requester_did),
+            Some(&requester_did),
             request_id,
         )
         .await;
@@ -172,68 +114,112 @@ async fn shared_snapshot_keeps_previous_accounting_until_new_request_dispatches(
         );
     }
 
-    let accounted_json = gents::graphql::escape_graphql_string(&accounting_json(2_500));
-    let twin_json = gents::graphql::escape_graphql_string(&accounting_json(3_000));
-    let foreign_json = gents::graphql::escape_graphql_string(&accounting_json(9_999));
-    let inference_calls = format!(
-        r#"mutation {{
-            accounted: create_InferenceCall(input: {{
-                call_id: "call-accounted",
-                request_id: "request-accounted",
-                request_doc_id: "{accounted_doc}",
-                call_seq: 1,
-                node_did: "{node_did}",
-                call_kind: "inference",
-                queued_at: "2026-08-24T12:01:00Z",
-                context_accounting_json: "{accounted_json}"
-            }}) {{ _docID }}
-            twin: create_InferenceCall(input: {{
-                call_id: "call-accounted-twin",
-                request_id: "request-accounted",
-                request_doc_id: "{twin_doc}",
-                call_seq: 2,
-                node_did: "{node_did}",
-                call_kind: "inference",
-                queued_at: "2026-08-24T12:02:00Z",
-                context_accounting_json: "{twin_json}"
-            }}) {{ _docID }}
-            pending: create_InferenceCall(input: {{
-                call_id: "call-pending",
-                request_id: "request-pending",
-                request_doc_id: "{pending_doc}",
-                call_seq: 3,
-                node_did: "{node_did}",
-                call_kind: "inference",
-                queued_at: "2026-08-24T12:03:00Z"
-            }}) {{ _docID }}
-            foreign: create_InferenceCall(input: {{
-                call_id: "call-foreign-session",
-                request_id: "request-accounted",
-                request_doc_id: "{foreign_doc}",
-                call_seq: 4,
-                node_did: "{node_did}",
-                call_kind: "inference",
-                queued_at: "2026-08-24T12:04:00Z",
-                context_accounting_json: "{foreign_json}"
-            }}) {{ _docID }}
-            other_requester: create_InferenceCall(input: {{
-                call_id: "call-other-requester",
-                request_id: "request-accounted",
-                request_doc_id: "{other_requester_doc}",
-                call_seq: 5,
-                node_did: "{node_did}",
-                call_kind: "inference",
-                queued_at: "2026-08-24T12:05:00Z",
-                context_accounting_json: "{foreign_json}"
-            }}) {{ _docID }}
-        }}"#
-    );
-    let response = core.node().execute(&inference_calls).await;
-    assert!(
-        !response.has_errors(),
-        "seed inference calls failed: {:?}",
-        response.errors
-    );
+    let session_doc = |request_doc: &str| {
+        let access = served.runtime.user_access();
+        let query = format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ session_doc_id }} }}"#,
+            gents::store::graphql::escape_graphql_string(request_doc)
+        );
+        async move {
+            access.execute(&query).await.unwrap()["data"]["AgentRequest"][0]["session_doc_id"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        }
+    };
+    let own_session = session_doc(&accounted_doc).await;
+    let other_session = session_doc(&foreign_doc).await;
+    let call = |call_id: &str,
+                request_id: &str,
+                request_doc: &str,
+                call_seq: u32,
+                queued_at: &str,
+                accounting: Option<String>| {
+        let mut call = serde_json::json!({
+            "call_id": call_id, "request_id": request_id, "request_doc_id": request_doc,
+            "call_seq": call_seq, "node_did": node_did, "agent_did": served.agent.agent_did,
+            "call_kind": "inference", "queued_at": queued_at,
+        });
+        if let Some(accounting) = accounting {
+            call["context_accounting_json"] = accounting.into();
+        }
+        call
+    };
+    let calls = [
+        (
+            call(
+                "call-accounted",
+                "request-accounted",
+                &accounted_doc,
+                1,
+                "2026-08-24T12:01:00Z",
+                Some(accounting_json(2_500)),
+            ),
+            &own_session,
+        ),
+        (
+            call(
+                "call-accounted-twin",
+                "request-accounted",
+                &accounted_doc,
+                2,
+                "2026-08-24T12:02:00Z",
+                Some(accounting_json(3_000)),
+            ),
+            &own_session,
+        ),
+        (
+            call(
+                "call-pending",
+                "request-pending",
+                &pending_doc,
+                3,
+                "2026-08-24T12:03:00Z",
+                None,
+            ),
+            &own_session,
+        ),
+        (
+            call(
+                "call-foreign-session",
+                "request-foreign",
+                &foreign_doc,
+                4,
+                "2026-08-24T12:04:00Z",
+                Some(accounting_json(9_999)),
+            ),
+            &other_session,
+        ),
+    ];
+    served
+        .runtime
+        .agent_access(&served.agent)
+        .await
+        .transact_write("test.context_accounting.calls", |txn| {
+            let calls = &calls;
+            Box::pin(async move {
+                for (call, session) in calls {
+                    let response = txn
+                        .execute_with_variables(
+                            "mutation($input: InferenceCallMutationInputArg!) { create_InferenceCall(input: $input) {_docID} }",
+                            &serde_json::json!({"input": call}),
+                        )
+                        .await?;
+                    let doc = gents::store::graphql::created_doc_id(&response, "InferenceCall")?;
+                    txn.add_resource_relationship(
+                        "InferenceCall",
+                        &doc,
+                        "parent",
+                        "sessions",
+                        session.as_str(),
+                    )
+                    .await?;
+                }
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await
+        .unwrap();
 
     assert!(
         core.store()
@@ -246,7 +232,7 @@ async fn shared_snapshot_keeps_previous_accounting_until_new_request_dispatches(
     );
     let snapshot = build_session_snapshot_for_node(
         core.as_ref(),
-        Some(node_did),
+        Some(&node_did),
         session_id,
         Some("request-pending"),
     )
@@ -264,5 +250,5 @@ async fn shared_snapshot_keeps_previous_accounting_until_new_request_dispatches(
     assert_eq!(last.call_id, "call-accounted-twin");
     assert_eq!(last.estimated_input_tokens, 3_000);
 
-    core.shutdown().await.expect("core shutdown");
+    served.shutdown().await;
 }

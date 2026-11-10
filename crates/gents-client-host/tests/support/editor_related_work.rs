@@ -1,9 +1,8 @@
 use super::{fake_llm, ChatAction};
 use anyhow::{Context, Result};
-use gents::config_client::{
-    apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
-};
-use gents::document_config::{load_agent_context_and_tools_in_txn, AgentTools};
+use gents::documents::apply_desired_state_plan;
+use gents::documents::{load_agent_context_and_tools_in_txn, AgentTools};
+use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::{Collection, ConfigAccess};
 use serde_json::{json, Value};
 use std::{path::Path, sync::Arc, time::Duration};
@@ -103,14 +102,14 @@ pub async fn configure(access: &ConfigAccess, node: &str, agent: &str) -> Result
         Box::pin(async move {
             let (_, tools) = load_agent_context_and_tools_in_txn(txn, node, agent).await?;
             let mut tools = tools.context("fixture agent tools")?;
-            let (_, base) = gents::config_client::read_desired_state_record_in_txn(txn, Collection::Agent, node, agent).await?.context("fixture agent")?;
+            let (_, base) = gents::store::config_client::read_desired_state_record_in_txn(txn, Collection::Agent, node, agent).await?.context("fixture agent")?;
             let mut documents = Vec::new();
             let targets: Vec<_> = (0..2).map(|index| format!("related-worker-{index}")).collect();
             for target in &targets {
                 let mut worker = base.clone();
-                worker["agent_id"] = json!(format!("{agent}-{target}"));
+                worker["agent_did"] = json!(format!("{agent}-{target}"));
                 documents.push((Collection::Agent, worker));
-                documents.push((Collection::AgentTarget, json!({"node_did":node,"target_id":target,"name":target,"target_node_did":node,"agent_id":format!("{agent}-{target}")})));
+                documents.push((Collection::AgentTarget, json!({"node_did":node,"target_id":target,"name":target,"target_node_did":node,"agent_did":format!("{agent}-{target}")})));
             }
             tools.agents = Some(AgentTools { enabled: Some(true), target_ids: targets });
             documents.push((Collection::Tools, serde_json::to_value(tools)?));
@@ -130,7 +129,7 @@ pub async fn verify(
     profile_commands: bool,
 ) -> Result<Value> {
     use anyhow::ensure;
-    use gents::graphql::escape_graphql_string as escape;
+    use gents::store::graphql::escape_graphql_string as escape;
     use gents_protocol::row::AgentRequestRow;
     let response = access
         .execute(&format!(

@@ -22,7 +22,7 @@ def isBound : ShimState → Bool
 end ShimState
 
 structure Shim where
-  boundAgent : AgentId
+  boundAgent : AgentDid
   state : ShimState
   deriving DecidableEq, Repr
 
@@ -138,5 +138,25 @@ theorem observePublish_coherent
           · simp [hs, hr]
 
 end Shim
+
+/-- Whether the route admits a new connection for `agent`.
+
+A signed-out or unknown agent fails when opened, not mid-conversation. An agent
+created after the last publish waits for the next one. The route reads the same
+set `observePublish` reads, so listening and admission share one rule. A
+connection exists only while the shim listens, and the shim's own `boundAgent`
+plays no part. -/
+def admitConnection (agent : AgentDid) (snap : ActiveRuntimeSnapshot) : Bool :=
+  decide (agent ∈ snap.runnable)
+
+theorem admitConnection_iff_runnable (agent : AgentDid) (snap : ActiveRuntimeSnapshot) :
+    admitConnection agent snap = true ↔ agent ∈ snap.runnable := by
+  simp [admitConnection]
+
+theorem never_admits_unrunnable
+    (agent : AgentDid) (snap : ActiveRuntimeSnapshot)
+    (hNotRunnable : agent ∉ snap.runnable) :
+    admitConnection agent snap = false := by
+  simp [admitConnection, hNotRunnable]
 
 end CodexShim.Binding

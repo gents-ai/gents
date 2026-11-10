@@ -1,5 +1,11 @@
 use serde::{Deserialize, Serialize};
 
+mod owner_row;
+pub use owner_row::{
+    decode_session_row, session_scope_filter, validate_agent_session, SessionOwnerRow,
+    SessionRowError, SessionScope, AGENT_SESSION_FIELDS, SESSION_SCOPE_FIELDS,
+};
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentSession {
@@ -9,7 +15,7 @@ pub struct AgentSession {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requester_did: Option<String>,
     /// The only configuration selection. Context and inference resolve through it.
-    pub agent_id: String,
+    pub agent_did: String,
     pub created_at: String,
     /// Explicit close time; absent for an open session. Reopening clears it.
     /// Authoritative request execution state remains on AgentRequest.
@@ -88,7 +94,7 @@ pub enum SessionTitleSource {
 
 /// These origins can coexist: a task runs, and that work can start another
 /// session with `agent_new`. Descriptive references do not confer authority;
-/// the creation receipt is evidence only after its node signature and bindings are verified.
+/// the creation receipt is evidence only after its creator signature and bindings are verified.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -114,15 +120,15 @@ pub struct SessionProvenance {
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub started_by: Option<SessionReference>,
     /// The request whose claim or refusal created this session through a
-    /// calling tool call, recorded once with `parent_request_doc_id` and
-    /// never rewritten (Lean `AgentSession.Provenance.openingRequestDoc`).
+    /// calling tool call or Task delivery. It is recorded once and never
+    /// rewritten (Lean `AgentSession.Provenance.openingRequestDoc`).
     /// Readers open a caused session at it (Lean
     /// `DurableLineage.openingRequest`); a session created before it was
     /// recorded has none and falls back to `(created_at, _docID)`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub opening_request_doc_id: Option<String>,
-    /// Node-signed evidence that this opening request created this exact session.
+    /// Creator-signed evidence that this opening request created this exact session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub creation_receipt: Option<SessionCreationReceipt>,
@@ -151,7 +157,7 @@ pub struct SessionCreationReceipt {
     pub session_id: String,
     pub session_doc_id: String,
     pub requester_did: Option<String>,
-    pub agent_id: String,
+    pub agent_did: String,
     pub opening_request_doc_id: String,
     pub cause: SessionCreationCause,
     pub cause_binding: String,
@@ -186,7 +192,7 @@ impl SessionCreationReceipt {
             &self.session_id,
             &self.session_doc_id,
             &self.requester_did,
-            &self.agent_id,
+            &self.agent_did,
             &self.opening_request_doc_id,
             self.cause,
             &self.cause_binding,

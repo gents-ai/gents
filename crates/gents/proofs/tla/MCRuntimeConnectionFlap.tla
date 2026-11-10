@@ -1,0 +1,4 @@
+---- MODULE MCRuntimeConnectionFlap ----
+EXTENDS RuntimeConnectionTransport
+
+====

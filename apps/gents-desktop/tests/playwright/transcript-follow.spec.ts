@@ -176,17 +176,29 @@ test.describe("a reader scrolled up in a transcript", () => {
     await expect(viewport).toHaveAttribute("data-following", "false");
     await page.waitForTimeout(800);
     const result = await viewport.evaluate(async (scroller) => {
+      const top = scroller.getBoundingClientRect().top;
+      const reader = Array.from(
+        scroller.querySelectorAll<HTMLElement>("[data-timeline-key]"),
+      ).find((row) => row.getBoundingClientRect().bottom > top + 200)!;
+      const before = reader.getBoundingClientRect().top;
       const moved = scroller.scrollTop - 10;
       window.dispatchEvent(
         new KeyboardEvent("keydown", { key: "ArrowUp", repeat: true }),
       );
       scroller.scrollTop = moved;
+      const afterMove = reader.getBoundingClientRect().top;
       const note = document.createElement("span");
       scroller.querySelector("[data-timeline-key]")!.append(note);
       for (let i = 0; i < 3; i += 1) await new Promise((r) => requestAnimationFrame(r));
-      return { moved, now: scroller.scrollTop };
+      return {
+        moved: afterMove - before,
+        drift: reader.getBoundingClientRect().top - afterMove,
+        retained: reader.isConnected,
+      };
     });
-    expect(Math.abs(result.now - result.moved)).toBeLessThan(1);
+    expect(result.retained).toBe(true);
+    expect(result.moved).toBeGreaterThan(0);
+    expect(Math.abs(result.drift)).toBeLessThan(1);
   });
 
   test("keeps their place while the reply below them streams", async ({ page }) => {

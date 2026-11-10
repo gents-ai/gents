@@ -9,6 +9,7 @@ import { Fragment, memo, useMemo } from "react";
 import { AssistantCancelCauseTurn } from "./transcript/MessageItems.js";
 import { useAssistantReveal } from "./transcript/useAssistantReveal.js";
 import { TimelineItem, timelineKey } from "./transcript/TimelineItem.js";
+import { isHiddenRuntimeInput } from "./transcript/runtimeInputs.js";
 import {
   coalesceToolGroups,
   type CompactTimelineItem,
@@ -36,7 +37,8 @@ export const MessageList = memo(function MessageList({
   ) => void;
 }) {
   const displayItems = useMemo<CompactTimelineItem[]>(() => {
-    return compactTools ? coalesceToolGroups(timelineItems) : timelineItems;
+    const visible = timelineItems.filter((item) => !isHiddenRuntimeInput(item));
+    return compactTools ? coalesceToolGroups(visible) : visible;
   }, [compactTools, timelineItems]);
   const window = useListWindow(
     displayItems,
@@ -94,5 +96,4 @@ export const MessageList = memo(function MessageList({
     </>
   );
 });
-
 const estimateItemSize = () => 120;

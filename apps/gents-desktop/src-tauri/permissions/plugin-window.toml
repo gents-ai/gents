@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "open-plugin-window"
+description = "Allow the main view to open a UX plugin's page in a window of its own."
+commands.allow = ["desktop_open_plugin_window"]

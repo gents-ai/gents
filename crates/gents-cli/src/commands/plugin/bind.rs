@@ -26,7 +26,7 @@ pub(super) async fn bind(args: PluginBindArgs) -> Result<()> {
         profile_id: args.profile,
     };
     AccessModels(access)
-        .resolve(&binding)
+        .resolve(&binding, None)
         .await
         .with_context(|| format!("profile {:?} cannot serve {coordinate}", binding.profile_id))?;
     let record = set_model_binding(&home, &coordinate, Some(binding))?;

@@ -1,4 +1,29 @@
 @layer transcript {
+  .runtime-background-event {
+    min-width: 0;
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+  }
+
+  .runtime-background-event > summary {
+    cursor: pointer;
+    padding: 3px 0;
+  }
+
+  .runtime-background-event > summary:focus-visible {
+    outline: 1px solid var(--color-accent);
+    outline-offset: 3px;
+  }
+
+  .runtime-background-event pre {
+    max-height: 200px;
+    overflow: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: var(--color-text);
+    font-size: var(--text-xs);
+  }
+
   .tool-activity-row {
     display: flex;
     align-items: center;

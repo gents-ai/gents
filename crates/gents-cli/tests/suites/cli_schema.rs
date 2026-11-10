@@ -32,7 +32,10 @@ type ActionRequest {
     )?;
 
     let schema_root = schema_dir.to_str().expect("schema dir is utf-8");
-    let first = run_cli_json(&home_dir, &["schema", "apply", schema_root])?;
+    let first = run_cli_json(
+        &home_dir,
+        &["utils", "data", "schema", "apply", schema_root],
+    )?;
     assert_eq!(
         first.get("status").and_then(Value::as_str),
         Some("schema_applied")
@@ -57,7 +60,10 @@ type ActionRequest {
         Some("status")
     );
 
-    let second = run_cli_json(&home_dir, &["schema", "apply", schema_root])?;
+    let second = run_cli_json(
+        &home_dir,
+        &["utils", "data", "schema", "apply", schema_root],
+    )?;
     assert_eq!(
         second
             .pointer("/schema_files/0/status")
@@ -130,6 +136,8 @@ async fn bundled_workspace_owned_files_remain_immutable_on_fresh_install_and_upg
                 run_cli_json(
                     &home_dir,
                     &[
+                        "utils",
+                        "data",
                         "schema",
                         "apply",
                         old_path.to_str().context("schema path utf8")?,
@@ -143,7 +151,9 @@ async fn bundled_workspace_owned_files_remain_immutable_on_fresh_install_and_upg
             let schema_arg = schema_dir.to_str().context("schema root utf8")?;
             let first = run_cli_json(
                 &home_dir,
-                &["schema", "apply", schema_arg, "--home", home_arg],
+                &[
+                    "utils", "data", "schema", "apply", schema_arg, "--home", home_arg,
+                ],
             )?;
             assert_eq!(
                 first
@@ -154,7 +164,9 @@ async fn bundled_workspace_owned_files_remain_immutable_on_fresh_install_and_upg
             );
             let repeated = run_cli_json(
                 &home_dir,
-                &["schema", "apply", schema_arg, "--home", home_arg],
+                &[
+                    "utils", "data", "schema", "apply", schema_arg, "--home", home_arg,
+                ],
             )?;
             assert_eq!(
                 repeated
@@ -175,10 +187,10 @@ async fn bundled_workspace_owned_files_remain_immutable_on_fresh_install_and_upg
                 .context("init key path")?;
             let _identity = gents::KeyIdentity::load_or_create(key_path, None)?;
             let data = agent_home.join("data");
-            let node = gents::store_key::open_home_store_key(&agent_home, &data)
+            let node = gents::store::local::store_key::open_home_store_key(&agent_home, &data)
                 .await?
                 .encrypt(
-                    gents::defra_node::EmbeddedNode::builder()
+                    gents::defra_node::Node::builder()
                         .data_path(&data)
                         .with_storage_backend(gents::defra_node::StorageBackend::Regolith),
                 )
@@ -218,12 +230,184 @@ async fn bundled_workspace_owned_files_remain_immutable_on_fresh_install_and_upg
                 after.data.context("read data")?[collection][0]["owned_files"],
                 owned
             );
-            node.shutdown().await;
+            node.shutdown().await.expect("node shutdown");
             drop(node);
             // Defra's background task cleanup may outlive shutdown; preserve
             // this isolated test store instead of deleting it underneath them.
             std::mem::forget(tempdir);
         }
     }
+    Ok(())
+}
+
+#[test]
+fn export_and_paged_query_preserve_long_values() -> Result<()> {
+    use serde_json::json;
+    use sha2::{Digest, Sha256};
+
+    let tempdir = tempfile::tempdir()?;
+    let home = tempdir.path().join("home");
+    let schemas = tempdir.path().join("schemas");
+    let output = tempdir.path().join("export");
+    fs::create_dir_all(&home)?;
+    fs::create_dir_all(&schemas)?;
+    run_init_json(&home, &["--identity-only", "--node-name", "export-test"])?;
+    fs::write(
+        schemas.join("record.graphql"),
+        "type ExportRecord { body: String category: String }",
+    )?;
+    run_cli_json(
+        &home,
+        &[
+            "utils",
+            "data",
+            "schema",
+            "apply",
+            schemas.to_str().unwrap(),
+        ],
+    )?;
+    let original = format!("{}😀", "é".repeat(1500));
+    let input = json!({"body":original,"category":"keep"}).to_string();
+    let record_schema = schemas.join("record.graphql");
+    let record_schema = record_schema.to_str().context("schema path utf8")?;
+    run_cli_json(
+        &home,
+        &[
+            "utils",
+            "data",
+            "document",
+            "create",
+            "ExportRecord",
+            "--schema",
+            record_schema,
+            "--json",
+            &input,
+        ],
+    )?;
+    run_cli_json(
+        &home,
+        &[
+            "utils",
+            "data",
+            "document",
+            "create",
+            "ExportRecord",
+            "--schema",
+            record_schema,
+            "--json",
+            r#"{"body":"skip","category":"other"}"#,
+        ],
+    )?;
+    let query = run_cli_json(
+        &home,
+        &[
+            "utils",
+            "data",
+            "query",
+            "find",
+            "--collection",
+            "ExportRecord",
+            "--field",
+            "body",
+            "--filter",
+            r#"{"category":{"_eq":"keep"}}"#,
+        ],
+    )?;
+    assert_eq!(query["truncated"], true);
+    assert_eq!(query["truncated_fields"][0]["total_bytes"], original.len());
+    let doc = query["field_recovery"][0]["doc_id"].as_str().unwrap();
+    let mut offset = 0;
+    let mut hash = None::<String>;
+    let mut recovered = String::new();
+    loop {
+        let mut page = json!({"doc_id":doc,"field":"body","offset_bytes":offset});
+        if let Some(hash) = &hash {
+            page["expected_hash"] = json!(hash);
+        }
+        let response = run_cli_json(
+            &home,
+            &[
+                "utils",
+                "data",
+                "query",
+                "find",
+                "--collection",
+                "ExportRecord",
+                "--field",
+                "body",
+                "--field-page",
+                &page.to_string(),
+            ],
+        )?;
+        let page = &response["field_page"];
+        recovered.push_str(page["text"].as_str().unwrap());
+        hash = Some(page["value_hash"].as_str().unwrap().to_owned());
+        offset = page["next_offset_bytes"].as_u64().unwrap();
+        if page["complete"] == true {
+            break;
+        }
+    }
+    assert_eq!(recovered, original);
+    let response = run_cli_json(
+        &home,
+        &[
+            "utils",
+            "data",
+            "export",
+            "ExportRecord",
+            "--jsonl",
+            "--output-dir",
+            output.to_str().unwrap(),
+            "--filter",
+            r#"{"category":{"_eq":"keep"}}"#,
+        ],
+    )?;
+    assert_eq!(response["status"], "complete");
+    let bytes = fs::read(output.join("ExportRecord.jsonl"))?;
+    let row: Value = serde_json::from_slice(&bytes)?;
+    assert_eq!(row["body"], original);
+    let digest = format!("{:x}", Sha256::digest(&bytes));
+    assert_eq!(
+        fs::read_to_string(output.join("MANIFEST.tsv"))?,
+        format!(
+            "collection\trows\tbytes\tsha256\nExportRecord\t1\t{}\t{digest}\n",
+            bytes.len()
+        )
+    );
+    let all_output = tempdir.path().join("all-export");
+    let all = run_cli_json(
+        &home,
+        &[
+            "utils",
+            "data",
+            "export",
+            "--all-app-collections",
+            "--jsonl",
+            "--output-dir",
+            all_output.to_str().unwrap(),
+        ],
+    )?;
+    assert_eq!(all["status"], "complete");
+    assert_eq!(
+        fs::read_to_string(all_output.join("ExportRecord.jsonl"))?
+            .lines()
+            .count(),
+        2
+    );
+    assert!(!all_output.join("Node.jsonl").exists());
+    let failed_output = tempdir.path().join("failed-export");
+    run_cli_failure_stderr(
+        &home,
+        &[
+            "utils",
+            "data",
+            "export",
+            "MissingRecord",
+            "--jsonl",
+            "--output-dir",
+            failed_output.to_str().unwrap(),
+        ],
+    )?;
+    assert!(!failed_output.join("MANIFEST.tsv").exists());
     Ok(())
 }

@@ -24,7 +24,6 @@ export function BackgroundToolButton({ tool }: { tool: RenderedToolCallView }) {
           <Button
             variant="quiet"
             size="xs"
-            className="ml-1.5"
             onClick={(event) => {
               event.stopPropagation();
               openBackgroundLog(

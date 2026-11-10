@@ -1,3 +1,4 @@
+use crate::support::inference_target::{InferenceTarget, EVAL_TARGET_VARIABLE};
 use crate::support::*;
 
 use std::fs;
@@ -11,7 +12,8 @@ struct LiveFileAgents<'a> {
     tools_id: &'a str,
     host: Value,
     system_prompt: &'a std::path::Path,
-    agent_ids: &'a [&'a str],
+    agent_dids: &'a [&'a str],
+    target: Option<&'a InferenceTarget>,
 }
 
 fn apply_live_file_agent_config(
@@ -25,7 +27,8 @@ fn apply_live_file_agent_config(
         tools_id,
         host,
         system_prompt,
-        agent_ids,
+        agent_dids,
+        target,
     } = agents;
     run_cli_text(
         home,
@@ -44,6 +47,46 @@ fn apply_live_file_agent_config(
     )?;
     let path = root.join("pack_config.json");
     let mut config = read_json_file(&path)?;
+    if let Some(target) = target {
+        let profile_id = config["agents"][0]["inference_profile_id"]
+            .as_str()
+            .context("default agent lacks inference profile")?
+            .to_owned();
+        let profile = config["inference_profiles"]
+            .as_array_mut()
+            .context("inference_profiles is not an array")?
+            .iter_mut()
+            .find(|profile| profile["profile_id"] == profile_id)
+            .context("default inference profile is missing")?;
+        let backend_id = profile["backend_id"]
+            .as_str()
+            .context("default profile lacks backend")?
+            .to_owned();
+        let mut selected_profile = target.profile(node_did);
+        selected_profile.profile_id = profile_id;
+        selected_profile.backend_id = backend_id.clone();
+        *profile = serde_json::to_value(selected_profile)?;
+        let backend = config["inference_backends"]
+            .as_array_mut()
+            .context("inference_backends is not an array")?
+            .iter_mut()
+            .find(|backend| backend["backend_id"] == backend_id)
+            .context("default inference backend is missing")?;
+        let mut selected_backend = target.backend(node_did);
+        selected_backend.backend_id = backend_id;
+        *backend = serde_json::to_value(selected_backend)?;
+        if let Some(sampling) = target.sampling(node_did) {
+            let rows = config
+                .as_object_mut()
+                .context("configuration object")?
+                .entry("inference_sampling")
+                .or_insert_with(|| serde_json::json!([]))
+                .as_array_mut()
+                .context("inference_sampling is not an array")?;
+            rows.retain(|row| row["sampling_id"] != sampling.sampling_id);
+            rows.push(serde_json::to_value(sampling)?);
+        }
+    }
     let tools = config["tools"]
         .as_array_mut()
         .context("tools is not an array")?
@@ -54,20 +97,20 @@ fn apply_live_file_agent_config(
     let prompt = fs::read_to_string(system_prompt)?;
     let base_agent = config["agents"][0].clone();
     let base_context = config["contexts"][0].clone();
-    for agent_id in agent_ids {
+    for agent_did in agent_dids {
         let existing_context_id = config["agents"]
             .as_array()
             .context("agents is not an array")?
             .iter()
-            .find(|agent| agent["agent_id"] == *agent_id)
+            .find(|agent| agent["agent_did"] == *agent_did)
             .and_then(|agent| agent["context_id"].as_str())
             .map(ToOwned::to_owned);
         let context_id = if let Some(context_id) = existing_context_id {
             context_id
         } else {
-            let context_id = format!("{agent_id}:context");
+            let context_id = format!("{agent_did}:context");
             let mut agent = base_agent.clone();
-            agent["agent_id"] = Value::String((*agent_id).to_string());
+            agent["agent_did"] = Value::String((*agent_did).to_string());
             agent["context_id"] = Value::String(context_id.clone());
             config["agents"]
                 .as_array_mut()
@@ -143,10 +186,23 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
     let port = allocate_port()?;
     let graphql = graphql_url(port);
     let agent_name = format!("cli-live-demo-{}", Uuid::new_v4().simple());
-    let model_endpoint = std::env::var("GENTS_CLI_E2E_MODEL_ENDPOINT")
-        .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
-    let model_name = std::env::var("GENTS_CLI_E2E_MODEL_NAME")
-        .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string());
+    let target = std::env::var_os(EVAL_TARGET_VARIABLE)
+        .map(|_| InferenceTarget::selected())
+        .transpose()?;
+    let model_endpoint = target
+        .as_ref()
+        .map(|target| target.endpoint().to_owned())
+        .unwrap_or_else(|| {
+            std::env::var("GENTS_CLI_E2E_MODEL_ENDPOINT")
+                .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string())
+        });
+    let model_name = target
+        .as_ref()
+        .map(|target| target.model().to_owned())
+        .unwrap_or_else(|| {
+            std::env::var("GENTS_CLI_E2E_MODEL_NAME")
+                .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string())
+        });
 
     let init_args = vec![
         "--home".to_string(),
@@ -165,10 +221,10 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
     let init_arg_refs = init_args.iter().map(String::as_str).collect::<Vec<_>>();
     let init = run_init_json(&home_dir, &init_arg_refs)?;
     let node_did = node_did_from_init(&init)?;
-    let agent_id = init
-        .pointer("/init/default_agent_id")
+    let agent_did = init
+        .pointer("/init/default_agent_did")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("init output missing default_agent_id: {init}"))?
+        .ok_or_else(|| anyhow!("init output missing default_agent_did: {init}"))?
         .to_string();
     let tools_id = init
         .pointer("/init/tools_id")
@@ -249,7 +305,8 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
             tools_id: &tools_id,
             host: read_only_files(&home_dir)?,
             system_prompt: &system_prompt,
-            agent_ids: &[&agent_id],
+            agent_dids: &[&agent_did],
+            target: target.as_ref(),
         },
     )?;
     wait_for_runtime_quiescence(&graphql, &node_did, 2, Duration::from_secs(6)).await?;
@@ -259,17 +316,21 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
     let first = run_cli_json(
         &home_dir,
         &[
-            "chat",
+            "utils",
+            "debug",
+            "request",
+            "submit",
             "--home",
             home_arg,
             "--session-id",
             &session_id,
-            "--output",
-            "json",
+            "--valid-until",
+            "none",
             "--timeout-secs",
             "240",
             "--poll-secs",
             "1",
+            "--content",
             first_prompt,
         ],
     )?;
@@ -290,17 +351,21 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
     let second = run_cli_json(
         &home_dir,
         &[
-            "chat",
+            "utils",
+            "debug",
+            "request",
+            "submit",
             "--home",
             home_arg,
             "--session-id",
             &session_id,
-            "--output",
-            "json",
+            "--valid-until",
+            "none",
             "--timeout-secs",
             "240",
             "--poll-secs",
             "1",
+            "--content",
             second_prompt,
         ],
     )?;
@@ -380,10 +445,10 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
     let init_arg_refs = init_args.iter().map(String::as_str).collect::<Vec<_>>();
     let init = run_init_json(&home_dir, &init_arg_refs)?;
     let node_did = node_did_from_init(&init)?;
-    let agent_id = init
-        .pointer("/init/default_agent_id")
+    let agent_did = init
+        .pointer("/init/default_agent_did")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("init output missing default_agent_id: {init}"))?
+        .ok_or_else(|| anyhow!("init output missing default_agent_did: {init}"))?
         .to_string();
     let tools_id = init
         .pointer("/init/tools_id")
@@ -404,7 +469,8 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
             tools_id: &tools_id,
             host: read_only_files(&home_dir)?,
             system_prompt: &system_prompt,
-            agent_ids: &[&agent_id],
+            agent_dids: &[&agent_did],
+            target: None,
         },
     )?;
     wait_for_runtime_quiescence(&graphql, &node_did, 2, Duration::from_secs(6)).await?;
@@ -416,6 +482,8 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
     let result = run_cli_json(
         &home_dir,
         &[
+            "utils",
+            "debug",
             "request",
             "submit",
             "--home",
@@ -426,8 +494,8 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
             &node_did,
             "--session-id",
             &session_id,
-            "--agent-id",
-            &agent_id,
+            "--agent-did",
+            &agent_did,
             "--content",
             &prompt,
             "--timeout-secs",
@@ -729,7 +797,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
     let home_arg = home_dir.to_str().context("home is not UTF-8")?;
 
     struct LiveRequestSpec {
-        agent_id: String,
+        agent_did: String,
         prompt: String,
         tokens: Vec<String>,
     }
@@ -756,7 +824,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
             paths.join(", ")
         );
         request_specs.push(LiveRequestSpec {
-            agent_id: format!("live-{request_index}"),
+            agent_did: format!("live-{request_index}"),
             prompt,
             tokens,
         });
@@ -809,9 +877,9 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
-    let agent_ids = request_specs
+    let agent_dids = request_specs
         .iter()
-        .map(|spec| spec.agent_id.as_str())
+        .map(|spec| spec.agent_did.as_str())
         .collect::<Vec<_>>();
     apply_live_file_agent_config(
         &home_dir,
@@ -822,7 +890,8 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
             tools_id: &tools_id,
             host: read_only_files(&home_dir)?,
             system_prompt: &system_prompt,
-            agent_ids: &agent_ids,
+            agent_dids: &agent_dids,
+            target: None,
         },
     )?;
     wait_for_runtime_quiescence(&graphql, &node_did, 2, Duration::from_secs(6)).await?;
@@ -832,6 +901,8 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
         let child = spawn_cli(
             &home_dir,
             &[
+                "utils",
+                "debug",
                 "request",
                 "submit",
                 "--home",
@@ -840,8 +911,8 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
                 &graphql,
                 "--node-did",
                 &node_did,
-                "--agent-id",
-                &spec.agent_id,
+                "--agent-did",
+                &spec.agent_did,
                 "--content",
                 &spec.prompt,
                 "--timeout-secs",
@@ -858,7 +929,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
     for (spec, child) in children {
         match child.wait_with_output() {
             Ok(output) => outputs.push((spec, output)),
-            Err(error) => wait_errors.push(format!("{}: {error}", spec.agent_id)),
+            Err(error) => wait_errors.push(format!("{}: {error}", spec.agent_did)),
         }
     }
     if !wait_errors.is_empty() {
@@ -873,7 +944,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
             let (server_stdout, server_stderr) = serve.captured_output()?;
             bail!(
                 "live request {} failed\nstdout:\n{}\nstderr:\n{}\nserver stdout:\n{}\nserver stderr:\n{}",
-                spec.agent_id,
+                spec.agent_did,
                 String::from_utf8_lossy(&output.stdout),
                 String::from_utf8_lossy(&output.stderr),
                 server_stdout,
@@ -881,10 +952,10 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
             );
         }
         let result: Value = serde_json::from_slice(&output.stdout)
-            .with_context(|| format!("parsing live request JSON for {}", spec.agent_id))?;
+            .with_context(|| format!("parsing live request JSON for {}", spec.agent_did))?;
         assert_eq!(
-            result.get("agent_id").and_then(Value::as_str),
-            Some(spec.agent_id.as_str())
+            result.get("agent_did").and_then(Value::as_str),
+            Some(spec.agent_did.as_str())
         );
         let response = result
             .pointer("/output/presentation/body_markdown")
@@ -896,7 +967,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
             assert!(
                 response.contains(token),
                 "expected response for {} to contain token {token}, got {response}",
-                spec.agent_id
+                spec.agent_did
             );
         }
         let session_id = result
@@ -915,7 +986,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
             assert!(
                 tool_results.contains(token),
                 "expected persisted read_file tool calls for {} to include token {token}: {tool_results}",
-                spec.agent_id
+                spec.agent_did
             );
         }
     }
@@ -925,7 +996,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
         &backend_id,
         &request_specs
             .iter()
-            .map(|spec| spec.agent_id.as_str())
+            .map(|spec| spec.agent_did.as_str())
             .collect::<Vec<_>>(),
     )
     .await?;
@@ -1102,10 +1173,10 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         &init_args.iter().map(String::as_str).collect::<Vec<_>>(),
     )?;
     let node = node_did_from_init(&init)?;
-    let agent_id = init
-        .pointer("/init/default_agent_id")
+    let agent_did = init
+        .pointer("/init/default_agent_did")
         .and_then(Value::as_str)
-        .context("init output missing default_agent_id")?
+        .context("init output missing default_agent_did")?
         .to_owned();
     let tools_id = init
         .pointer("/init/tools_id")
@@ -1134,7 +1205,8 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
                 "bash": {"mode": "Unrestricted"}
             }),
             system_prompt: &system_prompt,
-            agent_ids: &[&agent_id],
+            agent_dids: &[&agent_did],
+            target: None,
         },
     )?;
     wait_for_runtime_quiescence(&graphql, &node, 2, Duration::from_secs(6)).await?;
@@ -1142,6 +1214,8 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
     let session = Uuid::new_v4().to_string();
     let submit = |content: &str, wait: bool| {
         let mut args = vec![
+            "utils",
+            "debug",
             "request",
             "submit",
             "--home",
@@ -1179,7 +1253,12 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         "--output",
         "json",
     ];
-    let pending = || run_cli_json(&home, &[&["request", "pending"][..], &scope[..]].concat());
+    let pending = || {
+        run_cli_json(
+            &home,
+            &[&["utils", "debug", "request", "pending"][..], &scope[..]].concat(),
+        )
+    };
     let wait_for_pending = |expected: Vec<&str>| {
         let expected = expected.into_iter().map(str::to_owned).collect::<Vec<_>>();
         let pending = &pending;
@@ -1198,7 +1277,12 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         }
     };
     let mutate = |command: &str, snapshot: &Value, extra: &[&str]| {
-        let mut args = vec!["request".to_owned(), command.to_owned()];
+        let mut args = vec![
+            "utils".to_owned(),
+            "debug".to_owned(),
+            "request".to_owned(),
+            command.to_owned(),
+        ];
         args.extend(scope.iter().map(|arg| (*arg).to_owned()));
         for id in ids(snapshot) {
             args.extend(["--expected-request-doc-id".to_owned(), id]);
@@ -1390,7 +1474,7 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         "harness: the held request must complete"
     );
 
-    let access = gents::config_client::ConfigAccess::Graphql(
+    let access = gents::store::config_client::ConfigAccess::Graphql(
         crate::support::graphql::served_endpoint(&graphql),
     );
     let captures = captures_for(&active_request_id).await?;
@@ -1404,13 +1488,13 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
             capture["request_doc_id"], active_doc_id,
             "steering must not start a second physical request"
         );
-        let body = gents::rendered_request::decode_capture_json(
+        let body = gents::inference::rendered_request::decode_capture_json(
             &access,
             capture["capture_version"]
                 .as_u64()
                 .context("capture_version")? as u32,
             capture["request_json"].as_str().context("request_json")?,
-            gents::rendered_request::CapturePayloadKind::RequestBody,
+            gents::inference::rendered_request::CapturePayloadKind::RequestBody,
         )
         .await?
         .to_string();
@@ -1452,7 +1536,7 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         assert_eq!(row["lifecycle_state"], "superseded", "{row}");
         assert_eq!(
             row["failure_reason"],
-            gents::lifecycle::FOLDED_REASON,
+            gents::request::lifecycle::FOLDED_REASON,
             "{row}"
         );
         assert_eq!(
@@ -1505,6 +1589,8 @@ fn trace_project_json(
     let output = run_cli_text(
         home_dir,
         &[
+            "utils",
+            "debug",
             "trace",
             "project",
             "--graphql",
@@ -1533,6 +1619,8 @@ fn trace_project_jsonl_lines(
     let output = run_cli_text(
         home_dir,
         &[
+            "utils",
+            "debug",
             "trace",
             "project",
             "--graphql",

@@ -5,15 +5,79 @@ use std::sync::{Mutex, OnceLock};
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
 
-pub use gents::graphql::escape_graphql_string;
+pub use gents::store::graphql::escape_graphql_string;
 
-fn served_principals() -> &'static Mutex<RapidHashMap<u16, String>> {
-    static PRINCIPALS: OnceLock<Mutex<RapidHashMap<u16, String>>> = OnceLock::new();
+/// The CLI client key a served port's User reads and writes with. `gents
+/// init` may not have created it when the server is spawned, so it is located
+/// at registration and loaded on first use.
+enum ServedPrincipal {
+    Pending(gents_desktop_core::client::DesktopPaths),
+    Loaded(gents::store::config_client::ClientSigningCapability),
+}
+
+fn served_principals() -> &'static Mutex<RapidHashMap<u16, ServedPrincipal>> {
+    static PRINCIPALS: OnceLock<Mutex<RapidHashMap<u16, ServedPrincipal>>> = OnceLock::new();
     PRINCIPALS.get_or_init(Default::default)
 }
 
-pub fn register_served_home(home: &Path, port: u16) -> Result<()> {
-    let Some(config) = gents::home::read_init_config::<Value, Value>(home)? else {
+/// The CLI's client key is the home's User: `gents init` creates the Node and
+/// its Agent as that DID, so fixtures observe and author as it, never as the
+/// Node key. `user_home` is the `HOME` the CLI processes ran under.
+pub fn register_served_home(
+    user_home: &Path,
+    gents_home: &Path,
+    envs: &[(&str, &str)],
+    port: u16,
+) -> Result<()> {
+    register_node_principal(gents_home, port)?;
+    let paths = cli_client_paths(user_home, envs);
+    served_principals()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(port, ServedPrincipal::Pending(paths));
+    Ok(())
+}
+
+fn served_capability(port: u16) -> Option<gents::store::config_client::ClientSigningCapability> {
+    let mut principals = served_principals()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let principal = principals.get_mut(&port)?;
+    if let ServedPrincipal::Pending(paths) = principal {
+        if !paths.identity_key_path().exists() {
+            return None;
+        }
+        let identity = gents_desktop_core::client::PrincipalIdentity::load_existing(paths)
+            .unwrap_or_else(|error| {
+                panic!(
+                    "loading CLI client key under {}: {error:#}",
+                    paths.root().display()
+                )
+            });
+        *principal = ServedPrincipal::Loaded(
+            gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+                identity.private_key_bytes(),
+            )
+            .expect("CLI client key is an Ed25519 signing key"),
+        );
+    }
+    match principal {
+        ServedPrincipal::Loaded(capability) => Some(capability.clone()),
+        ServedPrincipal::Pending(_) => None,
+    }
+}
+
+fn node_principals(
+) -> &'static Mutex<RapidHashMap<u16, gents::store::config_client::ClientSigningCapability>> {
+    static PRINCIPALS: OnceLock<
+        Mutex<RapidHashMap<u16, gents::store::config_client::ClientSigningCapability>>,
+    > = OnceLock::new();
+    PRINCIPALS.get_or_init(Default::default)
+}
+
+fn register_node_principal(gents_home: &Path, port: u16) -> Result<()> {
+    let Some(config) = gents::store::local::home::read_init_config::<Value, Value>(gents_home)?
+    else {
         return Ok(());
     };
     let Some(key_path) = config.key_path.as_deref().filter(|path| !path.is_empty()) else {
@@ -21,32 +85,119 @@ pub fn register_served_home(home: &Path, port: u16) -> Result<()> {
     };
     let identity = gents::KeyIdentity::load_existing(key_path, None)
         .with_context(|| format!("loading served home key {key_path}"))?;
-    served_principals()
+    node_principals()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .insert(port, gents::NodeIdentity::did(&identity).to_string());
+        .insert(port, identity.client_signing_capability()?);
     Ok(())
 }
 
-pub fn served_endpoint(graphql: &str) -> gents::config_client::GraphqlEndpoint {
-    let principal = reqwest::Url::parse(graphql)
-        .ok()
-        .and_then(|url| url.port())
-        .and_then(|port| {
-            served_principals()
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .get(&port)
-                .cloned()
+/// The served Node's own principal, which alone may call the runtime's
+/// node-principal HTTP routes (`/metrics`, `/self`, `/fleet`, ...).
+pub fn node_principal_endpoint(graphql: &str) -> gents::store::config_client::GraphqlEndpoint {
+    endpoint_for(graphql, node_principals())
+}
+
+/// Mirrors the CLI's client-key discovery for a process run with
+/// `HOME=user_home` and `envs`.
+pub fn cli_client_paths(
+    user_home: &Path,
+    envs: &[(&str, &str)],
+) -> gents_desktop_core::client::DesktopPaths {
+    let desktop_root = envs
+        .iter()
+        .rev()
+        .find(|(name, _)| *name == gents_desktop_core::client::DESKTOP_HOME_ENV)
+        .map(|(_, value)| std::path::PathBuf::from(value))
+        .or_else(|| {
+            std::env::var_os(gents_desktop_core::client::DESKTOP_HOME_ENV)
+                .filter(|value| !value.is_empty())
+                .map(std::path::PathBuf::from)
+        })
+        .unwrap_or_else(|| {
+            user_data_local_dir(user_home, envs)
+                .join("gents")
+                .join("desktop")
         });
+    gents_desktop_core::client::DesktopPaths::from_root(desktop_root.join("cli"))
+}
+
+/// The operator's User DID: the CLI client key a CLI process with this
+/// `HOME` signs with.
+pub fn cli_user_did(cli_home: &Path) -> Result<String> {
+    let paths = cli_client_paths(cli_home, &[]);
+    let identity = gents_desktop_core::client::PrincipalIdentity::load_existing(&paths)
+        .with_context(|| format!("loading the CLI User key under {}", paths.root().display()))?;
+    Ok(identity.did().to_owned())
+}
+
+#[cfg(target_os = "macos")]
+fn user_data_local_dir(user_home: &Path, _envs: &[(&str, &str)]) -> std::path::PathBuf {
+    user_home.join("Library").join("Application Support")
+}
+
+#[cfg(not(target_os = "macos"))]
+fn user_data_local_dir(user_home: &Path, envs: &[(&str, &str)]) -> std::path::PathBuf {
+    envs.iter()
+        .rev()
+        .find(|(name, _)| *name == "XDG_DATA_HOME")
+        .map(|(_, value)| std::path::PathBuf::from(value))
+        .or_else(|| std::env::var_os("XDG_DATA_HOME").map(std::path::PathBuf::from))
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(|| user_home.join(".local").join("share"))
+}
+
+pub fn served_endpoint(graphql: &str) -> gents::store::config_client::GraphqlEndpoint {
+    endpoint_with(graphql, graphql_port(graphql).and_then(served_capability))
+}
+
+fn graphql_port(graphql: &str) -> Option<u16> {
+    reqwest::Url::parse(graphql).ok().and_then(|url| url.port())
+}
+
+fn endpoint_for(
+    graphql: &str,
+    principals: &Mutex<RapidHashMap<u16, gents::store::config_client::ClientSigningCapability>>,
+) -> gents::store::config_client::GraphqlEndpoint {
+    let principal = graphql_port(graphql).and_then(|port| {
+        principals
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(&port)
+            .cloned()
+    });
+    endpoint_with(graphql, principal)
+}
+
+fn endpoint_with(
+    graphql: &str,
+    principal: Option<gents::store::config_client::ClientSigningCapability>,
+) -> gents::store::config_client::GraphqlEndpoint {
     match principal {
-        Some(did) => gents::config_client::GraphqlEndpoint::as_principal(graphql, did),
-        None => gents::config_client::GraphqlEndpoint::anonymous(graphql),
+        Some(capability) => {
+            gents::store::config_client::GraphqlEndpoint::as_principal(graphql, capability.did())
+                .with_client_signing_capability(capability)
+                .expect("served endpoint uses the capability's own DID")
+        }
+        None => gents::store::config_client::GraphqlEndpoint::anonymous(graphql),
     }
 }
 
+/// Document reads and fixture writes as the operator's User.
 pub async fn graphql_query(graphql: &str, query: &str) -> Result<Value> {
-    let access = gents::config_client::ConfigAccess::Graphql(served_endpoint(graphql));
+    execute_as(served_endpoint(graphql), query).await
+}
+
+/// Seeds or reads rows the runtime itself owns and observes as its Node.
+pub async fn node_graphql_query(graphql: &str, query: &str) -> Result<Value> {
+    execute_as(node_principal_endpoint(graphql), query).await
+}
+
+async fn execute_as(
+    endpoint: gents::store::config_client::GraphqlEndpoint,
+    query: &str,
+) -> Result<Value> {
+    let access = gents::store::config_client::ConfigAccess::Graphql(endpoint);
     if query.trim_start().starts_with("mutation") {
         Ok(access.write("test.fixture", query).await?)
     } else {
@@ -55,7 +206,7 @@ pub async fn graphql_query(graphql: &str, query: &str) -> Result<Value> {
 }
 
 pub async fn graphql_mutation_with_variables(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     query: &str,
     variables: &Value,
 ) -> Result<Value> {
@@ -104,7 +255,7 @@ pub async fn doc_id_for_tools(graphql: &str, tools_id: &str) -> Result<String> {
         .ok_or_else(|| anyhow!("Tools row missing _docID for {tools_id}"))
 }
 
-pub async fn exec(node: &gents::defra_node::EmbeddedNode, query: &str) -> Result<()> {
+pub async fn exec(node: &gents::defra_node::Node, query: &str) -> Result<()> {
     let response = node.execute(query).await;
     if response.has_errors() {
         bail!("GraphQL mutation failed: {:?}", response.errors);

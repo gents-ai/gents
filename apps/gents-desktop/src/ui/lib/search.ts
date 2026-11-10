@@ -2,15 +2,28 @@ import type { ComponentType } from "react";
 import type { MailboxItemView, SessionSummary } from "@source-inc/gents-desktop-client";
 import type { Route } from "./router";
 
-export type SearchKind = "attention" | "session" | "agent" | "setting" | "action";
+export type SearchKind =
+  "attention" | "node" | "session" | "agent" | "automation" | "setting" | "action";
 
 type Icon = ComponentType<{ className?: string }>;
 
 export type SearchTarget =
   | { kind: "attention"; item: MailboxItemView }
+  | {
+      kind: "node";
+      nodeDid: string;
+      name: string;
+      avatar: string | null;
+      /** the node the app works with now */
+      current?: boolean;
+      /** the one before it, which the last-node key goes back to */
+      last?: boolean;
+    }
   | { kind: "session"; session: SessionSummary }
-  | { kind: "agent"; route: Route; agentId: string; nodeDid: string }
-  | { kind: "setting" | "action"; route: Route; icon: Icon };
+  | { kind: "agent"; route: Route; agentDid: string; nodeDid: string }
+  | { kind: "automation"; route: Route; icon: Icon }
+  | { kind: "setting"; route: Route; icon: Icon }
+  | { kind: "action"; run: () => void; icon: Icon; keys?: string };
 
 export type SearchEntry = SearchTarget & {
   key: string;
@@ -72,7 +85,28 @@ export function entryScore(words: readonly string[], e: SearchEntry) {
 export type SearchSources = {
   sessions: readonly SessionSummary[];
   attention: readonly MailboxItemView[];
-  agents: readonly { agentId: string; nodeDid: string; name: string; node: string }[];
+  /** every agent, with its node and the pack it came from, if any */
+  agents: readonly {
+    agentDid: string;
+    nodeDid: string;
+    name: string;
+    node: string;
+    pack: string | null;
+  }[];
+  /** every node, with what it is to this app and whether it answers, in the
+      order a Nodes view lists them before anything is typed */
+  nodes: readonly {
+    nodeDid: string;
+    name: string;
+    /** the node's saved portrait, if it has one */
+    avatar: string | null;
+    place: string;
+    offline: boolean;
+    current?: boolean;
+    last?: boolean;
+  }[];
+  /** the active node's automations, while the Automations page is on */
+  automations: readonly { id: string; name: string; when: string; icon: Icon }[];
   agentName: (session: SessionSummary) => string;
   nodeName: (nodeDid: string) => string;
   places: readonly {
@@ -82,7 +116,13 @@ export type SearchSources = {
     route: Route;
     icon: Icon;
   }[];
-  actions: readonly { key: string; title: string; route: Route; icon: Icon }[];
+  actions: readonly {
+    key: string;
+    title: string;
+    run: () => void;
+    icon: Icon;
+    keys?: string;
+  }[];
 };
 
 export function searchEntries(src: SearchSources): SearchEntry[] {
@@ -95,6 +135,22 @@ export function searchEntries(src: SearchSources): SearchEntry[] {
         item.summary ?? "",
         [item.summary ?? ""],
         item.createdAt,
+      ),
+    ),
+    ...src.nodes.map((n) =>
+      entry(
+        {
+          kind: "node",
+          nodeDid: n.nodeDid,
+          name: n.name,
+          avatar: n.avatar,
+          current: n.current,
+          last: n.last,
+        },
+        `node:${n.nodeDid}`,
+        n.name,
+        [n.place, n.offline && "Offline"].filter(Boolean).join(" · "),
+        [n.place],
       ),
     ),
     ...src.sessions.map((session) => {
@@ -113,19 +169,32 @@ export function searchEntries(src: SearchSources): SearchEntry[] {
       entry(
         {
           kind: "agent",
-          agentId: a.agentId,
+          agentDid: a.agentDid,
           nodeDid: a.nodeDid,
           route: {
             name: "agent",
             nodeDid: a.nodeDid,
             section: "agents",
-            item: a.agentId,
+            item: a.agentDid,
           },
         },
-        `agent:${a.nodeDid}:${a.agentId}`,
+        `agent:${a.nodeDid}:${a.agentDid}`,
         a.name,
-        a.node,
-        [a.node],
+        a.pack ? `${a.node} · ${a.pack}` : a.node,
+        a.pack ? [a.node, a.pack] : [a.node],
+      ),
+    ),
+    ...src.automations.map((a) =>
+      entry(
+        {
+          kind: "automation",
+          route: { name: "automations", item: a.id },
+          icon: a.icon,
+        },
+        `automation:${a.id}`,
+        a.name,
+        a.when,
+        [a.when],
       ),
     ),
     ...src.places.map((p) =>
@@ -138,7 +207,13 @@ export function searchEntries(src: SearchSources): SearchEntry[] {
       ),
     ),
     ...src.actions.map((a) =>
-      entry({ kind: "action", route: a.route, icon: a.icon }, a.key, a.title, "", []),
+      entry(
+        { kind: "action", run: a.run, icon: a.icon, keys: a.keys },
+        a.key,
+        a.title,
+        "",
+        [],
+      ),
     ),
   ];
 }
@@ -148,30 +223,68 @@ export type SearchGroup = {
   kind: SearchKind | "recent";
   label: string;
   entries: SearchEntry[];
+  /** how many more there are past the ones listed, until the group is expanded */
+  more: number;
 };
 
 const LABEL: Record<SearchKind, string> = {
   attention: "Needs attention",
+  node: "Nodes",
   session: "Sessions",
   agent: "Agents",
+  automation: "Automations",
   setting: "Settings",
   action: "Actions",
 };
-const ORDER: SearchKind[] = ["attention", "session", "agent", "setting", "action"];
-const RECENT = 6;
+const ORDER: SearchKind[] = [
+  "attention",
+  "node",
+  "session",
+  "agent",
+  "automation",
+  "setting",
+  "action",
+];
+/* before anything is typed, a few of each, so the palette opens short */
+const OPENING: Record<"attention" | "recent" | "action", number> = {
+  attention: 3,
+  recent: 5,
+  action: 3,
+};
 const PER_GROUP = 5;
 const FILTERED = 50;
+
+/* the first `cap`, and how many are left past them; an expanded group
+   lists up to the cap one kind gets on its own */
+function capped(
+  kind: SearchGroup["kind"],
+  label: string,
+  all: SearchEntry[],
+  cap: number,
+  expanded: ReadonlySet<string>,
+): SearchGroup {
+  const limit = expanded.has(kind) ? FILTERED : cap;
+  return {
+    kind,
+    label,
+    entries: all.slice(0, limit),
+    more: Math.max(0, Math.min(all.length, FILTERED) - limit),
+  };
+}
 
 const newest = (a: SearchEntry, b: SearchEntry) =>
   (b.at ?? "").localeCompare(a.at ?? "");
 
 /** What the palette lists: with no query, what needs attention, recent
-    sessions and actions; with one, the best matches of each kind, a few per
-    kind under All and more under one kind. */
+    sessions and actions, a few of each; with one, the best matches of each
+    kind, a few per kind under All and more under one kind. A group listing
+    fewer than it has says how many more, and lists them once `expanded`
+    names its kind. */
 export function searchGroups(
   entries: readonly SearchEntry[],
   query: string,
   filter: SearchFilter,
+  expanded: ReadonlySet<string> = new Set(),
 ): SearchGroup[] {
   const words = queryWords(query);
   const shown = (kind: SearchKind) => filter === "all" || filter === kind;
@@ -183,34 +296,39 @@ export function searchGroups(
           kind: filter,
           label: LABEL[filter],
           entries: of(filter).sort(newest).slice(0, FILTERED),
+          more: 0,
         },
       ];
     const recent = of("session")
       .filter((e) => e.kind === "session" && !e.session.startedBy)
-      .sort(newest)
-      .slice(0, RECENT);
+      .sort(newest);
     return [
-      {
-        kind: "attention" as const,
-        label: LABEL.attention,
-        entries: of("attention").sort(newest),
-      },
-      { kind: "recent" as const, label: "Recent sessions", entries: recent },
-      { kind: "action" as const, label: LABEL.action, entries: of("action") },
+      capped(
+        "attention",
+        LABEL.attention,
+        of("attention").sort(newest),
+        OPENING.attention,
+        expanded,
+      ),
+      capped("recent", "Recent sessions", recent, OPENING.recent, expanded),
+      capped("action", LABEL.action, of("action"), OPENING.action, expanded),
     ].filter((g) => g.entries.length > 0);
   }
   const cap = filter === "all" ? PER_GROUP : FILTERED;
   return ORDER.filter(shown)
-    .map((kind) => ({
-      kind,
-      label: LABEL[kind],
-      entries: entries
-        .filter((e) => e.kind === kind)
-        .map((e) => ({ e, score: entryScore(words, e) }))
-        .filter((r) => r.score > 0)
-        .sort((a, b) => b.score - a.score || newest(a.e, b.e))
-        .slice(0, cap)
-        .map((r) => r.e),
-    }))
+    .map((kind) =>
+      capped(
+        kind,
+        LABEL[kind],
+        entries
+          .filter((e) => e.kind === kind)
+          .map((e) => ({ e, score: entryScore(words, e) }))
+          .filter((r) => r.score > 0)
+          .sort((a, b) => b.score - a.score || newest(a.e, b.e))
+          .map((r) => r.e),
+        cap,
+        expanded,
+      ),
+    )
     .filter((g) => g.entries.length > 0);
 }

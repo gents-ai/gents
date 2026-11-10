@@ -1,10 +1,10 @@
 use std::path::Path;
 
-use gents::document_config::{Agent, PluginToolRef, Tools};
+use gents::documents::{Agent, PluginToolRef, Tools};
 use gents::pack::home_install::recorded_provenance;
 use gents::pack::{read_home_install, InstalledVia, PackKind};
 use gents::plugin::store::{parse_coordinate, read_record};
-use gents::tool_surface::{BashMode, FileToolMode};
+use gents::tools::surface::{BashMode, FileToolMode};
 use gents_protocol::job::PluginJobSettings;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -39,7 +39,7 @@ pub(super) fn diagnose_plugin_jobs(home: &Path, bundle: Option<&ConfigExportBund
                 .config
                 .agents
                 .iter()
-                .map(|agent| (agent.agent_id.as_str(), agent_rows(home, bundle, agent)))
+                .map(|agent| (agent.agent_did.as_str(), agent_rows(home, bundle, agent)))
         })
         .collect();
     let ok = agents
@@ -49,7 +49,7 @@ pub(super) fn diagnose_plugin_jobs(home: &Path, bundle: Option<&ConfigExportBund
         "ok": ok,
         "agents": agents
             .iter()
-            .map(|(agent_id, rows)| json!({"agent_id": agent_id, "checks": rows}))
+            .map(|(agent_did, rows)| json!({"agent_did": agent_did, "checks": rows}))
             .collect::<Vec<_>>(),
     })
 }
@@ -71,7 +71,7 @@ fn agent_rows(home: &Path, bundle: &ConfigExportBundle, agent: &Agent) -> Vec<Ro
             "tools_unreadable",
             "fail",
             error.to_string(),
-            format!("gents tools explain --agent {}", agent.agent_id),
+            format!("gents config tools explain --agent {}", agent.agent_did),
         )),
     }
     rows
@@ -95,13 +95,16 @@ fn plugin_rows(
                 "plugin_record_unreadable",
                 "fail",
                 format!("{plugin}: {error:#}"),
-                format!("gents plugin install {plugin}"),
+                format!("gents config pack plugin install {plugin}"),
             ));
             return;
         }
     };
     let owner = record.owner_pack_coordinate.as_deref();
-    let wire = format!("gents pack wire {plugin} --agent {}", agent.agent_id);
+    let wire = format!(
+        "gents config pack wire {plugin} --agent {}",
+        agent.agent_did
+    );
     let Some(block) = &entry.job else {
         if record.declaration.job.0 {
             rows.push(row(
@@ -132,7 +135,7 @@ fn plugin_rows(
             .config
             .agents
             .iter()
-            .find(|a| a.node_did == target.target_node_did && a.agent_id == target.agent_id);
+            .find(|a| a.node_did == target.target_node_did && a.agent_did == target.agent_did);
         let problem = if target.target_node_did == target.node_did && destination.is_none() {
             Some("names an agent that is not configured")
         } else if destination.is_some_and(|a| !a.enabled) {
@@ -169,19 +172,18 @@ fn plugin_rows(
             "engine_not_operator_installed",
             "fail",
             format!("{plugin}: {reason}"),
-            format!("gents pack install {engine} --grant-authority"),
+            format!("gents config pack install {engine} --grant-authority"),
         ));
     }
     for id in &block.policy.dynamic_targets {
-        let tools =
-            find_target(bundle, agent, id)
-                .and_then(|target| {
-                    bundle.config.agents.iter().find(|a| {
-                        a.node_did == target.target_node_did && a.agent_id == target.agent_id
-                    })
+        let tools = find_target(bundle, agent, id)
+            .and_then(|target| {
+                bundle.config.agents.iter().find(|a| {
+                    a.node_did == target.target_node_did && a.agent_did == target.agent_did
                 })
-                .and_then(|a| agent_tools_document(bundle, &a.node_did, a).ok())
-                .and_then(|(_, tools)| tools);
+            })
+            .and_then(|a| agent_tools_document(bundle, &a.node_did, a).ok())
+            .and_then(|(_, tools)| tools);
         if tools.is_some_and(reads_files_and_reaches_network) {
             rows.push(row(
                 "dynamic_target_exfiltration",
@@ -210,7 +212,7 @@ fn plugin_rows(
                 "{plugin}: {} are also reachable by agent_new",
                 widened.join(", ")
             ),
-            format!("gents tools explain --agent {}", agent.agent_id),
+            format!("gents config tools explain --agent {}", agent.agent_did),
         ));
     }
 }
@@ -219,7 +221,7 @@ fn find_target<'a>(
     bundle: &'a ConfigExportBundle,
     agent: &Agent,
     id: &str,
-) -> Option<&'a gents::document_config::AgentTargetDocument> {
+) -> Option<&'a gents::documents::AgentTargetDocument> {
     bundle
         .config
         .agent_targets
@@ -263,7 +265,7 @@ fn inference_rows(
             "fail",
             format!(
                 "{plugin}: target agent {} has no usable inference: {problem}",
-                destination.agent_id
+                destination.agent_did
             ),
             "gents config profile / gents config backend".into(),
         ));
@@ -278,7 +280,7 @@ fn inference_rows(
                     backend.backend_id, block.max_live
                 ),
                 format!(
-                    "gents config backend set --backend-id {} --max-concurrent {}",
+                    "save the output of `gents config backend show {}` without its `_docID`, set `max_concurrent` to {}, and load it with `gents config backend set --file <backend.json>`",
                     backend.backend_id, block.max_live
                 ),
             ));
@@ -323,7 +325,7 @@ fn reads_files_and_reaches_network(tools: &Tools) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::document_config::AgentContext;
+    use gents::documents::AgentContext;
     use gents::plugin::store::write_record;
 
     const NODE: &str = "did:key:node";
@@ -332,9 +334,9 @@ mod tests {
         json!({
             "node": {"node_did": NODE},
             "agents": [
-                {"agent_id": "caller", "node_did": NODE, "context_id": "ctx", "inference_profile_id": "p"},
-                {"agent_id": "worker", "node_did": NODE, "inference_profile_id": "p"},
-                {"agent_id": "web", "node_did": NODE, "context_id": "ctx-web", "inference_profile_id": "p"},
+                {"agent_did": "caller", "node_did": NODE, "creation_nonce": "nonce", "context_id": "ctx", "inference_profile_id": "p"},
+                {"agent_did": "worker", "node_did": NODE, "creation_nonce": "nonce", "inference_profile_id": "p"},
+                {"agent_did": "web", "node_did": NODE, "creation_nonce": "nonce", "context_id": "ctx-web", "inference_profile_id": "p"},
             ],
             "contexts": [
                 {"context_id": "ctx", "node_did": NODE, "tools_id": "tools"},
@@ -366,9 +368,9 @@ mod tests {
             ],
             "agent_targets": [
                 {"target_id": "wf-read-only", "node_did": NODE, "target_node_did": NODE,
-                 "agent_id": "worker", "name": "wf-read-only"},
+                 "agent_did": "worker", "name": "wf-read-only"},
                 {"target_id": "wf-read-only-web", "node_did": NODE, "target_node_did": NODE,
-                 "agent_id": "web", "name": "wf-read-only-web"},
+                 "agent_did": "web", "name": "wf-read-only-web"},
             ],
             "inference_backends": [{
                 "backend_id": "b", "node_did": NODE, "name": "b",
@@ -401,7 +403,7 @@ mod tests {
                 "coordinate": coordinate, "version": "1.0.0", "digest": "sha256:bb",
                 "kind": "plugins", "assets": "packs/.materialized/acme/engine/bb",
                 "plugins": [], "installed_at": "2026-01-01T00:00:00Z",
-                "installed_via": via,
+                "installed_via": via, "source": null, "source_history": [],
             }))
             .unwrap(),
         )
@@ -432,7 +434,7 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .find(|agent| agent["agent_id"] == "caller")
+            .find(|agent| agent["agent_did"] == "caller")
             .unwrap();
         let rows = caller["checks"]
             .as_array()
@@ -486,7 +488,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             next_call,
-            "gents pack wire acme/runner --agent caller --targets-from acme/engine"
+            "gents config pack wire acme/runner --agent caller --targets-from acme/engine"
         );
     }
 
@@ -519,7 +521,7 @@ mod tests {
             );
             assert_eq!(
                 check["next_call"],
-                "gents pack wire acme/runner --agent caller"
+                "gents config pack wire acme/runner --agent caller"
             );
         }
     }
@@ -559,7 +561,7 @@ mod tests {
         let check = &report["agents"][0]["checks"][0];
         assert_eq!(
             check["next_call"],
-            "gents pack install acme/engine --grant-authority"
+            "gents config pack install acme/engine --grant-authority"
         );
         assert_eq!(report["ok"], false);
     }
@@ -575,7 +577,7 @@ mod tests {
         let check = &report["agents"][0]["checks"][0];
         assert_eq!(
             check["next_call"],
-            "gents pack install acme/runner --grant-authority"
+            "gents config pack install acme/runner --grant-authority"
         );
         assert_eq!(report["ok"], false);
     }
@@ -587,7 +589,7 @@ mod tests {
         only(&rows, "plugin_record_unreadable", "fail");
         assert_eq!(
             report["agents"][0]["checks"][0]["next_call"],
-            "gents plugin install acme/runner"
+            "gents config pack plugin install acme/runner"
         );
         assert_eq!(report["ok"], false);
     }
@@ -620,7 +622,11 @@ mod tests {
         let next_call = report["agents"][0]["checks"][0]["next_call"]
             .as_str()
             .unwrap();
-        assert!(next_call.ends_with("--max-concurrent 2"), "{next_call}");
+        assert!(next_call.contains("`max_concurrent` to 2"), "{next_call}");
+        assert!(
+            next_call.contains("gents config backend set --file"),
+            "{next_call}"
+        );
     }
 
     #[test]
@@ -668,7 +674,7 @@ mod tests {
             node_did: NODE.into(),
             ..Tools::default()
         };
-        let (wired, _, report) = gents::document_config::wire_plugin(
+        let (wired, _, report) = gents::documents::wire_plugin(
             &empty,
             &context,
             &plugin,

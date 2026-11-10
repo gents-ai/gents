@@ -117,11 +117,11 @@ describe("the plugin page route", () => {
 describe("the area vocabulary", () => {
   it("is one list on both sides of the bridge", () => {
     const rust = readFileSync(
-      join(__dirname, "../../../crates/gents/src/pack.rs"),
+      join(__dirname, "../../../crates/gents/src/pack/ux.rs"),
       "utf8",
     );
     const block = /pub const UX_PLUGIN_AREAS: &\[&str\] = &\[([^\]]*)\];/.exec(rust);
-    expect(block, "UX_PLUGIN_AREAS in pack.rs").not.toBeNull();
+    expect(block, "UX_PLUGIN_AREAS in pack/ux.rs").not.toBeNull();
     const areas = [...block![1]!.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
     expect(areas.sort()).toEqual([...KNOWN_AREAS].sort());
   });

@@ -12,8 +12,6 @@ mod legacy_authority_absence;
 mod log_rate_filter;
 #[path = "misc/node_access_control.rs"]
 mod node_access_control;
-#[path = "misc/oneshot_admission_exemption.rs"]
-mod oneshot_admission_exemption;
 #[path = "misc/startup_readiness_barrier.rs"]
 mod startup_readiness_barrier;
 

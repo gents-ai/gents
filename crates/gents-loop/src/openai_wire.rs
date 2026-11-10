@@ -10,7 +10,7 @@ pub enum OpenAiWireApiError {
 
 type Result<T, E = OpenAiWireApiError> = std::result::Result<T, E>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum OpenAiWireApi {
     #[serde(rename = "responses")]
@@ -49,9 +49,15 @@ impl OpenAiWireApi {
             BackendProviderKind::OpenRouter => Self::ChatCompletions,
             BackendProviderKind::ChatGptCodex => Self::Responses,
             BackendProviderKind::XaiGrokOAuth => configured.unwrap_or(Self::Responses),
-            BackendProviderKind::ClaudeCliSubscription | BackendProviderKind::AnthropicApiKey => {
-                Self::ChatCompletions
-            }
+            BackendProviderKind::ClaudeCliSubscription
+            | BackendProviderKind::AnthropicApiKey
+            | BackendProviderKind::ClaudeBedrock
+            | BackendProviderKind::ClaudeVertex
+            | BackendProviderKind::ClaudeFoundry
+            | BackendProviderKind::ClaudeAnthropicAws
+            | BackendProviderKind::ClaudeMantle
+            | BackendProviderKind::ClaudeGoogleCloud
+            | BackendProviderKind::ClaudeGateway => Self::ChatCompletions,
         }
     }
 
@@ -63,13 +69,12 @@ impl OpenAiWireApi {
         let Some(configured) = configured else {
             return;
         };
-        if matches!(
-            provider_kind,
-            BackendProviderKind::OpenRouter
-                | BackendProviderKind::ChatGptCodex
-                | BackendProviderKind::ClaudeCliSubscription
-                | BackendProviderKind::AnthropicApiKey
-        ) {
+        if provider_kind.uses_messages_wire()
+            || matches!(
+                provider_kind,
+                BackendProviderKind::OpenRouter | BackendProviderKind::ChatGptCodex
+            )
+        {
             tracing::warn!(
                 backend_id,
                 openai_wire_api = configured.as_str(),

@@ -5,11 +5,13 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use gents::background_tools::ProcessControlScope;
-use gents::config_client::ConfigAccess;
-use gents::plugin_job::control::control;
-use gents::plugin_job::dispatch::split_address;
-use gents::plugin_job::view::{list_jobs, load_job_view, JobFilter, JobKey, StateFilter};
+use gents::store::config_client::ConfigAccess;
+use gents::tools::background::job::dispatch::split_address;
+use gents::tools::background::job::view::{
+    list_jobs, load_job_view, JobFilter, JobKey, StateFilter,
+};
+use gents::tools::background::status::ProcessControlScope;
+use gents::tools::call::control::client::send::ControlSendError;
 use gents_protocol::job::{
     JobChildState, JobControlKind, JobControlOutcome, JobOrigin, JobPauseReason, JobPhaseState,
     JobReadError, JobState, JobView,
@@ -58,7 +60,7 @@ const NOT_OBSERVABLE_EXIT: i32 = 4;
 
 async fn job_watch(args: JobWatchArgs) -> Result<()> {
     let format = args.output.ensure_supported(
-        "job watch",
+        "automation job watch",
         &[OutputFormat::Text, OutputFormat::Json, OutputFormat::Ndjson],
     )?;
     let (access, session_id, tool_call_id) = match watch_target(&args).await {
@@ -137,7 +139,7 @@ fn pre_poll_failure(error: &anyhow::Error) -> (String, i32) {
     (format!("{error:#}"), NOT_OBSERVABLE_EXIT)
 }
 
-/// A Local access holds the home store claim, which would block `gents server`.
+/// A Local access holds the home store claim, which would block `gents runtime server`.
 fn require_served(access: &ConfigAccess) -> Result<()> {
     match access {
         ConfigAccess::Graphql(_) => Ok(()),
@@ -168,7 +170,7 @@ fn exit_code(ended: &Result<JobView, JobReadError>) -> i32 {
 fn failure_text(error: &JobReadError, session_id: &str) -> String {
     match error {
         JobReadError::NotYetObservable => {
-            format!("not found: {error}\nnext: gents job list --session {session_id}")
+            format!("not found: {error}\nnext: gents automation job list --session {session_id}")
         }
         error => error.to_string(),
     }
@@ -249,14 +251,15 @@ where
 }
 
 async fn job_show(args: JobShowArgs) -> Result<()> {
-    let format = args
-        .output
-        .ensure_supported("job show", &[OutputFormat::Text, OutputFormat::Json])?;
-    let actor = resolve_node_did(args.scope.home.as_deref(), args.scope.node_did.as_deref())
+    let format = args.output.ensure_supported(
+        "automation job show",
+        &[OutputFormat::Text, OutputFormat::Json],
+    )?;
+    let node_did = resolve_node_did(args.scope.home.as_deref(), args.scope.node_did.as_deref())
         .context("resolving job owner node_did")?;
     let (access, _home_dir) =
         resolve_config_access(args.scope.home.as_deref(), args.scope.graphql.as_deref()).await?;
-    let view = resolve_job(&access, &actor, &args.selector, args.session.as_deref()).await?;
+    let view = resolve_job(&access, &node_did, &args.selector, args.session.as_deref()).await?;
     match format {
         OutputFormat::Json => print_json(&view),
         _ => {
@@ -269,9 +272,10 @@ async fn job_show(args: JobShowArgs) -> Result<()> {
 }
 
 pub(crate) async fn job_promote(args: JobPromoteArgs) -> Result<()> {
-    let format = args
-        .output
-        .ensure_supported("job promote", &[OutputFormat::Text, OutputFormat::Json])?;
+    let format = args.output.ensure_supported(
+        "automation job promote",
+        &[OutputFormat::Text, OutputFormat::Json],
+    )?;
     let actor = resolve_node_did(args.scope.home.as_deref(), args.scope.node_did.as_deref())
         .context("resolving job owner node_did")?;
     let (access, home) =
@@ -292,7 +296,9 @@ pub(crate) async fn job_promote(args: JobPromoteArgs) -> Result<()> {
     )
     .await;
     if let Some(node) = access.local_node() {
-        node.shutdown().await;
+        if let Err(error) = node.shutdown().await {
+            tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
+        }
     }
     let report = result.map_err(|error| {
         let code = promote::refusal_code(&error);
@@ -319,6 +325,12 @@ async fn job_control(args: JobControlArgs, kind: JobControlKind) -> Result<()> {
         .context("resolving job owner node_did")?;
     let (access, _home_dir) =
         resolve_config_access(args.scope.home.as_deref(), args.scope.graphql.as_deref()).await?;
+    // Job control is delivered to the hosting runtime; a Local access holds
+    // the home store with no runtime to receive the signed control.
+    anyhow::ensure!(
+        matches!(access, ConfigAccess::Graphql(_)),
+        "start the hosting runtime to control a job, or pass --graphql"
+    );
     let view = resolve_job(&access, &actor, &args.selector, args.session.as_deref()).await?;
     for line in control_job(&access, &view, kind).await? {
         println!("{line}");
@@ -326,7 +338,6 @@ async fn job_control(args: JobControlArgs, kind: JobControlKind) -> Result<()> {
     Ok(())
 }
 
-/// The operator acts as the job's own scope; the owner refuses a GraphQL access.
 pub(crate) fn operator_scope(view: &JobView) -> ProcessControlScope {
     ProcessControlScope {
         request_id: String::new(),
@@ -341,8 +352,37 @@ async fn control_job(
     view: &JobView,
     kind: JobControlKind,
 ) -> Result<Vec<String>> {
-    let result = control(access, &operator_scope(view), &view.tool_call_id, kind).await;
-    control_lines(kind, view, result)
+    match control_job_remote(access, view, kind).await {
+        Ok(outcome) => control_lines(kind, view, Ok(outcome)),
+        Err(ControlSendError::NotFound) => {
+            control_lines(kind, view, Err(JobReadError::NotYetObservable))
+        }
+        Err(ControlSendError::NotAuthorized) => {
+            control_lines(kind, view, Err(JobReadError::NotAuthorized))
+        }
+        Err(ControlSendError::PermissionDenied) => {
+            control_lines(kind, view, Err(JobReadError::PermissionDenied))
+        }
+        Err(error) => Err(anyhow::Error::new(error)),
+    }
+}
+
+async fn control_job_remote(
+    access: &ConfigAccess,
+    view: &JobView,
+    kind: JobControlKind,
+) -> std::result::Result<JobControlOutcome, ControlSendError> {
+    let actor = access.actor_did().ok_or(ControlSendError::NotAuthorized)?;
+    let signer = gents::store::identity::RegisteredIdentity::from_registered_did(&actor, None)
+        .map_err(|error| ControlSendError::Unavailable(error.into()))?;
+    gents::tools::call::control::client::send::control_job(
+        access,
+        &signer,
+        &view.scope.node_did,
+        &view.row_doc_id,
+        kind,
+    )
+    .await
 }
 
 /// Answer first. A job that is not ours or not a job is an error carrying the
@@ -357,6 +397,11 @@ pub(crate) fn control_lines(
         JobControlKind::Pause => "pause",
     };
     match result {
+        Ok(JobControlOutcome::Queued { intent_doc_id }) => Ok(vec![
+            format!("{verb} requested"),
+            format!("control: {intent_doc_id}"),
+            format!("next: gents automation job show {}", view.address),
+        ]),
         Ok(JobControlOutcome::Applied {
             state,
             killed_children,
@@ -375,19 +420,20 @@ pub(crate) fn control_lines(
             "workflow_control_not_applicable".to_owned(),
             format!("state: {}", state_name(state)),
             "next:".to_owned(),
-            format!("  gents job show {}", view.address),
+            format!("  gents automation job show {}", view.address),
         ]),
         Err(JobReadError::NotAJob | JobReadError::NotAuthorized) => Err(anyhow::anyhow!(
-            "workflow_control_unknown_run\nnext:\n  gents job list"
+            "workflow_control_unknown_run\nnext:\n  gents automation job list"
         )),
         Err(error) => Err(read_error(error)),
     }
 }
 
 async fn job_list(args: JobListArgs) -> Result<()> {
-    let format = args
-        .output
-        .ensure_supported("job list", &[OutputFormat::Table, OutputFormat::Json])?;
+    let format = args.output.ensure_supported(
+        "automation job list",
+        &[OutputFormat::Table, OutputFormat::Json],
+    )?;
     let (access, _home_dir) =
         resolve_config_access(args.scope.home.as_deref(), args.scope.graphql.as_deref()).await?;
     let views = list_jobs(
@@ -529,13 +575,15 @@ pub(crate) fn pick_job<'a>(
 }
 
 fn not_found(selector: &str) -> anyhow::Error {
-    anyhow::anyhow!("not found: no job matches `{selector}`; list jobs with `gents job list`")
+    anyhow::anyhow!(
+        "not found: no job matches `{selector}`; list jobs with `gents automation job list`"
+    )
 }
 
 fn ambiguous(selector: &str, candidates: &[&JobView]) -> anyhow::Error {
     let calls: Vec<String> = candidates
         .iter()
-        .map(|view| format!("  gents job show {}", view.address))
+        .map(|view| format!("  gents automation job show {}", view.address))
         .collect();
     anyhow::anyhow!(
         "`{selector}` matches more than one job; show one with:\n{}",
@@ -543,20 +591,20 @@ fn ambiguous(selector: &str, candidates: &[&JobView]) -> anyhow::Error {
     )
 }
 
-/// The `gents job` calls that follow a job in `state`. How a paused or failed
+/// The `gents automation job` calls that follow a job in `state`. How a paused or failed
 /// run is resumed is the plugin's own contract (its TOOL.md), not the host's.
 pub fn next_calls(state: JobState, address: &str) -> Vec<String> {
     match state {
         JobState::Running => vec![
-            format!("gents job watch {address}"),
-            format!("gents job stop {address}"),
+            format!("gents automation job watch {address}"),
+            format!("gents automation job stop {address}"),
         ],
         JobState::Paused | JobState::AwaitingUser => vec![
-            format!("gents job show {address}"),
-            format!("gents job stop {address}"),
+            format!("gents automation job show {address}"),
+            format!("gents automation job stop {address}"),
         ],
         JobState::Completed | JobState::Failed | JobState::Cancelled | JobState::TimedOut => {
-            vec![format!("gents job show {address}")]
+            vec![format!("gents automation job show {address}")]
         }
     }
 }
@@ -749,8 +797,8 @@ fn print_table(views: &[JobView], now_ms: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::plugin_job::admit::Refusal;
-    use gents::plugin_job::dispatch::split_address;
+    use gents::tools::background::job::admit::Refusal;
+    use gents::tools::background::job::dispatch::split_address;
     use gents_protocol::job::{
         JobBudget, JobChildRow, JobChildState, JobOutcome, JobPauseReason, JobPhase, JobPhaseState,
         JobPinSummary, JobProgress, JobScope, JobState, JobUsage, JobView,
@@ -853,8 +901,14 @@ mod tests {
         let error = pick_job(&views, ACTOR, "call-1", None)
             .unwrap_err()
             .to_string();
-        assert!(error.contains("gents job show s1:call-1"), "{error}");
-        assert!(error.contains("gents job show s2:call-1"), "{error}");
+        assert!(
+            error.contains("gents automation job show s1:call-1"),
+            "{error}"
+        );
+        assert!(
+            error.contains("gents automation job show s2:call-1"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -906,7 +960,7 @@ mod tests {
     fn not_yet_observable_reports_not_found_with_job_list() {
         let error = read_error(JobReadError::NotYetObservable).to_string();
         assert!(error.starts_with("not found: "), "{error}");
-        assert!(error.contains("gents job list"), "{error}");
+        assert!(error.contains("gents automation job list"), "{error}");
         assert_eq!(
             read_error(JobReadError::NotAuthorized).to_string(),
             JobReadError::NotAuthorized.to_string()
@@ -946,7 +1000,7 @@ mod tests {
     fn show_completed_names_workflow_result() {
         assert_eq!(
             next_calls(JobState::Completed, "s1:call-1"),
-            ["gents job show s1:call-1"]
+            ["gents automation job show s1:call-1"]
         );
     }
 
@@ -954,7 +1008,7 @@ mod tests {
     fn show_step_failed_names_show() {
         assert_eq!(
             next_calls(JobState::Failed, "s1:call-1"),
-            ["gents job show s1:call-1"]
+            ["gents automation job show s1:call-1"]
         );
         let mut failed = view("s1", "call-1", "alpha", JobState::Failed, 1);
         failed.outcome = outcome(Refusal::StepFailed);
@@ -972,7 +1026,10 @@ mod tests {
         assert!(text.contains("budget_exceeded"), "{text}");
         assert_eq!(
             next_calls(JobState::Paused, "s1:call-1"),
-            ["gents job show s1:call-1", "gents job stop s1:call-1"]
+            [
+                "gents automation job show s1:call-1",
+                "gents automation job stop s1:call-1"
+            ]
         );
     }
 
@@ -984,7 +1041,10 @@ mod tests {
         waiting.progress = Some(p);
         let text = shown(&waiting);
         assert!(text.contains("Which branch?"), "{text}");
-        assert!(text.contains("gents job show s1:call-1"), "{text}");
+        assert!(
+            text.contains("gents automation job show s1:call-1"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -995,7 +1055,7 @@ mod tests {
         assert!(!text.contains("outcome"), "{text}");
         assert_eq!(
             next_calls(JobState::Cancelled, "s1:call-1"),
-            ["gents job show s1:call-1"]
+            ["gents automation job show s1:call-1"]
         );
     }
 
@@ -1055,7 +1115,7 @@ mod tests {
             at("plan"),
             at("slot-a"),
             at("Which branch?"),
-            at("gents job show"),
+            at("gents automation job show"),
             at("script"),
         ];
         assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{text}");
@@ -1065,11 +1125,14 @@ mod tests {
     fn next_calls_takes_pure_inputs_through_the_jobs_facade() {
         assert_eq!(
             crate::jobs::next_calls(JobState::Completed, "s:t"),
-            ["gents job show s:t"]
+            ["gents automation job show s:t"]
         );
         assert_eq!(
             next_calls(JobState::Running, "s:t"),
-            ["gents job watch s:t", "gents job stop s:t"]
+            [
+                "gents automation job watch s:t",
+                "gents automation job stop s:t"
+            ]
         );
     }
 
@@ -1161,20 +1224,20 @@ mod tests {
             line["budget"],
             serde_json::json!({"total": 5, "spent": 2, "remaining": 3})
         );
-        assert_eq!(line["next"], "gents job show s1:call-1");
+        assert_eq!(line["next"], "gents automation job show s1:call-1");
 
         let cancelled = terminal_line(&view("s1", "call-1", "alpha", JobState::Cancelled, 1));
         assert!(cancelled["outcome"].is_null());
         assert!(cancelled["spawned"].is_null());
         assert!(cancelled["budget"].is_null());
         assert!(cancelled.get("pause_reason").is_none());
-        assert_eq!(cancelled["next"], "gents job show s1:call-1");
+        assert_eq!(cancelled["next"], "gents automation job show s1:call-1");
 
         let mut done = view("s1", "call-1", "alpha", JobState::Completed, 1);
         done.outcome = outcome(Refusal::StepFailed);
         let line = terminal_line(&done);
         assert_eq!(line["outcome"]["code"], "plugin_job_step_failed");
-        assert_eq!(line["next"], "gents job show s1:call-1");
+        assert_eq!(line["next"], "gents automation job show s1:call-1");
     }
 
     #[tokio::test]
@@ -1215,7 +1278,10 @@ mod tests {
         assert!(run.clock < Duration::from_secs(150), "{:?}", run.clock);
         let text = failure_text(&JobReadError::NotYetObservable, "s1");
         assert!(text.starts_with("not found: "), "{text}");
-        assert!(text.contains("next: gents job list --session s1"), "{text}");
+        assert!(
+            text.contains("next: gents automation job list --session s1"),
+            "{text}"
+        );
     }
 
     #[tokio::test]
@@ -1232,7 +1298,7 @@ mod tests {
 
     #[tokio::test]
     async fn watch_refuses_local_access() {
-        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = std::sync::Arc::new(defra_node::Node::builder().build().await.unwrap());
         let error = require_served(&ConfigAccess::local(node))
             .unwrap_err()
             .to_string();
@@ -1302,23 +1368,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn graphql_access_prints_the_owner_refusal() {
+    async fn anonymous_job_control_is_rejected() {
         let row = view("s1", "call-1", "alpha", JobState::Running, 1);
-        let access = ConfigAccess::graphql("http://127.0.0.1:9/graphql");
-        let owner = control(
-            &access,
-            &operator_scope(&row),
-            "call-1",
-            JobControlKind::Stop,
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(owner, JobReadError::Unavailable { .. }));
-        let printed = control_job(&access, &row, JobControlKind::Stop)
-            .await
-            .unwrap_err()
-            .to_string();
-        assert_eq!(printed, owner.to_string());
+        let access = ConfigAccess::graphql("http://127.0.0.1:9/api/v0/graphql");
+        assert!(matches!(
+            control_job_remote(&access, &row, JobControlKind::Stop).await,
+            Err(ControlSendError::NotAuthorized)
+        ));
     }
 
     #[test]
@@ -1335,7 +1391,7 @@ mod tests {
         .unwrap();
         assert_eq!(lines[0], "cancelled  stop applied  2 children interrupted");
         assert!(
-            lines.contains(&"  gents job show s1:call-1".to_owned()),
+            lines.contains(&"  gents automation job show s1:call-1".to_owned()),
             "{lines:?}"
         );
     }
@@ -1369,7 +1425,10 @@ mod tests {
         .unwrap();
         assert_eq!(lines[0], "workflow_control_not_applicable");
         assert!(lines.contains(&"state: failed".to_owned()), "{lines:?}");
-        assert_eq!(lines.last().unwrap(), "  gents job show s1:call-1");
+        assert_eq!(
+            lines.last().unwrap(),
+            "  gents automation job show s1:call-1"
+        );
     }
 
     #[test]
@@ -1380,7 +1439,7 @@ mod tests {
                 .unwrap_err()
                 .to_string();
             assert!(text.starts_with("workflow_control_unknown_run"), "{text}");
-            assert!(text.ends_with("gents job list"), "{text}");
+            assert!(text.ends_with("gents automation job list"), "{text}");
         }
     }
 
@@ -1398,6 +1457,6 @@ mod tests {
             text,
             format!("not found: {}", JobReadError::NotYetObservable)
         );
-        assert!(text.contains("gents job list"), "{text}");
+        assert!(text.contains("gents automation job list"), "{text}");
     }
 }

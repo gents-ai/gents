@@ -36,6 +36,7 @@ pub fn install_from_pack(
         instructions,
         data_unique_keys,
         data_collection_fields,
+        BTreeMap::new(),
         consent,
     )
 }
@@ -53,6 +54,7 @@ fn install_from_pack_locked(
     instructions: Option<String>,
     data_unique_keys: BTreeMap<String, Vec<Vec<String>>>,
     data_collection_fields: BTreeMap<String, Vec<String>>,
+    data_collection_schemas: BTreeMap<String, String>,
     consent: bool,
 ) -> Result<InstalledPlugin> {
     // The pack lifecycle already holds this lock across its transaction window; flock does not re-enter.
@@ -100,6 +102,7 @@ fn install_from_pack_locked(
         model_binding,
         data_unique_keys,
         data_collection_fields,
+        data_collection_schemas,
     };
     store::write_record(home, &record)?;
     Ok(record)
@@ -185,7 +188,7 @@ fn install_pack_plugins_locked<'a>(
                 .as_deref()
                 .map(|path| crate::pack::tool_instructions(&plugin.name, asset(path)?))
                 .transpose()?;
-            let (data_unique_keys, data_collection_fields) =
+            let (data_unique_keys, data_collection_fields, data_collection_schemas) =
                 crate::pack::plugin_data_unique_keys(manifest, plugin, &asset)?;
             install_from_pack_locked(
                 lock,
@@ -199,13 +202,15 @@ fn install_pack_plugins_locked<'a>(
                 instructions,
                 data_unique_keys,
                 data_collection_fields,
+                data_collection_schemas,
                 consent,
             )
         })
         .collect()
 }
 
-pub fn bind_plugin_slots(
+#[cfg(test)]
+pub(crate) fn bind_plugin_slots(
     home: &Path,
     manifest: &PackManifest,
     owner: &str,
@@ -338,6 +343,10 @@ struct StagedPluginRecords {
     previous: Vec<(String, String, Option<InstalledPlugin>)>,
 }
 
+/// Holds the plugin store lock from staging through the node's configuration
+/// commit, where installed pins are rechecked (`plugin_replacement_conflict_in_txn`),
+/// so a concurrent publisher cannot change a pinned artifact between that check
+/// and the configuration write.
 pub(crate) struct StagedPluginInstall {
     records: Option<StagedPluginRecords>,
     cleanup: crate::drop_cleanup::DropCleanup,
@@ -345,6 +354,19 @@ pub(crate) struct StagedPluginInstall {
 }
 
 impl StagedPluginInstall {
+    pub(crate) fn previous_plugins(&self) -> Vec<InstalledPlugin> {
+        self.records
+            .as_ref()
+            .map(|records| {
+                records
+                    .previous
+                    .iter()
+                    .filter_map(|(_, _, record)| record.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub(crate) async fn finish(mut self, committed: bool) -> Result<()> {
         let records = self.records.take();
         tokio::task::spawn_blocking(move || {

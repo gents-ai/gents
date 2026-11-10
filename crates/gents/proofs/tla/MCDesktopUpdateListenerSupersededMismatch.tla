@@ -1,0 +1,4 @@
+---- MODULE MCDesktopUpdateListenerSupersededMismatch ----
+EXTENDS DesktopUpdateListener
+
+====

@@ -185,10 +185,10 @@ mod tests {
         let (activation_runtime, activation_observation) =
             crate::http::router::empty_activation_state();
         RuntimeHttpState {
-            graphql: gents::config_client::GraphqlEndpoint::anonymous(
+            graphql: gents::store::config_client::GraphqlEndpoint::anonymous(
                 "http://localhost:9181/api/v0/graphql",
             ),
-            p2p_graphql: gents::config_client::GraphqlEndpoint::anonymous(
+            p2p_graphql: gents::store::config_client::GraphqlEndpoint::anonymous(
                 "http://localhost:9181/api/v0/graphql",
             ),
             node_name: "test-agent".to_string(),
@@ -203,6 +203,7 @@ mod tests {
             backend_health: None,
             p2p_admission: None,
             p2p_metrics_cache: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            store_size: crate::http::prometheus::StoreSizeCache::new(None),
             codex_shim_health: None,
             enrollment_offer_issuer: crate::http::enrollment::empty_issuer_handle(),
             enrollment_decisions: crate::http::enrollment::empty_decision_service_handle(),
@@ -230,9 +231,9 @@ mod tests {
                 process_state: NodeReadinessProcessState::Ready,
                 active_generation: 1,
                 router_generation: 1,
-                default_agent_id: "default".to_string(),
+                default_agent_did: "default".to_string(),
                 agents: vec![AgentReadinessEntry {
-                    agent_id: "default".to_string(),
+                    agent_did: "default".to_string(),
                     state: AgentReadinessState::Ready,
                     reason: None,
                 }],
@@ -331,9 +332,9 @@ mod tests {
                 process_state: NodeReadinessProcessState::Ready,
                 active_generation: 1,
                 router_generation: 1,
-                default_agent_id: "default".to_string(),
+                default_agent_did: "default".to_string(),
                 agents: vec![AgentReadinessEntry {
-                    agent_id: "default".to_string(),
+                    agent_did: "default".to_string(),
                     state: AgentReadinessState::Unavailable,
                     reason: Some(
                         gents_protocol::row::AgentReadinessUnavailableReason::BackendTemporarilyUnavailable,
@@ -495,8 +496,8 @@ mod tests {
     #[test]
     fn healthz_reports_a_pending_shim_as_degraded() {
         let state = state_with_shim(crate::shared::CodexShimHealth::Pending {
-            bound_agent_id: "default".to_string(),
-            reason: "no Agent document with that agent_id exists".to_string(),
+            bound_agent_did: "default".to_string(),
+            reason: "no Agent document with that agent_did exists".to_string(),
         });
         let payload = render_healthz_payload_at(&state, Some(&healthy_data()), None, observed_at());
 
@@ -523,7 +524,7 @@ mod tests {
             websocket: "ws://127.0.0.1:9292/".to_string(),
             auth_required: true,
             bound_node_did: "did:key:agent".to_string(),
-            bound_agent_id: "did:key:agent:default".to_string(),
+            bound_agent_did: "did:key:agent:default".to_string(),
         });
         let payload = render_healthz_payload_at(&state, Some(&healthy_data()), None, observed_at());
 

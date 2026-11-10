@@ -10,15 +10,15 @@ pub(crate) struct VersionResponse {
     pub(super) package: &'static str,
     pub(super) version: &'static str,
     pub(super) repository: &'static str,
-    pub(super) build: BuildMetadata,
+    pub(crate) build: BuildMetadata,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub(super) struct BuildMetadata {
-    pub(super) git_sha: Option<&'static str>,
+pub(crate) struct BuildMetadata {
+    pub(crate) git_sha: Option<&'static str>,
     pub(super) git_ref: Option<&'static str>,
-    pub(super) git_tag: Option<&'static str>,
-    pub(super) git_dirty: Option<bool>,
+    pub(crate) git_tag: Option<&'static str>,
+    pub(crate) git_dirty: Option<bool>,
     pub(super) target: Option<&'static str>,
     pub(super) profile: Option<&'static str>,
 }

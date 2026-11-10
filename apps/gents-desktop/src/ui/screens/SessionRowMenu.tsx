@@ -58,9 +58,9 @@ export function SessionRowMenu({
   onRename: start,
   ...props
 }: MenuProps & { trigger: ReactElement; children: ReactNode }) {
-  const { onRename, finalFocus } = useRenameFromMenu(start);
+  const { onRename, finalFocus, onOpenChange } = useRenameFromMenu(start);
   return (
-    <ContextMenu>
+    <ContextMenu onOpenChange={onOpenChange}>
       <ContextMenuTrigger render={trigger}>{children}</ContextMenuTrigger>
       <ContextMenuContent className="min-w-56" finalFocus={finalFocus}>
         <Items {...props} onRename={onRename} {...CONTEXT_MENU} />
@@ -75,9 +75,9 @@ export function SessionRowActions({
   onRename: start,
   ...props
 }: MenuProps & { className?: string }) {
-  const { onRename, finalFocus } = useRenameFromMenu(start);
+  const { onRename, finalFocus, onOpenChange } = useRenameFromMenu(start);
   return (
-    <DropdownMenu>
+    <DropdownMenu onOpenChange={onOpenChange}>
       <DropdownMenuTrigger
         render={
           <Button

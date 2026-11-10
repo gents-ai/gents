@@ -18,15 +18,15 @@ fn request_turn(request: &AgentRequestRow) -> Option<crate::types::RequestTurnVi
 }
 
 fn project_message_with_dependencies(
-    row: &gents::session::canonical_rows::TranscriptMessageRow,
+    row: &gents_protocol::output::rows::TranscriptMessageRow,
     observed_messages: &[gents_protocol::output::origin::ObservedMessage<'_>],
-    output_segments: &[gents::session::canonical_rows::OutputSegmentRow],
+    output_segments: &[gents_protocol::output::rows::OutputSegmentRow],
     denied_headers: &[String],
     denied_segments: &[String],
     dependency_denials: &[gents_protocol::output::reconstruction::DependencyDenial],
 ) -> gents_desktop_core::client::canonical_output::CanonicalMessageProjection {
     use gents_desktop_core::client::canonical_output::{
-        project_canonical_message, CanonicalMessageProjection,
+        project_canonical_message, resolves_from_fork_copies, CanonicalMessageProjection,
     };
     let origin = gents_protocol::output::origin::resolve_origin(
         observed_messages,
@@ -35,9 +35,27 @@ fn project_message_with_dependencies(
         &row.message.node_did,
         row.message.requester_did.as_deref(),
     );
+    if resolves_from_fork_copies(row, output_segments) {
+        // The copies are the content; a visible origin is provenance and must
+        // still agree with the fork, while an unseen one is not consulted.
+        return match origin {
+            Ok(_)
+            | Err(
+                gents_protocol::output::origin::OriginError::Denied { .. }
+                | gents_protocol::output::origin::OriginError::Unavailable { .. },
+            ) => {
+                project_canonical_message(row, output_segments, denied_segments, dependency_denials)
+            }
+            Err(error) => CanonicalMessageProjection::Invalid(
+                gents_protocol::output::ReconstructionError::InvalidStructure {
+                    detail: error.to_string(),
+                },
+            ),
+        };
+    }
     match origin {
         Ok(origin) => match project_canonical_message(
-            &gents::session::canonical_rows::TranscriptMessageRow {
+            &gents_protocol::output::rows::TranscriptMessageRow {
                 doc_id: origin.doc_id.to_string(),
                 message: origin.message.clone(),
             },
@@ -71,9 +89,9 @@ fn project_message_with_dependencies(
 /// key or provider-native id.
 fn canonical_tool_payload(
     tool: &AgentToolCallRow,
-    messages: &[&gents::session::canonical_rows::TranscriptMessageRow],
+    messages: &[&gents_protocol::output::rows::TranscriptMessageRow],
     observed_messages: &[gents_protocol::output::origin::ObservedMessage<'_>],
-    output_segments: &[gents::session::canonical_rows::OutputSegmentRow],
+    output_segments: &[gents_protocol::output::rows::OutputSegmentRow],
     denied_headers: &[String],
     denied_segments: &[String],
     dependency_denials: &[gents_protocol::output::reconstruction::DependencyDenial],
@@ -243,8 +261,8 @@ fn canonical_tool_payload(
 fn canonical_live_tool_output(
     tool: &AgentToolCallRow,
     request: Option<&AgentRequestRow>,
-    messages: &[&gents::session::canonical_rows::TranscriptMessageRow],
-    output_segments: &[gents::session::canonical_rows::OutputSegmentRow],
+    messages: &[&gents_protocol::output::rows::TranscriptMessageRow],
+    output_segments: &[gents_protocol::output::rows::OutputSegmentRow],
     denied_headers: &[String],
     denied_segments: &[String],
     dependency_denials: &[gents_protocol::output::reconstruction::DependencyDenial],
@@ -370,40 +388,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
                 .collect()
         },
     );
-    let goal = store
-        .goals
-        .iter()
-        .filter(|row| {
-            row.session_id == session_id
-                && node_did.is_none_or(|node_did| row.node_did == node_did)
-                && row
-                    .status
-                    .as_deref()
-                    .and_then(gents::goal::GoalStatus::parse)
-                    != Some(gents::goal::GoalStatus::Stopped)
-        })
-        .min_by(|left, right| {
-            left.created_at
-                .cmp(&right.created_at)
-                .then_with(|| left.goal_id.cmp(&right.goal_id))
-        })
-        .map(|row| GoalView {
-            goal_id: row.goal_id.clone(),
-            objective: normalize_optional(row.objective.as_deref()),
-            status: normalize_optional(row.status.as_deref()),
-            token_budget: row.token_budget,
-            tokens_used: row.tokens_used.unwrap_or_default().max(0),
-            active_time_seconds: row.active_time_seconds.unwrap_or_default().max(0),
-            consecutive_blocked_audits: row.consecutive_blocked_audits.unwrap_or_default().max(0),
-            continuation_sequence: row.continuation_sequence.unwrap_or_default().max(0),
-            wrapup_requested: row.wrapup_requested.unwrap_or(false),
-            wrapup_completed: row.wrapup_completed.unwrap_or(false),
-            last_blocked_reason: normalize_optional(row.last_blocked_reason.as_deref()),
-            last_failure: normalize_optional(row.last_failure.as_deref()),
-            completion_evidence: normalize_optional(row.completion_evidence.as_deref()),
-        });
-
-    if session_row.is_none() && requests.is_empty() && goal.is_none() {
+    if session_row.is_none() && requests.is_empty() {
         return None;
     }
 
@@ -476,7 +461,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
             interrupt_requested_at: normalize_optional(request.interrupt_requested_at.as_deref()),
         };
         let cancel_cause = crate::cause_derivation::derive_request_cause(
-            request.lifecycle_state.map(|state| state.as_str()),
+            request.lifecycle_state,
             &evidence,
             normalize_optional(request.terminalized_at.as_deref()),
         );
@@ -542,14 +527,14 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
     let resolved_node_did = session_row
         .map(|row| row.node_did.clone())
         .or_else(|| latest_request.and_then(|row| normalize_optional(row.node_did.as_deref())));
-    let resolved_agent_id = session_row
-        .and_then(|row| normalize_optional(Some(row.agent_id.as_str())))
-        .or_else(|| latest_request.and_then(|row| normalize_optional(row.agent_id.as_deref())));
+    let resolved_agent_did = session_row
+        .and_then(|row| normalize_optional(Some(row.agent_did.as_str())))
+        .or_else(|| latest_request.and_then(|row| normalize_optional(row.agent_did.as_deref())));
     let context = build_session_context_from_stores(
         store,
         context_store,
         resolved_node_did.as_deref(),
-        resolved_agent_id.as_deref(),
+        resolved_agent_did.as_deref(),
         session_id,
         context_totals_exact,
     );
@@ -561,7 +546,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
     let input_owners: RapidHashMap<(String, String), &AgentRequestRow> = requests
         .iter()
         .filter_map(|request| {
-            gents::lifecycle::input_message_owner(request).map(|owner| (owner, *request))
+            gents::request::lifecycle::input_message_owner(request).map(|owner| (owner, *request))
         })
         .collect();
     let input_request_for_message = |row: &TranscriptMessageRow| {
@@ -586,6 +571,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
     };
     let (messages, tool_calls) = project_transcript_rows(
         store,
+        transcript_store,
         &transcript,
         canonical_dependencies,
         &requests,
@@ -620,7 +606,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
     .filter_map(|request| {
         Some(crate::types::FoldedInputView {
             request_id: request.request_id.clone(),
-            folded_into_request_id: gents::lifecycle::folded_into(request)?.to_owned(),
+            folded_into_request_id: gents::request::lifecycle::folded_into(request)?.to_owned(),
         })
     })
     .collect::<Vec<_>>();
@@ -665,7 +651,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
                 .iter()
                 .filter(|later| {
                     later.requester_did == request.requester_did
-                        && !gents::lifecycle::is_runtime_control_message(
+                        && !gents::request::lifecycle::is_runtime_control_message(
                             &later.input.clone().unwrap_or_default(),
                             "",
                         )
@@ -722,7 +708,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
         live_cursor,
         session_id: session_id.to_string(),
         node_did: resolved_node_did,
-        agent_id: resolved_agent_id,
+        agent_did: resolved_agent_did,
         title: session_row.and_then(|row| {
             row.title.as_ref().and_then(|title| {
                 normalize_optional(Some(&gents::session::display_session_title(title)))
@@ -740,7 +726,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
                 "active".to_string()
             }
         }),
-        goal,
+        goal: None,
         turn_state: turn_state_label,
         inference_activity: None,
         latest_request_id,
@@ -752,7 +738,6 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
         folded_inputs,
         context,
         timeline_items,
-        hydration: None,
         timeline_page: None,
         projection_revision: None,
         messages,
@@ -763,7 +748,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
 #[cfg(test)]
 mod canonical_projection_tests {
     use super::*;
-    use gents::session::canonical_rows::{OutputSegmentRow, TranscriptMessageRow};
+    use gents_protocol::output::rows::{OutputSegmentRow, TranscriptMessageRow};
     use gents_protocol::output::{
         MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource, OutputWriter,
         SegmentRun, StreamDeclaration, StreamPayload, TerminalOutput, TranscriptMessage,
@@ -1060,6 +1045,7 @@ mod canonical_projection_tests {
         TranscriptMessageRow {
             doc_id: doc_id.to_string(),
             message: TranscriptMessage {
+                native_request_id: None,
                 message_key: format!("{session_id}:message"),
                 session_id: session_id.to_string(),
                 node_did: "did:test:node".to_string(),
@@ -1089,35 +1075,125 @@ mod canonical_projection_tests {
             .collect()
     }
 
-    #[test]
-    fn missing_denied_and_invalid_fork_dependencies_remain_distinct() {
-        use gents_desktop_core::client::canonical_output::CanonicalMessageProjection;
-
-        let origin = header("origin", "parent");
+    fn fork_child(origin: &str, close_doc_id: Option<&str>) -> TranscriptMessageRow {
         let mut child = header("child", "child-session");
         child.message.request_doc_id = None;
         child.message.publication = MessagePublication::Fork {
-            origin_message_doc_id: "origin".to_string(),
+            origin_message_doc_id: origin.to_string(),
         };
+        if let Some(close_doc_id) = close_doc_id {
+            child.message.blocks = vec![gents_protocol::output::MessageBlock::Text {
+                text: gents_protocol::output::PresentedPayload {
+                    output: gents_protocol::output::PayloadRef {
+                        close_doc_id: close_doc_id.to_string(),
+                        stream: 0,
+                    },
+                    presentation: gents_protocol::output::PayloadPresentation::Full,
+                },
+            }];
+        }
+        child
+    }
 
+    fn fork_copy(doc_id: &str, logical: &str, text: &str) -> OutputSegmentRow {
+        use gents_protocol::output::{
+            OutputSegment, OutputSource, OutputWriter, SegmentRun, SourceClose, StreamDeclaration,
+            StreamPayload,
+        };
+        OutputSegmentRow {
+            doc_id: doc_id.to_string(),
+            segment: OutputSegment {
+                node_did: "did:test:node".to_string(),
+                requester_did: Some("did:test:requester".to_string()),
+                session_id: "child-session".to_string(),
+                request_doc_id: logical.to_string(),
+                source: OutputSource::Authored {
+                    key: "prompt".to_string(),
+                },
+                writer: OutputWriter::RequestExecution {
+                    execution_generation: "generation".to_string(),
+                },
+                ordinal: Some(0),
+                runs: vec![SegmentRun {
+                    stream: 0,
+                    bytes: text.len() as u32,
+                    declaration: Some(StreamDeclaration {
+                        block_index: 0,
+                        part_index: 0,
+                        payload: StreamPayload::Text,
+                    }),
+                }],
+                payload: text.to_string(),
+                close: Some(SourceClose::Closed {
+                    outcome: OutputOutcome::Complete,
+                    segments: 1,
+                    stream_bytes: vec![text.len() as u64],
+                }),
+                created_at: "2026-09-01T00:00:00Z".to_string(),
+            },
+        }
+    }
+
+    #[test]
+    fn a_fork_reads_its_own_copies_without_its_origin() {
+        use gents_desktop_core::client::canonical_output::CanonicalMessageProjection;
+
+        let child = fork_child("origin", Some("source-close"));
         let child_only = vec![child.clone()];
-        assert!(matches!(
-            project_message_with_dependencies(&child, &observed(&child_only), &[], &[], &[], &[],),
-            CanonicalMessageProjection::Loading(_)
-        ));
+        let copies = vec![fork_copy("copy-close", "source-close", "hello")];
+        for denied_headers in [vec![], vec!["origin".to_string()]] {
+            assert!(matches!(
+                project_message_with_dependencies(
+                    &child,
+                    &observed(&child_only),
+                    &copies,
+                    &denied_headers,
+                    &[],
+                    &[],
+                ),
+                CanonicalMessageProjection::Ready(_)
+            ));
+        }
+        assert!(
+            matches!(
+                project_message_with_dependencies(
+                    &child,
+                    &observed(&child_only),
+                    &[],
+                    &[],
+                    &[],
+                    &[]
+                ),
+                CanonicalMessageProjection::Loading(_)
+            ),
+            "a fork without copies still waits for its origin"
+        );
+        let mut foreign = copies.clone();
+        foreign[0].segment.session_id = "parent".to_string();
         assert!(matches!(
             project_message_with_dependencies(
                 &child,
                 &observed(&child_only),
+                &foreign,
                 &[],
-                &["origin".to_string()],
                 &[],
-                &[],
+                &[]
             ),
-            CanonicalMessageProjection::Denied { ref doc_id } if doc_id == "origin"
+            CanonicalMessageProjection::Loading(_)
         ));
+    }
 
-        let mut invalid_origin = origin.clone();
+    #[test]
+    fn a_visible_fork_origin_must_still_agree_with_its_copies() {
+        use gents_desktop_core::client::canonical_output::CanonicalMessageProjection;
+
+        let child = fork_child("origin", None);
+        let child_only = vec![child.clone()];
+        assert!(matches!(
+            project_message_with_dependencies(&child, &observed(&child_only), &[], &[], &[], &[],),
+            CanonicalMessageProjection::Ready(_)
+        ));
+        let mut invalid_origin = header("origin", "parent");
         invalid_origin.message.sequence = 8;
         let invalid_rows = vec![child.clone(), invalid_origin];
         assert!(matches!(
@@ -1187,7 +1263,7 @@ mod tests {
                 purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
                 superseded_by_request: Some("head".into()),
                 superseded_by_request_doc_id: Some("doc-head".into()),
-                failure_reason: Some(gents::lifecycle::FOLDED_REASON.into()),
+                failure_reason: Some(gents::request::lifecycle::FOLDED_REASON.into()),
                 ..Default::default()
             },
         ];
@@ -1279,7 +1355,7 @@ mod tests {
         let folded = AgentRequestRow {
             superseded_by_request: Some("head".into()),
             superseded_by_request_doc_id: Some("doc-head".into()),
-            failure_reason: Some(gents::lifecycle::FOLDED_REASON.into()),
+            failure_reason: Some(gents::request::lifecycle::FOLDED_REASON.into()),
             ..request("folded", RequestLifecycleState::Superseded, 1)
         };
         let mut rows = ClientStoreRows {
@@ -1423,7 +1499,7 @@ mod tests {
                     lifecycle_state: Some(RequestLifecycleState::Superseded),
                     superseded_by_request: Some("skilled".into()),
                     superseded_by_request_doc_id: Some("doc-skilled".into()),
-                    failure_reason: Some(gents::lifecycle::FOLDED_REASON.into()),
+                    failure_reason: Some(gents::request::lifecycle::FOLDED_REASON.into()),
                     ..request("steered", &["review"], 1)
                 },
                 request("plain", &[], 2),
@@ -1717,11 +1793,12 @@ mod tests {
 /// resolves where a request came from.
 pub(super) fn project_transcript_rows(
     store: &ClientStore,
+    question_store: &ClientStore,
     transcript: &gents_desktop_core::client::TranscriptView<'_>,
     canonical_dependencies: Option<&gents_desktop_core::client::CanonicalTranscriptDependencies>,
     requests: &[&AgentRequestRow],
     requests_by_doc_id: &RapidHashMap<&str, &AgentRequestRow>,
-    result_messages: &[&gents::session::canonical_rows::TranscriptMessageRow],
+    result_messages: &[&gents_protocol::output::rows::TranscriptMessageRow],
 ) -> (Vec<MessageView>, Vec<ToolCallView>) {
     /* messages a tool's arguments or result are read from: the rows and any
     deliveries outside them */
@@ -1734,7 +1811,7 @@ pub(super) fn project_transcript_rows(
     let input_owners: RapidHashMap<(String, String), &AgentRequestRow> = requests
         .iter()
         .filter_map(|request| {
-            gents::lifecycle::input_message_owner(request).map(|owner| (owner, *request))
+            gents::request::lifecycle::input_message_owner(request).map(|owner| (owner, *request))
         })
         .collect();
     let input_request_for_message = |row: &TranscriptMessageRow| {
@@ -1823,6 +1900,25 @@ pub(super) fn project_transcript_rows(
                                 && request.requester_did == origin.message.requester_did
                         })
                 });
+            let authored_source = input_request.or_else(|| {
+                let origin = resolved_origin?;
+                let doc_id = origin.message.request_doc_id.as_deref()?;
+                let request = canonical_dependencies?
+                    .origin_requests
+                    .iter()
+                    .find(|request| {
+                        request.doc_id.as_deref() == Some(doc_id)
+                            && request.node_did.as_deref() == Some(origin.message.node_did.as_str())
+                            && request.session_id.as_deref()
+                                == Some(origin.message.session_id.as_str())
+                            && request.requester_did == origin.message.requester_did
+                    })?;
+                let (owner_doc, owner_key) =
+                    gents::request::lifecycle::input_message_owner(request)?;
+                (origin.message.request_doc_id.as_deref() == Some(owner_doc.as_str())
+                    && origin.message.message_key == owner_key)
+                    .then_some(request)
+            });
             let projection = project_message_with_dependencies(
                 row,
                 &observed_messages,
@@ -1907,6 +2003,13 @@ pub(super) fn project_transcript_rows(
             };
 
             MessageView {
+                question_reply: (origin_message.role == gents_protocol::output::MessageRole::User)
+                    .then(|| {
+                        authored_source.and_then(|request| {
+                            super::question_reply_view(store, question_store, request)
+                        })
+                    })
+                    .flatten(),
                 started_goal_id: None,
                 request_turn: row
                     .message
@@ -2041,7 +2144,7 @@ pub(super) fn project_transcript_rows(
                     Some(pin.handle.clone()),
                     row.lifecycle_state
                         .as_deref()
-                        .and_then(gents::tool_call_lifecycle::ToolCallState::from_persisted)
+                        .and_then(gents::tools::call::lifecycle::ToolCallState::from_persisted)
                         .map(|lifecycle| {
                             gents::plugin::job_calls::job_state(
                                 lifecycle,
@@ -2064,7 +2167,7 @@ pub(super) fn project_transcript_rows(
                         && row.plugin_parent_tool_call_doc_id.is_none()
                         && row.spawned_by_tool_call_doc_id.is_none()
                         && row.tool_name.as_deref().is_some_and(
-                            gents::background_tools::supports_foreground_backgrounding,
+                            gents::tools::background::status::supports_foreground_backgrounding,
                         ),
                 ),
                 tool_call_key: row.tool_call_key.clone(),
@@ -2113,6 +2216,7 @@ fn transcript_row_parts(
         .collect();
     let (messages, tool_calls) = project_transcript_rows(
         store,
+        &page.store,
         &transcript,
         Some(&page.canonical_dependencies),
         &requests,
@@ -2133,12 +2237,12 @@ pub(crate) fn render_transcript_rows(
 }
 
 pub(crate) async fn render_transcript_rows_with_provenance(
-    access: &dyn gents::config_client::ConfigRead,
+    access: &dyn gents::store::config_client::ConfigRead,
     store: &ClientStore,
     page: &gents_desktop_core::client::SessionTranscriptQueryPage,
     node_did: &str,
     session_id: &str,
-) -> Vec<RenderedTimelineItem> {
+) -> anyhow::Result<Vec<RenderedTimelineItem>> {
     let (mut messages, tools) = transcript_row_parts(store, page, session_id);
     super::goal_provenance::attach_messages(
         access,
@@ -2148,10 +2252,18 @@ pub(crate) async fn render_transcript_rows_with_provenance(
         (node_did, session_id),
         &mut messages,
     )
-    .await;
-    super::super::timeline::build_rendered_timeline(&messages, &tools, &[])
+    .await?;
+    Ok(super::super::timeline::build_rendered_timeline(
+        &messages,
+        &tools,
+        &[],
+    ))
 }
 
 #[cfg(test)]
 #[path = "fork_input_tests.rs"]
 mod fork_input_tests;
+
+#[cfg(test)]
+#[path = "background_origin_tests.rs"]
+mod background_origin_tests;

@@ -114,6 +114,7 @@ fn render_timeline_order(
                     turn.request_doc_id.as_deref().unwrap_or(&turn.request_id) == key
                 }) {
                     timeline.push(RenderedTimelineItem::PendingUserTurn {
+                        question_reply: pending_turn.question_reply.clone(),
                         item_key: format!("pending-{}", pending_turn.request_id),
                         started_goal_id: pending_turn.started_goal_id.clone(),
                         request_id: pending_turn.request_id.clone(),
@@ -121,7 +122,7 @@ fn render_timeline_order(
                         captured_context: pending_turn.captured_context.clone(),
                         attachments: pending_turn.attachments.clone(),
                         selected_skill_ids: pending_turn.selected_skill_ids.clone(),
-                        lifecycle_state: pending_turn.lifecycle_state.clone(),
+                        lifecycle_state: pending_turn.lifecycle_state,
                         folded_into_request_id: pending_turn.folded_into_request_id.clone(),
                         origin: pending_turn.origin.clone(),
                         created_at: pending_turn.created_at.clone(),
@@ -216,6 +217,7 @@ pub(super) fn build_rendered_timeline(
                 (Some(_), _) | (None, true) => (
                     true,
                     Some(RenderedTimelineItem::UserMessage {
+                        question_reply: message.question_reply.clone(),
                         started_goal_id: message.started_goal_id.clone(),
                         item_key: message.message_key.clone(),
                         request_id: message.request_id.clone(),
@@ -310,6 +312,7 @@ mod tests {
 
     fn user_message(key: &str, sequence: i64, content: &str) -> MessageView {
         MessageView {
+            question_reply: None,
             started_goal_id: None,
             request_turn: None,
             message_key: key.to_string(),
@@ -334,6 +337,24 @@ mod tests {
             input_text: None,
             timestamp: None,
         }
+    }
+
+    #[test]
+    fn question_answer_remains_a_user_message_with_its_structured_choice() {
+        let mut message = user_message("answer", 1, "Decision on colour: Blue");
+        message.question_reply = Some(crate::types::QuestionReplyView {
+            source_doc_id: "question".into(),
+            answer: Some(gents_protocol::mailbox_question::MailboxQuestionAnswer {
+                option_ids: vec!["blue".into()],
+                ..Default::default()
+            }),
+        });
+        let timeline = build_rendered_timeline(&[message], &[], &[]);
+        assert!(
+            matches!(timeline.as_slice(), [RenderedTimelineItem::UserMessage {
+            question_reply: Some(reply), ..
+        }] if reply.source_doc_id == "question" && reply.answer.as_ref().unwrap().option_ids == ["blue"])
+        );
     }
 
     #[test]
@@ -378,7 +399,7 @@ mod tests {
             tool_call_key: "start-1".to_string(),
             request_id: Some("parent-1".to_string()),
             message_sequence: Some(2),
-            tool_name: Some(gents::toolset::AGENT_NEW_TOOL_NAME.to_string()),
+            tool_name: Some(gents::tools::native::AGENT_NEW_TOOL_NAME.to_string()),
             tool_call_id: Some("start-1".to_string()),
             args: Some(r#"{"agent":"researcher","prompt":"trace the request flow"}"#.to_string()),
             partial_output_tail: None,
@@ -461,11 +482,11 @@ mod tests {
         for text in [
             "<tool-completion tool_call_id=\"spawned:call\" tool_name=\"bash_unrestricted\" status=\"completed\"><result>finished</result></tool-completion>",
             "<tool-completion tool_call_id=\"spawned:call\" tool_name=\"bash_unrestricted\" status=\"failed\"><result>error: no bin target named `verad`</result><reason>tool_failed</reason></tool-completion>",
-            gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
+            gents::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
         ] {
             let message = MessageView {
                 runtime_control: true,
-                origin: Some(crate::types::RequestOriginView::BackgroundCompletion),
+                origin: Some(crate::types::RequestOriginView::BackgroundCompletion { notification: false }),
                 input_text: Some(text.into()),
                 ..user_message("internal-completion", 1, text)
             };
@@ -478,7 +499,7 @@ mod tests {
 
     #[test]
     fn user_text_that_looks_like_a_control_message_still_renders() {
-        let content = gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
+        let content = gents::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
         let messages = vec![user_message("literal-user-text", 1, content)];
 
         let timeline = build_rendered_timeline(&messages, &[], &[]);

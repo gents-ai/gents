@@ -2,6 +2,8 @@ import type { MailboxItemView } from "@source-inc/gents-desktop-client";
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "zustand";
 import { Button } from "@gents/ui/components/button";
+import { errorWords } from "../../../lib/reasonText";
+import { Notice } from "../../components/Notice";
 import { useApp } from "@/app/AppContext";
 import { workspace } from "@/app/workspace";
 import { StorageFullRecovery } from "./StorageFullRecovery";
@@ -12,6 +14,12 @@ import {
   loadChatDrafts,
   type ChatDraft,
 } from "../../../hooks/chatDrafts";
+import {
+  deliveryAffordances,
+  sendStatus,
+  type SendStatus,
+} from "../../../hooks/chatDeliveryView";
+import { useSendDeadlineClock } from "../../../hooks/useSendDeadlineClock";
 
 function description(draft: ChatDraft) {
   if (draft.mailbox) return draft.mailbox.summary;
@@ -24,7 +32,7 @@ function description(draft: ChatDraft) {
       .filter(Boolean)
       .join("\n");
   } catch {
-    return "The original input is unavailable. Checking delivery can still recover its outcome.";
+    return "The original input is unavailable.";
   }
 }
 
@@ -45,7 +53,7 @@ export function ChatDeliveryFeedback({
   const entries = stores.chat.use.chatDrafts();
   const readError = stores.chat.use.chatDraftError();
   const sending = stores.chat.use.sending();
-  const requests = stores.chat.use.chatRequestsInFlight();
+  const now = useSendDeadlineClock(entries);
   useEffect(() => {
     const reload = () => stores.chat.setState(loadChatDrafts());
     window.addEventListener("storage", reload);
@@ -58,32 +66,38 @@ export function ChatDeliveryFeedback({
           {readError}
         </p>
       )}
+      {/* every kept message is in view from the moment it is sent: pending
+          while its send is in flight, failed with Retry and Discard, or a
+          confirmed answer waiting for its question to close */}
       {chatDraftsFor(
         entries,
         clientDid,
         nodeDid,
         sessionId,
         mailboxItem?.itemId ?? null,
-      ).map((draft) => (
-        <SavedMessage
-          key={draft.requestId}
-          draft={draft}
-          disabled={sending || requests.has(draft.requestId)}
-          submitting={requests.has(draft.requestId)}
-        />
-      ))}
+      ).map((draft) => {
+        const status = sendStatus(draft, now);
+        return (
+          <SavedMessage
+            key={draft.requestId}
+            draft={draft}
+            status={status}
+            disabled={sending || status === "pending"}
+          />
+        );
+      })}
     </>
   );
 }
 
 function SavedMessage({
   draft,
+  status,
   disabled,
-  submitting,
 }: {
   draft: ChatDraft;
+  status: SendStatus;
   disabled: boolean;
-  submitting: boolean;
 }) {
   const { actions, stores } = useApp();
   const mounted = useRef(true);
@@ -96,33 +110,22 @@ function SavedMessage({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const noun = draft.mailbox ? "answer" : "message";
-  const notDelivered = draft.result?.outcome === "notDelivered";
-  const confirmed = draft.result && !draft.result.outcome;
-  async function recover(resume: boolean) {
+  const shown = deliveryAffordances(status, draft.mailbox !== undefined);
+  async function retry() {
     if (busy || disabled) return;
     const intent = actions.captureComposeIntent();
     setBusy(true);
     setError("");
     try {
       const result = draft.mailbox
-        ? await actions.recoverMailboxAnswer(
+        ? await actions.retryMailboxAnswer(
             draft.mailbox.itemId,
             draft.requestId,
-            resume,
             () => mounted.current,
           )
-        : await actions.recoverChatMessage(
-            draft.requestId,
-            resume,
-            () => mounted.current,
-          );
-      if (!mounted.current) return;
-      if (!result || result.outcome === "deliveryUnknown")
-        setError(
-          `Delivery is still unconfirmed. Check again or resume the saved ${noun}.`,
-        );
-      else if (
-        !result.outcome &&
+        : await actions.retryChatMessage(draft.requestId, () => mounted.current);
+      if (
+        mounted.current &&
         actions.acceptsComposeIntent(intent) &&
         stores.selection.getState().sessionId === result.sessionId &&
         draft.selectedSessionId === null
@@ -137,12 +140,14 @@ function SavedMessage({
       if (mounted.current) setBusy(false);
     }
   }
-  async function dismiss() {
+  async function discard() {
     if (busy || disabled) return;
     setBusy(true);
     setError("");
     try {
-      await actions.dismissChatMessage(draft.requestId);
+      if (draft.mailbox)
+        await actions.discardMailboxAnswer(draft.mailbox.itemId, draft.requestId);
+      else await actions.discardChatMessage(draft.requestId);
     } catch (error) {
       if (mounted.current)
         setError(error instanceof Error ? error.message : String(error));
@@ -150,81 +155,68 @@ function SavedMessage({
       if (mounted.current) setBusy(false);
     }
   }
+  const failed = shown.view === "failed";
   return (
-    <section
+    <Notice
+      tone={failed ? "destructive" : "info"}
       role="status"
       aria-label={draft.mailbox ? "Saved answer" : "Saved message"}
-      className="mt-2 rounded-xl border border-border p-3 text-xs"
-    >
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="mr-auto text-muted-foreground">
-          {notDelivered
+      className="my-2"
+      title={
+        shown.view === "sending" || busy
+          ? `Sending the ${noun}…`
+          : shown.view === "delivered"
             ? draft.mailbox
-              ? "Answer was not delivered"
-              : "Message was not delivered"
-            : confirmed
-              ? draft.mailbox
-                ? "Answer sent"
-                : "Message sent"
-              : busy
-                ? `Checking saved ${noun}…`
-                : submitting
-                  ? `Sending saved ${noun}…`
-                  : draft.mailbox
-                    ? "Answer awaiting confirmation"
-                    : "Message awaiting confirmation"}
-        </span>
-        <Button
-          variant="ghost"
-          size="sm"
-          disabled={busy || disabled}
-          onClick={() => void recover(false)}
-        >
-          {busy ? "Checking…" : `Check ${noun} delivery`}
-        </Button>
-        {notDelivered ? (
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={busy || disabled}
-            onClick={() => void dismiss()}
-          >
-            Dismiss saved {noun}
-          </Button>
-        ) : (
-          !confirmed && (
+              ? "Answer sent"
+              : "Message sent"
+            : draft.mailbox
+              ? "The answer wasn't sent"
+              : "The message wasn't sent"
+      }
+      details={description(draft)}
+      detailsText
+      detailsLabel={`Saved ${noun}`}
+      actions={
+        <>
+          {shown.retry && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy || disabled}
+              onClick={() => void retry()}
+            >
+              {busy ? "Sending…" : `Retry ${noun}`}
+            </Button>
+          )}
+          {shown.discard && (
             <Button
               variant="ghost"
               size="sm"
               disabled={busy || disabled}
-              onClick={() => void recover(true)}
+              onClick={() => void discard()}
             >
-              Resume saved {noun}
+              Discard {noun}
             </Button>
-          )
-        )}
-      </div>
-      {draft.result?.outcome === "deliveryUnknown" && (
-        <StorageFullRecovery
-          nodeDid={draft.nodeDid}
-          error={draft.result?.deliveryError}
-        />
-      )}
-      <details className="mt-1 text-muted-foreground">
-        <summary>Saved {noun}</summary>
-        <p className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words">
-          {description(draft)}
+          )}
+        </>
+      }
+    >
+      {failed && (
+        <p>
+          {draft.failure
+            ? errorWords(draft.failure.message)
+            : `No reply arrived for this ${noun}.`}{" "}
+          Retry sends it again; it is never sent twice.
         </p>
-      </details>
+      )}
+      {failed && draft.failure?.error?.code === "storageFull" && (
+        <StorageFullRecovery nodeDid={draft.nodeDid} error={draft.failure.error} />
+      )}
       {error && (
-        <p
-          role="alert"
-          tabIndex={0}
-          className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap break-words text-destructive"
-        >
-          {error}
+        <p role="alert" tabIndex={0} className="text-destructive">
+          {errorWords(error)}
         </p>
       )}
-    </section>
+    </Notice>
   );
 }

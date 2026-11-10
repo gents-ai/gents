@@ -30,6 +30,22 @@ def pending (cursor : Cursor) (sourceOrder : List Arrival) (enabled : Bool) : Li
   if cursor.seeded && enabled then sourceOrder.filter fun entry => cursor.after < entry.position
   else []
 
+/-- Under the trusted-writer ACP1 trial a callback result is published before
+its parent grant and repair marker. An unreadable row is ambiguous, so the
+consumer leaves its arrival pending. This can block later arrivals if access is
+never granted or the row is deleted. -/
+def callbackResultReady (visible linked : Bool) : Bool := visible && linked
+
+def callbackResultCursor (before position : Nat) (visible linked : Bool) : Nat :=
+  if callbackResultReady visible linked then position else before
+
+theorem callback_result_waits_for_visible_repair (before position : Nat) :
+    callbackResultCursor before position false false = before ∧
+    callbackResultCursor before position false true = before ∧
+    callbackResultCursor before position true false = before ∧
+    callbackResultCursor before position true true = position := by
+  simp [callbackResultCursor, callbackResultReady]
+
 inductive Disposition where
   | excluded
   | legacySerialBusy

@@ -111,7 +111,12 @@ export async function openConfigSection(page: Page, name: RegExp) {
     return;
   }
   await page.mouse.move(page.viewportSize()!.width - 30, 100);
-  await page.getByTestId("agent-screen").getByRole("link", { name }).click();
+  /* the section list's link, not a summary card leading to the same place */
+  await page
+    .getByTestId("agent-screen")
+    .locator('[data-slot="sidebar-nav"]')
+    .getByRole("link", { name })
+    .click();
 }
 
 export async function primarySurfaceCount(page: Page) {

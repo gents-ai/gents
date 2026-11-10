@@ -207,8 +207,8 @@ export class LiveBridgeRunner implements TauriDriverBridge {
     return this.http.getJson<T>(path);
   }
 
-  async postJson<T = unknown>(path: string, body: unknown) {
-    return this.http.postJson<T>(path, body);
+  async postJson<T = unknown>(path: string, body: unknown, timeoutMs?: number) {
+    return this.http.postJson<T>(path, body, timeoutMs);
   }
 
   async fetchWithTimeout(input: string, init: RequestInit) {

@@ -1,15 +1,7 @@
-use std::time::Duration;
-
 use anyhow::Result;
 use gents_desktop_core::client::{ClientCore, PeerMutationResult};
 
 use super::util::require_trimmed;
-
-pub async fn repair_p2p(core: &ClientCore, settle_delay: Duration) -> Result<()> {
-    core.request_p2p_repair().await?;
-    tokio::time::sleep(settle_delay).await;
-    Ok(())
-}
 
 pub async fn remove_peer(core: &ClientCore, peer_id: String) -> Result<PeerMutationResult> {
     let peer_id = require_trimmed("peer_id", peer_id)?;
@@ -43,12 +35,16 @@ pub async fn request_status_enrollment(
         .map(str::trim)
         .filter(|label| !label.is_empty())
         .map(str::to_owned);
-    core.request_status_enrollment_with_label(&status, server_label.as_deref())
-        .await
-        .map(|result| {
-            let mut view = EnrollmentRequestView::from(result);
-            view.server_label = server_label;
-            view
-        })
-        .map_err(|error| BridgeError::untyped(format!("{error:#}")))
+    core.request_status_enrollment_with_names(
+        &status,
+        server_label.as_deref(),
+        request.candidate_name.as_deref(),
+    )
+    .await
+    .map(|result| {
+        let mut view = EnrollmentRequestView::from(result);
+        view.server_label = server_label;
+        view
+    })
+    .map_err(|error| BridgeError::untyped(format!("{error:#}")))
 }

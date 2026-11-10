@@ -3,6 +3,13 @@ use crate::client::schema::ensure_runtime_schemas;
 use gents_protocol::schemas::AGENT_MESSAGE_NAME;
 use std::sync::Arc;
 
+fn visible(read: SelectedSessionRead) -> ClientStore {
+    match read {
+        SelectedSessionRead::Visible(patch) => *patch,
+        SelectedSessionRead::Absent => panic!("expected the canonical session row"),
+    }
+}
+
 #[tokio::test]
 async fn pending_edit_request_patch_reads_only_selected_and_replacement_documents() {
     let node = Arc::new(
@@ -24,7 +31,7 @@ async fn pending_edit_request_patch_reads_only_selected_and_replacement_document
                     purpose: "normal",
                     node_did: "did:test:agent",
                     requester_did: "did:test:requester",
-                    agent_id: "default",
+                    agent_did: "default",
                     session_id: "edit-session",
                     content: "old text",
                     lifecycle_state: "superseded",
@@ -36,7 +43,7 @@ async fn pending_edit_request_patch_reads_only_selected_and_replacement_document
                     purpose: "normal",
                     node_did: "did:test:agent",
                     requester_did: "did:test:requester",
-                    agent_id: "default",
+                    agent_did: "default",
                     session_id: "edit-session",
                     content: "new text",
                     lifecycle_state: "pending",
@@ -48,7 +55,7 @@ async fn pending_edit_request_patch_reads_only_selected_and_replacement_document
                     purpose: "normal",
                     node_did: "did:test:agent",
                     requester_did: "did:test:requester",
-                    agent_id: "default",
+                    agent_did: "default",
                     session_id: "other-session",
                     content: "unrelated",
                     lifecycle_state: "pending",
@@ -301,7 +308,7 @@ async fn fetch_doc_patch_hydrates_mailbox_live_updates() {
                     source_kind: "session",
                     source_id: "wait-live",
                     target_node_did: "did:test:agent",
-                    target_agent_id: "operator",
+                    target_agent_did: "operator",
                     created_at: "2026-08-25T00:00:00Z",
                     updated_at: "2026-08-25T00:00:00Z"
                 }) { _docID }
@@ -355,7 +362,7 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
             session_id: "sess-selected",
             node_did: "did:test:agent",
             requester_did: "did:test:requester",
-            agent_id: "default",
+            agent_did: "default",
             created_at: "2026-07-24T00:00:00Z"
         }) { _docID }
         first_request: create_AgentRequest(input: {
@@ -363,7 +370,7 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
             purpose: "normal",
             node_did: "did:test:agent",
             requester_did: "did:test:requester",
-            agent_id: "default",
+            agent_did: "default",
             session_id: "sess-selected",
             content: "selected",
             lifecycle_state: "processing",
@@ -375,7 +382,7 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
             purpose: "normal",
             node_did: "did:test:agent",
             requester_did: "did:test:foreign-requester",
-            agent_id: "default",
+            agent_did: "default",
             session_id: "sess-selected",
             content: "foreign twin",
             lifecycle_state: "processing",
@@ -387,7 +394,7 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
             purpose: "normal",
             node_did: "did:test:agent",
             requester_did: "did:test:requester",
-            agent_id: "default",
+            agent_did: "default",
             session_id: "sess-unrelated",
             content: "unrelated",
             lifecycle_state: "completed",
@@ -420,9 +427,11 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 
-    let patch = load_chat_patch(&access, "did:test:agent", "sess-selected", None, None, &[])
-        .await
-        .expect("selected local chat patch");
+    let patch = visible(
+        load_chat_patch(&access, "did:test:agent", "sess-selected", None, None, &[])
+            .await
+            .expect("selected local chat patch"),
+    );
     assert_eq!(patch.requests.len(), 1);
     assert_eq!(patch.requests[0].request_id, "req-selected");
     assert_eq!(
@@ -455,16 +464,18 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
         ))
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    let terminal_patch = load_chat_patch(
-        &access,
-        "did:test:agent",
-        "sess-selected",
-        Some("req-selected"),
-        None,
-        &[],
-    )
-    .await
-    .expect("terminal selected chat patch");
+    let terminal_patch = visible(
+        load_chat_patch(
+            &access,
+            "did:test:agent",
+            "sess-selected",
+            Some("req-selected"),
+            None,
+            &[],
+        )
+        .await
+        .expect("terminal selected chat patch"),
+    );
     assert_eq!(terminal_patch.requests[0].terminal_output, Some(terminal));
 }
 
@@ -589,6 +600,61 @@ fn selected_request_lookup_rejects_mixed_valid_and_malformed_rows() {
     assert!(error.downcast_ref::<crate::error::BridgeError>().is_none());
 }
 
+#[test]
+fn direct_session_read_matches_the_lean_model() {
+    let contract: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+    let cases = contract["client_direct_session_read_cases"]
+        .as_array()
+        .unwrap();
+    assert!(!cases.is_empty());
+    let row = serde_json::json!({"node_did":"node", "session_id":"session", "agent_did":"agent", "created_at":"now"});
+    for case in cases {
+        let rows = match case["session_row"].as_str().unwrap() {
+            "absent" => vec![],
+            "canonical" => vec![row.clone()],
+            "duplicate" => vec![row.clone(), row.clone()],
+            "out_of_scope" => vec![
+                serde_json::json!({"node_did":"other", "session_id":"session", "agent_did":"agent", "created_at":"now"}),
+            ],
+            other => panic!("unknown modeled observation {other}"),
+        };
+        let result = selected_session_from_data(
+            &serde_json::json!({"AgentSession":rows}),
+            "node",
+            "session",
+        );
+        let actual = match result {
+            Ok(None) => "empty",
+            Ok(Some(_)) => "visible",
+            Err(_) => "integrity_fault",
+        };
+        assert_eq!(actual, case["expected"].as_str().unwrap(), "{case}");
+    }
+}
+
+#[tokio::test]
+async fn absent_session_is_empty_even_when_a_request_is_visible() {
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    ensure_runtime_schemas(&node).await.unwrap();
+    let access = gents::ConfigAccess::local(node.clone());
+    let response = node
+        .execute(
+            r#"mutation { create_AgentRequest(input: {
+        request_id: "request", purpose: "normal", node_did: "node", agent_did: "agent",
+        session_id: "missing", content: "hello", lifecycle_state: "pending", created_at: "now"
+    }) { _docID } }"#,
+        )
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    assert!(matches!(
+        load_chat_patch(&access, "node", "missing", Some("request"), None, &[])
+            .await
+            .unwrap(),
+        SelectedSessionRead::Absent
+    ));
+    node.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn load_chat_patch_uses_the_canonical_nullable_session_requester() {
     let node = Arc::new(
@@ -608,7 +674,7 @@ async fn load_chat_patch_uses_the_canonical_nullable_session_requester() {
                     session_id: "sess-public",
                     node_did: "did:test:agent",
                     requester_did: null,
-                    agent_id: "default",
+                    agent_did: "default",
                     created_at: "2026-07-24T00:00:00Z"
                 }) { _docID }
                 request: create_AgentRequest(input: {
@@ -616,7 +682,7 @@ async fn load_chat_patch_uses_the_canonical_nullable_session_requester() {
                     purpose: "normal",
                     node_did: "did:test:agent",
                     requester_did: null,
-                    agent_id: "default",
+                    agent_did: "default",
                     session_id: "sess-public",
                     content: "public session",
                     lifecycle_state: "completed",
@@ -627,16 +693,18 @@ async fn load_chat_patch_uses_the_canonical_nullable_session_requester() {
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 
-    let patch = load_chat_patch(
-        &access,
-        "did:test:agent",
-        "sess-public",
-        Some("req-public"),
-        None,
-        &[],
-    )
-    .await
-    .expect("canonical nullable requester resolves");
+    let patch = visible(
+        load_chat_patch(
+            &access,
+            "did:test:agent",
+            "sess-public",
+            Some("req-public"),
+            None,
+            &[],
+        )
+        .await
+        .expect("canonical nullable requester resolves"),
+    );
     assert_eq!(patch.sessions.len(), 1);
     assert_eq!(patch.sessions[0].requester_did, None);
     assert_eq!(patch.requests.len(), 1);
@@ -664,7 +732,7 @@ async fn title_request_patch_preserves_existence_without_public_projection() {
                     caused_by_parent_tool_call_doc_id: "parent-tool-physical",
                     purpose: "normal",
                     node_did: "did:test:agent",
-                    agent_id: "default",
+                    agent_did: "default",
                     session_id: "patch-session",
                     content: "normal request",
                     lifecycle_state: "completed",
@@ -675,7 +743,7 @@ async fn title_request_patch_preserves_existence_without_public_projection() {
                     request_id: "patch-title",
                     purpose: "title-audit",
                     node_did: "did:test:agent",
-                    agent_id: "default",
+                    agent_did: "default",
                     session_id: "patch-session",
                     content: "title audit",
                     lifecycle_state: "completed",
@@ -756,35 +824,46 @@ fn request_projection_retains_every_field_needed_to_verify_signed_ancestry() {
 
 #[tokio::test]
 async fn catalog_freshness_reaches_snapshot_operator_and_document_patch_readers() -> Result<()> {
-    let node = Arc::new(crate::test_support::node_builder().build().await?);
-    ensure_runtime_schemas(&node).await?;
+    let runtime = crate::test_fixtures::ServedRuntimeHome::start().await;
+    let node = runtime.node().clone();
     let backend: InferenceBackend = serde_json::from_value(serde_json::json!({
-        "node_did":"did:key:catalog-owner", "backend_id":"catalog-backend", "name":"Catalog",
+        "node_did":runtime.node_did(), "backend_id":"catalog-backend", "name":"Catalog",
         "provider_kind":"OpenAiCompatible", "endpoint":"http://127.0.0.1:1/v1",
         "auth":{"kind":"unauthenticated"}
     }))?;
-    gents::ensure_node(&node, &backend.node_did).await?;
-    let access = gents::ConfigAccess::local(node.clone());
-    gents::config_client::write_inference_backend_document(&access, &backend).await?;
+    let access = runtime.user_access();
+    gents::documents::write_inference_backend_document(&access, &backend).await?;
+    // Catalog discovery is the runtime's own observation.
+    let observer = runtime.runtime_access();
     for observed_at in ["2026-10-28T01:00:00Z", "2026-10-28T02:00:00Z"] {
-        let catalog: gents::document_config::BackendModelCatalog =
+        let catalog: gents::documents::BackendModelCatalog =
             serde_json::from_value(serde_json::json!({
                 "node_did":null, "observed_at":observed_at,
                 "models":[{"model_name":"retained-model"}]
             }))?;
-        access
+        observer
             .transact_write("test.catalog.refresh", |txn| {
                 let backend = &backend;
                 let catalog = catalog.clone();
                 Box::pin(async move {
-                    gents::backend_registry::record_model_catalog_in_txn(txn, backend, catalog)
-                        .await
+                    gents::inference::backends::registry::record_model_catalog_in_txn(
+                        txn, backend, catalog,
+                    )
+                    .await
                 })
             })
             .await?;
     }
-    let response = access.execute("{ InferenceBackend { _docID } }").await?;
-    let doc_id = response["data"]["InferenceBackend"][0]["_docID"]
+    let response = access
+        .execute("{ InferenceBackendMetadata { _docID } }")
+        .await?;
+    let doc_id = response["data"]["InferenceBackendMetadata"][0]["_docID"]
+        .as_str()
+        .unwrap();
+    let response = access
+        .execute("{ InferenceBackendObservation { _docID } }")
+        .await?;
+    let observation_doc = response["data"]["InferenceBackendObservation"][0]["_docID"]
         .as_str()
         .unwrap();
     let snapshot = load_full_snapshot(&node).await?;
@@ -792,7 +871,16 @@ async fn catalog_freshness_reaches_snapshot_operator_and_document_patch_readers(
     let patch = fetch_doc_patch(&node, INFERENCE_BACKEND_NAME, &[doc_id])
         .await?
         .store;
-    for store in [snapshot, operator, patch] {
+    let observation_patch = fetch_doc_patch(
+        &node,
+        INFERENCE_BACKEND_OBSERVATION_NAME,
+        &[observation_doc],
+    )
+    .await?
+    .store;
+    assert_eq!(patch.inference_backends.len(), 1);
+    assert!(patch.backend_observations.is_empty());
+    for store in [snapshot, operator, observation_patch] {
         assert_eq!(store.backend_observations.len(), 1);
         assert_eq!(
             store.backend_observations[0].catalogs[0].observed_at,
@@ -806,8 +894,7 @@ async fn catalog_freshness_reaches_snapshot_operator_and_document_patch_readers(
             store.backend_observation_source_node_dids,
             [Some(backend.node_did.clone())]
         );
-        assert_eq!(store.inference_backends.len(), 1);
     }
-    node.shutdown().await;
+    runtime.shutdown().await;
     Ok(())
 }

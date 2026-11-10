@@ -5,13 +5,15 @@ import type {
   SessionSummary,
 } from "@source-inc/gents-desktop-client";
 import { useSelectedNode } from "@/hooks/useClient";
-import { agentName } from "./behavior";
+import { agentName, nameShared } from "./behavior";
 import { scopeKey, summariesByScope, useListedScopes } from "./workers";
 
 export type Sender = {
   sessionId: string;
   summary: SessionSummary | null;
   agentName: string | null;
+  /** whether another agent on its node goes by the same name */
+  agentShared: boolean;
 };
 
 export type ParentWork = {
@@ -45,7 +47,8 @@ export function useParentWork(provenance: SessionProvenanceView | null): ParentW
       return {
         sessionId: link.sessionId,
         summary,
-        agentName: summary ? agentName(summary.agentId, deployment) : null,
+        agentName: summary ? agentName(summary.agentDid, deployment) : null,
+        agentShared: summary ? nameShared(summary.agentDid, deployment) : false,
       };
     };
     const byRequest = new Map(

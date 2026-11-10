@@ -58,7 +58,7 @@ fn plugin_pack(
     dir: &std::path::Path,
     afb: &afterburner_cloud::Afb,
     bytes: &[u8],
-) -> Result<(Vec<u8>, gents::pack_archive::PackHeader)> {
+) -> Result<(Vec<u8>, gents::pack::archive::PackHeader)> {
     let package = &afb.manifest.package;
     anyhow::ensure!(
         gents::pack::is_valid_pack_name(&package.name)
@@ -75,7 +75,7 @@ fn plugin_pack(
     std::fs::write(
         dir.join("README.md"),
         format!(
-            "# {}\n\n{description}\n\nInstall with `gents plugin install {}/{}`.\n",
+            "# {}\n\n{description}\n\nInstall with `gents config pack plugin install {}/{}`.\n",
             package.name, package.namespace, package.name
         ),
     )?;
@@ -95,7 +95,7 @@ fn plugin_pack(
         dir.join("manifest.json"),
         serde_json::to_vec_pretty(&manifest).context("encoding the plugin pack manifest")?,
     )?;
-    gents::pack_archive::pack_dir(dir)
+    gents::pack::archive::pack_dir(dir)
 }
 
 fn list(args: PluginListArgs) -> Result<()> {
@@ -121,7 +121,7 @@ async fn remove(args: PluginRemoveArgs) -> Result<()> {
                     record.kind,
                     gents::pack::PackKind::Assets | gents::pack::PackKind::Plugins
                 ) && record.plugins.iter().all(|plugin| plugin.name == name),
-                "{namespace}/{name} is installed by pack {coordinate} with other contents; remove it with gents pack remove {coordinate}"
+                "{namespace}/{name} is installed by pack {coordinate} with other contents; remove it with gents config pack remove {coordinate}"
             );
             let removed =
                 crate::commands::pack::remove_home_install_with_guard(&home, &coordinate, guard)
@@ -132,6 +132,7 @@ async fn remove(args: PluginRemoveArgs) -> Result<()> {
     crate::commands::pack::ensure_home_plugins_unreferenced(
         &home,
         &std::collections::BTreeSet::from([format!("{namespace}/{name}")]),
+        &guard,
     )
     .await?;
     let removed =

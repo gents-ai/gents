@@ -2,7 +2,8 @@ use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 use std::time::Instant;
 
-use defra_node::{CollectionVersion, EmbeddedNode};
+use defra_core::RequestContext;
+use defra_node::{CollectionVersion, Node as EmbeddedNode};
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
@@ -18,6 +19,7 @@ use crate::report::MigrationReport;
 static ENSURE_LOCK: Mutex<()> = Mutex::const_new(());
 
 pub async fn ensure_migrations(node: &EmbeddedNode) -> Result<MigrationReport> {
+    validate_runtime_locality(node)?;
     let mut baseline = DEFAULT_REGISTRY.baseline.to_vec();
     let mut steps = DEFAULT_REGISTRY.steps.to_vec();
     crate::upgrades::include_existing(node, &mut baseline, &mut steps)?;
@@ -26,7 +28,46 @@ pub async fn ensure_migrations(node: &EmbeddedNode) -> Result<MigrationReport> {
         steps: &steps,
         ordinary_indexes: DEFAULT_REGISTRY.ordinary_indexes,
     };
-    ensure_migrations_with_registry(node, &registry).await
+    let mut report = ensure_migrations_with_registry(node, &registry).await?;
+    validate_runtime_locality(node)?;
+    report.warnings.extend(warn_non_canonical(node).await?);
+    Ok(report)
+}
+
+/// DefraDB omits branchability from schema CIDs and rejects changes to it.
+/// A matching lineage therefore cannot establish runtime-local placement. Refuse
+/// an incompatible store before registering or changing any of its collections;
+/// startup must never silently retain its previous replication semantics.
+fn validate_runtime_locality(node: &EmbeddedNode) -> Result<()> {
+    for entry in DEFAULT_REGISTRY.baseline {
+        if gents_protocol::schemas::is_replicated_protocol_collection(entry.name) {
+            continue;
+        }
+        if node
+            .get_collection(entry.name)?
+            .is_some_and(|collection| collection.is_branchable)
+        {
+            return Err(Error::RuntimeLocalityMismatch {
+                collection: entry.name.to_owned(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Logs and returns the managed collections this store cannot sync with canonical peers.
+async fn warn_non_canonical(node: &EmbeddedNode) -> Result<Vec<String>> {
+    let versions = node.get_all_collection_versions().await?;
+    let mismatches = non_canonical_store_lineages(&versions)?;
+    for mismatch in &mismatches {
+        tracing::error!(
+            collection = %mismatch.collection,
+            active = %mismatch.active,
+            canonical = %mismatch.canonical,
+            "{mismatch}"
+        );
+    }
+    Ok(mismatches.iter().map(ToString::to_string).collect())
 }
 
 pub async fn ensure_migrations_with_registry(
@@ -37,9 +78,17 @@ pub async fn ensure_migrations_with_registry(
     let mut report = MigrationReport::default();
 
     let started = Instant::now();
+    validate_identity_bindings(node, registry)?;
+    validate_legacy_backend_bindings(node, registry).await?;
+    validate_client_journal_binding(node, registry)?;
+    validate_mailbox_binding(node, registry)?;
     reject_unknown_lineage(node, registry).await?;
     let file_image_owner = register_file_image_policy(node, registry).await?;
+    register_identity_policy(node, registry).await?;
+    register_client_journal_policy(node, registry).await?;
+    register_mailbox_policy(node, registry).await?;
     register_baseline(node, registry, &mut report).await?;
+    register_branchable_identity_collection_owners(node, registry).await?;
     if let Some(owner) = file_image_owner.filter(|_| manages_file_images(registry)) {
         register_file_image_owner(node, owner, registry).await?;
     }
@@ -92,13 +141,244 @@ pub async fn ensure_migrations_with_registry(
     Ok(report)
 }
 
+async fn validate_legacy_backend_bindings(
+    node: &EmbeddedNode,
+    registry: &Registry<'_>,
+) -> Result<()> {
+    use gents_protocol::schemas::{AGENT_OWNERSHIP_POLICY_ID, INFERENCE_BACKEND_NAME};
+    if !registry
+        .managed_names()
+        .any(|name| name == INFERENCE_BACKEND_NAME)
+    {
+        return Ok(());
+    }
+    let active = node.get_collection(INFERENCE_BACKEND_NAME)?;
+    let versions = node.get_all_collection_versions().await?;
+    for version in versions.iter().filter(|version| {
+        version.name == INFERENCE_BACKEND_NAME
+            || active
+                .as_ref()
+                .is_some_and(|current| current.collection_id == version.collection_id)
+    }) {
+        if active.is_none()
+            || version.is_branchable
+            || !version.policy.as_ref().is_some_and(|policy| {
+                policy.id == AGENT_OWNERSHIP_POLICY_ID
+                    && policy.resource_name == "secret_configuration"
+            })
+        {
+            return Err(Error::IncompatibleIdentityPolicy {
+                collection: INFERENCE_BACKEND_NAME.into(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_identity_bindings(node: &EmbeddedNode, registry: &Registry<'_>) -> Result<()> {
+    use gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID;
+    let bindings = gents_protocol::schemas::IDENTITY_POLICY_BINDINGS;
+    if !registry
+        .managed_names()
+        .any(|name| bindings.iter().any(|(collection, _)| *collection == name))
+    {
+        return Ok(());
+    }
+    for &(name, resource) in bindings {
+        if !registry.managed_names().any(|managed| managed == name) {
+            continue;
+        }
+        if let Some(collection) = node.get_collection(name)? {
+            if collection.is_branchable
+                != gents_protocol::schemas::is_replicated_protocol_collection(name)
+                || !collection.policy.as_ref().is_some_and(|policy| {
+                    policy.id == AGENT_OWNERSHIP_POLICY_ID && policy.resource_name == resource
+                })
+            {
+                return Err(Error::IncompatibleIdentityPolicy {
+                    collection: name.into(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Branchable reads fall back to a collection ACP object when a document has
+/// no registered genesis. The local runtime owns that object so missing or
+/// unverified registrations do not become public reads.
+async fn register_branchable_identity_collection_owners(
+    node: &EmbeddedNode,
+    registry: &Registry<'_>,
+) -> Result<()> {
+    use gents_protocol::schemas::{AGENT_OWNERSHIP_POLICY_ID, IDENTITY_POLICY_BINDINGS};
+    let owned: Vec<_> = IDENTITY_POLICY_BINDINGS
+        .iter()
+        .filter(|(name, _)| {
+            gents_protocol::schemas::is_replicated_protocol_collection(name)
+                && registry.managed_names().any(|managed| managed == *name)
+        })
+        .collect();
+    if owned.is_empty() {
+        return Ok(());
+    }
+    let runtime = identity::Did::new(node.node_identity_did().ok_or(Error::MissingNodeIdentity)?)
+        .map_err(|error| Error::InvalidIdentityCollectionOwner { error })?;
+    let acp = node.document_acp();
+    for (name, resource) in owned {
+        let collection = node
+            .get_collection(name)?
+            .ok_or_else(|| Error::CollectionMissing {
+                collection: (*name).to_owned(),
+            })?;
+        if acp
+            .is_doc_registered(
+                AGENT_OWNERSHIP_POLICY_ID,
+                resource,
+                &collection.collection_id,
+            )
+            .await
+            .map_err(|error| Error::from(defra_node::Error::from(error)))?
+        {
+            let owner = acp
+                .get_doc_owner(
+                    AGENT_OWNERSHIP_POLICY_ID,
+                    resource,
+                    &collection.collection_id,
+                )
+                .await
+                .map_err(|error| Error::from(defra_node::Error::from(error)))?;
+            if owner.as_ref() != Some(&runtime) {
+                return Err(Error::ForeignIdentityCollectionOwner {
+                    collection: (*name).to_owned(),
+                });
+            }
+        } else {
+            acp.register_object(
+                &runtime,
+                AGENT_OWNERSHIP_POLICY_ID,
+                resource,
+                &collection.collection_id,
+            )
+            .await
+            .map_err(|error| Error::from(defra_node::Error::from(error)))?;
+        }
+    }
+    Ok(())
+}
+
+async fn register_identity_policy(node: &EmbeddedNode, registry: &Registry<'_>) -> Result<()> {
+    if !registry.managed_names().any(|name| {
+        gents_protocol::schemas::IDENTITY_POLICY_BINDINGS
+            .iter()
+            .any(|(collection, _)| *collection == name)
+    }) {
+        return Ok(());
+    }
+    use gents_protocol::schemas::{AGENT_OWNERSHIP_POLICY, AGENT_OWNERSHIP_POLICY_ID};
+    node.node_identity_did().ok_or(Error::MissingNodeIdentity)?;
+    let policy = node
+        .add_dac_policy_with_counter_as(&node_context(node), AGENT_OWNERSHIP_POLICY, 0)
+        .await?;
+    if policy != AGENT_OWNERSHIP_POLICY_ID {
+        return Err(Error::IdentityPolicyMismatch);
+    }
+    Ok(())
+}
+
+fn manages_client_journal(registry: &Registry<'_>) -> bool {
+    registry
+        .managed_names()
+        .any(|name| name == gents_protocol::schemas::PENDING_CHAT_SUBMISSION_NAME)
+}
+
+fn manages_mailbox(registry: &Registry<'_>) -> bool {
+    registry
+        .managed_names()
+        .any(|name| name == gents_protocol::schemas::MAILBOX_ITEM_NAME)
+}
+
+fn validate_mailbox_binding(node: &EmbeddedNode, registry: &Registry<'_>) -> Result<()> {
+    use gents_protocol::schemas::{MAILBOX_ITEM_NAME, MAILBOX_POLICY_ID, MAILBOX_POLICY_RESOURCE};
+    if manages_mailbox(registry) {
+        if let Some(collection) = node.get_collection(MAILBOX_ITEM_NAME)? {
+            if collection.is_branchable
+                || !collection.policy.as_ref().is_some_and(|policy| {
+                    policy.id == MAILBOX_POLICY_ID
+                        && policy.resource_name == MAILBOX_POLICY_RESOURCE
+                })
+            {
+                return Err(Error::IncompatibleIdentityPolicy {
+                    collection: MAILBOX_ITEM_NAME.into(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn register_mailbox_policy(node: &EmbeddedNode, registry: &Registry<'_>) -> Result<()> {
+    use gents_protocol::schemas::{MAILBOX_POLICY, MAILBOX_POLICY_ID};
+    if manages_mailbox(registry) {
+        node.node_identity_did().ok_or(Error::MissingNodeIdentity)?;
+        let policy = node
+            .add_dac_policy_with_counter_as(&node_context(node), MAILBOX_POLICY, 0)
+            .await?;
+        if policy != MAILBOX_POLICY_ID {
+            return Err(Error::IdentityPolicyMismatch);
+        }
+    }
+    Ok(())
+}
+
+fn validate_client_journal_binding(node: &EmbeddedNode, registry: &Registry<'_>) -> Result<()> {
+    use gents_protocol::schemas::{
+        CLIENT_JOURNAL_POLICY_ID, CLIENT_JOURNAL_POLICY_RESOURCE, PENDING_CHAT_SUBMISSION_NAME,
+    };
+    if manages_client_journal(registry) {
+        if let Some(collection) = node.get_collection(PENDING_CHAT_SUBMISSION_NAME)? {
+            if collection.is_branchable
+                || !collection.policy.as_ref().is_some_and(|policy| {
+                    policy.id == CLIENT_JOURNAL_POLICY_ID
+                        && policy.resource_name == CLIENT_JOURNAL_POLICY_RESOURCE
+                })
+            {
+                return Err(Error::IncompatibleIdentityPolicy {
+                    collection: PENDING_CHAT_SUBMISSION_NAME.into(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn register_client_journal_policy(
+    node: &EmbeddedNode,
+    registry: &Registry<'_>,
+) -> Result<()> {
+    use gents_protocol::schemas::{CLIENT_JOURNAL_POLICY, CLIENT_JOURNAL_POLICY_ID};
+    if manages_client_journal(registry) {
+        node.node_identity_did().ok_or(Error::MissingNodeIdentity)?;
+        let policy = node
+            .add_dac_policy_with_counter_as(&node_context(node), CLIENT_JOURNAL_POLICY, 0)
+            .await?;
+        if policy != CLIENT_JOURNAL_POLICY_ID {
+            return Err(Error::IdentityPolicyMismatch);
+        }
+    }
+    Ok(())
+}
+
+fn node_context(node: &EmbeddedNode) -> RequestContext {
+    RequestContext::default().with_identity(node.node_identity_did().map(str::to_owned))
+}
+
 const FILE_COLLECTION_POLICIES: &[(&str, bool)] = &[
-    (gents_protocol::schemas::TOOL_FILE_CHANGE_NAME, true),
-    (gents_protocol::schemas::TOOL_FILE_CONTENT_NAME, true),
-    (gents_protocol::schemas::TOOL_FILE_INVENTORY_NAME, true),
+    (gents_protocol::schemas::TOOL_FILE_CHANGE_NAME, false),
+    (gents_protocol::schemas::TOOL_FILE_CONTENT_NAME, false),
+    (gents_protocol::schemas::TOOL_FILE_INVENTORY_NAME, false),
     (gents_protocol::schemas::FILE_INVENTORY_REPLY_NAME, false),
     (gents_protocol::schemas::FILE_INVENTORY_PROGRESS_NAME, false),
-    (gents_protocol::schemas::FILE_INVENTORY_PAGE_NAME, true),
 ];
 
 fn manages_file_images(registry: &Registry<'_>) -> bool {
@@ -113,11 +393,7 @@ async fn register_file_image_policy<'n>(
     node: &'n EmbeddedNode,
     registry: &Registry<'_>,
 ) -> Result<Option<&'n str>> {
-    if !manages_file_images(registry)
-        && !registry
-            .managed_names()
-            .any(|name| name == gents_protocol::schemas::FILE_IMAGE_HYDRATION_RECEIPT_NAME)
-    {
+    if !manages_file_images(registry) {
         return Ok(None);
     }
     for (name, branchable) in FILE_COLLECTION_POLICIES {
@@ -125,14 +401,13 @@ async fn register_file_image_policy<'n>(
             validate_file_image_policy(&collection, *branchable)?;
         }
     }
-    if let Some(collection) =
-        node.get_collection(gents_protocol::schemas::FILE_IMAGE_HYDRATION_RECEIPT_NAME)?
-    {
-        validate_file_image_policy(&collection, false)?;
-    }
     let owner = node.node_identity_did().ok_or(Error::MissingNodeIdentity)?;
     let policy = node
-        .add_dac_policy_with_counter(owner, gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY, 0)
+        .add_dac_policy_with_counter_as(
+            &node_context(node),
+            gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY,
+            0,
+        )
         .await?;
     if policy != gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_ID {
         return Err(Error::FileImagePolicyMismatch);
@@ -471,7 +746,8 @@ async fn apply_patch_versioned(
         None => {
             if let Some(spec) = lens_spec {
                 let cfg = lens::lens_config(&spec, &active.version_id, pin);
-                node.set_migration(cfg)
+                let cfg = serde_json::to_value(cfg).map_err(defra_node::Error::LensJson)?;
+                node.set_migration_as(&node_context(node), &cfg)
                     .await
                     .map_err(|e| Error::StepFailed {
                         step: id.to_string(),
@@ -479,21 +755,14 @@ async fn apply_patch_versioned(
                         source: e.into(),
                     })?;
             }
-            let patched = node
-                .patch_collection(collection, patch)
+            node.patch_collection_as(&node_context(node), patch, None)
                 .await
                 .map_err(|e| Error::StepFailed {
                     step: id.to_string(),
                     collection: collection.to_string(),
                     source: e.into(),
                 })?;
-            if patched.version_id != pin {
-                return Err(Error::VersionPinMismatch {
-                    collection: collection.to_string(),
-                    expected: pin.to_string(),
-                    actual: patched.version_id,
-                });
-            }
+            let patched = patched_version(node, collection, pin).await?;
             expected_state
                 .verify(&patched)
                 .map_err(|detail| Error::StateVerification {
@@ -501,7 +770,7 @@ async fn apply_patch_versioned(
                     step: id.to_string(),
                     detail,
                 })?;
-            node.set_active_collection_version(pin)
+            node.set_active_collection_version_as(&node_context(node), pin)
                 .await
                 .map_err(|e| Error::StepFailed {
                     step: id.to_string(),
@@ -511,21 +780,14 @@ async fn apply_patch_versioned(
             report.steps_applied += 1;
         }
         Some(v) if v.is_placeholder => {
-            let patched = node
-                .patch_collection(collection, patch)
+            node.patch_collection_as(&node_context(node), patch, None)
                 .await
                 .map_err(|e| Error::StepFailed {
                     step: id.to_string(),
                     collection: collection.to_string(),
                     source: e.into(),
                 })?;
-            if patched.version_id != pin {
-                return Err(Error::VersionPinMismatch {
-                    collection: collection.to_string(),
-                    expected: pin.to_string(),
-                    actual: patched.version_id,
-                });
-            }
+            let patched = patched_version(node, collection, pin).await?;
             expected_state
                 .verify(&patched)
                 .map_err(|detail| Error::StateVerification {
@@ -533,7 +795,7 @@ async fn apply_patch_versioned(
                     step: id.to_string(),
                     detail,
                 })?;
-            node.set_active_collection_version(pin)
+            node.set_active_collection_version_as(&node_context(node), pin)
                 .await
                 .map_err(|e| Error::StepFailed {
                     step: id.to_string(),
@@ -562,7 +824,7 @@ async fn apply_patch_versioned(
                 )
                 .await?;
             }
-            node.set_active_collection_version(pin)
+            node.set_active_collection_version_as(&node_context(node), pin)
                 .await
                 .map_err(|e| Error::StepFailed {
                     step: id.to_string(),
@@ -574,7 +836,10 @@ async fn apply_patch_versioned(
         Some(v) => {
             verify_active_step(node, ctx, pin, expected_transform, report).await?;
             if v.version_id == pin {
-                if let Err(e) = node.set_active_collection_version(pin).await {
+                if let Err(e) = node
+                    .set_active_collection_version_as(&node_context(node), pin)
+                    .await
+                {
                     warn!(
                         step = id,
                         collection,
@@ -591,6 +856,28 @@ async fn apply_patch_versioned(
     }
 
     Ok(())
+}
+
+async fn patched_version(
+    node: &EmbeddedNode,
+    collection: &str,
+    pin: &str,
+) -> Result<CollectionVersion> {
+    let versions = node.get_all_collection_versions().await?;
+    let actual = node
+        .get_collection(collection)?
+        .map_or_else(|| "<missing>".into(), |version| version.version_id);
+    versions
+        .iter()
+        .find(|version| {
+            version.name == collection && version.version_id == pin && !version.is_placeholder
+        })
+        .cloned()
+        .ok_or_else(|| Error::VersionPinMismatch {
+            collection: collection.to_owned(),
+            expected: pin.to_owned(),
+            actual,
+        })
 }
 
 fn version_descends_from(
@@ -694,7 +981,8 @@ async fn repair_transform_if_needed(
         });
     };
     let cfg = lens::lens_config(&spec, source, dest);
-    node.set_migration(cfg)
+    let cfg = serde_json::to_value(cfg).map_err(defra_node::Error::LensJson)?;
+    node.set_migration_as(&node_context(node), &cfg)
         .await
         .map_err(|e| Error::StepFailed {
             step: id.to_string(),
@@ -728,13 +1016,17 @@ async fn apply_patch_in_place(
         return Ok(());
     }
 
-    let patched = node
-        .patch_collection(collection, patch)
+    node.patch_collection_as(&node_context(node), patch, None)
         .await
         .map_err(|e| Error::StepFailed {
             step: id.to_string(),
             collection: collection.to_string(),
             source: e.into(),
+        })?;
+    let patched = node
+        .get_collection(collection)?
+        .ok_or_else(|| Error::CollectionMissing {
+            collection: collection.to_string(),
         })?;
     expected_state
         .verify(&patched)
@@ -764,7 +1056,136 @@ fn versions_by_name(
 /// this registry does not know, before anything is registered or patched.
 async fn reject_unknown_lineage(node: &EmbeddedNode, registry: &Registry<'_>) -> Result<()> {
     let all_versions = node.get_all_collection_versions().await?;
-    let by_name = versions_by_name(&all_versions);
+    check_lineage_versions(&all_versions, registry)
+}
+
+/// Read-only preflight of the same lineages startup will accept. Callers may
+/// read these versions through ConfigAccess while another process owns the store.
+pub fn check_migration_compatibility(all_versions: &[CollectionVersion]) -> Result<()> {
+    let mut baseline = DEFAULT_REGISTRY.baseline.to_vec();
+    let mut steps = DEFAULT_REGISTRY.steps.to_vec();
+    crate::upgrades::include_existing_by_version(
+        &|name| {
+            Ok(all_versions
+                .iter()
+                .find(|version| {
+                    version.name == name && version.is_active && !version.is_placeholder
+                })
+                .map(|version| version.version_id.clone()))
+        },
+        &mut baseline,
+        &mut steps,
+    )?;
+    check_lineage_versions(
+        all_versions,
+        &Registry {
+            baseline: &baseline,
+            steps: &steps,
+            ordinary_indexes: DEFAULT_REGISTRY.ordinary_indexes,
+        },
+    )
+}
+
+/// A managed collection whose active version is not the one a store born on this build
+/// reaches. Stores on different versions of a replicated collection cannot merge each
+/// other's blocks, so this store cannot exchange that collection with canonical peers and
+/// clients (`gents_protocol::peer_schema`).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct LineageMismatch {
+    pub collection: String,
+    pub active: String,
+    pub canonical: String,
+}
+
+impl std::fmt::Display for LineageMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} is on a non-canonical schema lineage (active {}, canonical {}): this store cannot sync {} with peers on the canonical lineage",
+            self.collection, self.active, self.canonical, self.collection
+        )
+    }
+}
+
+/// The version every managed collection reaches on a store born on this build.
+pub fn canonical_versions() -> Result<std::collections::BTreeMap<String, String>> {
+    Ok(target_active_pins(&DEFAULT_REGISTRY).into_iter().collect())
+}
+
+/// Managed collections among `active` (name, active version) whose version differs from
+/// the canonical one. Collections this build does not manage are ignored.
+pub fn non_canonical_lineages<'v>(
+    active: impl IntoIterator<Item = (&'v str, &'v str)>,
+) -> Result<Vec<LineageMismatch>> {
+    let canonical = canonical_versions()?;
+    let mut mismatches = active
+        .into_iter()
+        .filter_map(|(name, version)| {
+            let expected = canonical.get(name)?;
+            (expected != version).then(|| LineageMismatch {
+                collection: name.to_string(),
+                active: version.to_string(),
+                canonical: expected.clone(),
+            })
+        })
+        .collect::<Vec<_>>();
+    mismatches.sort_by(|a, b| a.collection.cmp(&b.collection));
+    mismatches.dedup();
+    Ok(mismatches)
+}
+
+/// Managed collections whose version this store is on, or will be on once
+/// `ensure_migrations` has applied the steps it qualifies for, differs from the canonical
+/// one.
+pub fn non_canonical_store_lineages(
+    all_versions: &[CollectionVersion],
+) -> Result<Vec<LineageMismatch>> {
+    let active = |name: &str| {
+        all_versions
+            .iter()
+            .find(|version| version.name == name && version.is_active && !version.is_placeholder)
+            .map(|version| version.version_id.clone())
+    };
+    let mut baseline = DEFAULT_REGISTRY.baseline.to_vec();
+    let mut steps = DEFAULT_REGISTRY.steps.to_vec();
+    crate::upgrades::include_existing_by_version(
+        &|name| Ok(active(name)),
+        &mut baseline,
+        &mut steps,
+    )?;
+    let projected = target_active_pins(&Registry {
+        baseline: &baseline,
+        steps: &steps,
+        ordinary_indexes: DEFAULT_REGISTRY.ordinary_indexes,
+    });
+    let present = projected
+        .into_iter()
+        .filter_map(|(name, target)| {
+            let current = active(&name)?;
+            // A collection with no step for its version stays where it is.
+            let reaches = if steps
+                .iter()
+                .any(|step| step.collection() == Some(name.as_str()))
+            {
+                target
+            } else {
+                current
+            };
+            Some((name, reaches))
+        })
+        .collect::<Vec<_>>();
+    non_canonical_lineages(
+        present
+            .iter()
+            .map(|(name, version)| (name.as_str(), version.as_str())),
+    )
+}
+
+fn check_lineage_versions(
+    all_versions: &[CollectionVersion],
+    registry: &Registry<'_>,
+) -> Result<()> {
+    let by_name = versions_by_name(all_versions);
     let known_pins = known_pin_set(registry);
     for entry in registry.baseline {
         if let Some(versions) = by_name.get(entry.name) {

@@ -1,3 +1,4 @@
+use gents_protocol::agent_identity::AgentIdentityBinding;
 use tauri::{AppHandle, Runtime, State};
 
 use crate::error::BridgeError;
@@ -8,13 +9,13 @@ use crate::commands::{
     delete_inference_profile_config, delete_schedule_config, delete_skill_config,
     delete_task_config, delete_tool_service_config, delete_tools_config, delete_trigger_config,
     save_agent_config, save_backend_config, save_inference_profile_config, save_node_config,
-    save_skill_config, save_tool_service_config, save_tools_config, set_default_agent,
-    test_tool_service_config,
+    save_skill_config, save_tool_service_config, save_tools_config, set_backend_rotation_config,
+    set_default_agent, test_tool_service_config,
 };
 use crate::state::{current_core, DesktopAppState};
 use crate::types::{
-    AgentDeleteRequest, AgentSaveRequest, BackendDeleteRequest, BackendSaveRequest,
-    ContextDeleteRequest, DefaultAgentSetRequest, DesktopClientSnapshot,
+    AgentDeleteRequest, AgentSaveRequest, BackendDeleteRequest, BackendRotationSetRequest,
+    BackendSaveRequest, ContextDeleteRequest, DefaultAgentSetRequest, DesktopClientSnapshot,
     InferenceProfileDeleteRequest, InferenceProfileSaveRequest, NodeConfigSaveRequest,
     ScheduleDeleteRequest, SkillDeleteRequest, SkillSaveRequest, TaskDeleteRequest,
     ToolServiceDeleteRequest, ToolServiceSaveRequest, ToolServiceTestRequest,
@@ -130,6 +131,25 @@ where
     };
 
     save_backend_config(core.as_ref(), request)
+        .await
+        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+    emit_config_update_and_snapshot(&app, &core, &state).await
+}
+
+#[tauri::command]
+pub async fn desktop_backend_rotation_set<R>(
+    app: AppHandle<R>,
+    request: BackendRotationSetRequest,
+    state: State<'_, DesktopAppState>,
+) -> Result<DesktopClientSnapshot, BridgeError>
+where
+    R: Runtime,
+{
+    let Some(core) = current_core(&state) else {
+        return Err(BridgeError::untyped("desktop client is not running"));
+    };
+
+    set_backend_rotation_config(core.as_ref(), request)
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))?;
     emit_config_update_and_snapshot(&app, &core, &state).await
@@ -410,4 +430,16 @@ where
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))?;
     emit_config_update_and_snapshot(&app, &core, &state).await
+}
+
+#[tauri::command]
+pub async fn desktop_agent_identity_provision(
+    node_did: String,
+    state: State<'_, DesktopAppState>,
+) -> Result<AgentIdentityBinding, BridgeError> {
+    let core = current_core(&state)
+        .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
+    core.provision_agent_identity(&node_did)
+        .await
+        .map_err(|error| BridgeError::untyped(error.to_string()))
 }

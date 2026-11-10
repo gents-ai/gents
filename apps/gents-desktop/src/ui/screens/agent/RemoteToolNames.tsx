@@ -6,6 +6,7 @@ import { Input } from "@gents/ui/components/input";
 import { Textarea } from "@gents/ui/components/textarea";
 import { StackedRow } from "./rows";
 import { errorText } from "../../../lib/errorText";
+import { SEARCH_FIELD } from "@/lib/textAssist";
 
 const SEARCH_FROM = 8;
 
@@ -108,6 +109,7 @@ export function RemoteToolNames({
           {searching && (
             <Input
               aria-label="Search reported tools"
+              {...SEARCH_FIELD}
               placeholder="Search by name"
               value={search}
               onChange={(event) => setSearch(event.target.value)}

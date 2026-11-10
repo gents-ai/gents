@@ -127,5 +127,26 @@ pub fn derive_turn(attempts: &[AttemptView]) -> Option<ClientTurnState> {
     }
 }
 
+/// The canonical `AgentSession` rows a selected-session read found for its
+/// exact node/session scope (`SessionRowObservation` in `Proofs/Client/Types.lean`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionRowObservation {
+    Absent,
+    Canonical,
+    Duplicate,
+    OutOfScope,
+}
+
+impl SessionRowObservation {
+    pub fn observe(rows: usize, all_in_scope: bool) -> Self {
+        match rows {
+            _ if !all_in_scope => Self::OutOfScope,
+            0 => Self::Absent,
+            1 => Self::Canonical,
+            _ => Self::Duplicate,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests;

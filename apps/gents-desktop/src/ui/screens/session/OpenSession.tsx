@@ -1,7 +1,13 @@
 import { useCallback, useMemo, useRef, useState, type ComponentProps } from "react";
 import { toast } from "sonner";
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
+import { Search } from "lucide-react";
 import { cn } from "@gents/ui/lib/utils";
+import {
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuShortcut,
+} from "@gents/ui/components/dropdown-menu";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { useApp, useView } from "@/app/AppContext";
 import { PanelMenu } from "@/app/PanelMenu";
@@ -34,7 +40,10 @@ import { StartedSessionsButton } from "../StartedSessionsButton";
 import { BackgroundButton } from "../BackgroundButton";
 import { ParentLine, StartedByAutomation, Title } from "../SessionHeader";
 import { DROPDOWN_MENU, SessionItems, useRenameFromMenu } from "../SessionMenu";
+import { MOD } from "../shortcutKeys";
+import { openFind } from "./find";
 import { SessionLoading } from "../SessionLoading";
+import { SessionUnavailable, useSessionAbsence } from "./SessionUnavailable";
 import { useComposerRoom, useHeaderScrolledOut } from "../sessionLayout";
 import { sentTurnKey } from "../stream-reveal";
 import { TranscriptPanel, type TranscriptOwner } from "../Transcript";
@@ -42,6 +51,7 @@ import { type WorkerActions } from "../WorkerActions";
 import { useSessionProvenance, useWorkers } from "../workers";
 import { ProviderRecovery } from "./ProviderRecovery";
 import { OpenSessionComposer } from "./OpenSessionComposer";
+import { openAt } from "@/app/messagePlaces";
 
 export function OpenSession() {
   const activeRequestId = useView((view) => view.shellProjection.activeRequestId);
@@ -55,6 +65,7 @@ export function OpenSession() {
   const selectedSessionId = stores.selection.use.sessionId();
   const sessionLoad = useSessionLoad();
   const session = useSelectedSessionFields(selectScreenFacts);
+  const absence = useSessionAbsence(!session);
   const loadContextDetails = useCallback(
     (input: NonNullable<DesktopSessionSnapshot["context"]["lastRequest"]>) => {
       if (!session?.nodeDid) return Promise.resolve(null);
@@ -66,6 +77,19 @@ export function OpenSession() {
       });
     },
     [loadSessionContextDetails, session?.nodeDid, session?.sessionId],
+  );
+  const openCompaction = useCallback(
+    (compaction: DesktopSessionSnapshot["context"]["compactions"][number]) => {
+      if (!session || compaction.messageSequence == null) return;
+      openAt({
+        sessionId: session.sessionId,
+        nodeDid: session.nodeDid,
+        sequence: compaction.messageSequence,
+        itemKey: compaction.itemKey,
+        open: true,
+      });
+    },
+    [session?.sessionId, session?.nodeDid],
   );
   const homeDid = useHomeDid();
   const [requestedStop, setRequestedStop] = useState<string | null>(null);
@@ -106,6 +130,9 @@ export function OpenSession() {
   const sessionNode = useFleet((s) => nodeOf(s, session?.nodeDid));
   const [renaming, setRenaming] = useState(false);
   const rename = useRenameFromMenu(session ? () => setRenaming(true) : null);
+  /* the find bar's field keeps the focus the menu would hand back, as a
+     rename's does */
+  const find = useRenameFromMenu(openFind);
 
   const stoppableRequestId = interruptTarget({
     trackedRequestId: activeRequestId,
@@ -134,6 +161,8 @@ export function OpenSession() {
     }
   };
 
+  if (absence === "missing") return <SessionUnavailable />;
+  if (absence === "waiting") return <SessionLoading />;
   if (!session && sessionLoad.phase !== "failed" && sessionLoad.found !== false)
     return <SessionLoading />;
 
@@ -147,7 +176,7 @@ export function OpenSession() {
           aria-hidden="true"
           data-testid="transcript-top-fade"
           className={cn(
-            "pointer-events-none absolute inset-x-0 top-0 z-20 h-8 bg-gradient-to-b from-background to-transparent transition-opacity duration-200",
+            "pointer-events-none absolute inset-x-0 top-0 z-20 h-8 bg-linear-to-b/srgb from-background to-transparent transition-opacity duration-200",
             condensed ? "opacity-100" : "opacity-0",
           )}
         />
@@ -173,7 +202,7 @@ export function OpenSession() {
                 >
                   <NodeAgentStack
                     nodeDid={session?.nodeDid}
-                    agentId={session?.agentId}
+                    agentDid={session?.agentDid}
                     size="sm"
                     keyboard
                   />
@@ -223,13 +252,31 @@ export function OpenSession() {
                       <SessionContext
                         context={session.context}
                         loadDetails={loadContextDetails}
+                        onOpenCompaction={openCompaction}
                         compact
                       />
                     </div>
                   </div>
                 )}
                 <Slot area={SESSION_HEADER_ACTIONS_AREA} />
-                <PanelMenu routeName="session" finalFocus={rename.finalFocus}>
+                <PanelMenu
+                  routeName="session"
+                  finalFocus={
+                    rename.finalFocus === false || find.finalFocus === false
+                      ? false
+                      : undefined
+                  }
+                  onOpenChange={(open) => {
+                    rename.onOpenChange(open);
+                    find.onOpenChange(open);
+                  }}
+                >
+                  <DropdownMenuItem onClick={find.onRename!}>
+                    <Search />
+                    Find in session…
+                    <DropdownMenuShortcut>{`${MOD}F`}</DropdownMenuShortcut>
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
                   {summary && (
                     <SessionItems
                       session={summary}
@@ -263,22 +310,24 @@ export function OpenSession() {
                     </div>
                   )}
                   {summary &&
-                    !parentWork.parent &&
-                    (summary.taskId || summary.triggerId) && (
+                    (summary.taskOrigin ||
+                      summary.taskId ||
+                      (!parentWork.parent && summary.triggerId)) && (
                       <div className="mt-1 mb-1">
                         <StartedByAutomation
                           summary={summary}
                           nodeDid={deployment?.nodeDid ?? null}
+                          inherited={Boolean(parentWork.parent)}
                         />
                       </div>
                     )}
                   <div className="mt-3 flex flex-wrap items-center gap-2">
                     <NodeAgentStack
                       nodeDid={session?.nodeDid}
-                      agentId={session?.agentId}
+                      agentDid={session?.agentDid}
                     />
                     <span className="text-sm text-muted-foreground">
-                      {agentName(session?.agentId ?? null, deployment)}
+                      {agentName(session?.agentDid ?? null, deployment)}
                       {sessionNode && !isWorkingNode(sessionNode, homeDid)
                         ? ` on ${sessionNode.node.displayName ?? sessionNode.label}`
                         : null}
@@ -287,6 +336,7 @@ export function OpenSession() {
                       <SessionContext
                         context={session.context}
                         loadDetails={loadContextDetails}
+                        onOpenCompaction={openCompaction}
                       />
                     )}
                   </div>
@@ -319,8 +369,7 @@ export function OpenSession() {
                 toBottom={toBottom}
                 stop={stop}
                 stopping={stopping}
-                goal={session?.goal ?? null}
-                agentId={session?.agentId ?? null}
+                agentDid={session?.agentDid ?? null}
               />
             </div>
           </ScrollArea>
@@ -346,10 +395,9 @@ type ScreenFacts = Pick<
   DesktopSessionSnapshot,
   | "sessionId"
   | "nodeDid"
-  | "agentId"
+  | "agentDid"
   | "title"
   | "context"
-  | "goal"
   | "latestRequestId"
   | "turnState"
   | "latestRequestOutcome"
@@ -360,10 +408,9 @@ function selectScreenFacts(session: DesktopSessionSnapshot | null): ScreenFacts 
   return {
     sessionId: session.sessionId,
     nodeDid: session.nodeDid,
-    agentId: session.agentId,
+    agentDid: session.agentDid,
     title: session.title,
     context: session.context,
-    goal: session.goal,
     latestRequestId: session.latestRequestId,
     turnState: session.turnState,
     latestRequestOutcome: session.latestRequestOutcome,

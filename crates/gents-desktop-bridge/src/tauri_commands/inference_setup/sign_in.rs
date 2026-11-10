@@ -1,5 +1,5 @@
-use gents::inference_setup::InferenceAuthMethod;
-use gents::oauth_credential::SignIn;
+use gents::inference::auth::credential::SignIn;
+use gents::inference::backends::setup::InferenceAuthMethod;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tokio_util::sync::CancellationToken;
 
@@ -165,7 +165,7 @@ mod tests {
         let config = crate::BridgeConfig {
             home: crate::HomePolicy::FixedRoot(temp.path().join("client")),
             bootstrap: crate::BootstrapPolicy::PairedRemoteOnly,
-            store_key_custody: gents::store_key::StoreKeyCustodyChoice::File,
+            store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice::File,
             ..Default::default()
         };
         let state = DesktopAppState::new(crate::state::resolve_policy(&config, None).unwrap());

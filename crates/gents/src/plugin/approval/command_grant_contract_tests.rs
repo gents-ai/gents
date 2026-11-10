@@ -18,7 +18,7 @@ fn binding(root: &Path, value: &policy::Grant<u64, u64>) -> workspace::Binding {
             cwd: root.to_owned(),
             root: root.to_owned(),
             writable_root: Some(root.to_owned()),
-            policy: crate::toolset::CommandExecutionPolicy::write_capable(),
+            policy: crate::tools::native::CommandExecutionPolicy::write_capable(),
         },
     }
 }
@@ -223,9 +223,20 @@ fn generated_command_revocation_preserves_the_selected_mode() {
     }
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn automatic_review_reuses_remembered_invocations_until_revocation() {
+    remembered_invocations_until_revocation(true).await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn automatic_review_admission_reuses_remembered_invocations_until_revocation() {
+    remembered_invocations_until_revocation(false).await;
+}
+
+#[cfg(unix)]
+async fn remembered_invocations_until_revocation(launch: bool) {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let home = root.join("home");
@@ -247,21 +258,29 @@ async fn automatic_review_reuses_remembered_invocations_until_revocation() {
     workspace::scope(
         context,
         scope_interactive(true, async {
-            let tools = crate::toolset::ToolContext::new(project.clone(), false).unwrap();
-            let policy = crate::toolset::CommandExecutionPolicy::write_capable();
+            let tools = crate::tools::native::ToolContext::new(project.clone(), false).unwrap();
+            let policy = crate::tools::native::CommandExecutionPolicy::write_capable();
             let args = vec!["remembered-invocation".to_owned()];
-            let run = || {
-                crate::toolset::run_command_for_test(
-                    &tools,
-                    "bash",
-                    "printf",
-                    &args,
-                    None,
-                    Duration::from_secs(10),
-                    &policy,
-                    false,
-                    1024,
-                )
+            let argv = vec!["printf".to_owned(), args[0].clone()];
+            let run = || async {
+                if launch {
+                    let output = crate::tools::native::run_command_for_test(
+                        &tools,
+                        "bash",
+                        "printf",
+                        &args,
+                        None,
+                        Duration::from_secs(10),
+                        &policy,
+                        false,
+                        1024,
+                    )
+                    .await?;
+                    assert!(output.contains("remembered-invocation"));
+                    Ok::<(), anyhow::Error>(())
+                } else {
+                    workspace::authorize_command(&argv, &project, &project, None, &policy).await
+                }
             };
             let (operator, observation) =
                 crate::plugin::approval::testing::Operator::answer_with_observation(
@@ -274,8 +293,8 @@ async fn automatic_review_reuses_remembered_invocations_until_revocation() {
             let prompt = prompt.unwrap();
             assert!(!observation.id().unwrap().is_empty());
             assert!(!prompt.is_empty());
-            assert!(first.unwrap().contains("remembered-invocation"));
-            assert!(run().await.unwrap().contains("remembered-invocation"));
+            first.unwrap();
+            run().await.unwrap();
             assert!(pending_requests(&home).unwrap().is_empty());
             let current = workspace::get(&home, &key).unwrap().unwrap();
             workspace::revoke_commands(&home, &key, current.selection.revision).unwrap();
@@ -284,7 +303,7 @@ async fn automatic_review_reuses_remembered_invocations_until_revocation() {
                 .unwrap();
             let (again, observed) = tokio::join!(run(), operator);
             observed.unwrap();
-            assert!(again.unwrap().contains("remembered-invocation"));
+            again.unwrap();
             let operator = crate::plugin::approval::testing::Operator::answer(&home, Answer::Deny)
                 .await
                 .unwrap();
@@ -318,9 +337,9 @@ async fn one_time_workspace_approval_creates_a_profile_only_inside_its_write_roo
     workspace::scope(
         context,
         scope_interactive(true, async {
-            let tools = crate::toolset::ToolContext::new(project.clone(), false).unwrap();
-            let policy = crate::toolset::CommandExecutionPolicy::write_capable()
-                .with_mode(crate::toolset::CommandExecutionMode::WorkspaceWrite);
+            let tools = crate::tools::native::ToolContext::new(project.clone(), false).unwrap();
+            let policy = crate::tools::native::CommandExecutionPolicy::write_capable()
+                .with_mode(crate::tools::native::CommandExecutionMode::WorkspaceWrite);
             let args = vec![
                 "-c".into(),
                 concat!(
@@ -330,7 +349,7 @@ async fn one_time_workspace_approval_creates_a_profile_only_inside_its_write_roo
                 .into(),
             ];
             let run = || {
-                crate::toolset::run_command_for_test(
+                crate::tools::native::run_command_for_test(
                     &tools,
                     "bash",
                     "/bin/sh",
@@ -456,4 +475,62 @@ fn invocation_digest_covers_every_command_boundary_and_old_producers_offer_no_re
     let old: Request = serde_json::from_value(old).unwrap();
     assert!(!old.allows_answer(Answer::AlwaysInvocation));
     assert!(old.allows_answer(Answer::Once));
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+#[tokio::test]
+async fn guarded_command_launch_rejects_unsupported_isolation_before_asking() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let home = root.join("home");
+    let project = root.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let key = workspace::WorkspaceKey::canonical("node", "requester", "agent", &project).unwrap();
+    workspace::save_mode(&home, &key, 0, policy::Mode::Ask, None).unwrap();
+    mark_listening(&home).unwrap();
+    let context = workspace::for_request(
+        Some(&home),
+        "node",
+        Some("requester"),
+        "agent",
+        Some(&project),
+    )
+    .unwrap();
+    let tools = crate::tools::native::ToolContext::new(project.clone(), false).unwrap();
+    let command_policy = crate::tools::native::CommandExecutionPolicy::write_capable()
+        .with_mode(crate::tools::native::CommandExecutionMode::Unrestricted);
+    let marker = project.join("must-not-run");
+    let args = vec![
+        "-c".into(),
+        "printf unexpected > \"$1\"".into(),
+        "guard-fixture".into(),
+        marker.to_string_lossy().into_owned(),
+    ];
+    let error = workspace::scope(
+        context,
+        scope_interactive(
+            true,
+            crate::tools::native::run_command_for_test(
+                &tools,
+                "bash_unrestricted",
+                "/bin/sh",
+                &args,
+                None,
+                Duration::from_secs(1),
+                &command_policy,
+                false,
+                1024,
+            ),
+        ),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("Command isolation for runtime permissions"),
+        "{error:#}"
+    );
+    assert!(!marker.exists());
+    assert!(pending_requests(&home).unwrap().is_empty());
 }

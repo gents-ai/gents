@@ -207,6 +207,10 @@ structure MessageEnvelope where
   key : String
   sequence : Nat
   nativeId : Option String
+  /-- The provider's response request id (the `request-id` header). Only a
+  provider assistant message carries one: it is `none` on system, user and
+  recovery messages. -/
+  nativeRequestId : Option String := none
   blocks : List (MessageBlock PayloadSpec)
   createdAt : Time
   deriving DecidableEq, Repr
@@ -214,6 +218,7 @@ structure MessageEnvelope where
 structure ReconstructedMessage where
   role : MessageRole
   nativeId : Option String
+  nativeRequestId : Option String
   blocks : List (MessageBlock (List UInt8))
   deriving DecidableEq, Repr
 
@@ -301,27 +306,31 @@ adapter may impose its conventional nonempty-message requirement later. -/
 def validNativeShape (message : MessageEnvelope) : Bool :=
   message.blocks.all (roleAllows message.header.role) &&
     (match message.header.role with
-    | .system => message.nativeId.isNone && match message.blocks with
+    | .system => message.nativeId.isNone && message.nativeRequestId.isNone && match message.blocks with
         | [.text _] => true
         | _ => false
-    | .user => message.nativeId.isNone
+    | .user => message.nativeId.isNone && message.nativeRequestId.isNone
     | .assistant => true)
 
-def recoveryTextOnly : List (MessageBlock PayloadSpec) → Bool
+def recoveryBlocksValid : List (MessageBlock PayloadSpec) → Bool
   | [] => true
-  | .text payload :: rest => payload.presentation == .full && recoveryTextOnly rest
+  | .text payload :: rest => payload.presentation == .full && recoveryBlocksValid rest
+  | .reasoning none [.text payload _] :: rest =>
+      payload.presentation == .full && recoveryBlocksValid rest
+  | .reasoning none [.redacted payload] :: rest =>
+      payload.presentation == .full && recoveryBlocksValid rest
   | _ => false
 
 /-- Publication provenance constrains the header even when it has no payload.
-Recovery is the deliberately narrow text-only fallback; forks detach request
-membership and carry one exact origin. -/
+Recovery preserves text and stopped reasoning; forks detach request membership
+and carry one exact origin. -/
 def validPublicationShape (message : MessageEnvelope) : Bool :=
   match message.header.publication with
   | .requestExecution _ => message.header.request.isSome && message.header.origin.isNone
   | .requestRecovery _ =>
       message.header.request.isSome && message.header.origin.isNone &&
       message.header.role == .assistant && message.header.outcome == .partial &&
-      message.nativeId.isNone && recoveryTextOnly message.blocks
+      message.nativeId.isNone && message.nativeRequestId.isNone && recoveryBlocksValid message.blocks
   | .toolDelivery call =>
       message.header.request.isSome && message.header.origin.isNone &&
       message.header.role == .user && message.blocks.all (fun block => match block with
@@ -564,7 +573,12 @@ def validateRecoveryPositions (records : List Segment) (denied : List DocId)
     | .provider _ _ _ =>
         let (declaration, _) ← (reconstructPayload records denied reference).mapError
           MessageError.reconstruction
-        if declaration.kind == .text && declaration.part == 0 then .ok ()
+        let streams ← (reconstructExtent records closing).mapError
+          (fun error => MessageError.reconstruction (.extent error))
+        if declaration.part == 0 &&
+            (declaration.kind == .text ||
+              ((declaration.kind == .reasoning || declaration.kind == .redacted) &&
+                reasoningStopped streams declaration.block)) then .ok ()
         else .error .nativePosition
     | _ => .error .wrongSource
 
@@ -587,13 +601,14 @@ def reconstructMessage (records : List Segment) (denied : List DocId)
   else
     let _ ← validateMessageStructure records denied message
     let blocks ← message.blocks.mapM (reconstructBlock (resolveMessagePayload records denied))
-    return ⟨message.header.role, message.nativeId, blocks⟩
+    return ⟨message.header.role, message.nativeId, message.nativeRequestId, blocks⟩
 
 theorem reconstruction_preserves_native_identity
     (records : List Segment) (denied : List DocId)
     (message : MessageEnvelope) (native : ReconstructedMessage)
     (h : reconstructMessage records denied message = .ok native) :
-    native.role = message.header.role ∧ native.nativeId = message.nativeId := by
+    native.role = message.header.role ∧ native.nativeId = message.nativeId ∧
+      native.nativeRequestId = message.nativeRequestId := by
   simp only [reconstructMessage] at h
   split at h
   · contradiction
@@ -608,7 +623,7 @@ theorem reconstruction_preserves_native_identity
         | ok blocks =>
             simp [horder, hblocks, Bind.bind, Except.bind, pure] at h
             cases h
-            exact ⟨rfl, rfl⟩
+            exact ⟨rfl, rfl, rfl⟩
 
 theorem signed_reasoning_keeps_signature
     (resolve : List PayloadKind → Bool → PayloadSpec → Except MessageError (List UInt8))

@@ -1,18 +1,18 @@
 use std::time::Duration;
 
-use gents::defra_node::{EmbeddedNode, QueryResponse};
-use gents::graphql::escape_graphql_string;
-use gents::session::canonical_rows::{
-    decode_output_segment_row, OutputSegmentRow, AGENT_OUTPUT_SEGMENT_FIELDS,
-};
+use gents::defra_node::{Node as EmbeddedNode, QueryResponse};
+use gents::store::graphql::escape_graphql_string;
 use gents_protocol::output::live::reconstruct_dense_prefix;
 use gents_protocol::output::reconstruction::ObservedSegment;
+use gents_protocol::output::rows::{
+    decode_output_segment_row, OutputSegmentRow, AGENT_OUTPUT_SEGMENT_FIELDS,
+};
 use gents_protocol::output::OutputSource;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::snapshots::fetch_request_snapshot;
+use super::snapshots::{fetch_request_snapshot, SnapshotReader};
 
 const TEST_MUTATION_MAX_RETRIES: u32 = 3;
 const TEST_MUTATION_INITIAL_BACKOFF_MS: u64 = 100;
@@ -82,6 +82,46 @@ impl Drop for BootedAgent {
     }
 }
 
+/// Waits for readiness while the runtime task runs; a runtime that exits first
+/// fails the wait with its own error instead of the readiness timeout.
+pub async fn wait_for_runtime_ready_or_exit(
+    node: &EmbeddedNode,
+    node_did: &str,
+    handle: &mut tokio::task::JoinHandle<anyhow::Result<()>>,
+) {
+    tokio::select! {
+        ready = gents::eval::runner::embedded::wait_for_runtime_ready(node, node_did) => {
+            ready.expect("runtime ready");
+        }
+        exited = &mut *handle => match exited {
+            Ok(Ok(())) => panic!("runtime exited cleanly before readiness"),
+            Ok(Err(error)) => panic!("runtime exited before readiness: {error:#}"),
+            Err(error) => panic!("runtime task failed before readiness: {error}"),
+        },
+    }
+}
+
+/// The production runtime on the test Node's own identity, admitted through
+/// the home's backend protection, before its installed Agents are added with
+/// their identity bindings.
+pub fn managed_runtime_builder(db: &super::TestDb, default_agent_did: &str) -> gents::GentsBuilder {
+    gents::Gents::builder()
+        .node(db.node.clone())
+        .identity(db.node_identity.clone())
+        .backend_admission(db.home.backend_admission())
+        .default_agent_did(default_agent_did)
+        .tool_ceiling(gents::ToolCeiling::meta_only())
+}
+
+/// Runs a built runtime until it reports ready.
+pub async fn spawn_runtime(db: &super::TestDb, runtime: gents::Gents) -> BootedAgent {
+    let node_did = runtime.node_did().to_string();
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let mut handle = tokio::spawn(runtime.run(shutdown_rx));
+    wait_for_runtime_ready_or_exit(db.node.as_ref(), &node_did, &mut handle).await;
+    BootedAgent::new(shutdown_tx, handle, node_did)
+}
+
 pub async fn wait_for_runtime_ready(node: &EmbeddedNode, node_did: &str) {
     gents::eval::runner::embedded::wait_for_runtime_ready(node, node_did)
         .await
@@ -91,7 +131,7 @@ pub async fn wait_for_runtime_ready(node: &EmbeddedNode, node_did: &str) {
 pub async fn create_runtime_request(
     node: &EmbeddedNode,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
     request_id: &str,
     session_id: &str,
     content: &str,
@@ -100,7 +140,7 @@ pub async fn create_runtime_request(
         node,
         node_did,
         RuntimeRequestSpec {
-            agent_id,
+            agent_did,
             request_id,
             session_id,
             valid_until: None,
@@ -116,7 +156,7 @@ pub async fn create_runtime_request(
 pub async fn create_runtime_request_with_input(
     node: &EmbeddedNode,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
     request_id: &str,
     session_id: &str,
     content: &str,
@@ -126,7 +166,7 @@ pub async fn create_runtime_request_with_input(
         node,
         node_did,
         RuntimeRequestSpec {
-            agent_id,
+            agent_did,
             request_id,
             session_id,
             content,
@@ -142,7 +182,7 @@ pub async fn create_runtime_request_with_input(
 pub async fn create_runtime_request_with_valid_until(
     node: &EmbeddedNode,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
     request_id: &str,
     session_id: &str,
     valid_until: &str,
@@ -152,7 +192,7 @@ pub async fn create_runtime_request_with_valid_until(
         node,
         node_did,
         RuntimeRequestSpec {
-            agent_id,
+            agent_did,
             request_id,
             session_id,
             valid_until: Some(valid_until),
@@ -168,7 +208,7 @@ pub async fn create_runtime_request_with_valid_until(
 pub async fn create_runtime_request_with_execution_origin(
     node: &EmbeddedNode,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
     request_id: &str,
     session_id: &str,
     execution_origin: &str,
@@ -178,7 +218,7 @@ pub async fn create_runtime_request_with_execution_origin(
         node,
         node_did,
         RuntimeRequestSpec {
-            agent_id,
+            agent_did,
             request_id,
             session_id,
             valid_until: None,
@@ -194,7 +234,7 @@ pub async fn create_runtime_request_with_execution_origin(
 pub async fn create_runtime_request_caused_by_source(
     node: &EmbeddedNode,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
     request_id: &str,
     session_id: &str,
     caused_by_source_doc_id: &str,
@@ -204,7 +244,7 @@ pub async fn create_runtime_request_caused_by_source(
         node,
         node_did,
         RuntimeRequestSpec {
-            agent_id,
+            agent_did,
             request_id,
             session_id,
             valid_until: None,
@@ -218,7 +258,7 @@ pub async fn create_runtime_request_caused_by_source(
 }
 
 struct RuntimeRequestSpec<'a> {
-    agent_id: &'a str,
+    agent_did: &'a str,
     request_id: &'a str,
     session_id: &'a str,
     valid_until: Option<&'a str>,
@@ -234,7 +274,7 @@ async fn create_runtime_request_inner(
     spec: RuntimeRequestSpec<'_>,
 ) -> String {
     let RuntimeRequestSpec {
-        agent_id,
+        agent_did,
         request_id,
         session_id,
         valid_until,
@@ -243,7 +283,7 @@ async fn create_runtime_request_inner(
         content,
         input,
     } = spec;
-    ensure_generated_session(node, node_did, agent_id, session_id).await;
+    ensure_generated_session(node, node_did, agent_did, session_id).await;
 
     let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
@@ -251,7 +291,7 @@ async fn create_runtime_request_inner(
         request_id,
         node_did,
         node_did,
-        agent_id,
+        agent_did,
         session_id,
         content,
         execution_origin,
@@ -259,7 +299,7 @@ async fn create_runtime_request_inner(
         gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(node_did),
     );
     create.input = input;
-    create.max_retries = i64::from(gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES);
+    create.max_retries = i64::from(gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES);
     create.valid_until = valid_until.map(str::to_string);
     create.caused_by_source_doc_id = caused_by_source_doc_id.map(str::to_string);
     gents::sign_agent_request_create_as_registered_target(&mut create)
@@ -281,7 +321,7 @@ async fn create_runtime_request_inner(
 async fn ensure_generated_session(
     node: &EmbeddedNode,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
     session_id: &str,
 ) {
     if super::snapshots::fetch_session_snapshot(node, session_id)
@@ -291,7 +331,7 @@ async fn ensure_generated_session(
         return;
     }
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let mut session = super::session_document(session_id, agent_id, &now);
+    let mut session = super::session_document(session_id, agent_did, &now);
     session.node_did = node_did.to_owned();
     session.requester_did = Some(node_did.to_owned());
     session.title = Some(gents_protocol::session::SessionTitle {
@@ -314,25 +354,20 @@ async fn lookup_request_doc_id(node: &EmbeddedNode, request_id: &str) -> String 
     first_doc_id(&response, "AgentRequest")
 }
 
-pub async fn fetch_output_segments_for_request(
-    node: &EmbeddedNode,
+pub async fn fetch_output_segments_for_request<R>(
+    reader: &R,
     request_doc_id: &str,
-) -> Vec<OutputSegmentRow> {
+) -> Vec<OutputSegmentRow>
+where
+    R: SnapshotReader + ?Sized,
+{
     let request_doc_id = escape_graphql_string(request_doc_id);
-    let response = node
-        .execute(&format!(
+    let data = reader
+        .read_data(&format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#
         ))
         .await;
-    assert!(
-        !response.has_errors(),
-        "canonical output query failed: {:?}",
-        response.errors
-    );
-    response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentOutputSegment"))
+    data.get("AgentOutputSegment")
         .and_then(Value::as_array)
         .expect("canonical output rows")
         .iter()
@@ -340,11 +375,10 @@ pub async fn fetch_output_segments_for_request(
         .collect()
 }
 
-pub async fn wait_for_provider_output_contains(
-    node: &EmbeddedNode,
-    request_doc_id: &str,
-    expected: &str,
-) {
+pub async fn wait_for_provider_output_contains<R>(node: &R, request_doc_id: &str, expected: &str)
+where
+    R: SnapshotReader + ?Sized,
+{
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
         let rows = fetch_output_segments_for_request(node, request_doc_id).await;
@@ -390,11 +424,10 @@ pub async fn wait_for_provider_output_contains(
     }
 }
 
-pub async fn wait_for_request_lifecycle_state(
-    node: &EmbeddedNode,
-    request_doc_id: &str,
-    expected: &str,
-) {
+pub async fn wait_for_request_lifecycle_state<R>(node: &R, request_doc_id: &str, expected: &str)
+where
+    R: SnapshotReader + ?Sized,
+{
     let expected = RequestLifecycleState::parse(expected)
         .expect("expected request lifecycle state must be canonical");
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
@@ -417,11 +450,14 @@ pub async fn wait_for_request_lifecycle_state(
 /// [`REQUEST_TERMINAL_PUBLICATION_MARGIN`]; terminal publication is
 /// scheduler-bound on a loaded host, so a short fixed bound flakes under the
 /// full parallel suite.
-pub async fn wait_for_request_terminal_state(
-    node: &EmbeddedNode,
+pub async fn wait_for_request_terminal_state<R>(
+    node: &R,
     request_doc_id: &str,
     budget: Duration,
-) -> RequestLifecycleState {
+) -> RequestLifecycleState
+where
+    R: SnapshotReader + ?Sized,
+{
     let deadline = tokio::time::Instant::now() + budget;
     loop {
         let snapshot = fetch_request_snapshot(node, request_doc_id).await;
@@ -447,11 +483,14 @@ pub struct InferenceCallSnapshot {
 
 /// The daemon retries transient provider failures, so a historical failed
 /// attempt must not hide the current attempt's state.
-pub async fn wait_for_inference_call_state(
-    node: &EmbeddedNode,
+pub async fn wait_for_inference_call_state<R>(
+    node: &R,
     request_id: &str,
     expected: &str,
-) -> InferenceCallSnapshot {
+) -> InferenceCallSnapshot
+where
+    R: SnapshotReader + ?Sized,
+{
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     loop {
         let row = fetch_latest_inference_call(node, request_id).await;
@@ -469,10 +508,10 @@ pub async fn wait_for_inference_call_state(
     }
 }
 
-async fn fetch_latest_inference_call(
-    node: &EmbeddedNode,
-    request_id: &str,
-) -> Option<InferenceCallSnapshot> {
+async fn fetch_latest_inference_call<R>(node: &R, request_id: &str) -> Option<InferenceCallSnapshot>
+where
+    R: SnapshotReader + ?Sized,
+{
     let escaped_request_id = escape_graphql_string(request_id);
     let query = format!(
         r#"{{
@@ -490,16 +529,9 @@ async fn fetch_latest_inference_call(
             }}
         }}"#
     );
-    let response = node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "InferenceCall query failed: {:?}",
-        response.errors
-    );
-    response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("InferenceCall"))
+    node.read_data(&query)
+        .await
+        .get("InferenceCall")
         .and_then(Value::as_array)
         .and_then(|rows| rows.first())
         .cloned()

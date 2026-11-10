@@ -59,7 +59,6 @@ async function cost(
           position.set!.call(scroller, value);
         },
       });
-      scroller.dataset.measuringCost = "true";
       try {
         if (act !== "chunk") {
           const before = position.get!.call(scroller) as number;
@@ -70,7 +69,9 @@ async function cost(
             scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: delta }));
             position.set!.call(scroller, before + delta);
           });
+          scroller.dataset.measuringCost = "acted";
         } else {
+          scroller.dataset.measuringCost = "acted";
           window.__GENTS_MOBILE_PERFORMANCE__!.streamText(
             "\n\nMore of the reply, long enough to wrap onto a second line in the column.",
           );
@@ -108,7 +109,11 @@ async function cost(
     });
   void measurement.catch(() => {});
   try {
-    await expect.poll(() => viewport.getAttribute("data-measuring-cost")).toBe("true");
+    /* the browser delivers the scroll in real time while the paused clock
+       only moves when told: frames advance once the scroll has landed, so
+       the measured frames never reach the rest that writes the carried
+       position and draws another stretch of rows */
+    await expect.poll(() => viewport.getAttribute("data-measuring-cost")).toBe("acted");
     for (let frame = 0; frame < 200 && !finished; frame += 1)
       await page.clock.runFor(16);
     expect(finished).toBe(true);

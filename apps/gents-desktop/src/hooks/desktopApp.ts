@@ -9,6 +9,7 @@ import { clientStatus, createClientStore } from "./clientStore";
 import { createFleetStore } from "./fleetStore";
 import { createSelectionStore } from "./selectionStore";
 import { reconcileSelection } from "./selectionReconcile";
+import { noticeEndedAccess } from "./endedAccessNotices";
 import { createSessionReads } from "./sessionReads";
 import { createSessionStore, holdsRequest } from "./sessionStore";
 import { createProviderStore, type ProviderStore } from "./providerStore";
@@ -21,12 +22,16 @@ import {
   type ProvenanceStore,
 } from "./provenance";
 import { createShellActions } from "./shellActions";
+import type { SharingAdapter } from "./sharing";
+import { sharingFor } from "./joinRequestSharing";
 import { createDraftStore } from "./draftStore";
 import type { ShellStores } from "./shellProjection";
 import { createShellView, type ShellViewStore } from "./shellView";
 import { observeMailboxAnswerRetirement } from "./mailboxAnswerRetirement";
 import { seenMarks } from "../ui/app/sessionViews";
+import { mailboxSeen } from "../ui/app/mailboxSeen";
 import { seenMarkOf } from "../ui/lib/seen";
+import { watchNotifications } from "../ui/lib/notify/watch";
 import { listedSession, sessionKeyOf } from "./fleetStore";
 
 export type DesktopBridge = {
@@ -34,6 +39,7 @@ export type DesktopBridge = {
   listenToUpdates: DesktopClientUpdatedListenerFactory;
   supportsManagedServer?: boolean;
   reportFailure?: (message: string) => void;
+  sharing?: SharingAdapter;
 };
 
 export type DesktopAppParams = Omit<DesktopBridge, "listenToUpdates">;
@@ -42,6 +48,7 @@ export function createDesktopApp({
   api,
   supportsManagedServer = false,
   reportFailure,
+  sharing: given,
 }: DesktopAppParams) {
   const stores: ShellStores & {
     providers: ProviderStore;
@@ -98,10 +105,28 @@ export function createDesktopApp({
     ...createProvenance({ api, stores }),
   };
   observeMailboxAnswerRetirement({ api, stores });
-  reconcileSelection(stores, actions.selectNode);
-  keepSeen(stores);
   const drafts = createDraftStore();
-  return { api, stores, view, drafts, project, trackedRequestId, lifecycle, actions };
+  reconcileSelection(stores, actions.selectNode, drafts);
+  noticeEndedAccess(stores.fleet);
+  keepSeen(stores);
+  watchNotifications(stores);
+  const sharing =
+    given ??
+    sharingFor(
+      api,
+      () => stores.client.getState().snapshot?.bootstrap.initNodeDid ?? null,
+    );
+  return {
+    api,
+    stores,
+    view,
+    drafts,
+    project,
+    trackedRequestId,
+    lifecycle,
+    actions,
+    sharing,
+  };
 }
 
 export type DesktopApp = ReturnType<typeof createDesktopApp>;
@@ -110,6 +135,7 @@ export type DesktopApp = ReturnType<typeof createDesktopApp>;
    in front of the reader never reads as new */
 function keepSeen(stores: ShellStores) {
   seenMarks.start(new Date().toISOString());
+  mailboxSeen.start(new Date().toISOString());
   const stamp = () => {
     if (typeof document !== "undefined" && document.visibilityState === "hidden")
       return;

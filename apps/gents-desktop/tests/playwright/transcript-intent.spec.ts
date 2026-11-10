@@ -19,11 +19,24 @@ test.describe("transcript input at its scroll boundary", () => {
       const viewport = page.locator(
         '[data-slot="scroll-area-viewport"][data-following]',
       );
-      await viewport.evaluate((scroller) => {
-        scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }));
-        scroller.scrollTop = 0;
-        scroller.dispatchEvent(new Event("scroll"));
-      });
+      /* a correction the opening still carries lands with the row it holds,
+         so the jump is made once none is carried: the view then rests at 0 */
+      await expect
+        .poll(() =>
+          viewport.evaluate((scroller) => {
+            const content = scroller.querySelector<HTMLElement>(
+              "[data-transcript-content]",
+            )!;
+            if (content.style.marginTop) return false;
+            scroller.dispatchEvent(
+              new WheelEvent("wheel", { deltaY: -1, bubbles: true }),
+            );
+            scroller.scrollTop = 0;
+            scroller.dispatchEvent(new Event("scroll"));
+            return true;
+          }),
+        )
+        .toBe(true);
       await expect
         .poll(() => viewport.evaluate((scroller) => scroller.scrollTop))
         .toBe(0);
@@ -58,4 +71,158 @@ test.describe("transcript input at its scroll boundary", () => {
         .toBeLessThanOrEqual(1);
     });
   }
+
+  test("a delayed wheel scroll remains the reader's movement", async ({ page }) => {
+    const viewport = page.locator('[data-slot="scroll-area-viewport"][data-following]');
+    await viewport.evaluate((scroller) => {
+      scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }));
+      scroller.scrollTop = Math.floor(
+        (scroller.scrollHeight - scroller.clientHeight) / 2,
+      );
+      scroller.dispatchEvent(new Event("scroll"));
+    });
+    await page.waitForTimeout(400);
+    const before = await viewport.evaluate((scroller) => {
+      scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -80, bubbles: true }));
+      return scroller.scrollTop;
+    });
+    expect(before).toBeGreaterThan(100);
+    await page.waitForTimeout(400);
+    await viewport.evaluate((scroller, top) => {
+      scroller.scrollTop = top - 80;
+      scroller.dispatchEvent(new Event("scroll"));
+    }, before);
+    await page.waitForTimeout(400);
+    await expect
+      .poll(() => viewport.evaluate((scroller) => scroller.scrollTop))
+      .toBeLessThan(before - 40);
+  });
+
+  for (const input of [
+    "cancelled",
+    "cancelled after bubbling",
+    "nested",
+    "superseded by a click",
+  ] as const) {
+    test(`${input} wheel does not retain transcript intent`, async ({ page }) => {
+      const viewport = page.locator(
+        '[data-slot="scroll-area-viewport"][data-following]',
+      );
+      await viewport.evaluate((scroller) => {
+        scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }));
+        scroller.scrollTop = Math.floor(
+          (scroller.scrollHeight - scroller.clientHeight) / 2,
+        );
+        scroller.dispatchEvent(new Event("scroll"));
+      });
+      await page.waitForTimeout(400);
+      const before = await viewport.evaluate((scroller, input) => {
+        if (input === "superseded by a click") {
+          scroller.dispatchEvent(
+            new WheelEvent("wheel", { deltaY: -80, bubbles: true }),
+          );
+          scroller.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+        } else if (input !== "nested") {
+          const event = new WheelEvent("wheel", {
+            deltaY: -80,
+            bubbles: true,
+            cancelable: true,
+          });
+          if (input === "cancelled") event.preventDefault();
+          else
+            window.addEventListener("wheel", (event) => event.preventDefault(), {
+              once: true,
+              passive: false,
+            });
+          scroller.dispatchEvent(event);
+        } else {
+          const nested = document.createElement("div");
+          nested.style.cssText =
+            "position: absolute; top: 0; width: 100px; height: 30px; overflow-y: scroll; display: block";
+          const child = document.createElement("div");
+          child.style.cssText = "height: 200px; min-height: 200px; width: 100px";
+          nested.append(child);
+          scroller.append(nested);
+          nested.scrollTop = 50;
+          if (nested.scrollTop === 0) throw new Error("nested fixture must scroll");
+          nested.dispatchEvent(new WheelEvent("wheel", { deltaY: -80, bubbles: true }));
+          nested.remove();
+        }
+        const top = scroller.getBoundingClientRect().top;
+        const row = Array.from(
+          scroller.querySelectorAll<HTMLElement>("[data-timeline-key]"),
+        ).find((element) => element.getBoundingClientRect().bottom > top + 200)!;
+        return {
+          scrollTop: scroller.scrollTop,
+          key: row.dataset.timelineKey!,
+          offset: row.getBoundingClientRect().top - top,
+        };
+      }, input);
+      await page.waitForTimeout(400);
+      await viewport.evaluate((scroller, top) => {
+        scroller.scrollTop = top - 24;
+        scroller.dispatchEvent(new Event("scroll"));
+      }, before.scrollTop);
+      await expect
+        .poll(() =>
+          viewport.evaluate((scroller, previous) => {
+            const row = Array.from(
+              scroller.querySelectorAll<HTMLElement>("[data-timeline-key]"),
+            ).find((element) => element.dataset.timelineKey === previous.key);
+            return row
+              ? Math.abs(
+                  row.getBoundingClientRect().top -
+                    scroller.getBoundingClientRect().top -
+                    previous.offset,
+                )
+              : Infinity;
+          }, before),
+        )
+        .toBeLessThan(1);
+    });
+  }
+
+  test("a jump to the top while a correction is carried stays at the top", async ({
+    page,
+  }) => {
+    const viewport = page.locator('[data-slot="scroll-area-viewport"][data-following]');
+    /* the reader's wheel keeps the view moving while the reply grows below:
+       WebKit drops a write made then, so the owner carries the growth on
+       the content, and the reader jumps to the top while it is carried */
+    const carried = await viewport.evaluate(async (scroller) => {
+      const content = scroller.querySelector<HTMLElement>("[data-transcript-content]")!;
+      for (let frame = 0; frame < 120 && !content.style.marginTop; frame += 1) {
+        scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: 1, bubbles: true }));
+        window.__GENTS_MOBILE_PERFORMANCE__!.streamText(
+          "\n\nMore of the reply, long enough to wrap onto a second line in the column.",
+        );
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+      }
+      const carried = content.style.marginTop;
+      scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }));
+      scroller.scrollTop = 0;
+      scroller.dispatchEvent(new Event("scroll"));
+      return carried;
+    });
+    expect(carried).not.toBe("");
+    await expect
+      .poll(() =>
+        viewport
+          .locator("[data-transcript-content]")
+          .evaluate((content: HTMLElement) => content.style.marginTop),
+      )
+      .toBe("");
+    /* landed, the reader still sees the session's first row */
+    await expect
+      .poll(() =>
+        viewport.evaluate((scroller) => {
+          const first = scroller.querySelector('[data-row-key][data-index="0"]');
+          if (!first) return false;
+          return (
+            first.getBoundingClientRect().bottom > scroller.getBoundingClientRect().top
+          );
+        }),
+      )
+      .toBe(true);
+  });
 });

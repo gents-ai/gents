@@ -48,6 +48,11 @@ describe("the workspace store", () => {
     expect(workspace.dock(A).tabs).toEqual(["diagnostics", "workers", "trace"]);
   });
 
+  it("reopens with no tabs, to show the panels it can open", () => {
+    workspace.reopenDock(A);
+    expect(workspace.dock(A)).toMatchObject({ open: true, tabs: [], active: null });
+  });
+
   it("closing the dock keeps its tabs for reopening", () => {
     workspace.openSurface(A, "trace");
     workspace.closeDock(A);

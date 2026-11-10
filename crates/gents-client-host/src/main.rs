@@ -102,6 +102,7 @@ async fn client_main(args: Args) -> Result<()> {
                 "localRuntimeCli": true,
                 "runtimeKeyUnlock": true,
                 "runtimeKeyUnlockAndPrepare": true,
+                "runtimeToolRootChange": true,
                 "runtimePreparationVersion": gents_protocol::serve_lifecycle::preparation::RUNTIME_PREPARATION_VERSION,
                 "editorStoreBootstrapVersion": protocol::EDITOR_STORE_BOOTSTRAP_VERSION,
                 "editorCheckpointVersion": editor_checkpoints::VERSION,

@@ -197,7 +197,9 @@ pub fn chat_completions_attachment_supported(media_type: &str) -> bool {
     media_type != "application/pdf"
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum ServiceTier {
@@ -275,7 +277,14 @@ impl ProviderInputProfile {
             (BackendProviderKind::ChatGptCodex, _) => Self::ChatGptCodexResponses,
             (BackendProviderKind::XaiGrokOAuth, OpenAiWireApi::Responses) => Self::XaiResponses,
             (BackendProviderKind::ClaudeCliSubscription, _)
-            | (BackendProviderKind::AnthropicApiKey, _) => Self::ClaudeMessages,
+            | (BackendProviderKind::AnthropicApiKey, _)
+            | (BackendProviderKind::ClaudeBedrock, _)
+            | (BackendProviderKind::ClaudeVertex, _)
+            | (BackendProviderKind::ClaudeFoundry, _)
+            | (BackendProviderKind::ClaudeAnthropicAws, _)
+            | (BackendProviderKind::ClaudeMantle, _)
+            | (BackendProviderKind::ClaudeGoogleCloud, _)
+            | (BackendProviderKind::ClaudeGateway, _) => Self::ClaudeMessages,
         }
     }
 

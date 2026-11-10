@@ -237,3 +237,23 @@ fn owned_assignment(value: &str) -> bool {
     }
     !escaped
 }
+
+/// Strip exactly the custom environment directives the installer preserves;
+/// retain the rest of the installed service definition byte for byte.
+pub(super) fn without_custom_directives(definition: &str) -> Result<String> {
+    let custom = preserve_systemd(definition.as_bytes())?;
+    let mut result = definition.to_owned();
+    for directive in split_directives(&custom)? {
+        result = result.replacen(&(directive + "\n"), "", 1);
+    }
+    Ok(result)
+}
+
+fn split_directives(text: &str) -> Result<Vec<String>> {
+    let mut lines = text.lines();
+    let mut directives = Vec::new();
+    while let Some(line) = lines.next() {
+        directives.push(logical_line(line, &mut lines)?);
+    }
+    Ok(directives)
+}

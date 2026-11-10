@@ -31,6 +31,7 @@ const appOver = (answer: (command: string, args: unknown) => unknown) =>
   testApp({ api: apiOver(answer) });
 
 const route = () => ({ name: "sessions" as const });
+const caller = { id: "board", name: "Task Board" };
 
 describe("buildUxHost: ctx.send", () => {
   beforeEach(() => vi.spyOn(window, "confirm").mockReturnValue(true));
@@ -50,7 +51,9 @@ describe("buildUxHost: ctx.send", () => {
     const app = testApp({ selection: { sessionId: null } });
     const sendMessage = vi.spyOn(app.actions, "sendMessage");
     const host = buildUxHost(app, route);
-    await expect(host.shell.send("hi")).rejects.toThrow("no session is selected");
+    await expect(host.shell.send("hi", caller)).rejects.toThrow(
+      "no session is selected",
+    );
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -59,19 +62,21 @@ describe("buildUxHost: ctx.send", () => {
     const app = testApp({ selection: { sessionId: "s1", nodeDid: "did:a" } });
     const sendMessage = vi.spyOn(app.actions, "sendMessage");
     const host = buildUxHost(app, route);
-    await expect(host.shell.send("hi")).rejects.toThrow("user gesture");
+    await expect(host.shell.send("hi", caller)).rejects.toThrow("user gesture");
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("sends in the selected session from a gesture, with the selected agent", async () => {
     gesture(true);
     const app = testApp({
-      selection: { sessionId: "s1", nodeDid: "did:a", agentId: "b1" },
+      selection: { sessionId: "s1", nodeDid: "did:a", agentDid: "b1" },
     });
     const sendMessage = vi.spyOn(app.actions, "sendMessage").mockResolvedValue(null);
     const host = buildUxHost(app, route);
-    await host.shell.send("hi");
-    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining("hi"));
+    await host.shell.send("hi", caller);
+    expect(window.confirm).toHaveBeenCalledWith(
+      "Task Board wants to send this message to the selected chat:\n\nhi",
+    );
     expect(sendMessage).toHaveBeenCalledWith("hi", "b1");
   });
 
@@ -80,25 +85,25 @@ describe("buildUxHost: ctx.send", () => {
     vi.mocked(window.confirm).mockReturnValue(false);
     const app = testApp({ selection: { sessionId: "s1", nodeDid: "did:a" } });
     const send = vi.spyOn(app.actions, "sendMessage");
-    await expect(buildUxHost(app, route).shell.send("proposed text")).rejects.toThrow(
-      "not confirmed",
-    );
+    await expect(
+      buildUxHost(app, route).shell.send("proposed text", caller),
+    ).rejects.toThrow("not confirmed");
     expect(send).not.toHaveBeenCalled();
   });
 
-  it.each(["sessionId", "nodeDid", "agentId"] as const)(
+  it.each(["sessionId", "nodeDid", "agentDid"] as const)(
     "does not retarget a confirmed message after %s changes",
     async (field) => {
       gesture(true);
       const app = testApp({
-        selection: { sessionId: "s1", nodeDid: "did:a", agentId: "a1" },
+        selection: { sessionId: "s1", nodeDid: "did:a", agentDid: "a1" },
       });
       vi.mocked(window.confirm).mockImplementation(() => {
         app.stores.selection.setState({ [field]: "different" });
         return true;
       });
       const send = vi.spyOn(app.actions, "sendMessage");
-      await expect(buildUxHost(app, route).shell.send("text")).rejects.toThrow(
+      await expect(buildUxHost(app, route).shell.send("text", caller)).rejects.toThrow(
         "selected chat changed",
       );
       expect(send).not.toHaveBeenCalled();
@@ -109,12 +114,12 @@ describe("buildUxHost: ctx.send", () => {
     gesture(true);
     vi.mocked(window.confirm).mockReturnValue(false);
     const host = buildUxHost(testApp({ selection: { sessionId: "s1" } }), route);
-    const first = host.shell.send("first");
-    await expect(host.shell.send("second")).rejects.toThrow(
+    const first = host.shell.send("first", caller);
+    await expect(host.shell.send("second", caller)).rejects.toThrow(
       "already awaiting confirmation",
     );
     await expect(first).rejects.toThrow("not confirmed");
-    await expect(host.shell.send("third")).rejects.toThrow("not confirmed");
+    await expect(host.shell.send("third", caller)).rejects.toThrow("not confirmed");
     expect(window.confirm).toHaveBeenCalledTimes(2);
   });
 });
@@ -171,6 +176,10 @@ describe("buildUxHost: bridge verbs", () => {
         },
       },
     });
+    Object.defineProperty(navigator, "userActivation", {
+      configurable: true,
+      value: { isActive: true, hasBeenActive: true },
+    });
     try {
       const host = buildUxHost(app, route);
       expect(await host.os.openExternal("https://example.test/")).toBe(true);
@@ -183,16 +192,29 @@ describe("buildUxHost: bridge verbs", () => {
       warn.mockRestore();
     } finally {
       delete (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+      delete (navigator as { userActivation?: unknown }).userActivation;
     }
+  });
+
+  it("opens nothing outside a gesture, so a page can't send data out unasked", async () => {
+    call.mockReset();
+    const host = buildUxHost(
+      appOver(() => undefined),
+      route,
+    );
+    expect(await host.os.openExternal("https://example.test/?data=1")).toBe(false);
+    expect(call).not.toHaveBeenCalled();
   });
 
   it("exposes no raw bridge verb", () => {
     const host = buildUxHost(testApp(), route);
     expect("bridge" in host).toBe(false);
-    /* data: the declared-surface door; onShellChange: the host's route
-       feed for the frames, never a plugin-facing verb */
+    /* data: the declared-surface door; notify: the plugin notification
+       owner; onShellChange: the host's route feed for the frames, never a
+       plugin-facing verb */
     expect(Object.keys(host).sort()).toEqual([
       "data",
+      "notify",
       "onShellChange",
       "os",
       "plugin",

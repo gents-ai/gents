@@ -12,6 +12,7 @@ import {
   ComboboxTrigger,
 } from "@gents/ui/components/combobox";
 import { nameOf } from "./behaviorDraft";
+import { SEARCH_FIELD } from "@/lib/textAssist";
 
 const TRIGGER =
   "flex h-9 w-auto min-w-48 max-w-full items-center justify-between gap-1.5 rounded-2xl border border-transparent bg-input/50 px-3 text-sm whitespace-nowrap outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 max-md:w-full";
@@ -80,6 +81,7 @@ export function ContextPicker({
         <ComboboxInput
           showTrigger={false}
           aria-label="Search contexts"
+          {...SEARCH_FIELD}
           placeholder={`Search ${deployment.contexts.length} contexts or agents`}
         />
         <ComboboxEmpty>Nothing by that name.</ComboboxEmpty>

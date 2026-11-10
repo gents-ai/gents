@@ -1,14 +1,16 @@
 import { href, navigate } from "@/lib/router";
 import { SectionedScreen } from "../SectionedScreen";
-import { DEFAULT_SETTINGS_SECTION, SETTINGS_SECTIONS } from "./sections";
+import { DEFAULT_SETTINGS_SECTION, useSettingsSections } from "./sections";
 
 export function SettingsScreen({ section }: { section?: string }) {
+  const sections = useSettingsSections();
+  /* a section behind a feature that is off falls back to General */
   const current =
-    SETTINGS_SECTIONS.find((s) => s.id === section) ??
-    SETTINGS_SECTIONS.find((s) => s.id === DEFAULT_SETTINGS_SECTION)!;
+    sections.find((s) => s.id === section) ??
+    sections.find((s) => s.id === DEFAULT_SETTINGS_SECTION)!;
   return (
     <SectionedScreen
-      entries={SETTINGS_SECTIONS}
+      entries={sections}
       current={current.id}
       hrefFor={(id) => href({ name: "settings", section: id })}
       onSelect={(id) => navigate({ name: "settings", section: id })}

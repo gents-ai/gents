@@ -90,7 +90,16 @@ function timelineItemUnchanged(
         previous.messagesCompacted === next.messagesCompacted &&
         previous.originalTokens === next.originalTokens &&
         previous.compactedTokens === next.compactedTokens &&
-        previous.timestamp === next.timestamp
+        previous.timestamp === next.timestamp &&
+        previous.summary === next.summary &&
+        sameOptionalStrings(
+          previous.filesRead ?? undefined,
+          next.filesRead ?? undefined,
+        ) &&
+        sameOptionalStrings(
+          previous.filesModified ?? undefined,
+          next.filesModified ?? undefined,
+        )
       );
     case "pendingUserTurn":
       return (
@@ -231,64 +240,6 @@ export function mergeSessionTipSnapshot(
       oldestItemKey: preserveLoadedOlderState
         ? currentPage.oldestItemKey
         : next.timelinePage.oldestItemKey,
-    },
-  };
-}
-
-/** An older page joined in front of a snapshot: the stitching a client
- *  that pages the session snapshot itself uses. The desktop reads history
- *  by message number instead (`fetchSessionRows`). */
-export function mergeOlderSessionTimelinePage(
-  current: DesktopSessionSnapshot | null,
-  older: DesktopSessionSnapshot,
-): DesktopSessionSnapshot {
-  if (
-    !current ||
-    current.sessionId !== older.sessionId ||
-    !older.timelinePage
-  ) {
-    return current ?? older;
-  }
-  const currentIdentities = new Set(
-    current.timelineItems.map(timelineItemIdentity),
-  );
-  const prefix = older.timelineItems.filter(
-    (item) => !currentIdentities.has(timelineItemIdentity(item)),
-  );
-  const timelineItems = removeMaterializedPendingTurns([
-    ...prefix,
-    ...current.timelineItems,
-  ]);
-  const currentPage = current.timelinePage ?? older.timelinePage;
-  const totalItemsExact =
-    (currentPage.totalItemsExact ?? true) &&
-    (older.timelinePage.totalItemsExact ?? true);
-  return {
-    ...current,
-    timelineItems,
-    timelinePage: {
-      ...currentPage,
-      totalItems: totalItemsExact
-        ? Math.max(currentPage.totalItems, older.timelinePage.totalItems)
-        : -1,
-      totalItemsExact,
-      pageItems: timelineItems.length,
-      hasOlder: older.timelinePage.hasOlder,
-      hasNewer: false,
-      oldestItemKey: older.timelinePage.oldestItemKey,
-      newestItemKey: timelineItems[timelineItems.length - 1]?.itemKey ?? null,
-      queryCount:
-        (currentPage.queryCount ?? 0) + (older.timelinePage.queryCount ?? 0),
-      queriedRows:
-        (currentPage.queriedRows ?? 0) + (older.timelinePage.queriedRows ?? 0),
-      messageQueryLimit: Math.max(
-        currentPage.messageQueryLimit ?? 0,
-        older.timelinePage.messageQueryLimit ?? 0,
-      ),
-      toolCallQueryLimit: Math.max(
-        currentPage.toolCallQueryLimit ?? 0,
-        older.timelinePage.toolCallQueryLimit ?? 0,
-      ),
     },
   };
 }

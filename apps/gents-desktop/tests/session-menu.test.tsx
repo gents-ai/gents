@@ -14,6 +14,8 @@ import { resetListViews } from "../src/ui/app/listViews";
 import { resetSessionViews } from "../src/ui/app/sessionViews";
 import { resetPreferences } from "../src/ui/preferences";
 import { sessionMarkdown } from "../src/ui/lib/session-markdown";
+import { closeFind } from "../src/ui/screens/session/find";
+import { MOD } from "../src/ui/screens/shortcutKeys";
 import type { DesktopApp } from "../src/hooks/desktopApp";
 import { href, type Route } from "../src/ui/lib/router";
 import { node, renderRouted, testApp, withApp } from "./app-fixture";
@@ -51,7 +53,7 @@ const summary = (overrides: Partial<SessionSummary>): SessionSummary => ({
   title: "First",
   previewText: null,
   status: null,
-  agentId: null,
+  agentDid: null,
   taskId: null,
   taskName: null,
   triggerId: null,
@@ -195,12 +197,26 @@ describe("a session's menu in the sessions list", () => {
     await u.click(within(menu).getByRole("menuitem", { name: "Pin" }));
     expect(rowTitles()).toEqual(["Second", "First"]);
     const pinnedRow = screen.getByTestId("session-second").closest("li")!;
-    expect(within(pinnedRow).getByRole("img", { name: "Pinned" })).toBeInTheDocument();
+    expect(
+      within(pinnedRow).getByRole("button", { name: "Unpin" }),
+    ).toBeInTheDocument();
 
     const again = await openRowMenu("Second");
     await again.u.click(within(again.menu).getByRole("menuitem", { name: "Unpin" }));
     expect(rowTitles()).toEqual(["First", "Second"]);
-    expect(screen.queryByRole("img", { name: "Pinned" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Unpin" })).toBeNull();
+  });
+
+  it("unpins from the row's pin, with Undo", async () => {
+    showList([first, second]);
+    const { u, menu } = await openRowMenu("Second");
+    await u.click(within(menu).getByRole("menuitem", { name: "Pin" }));
+    expect(rowTitles()).toEqual(["Second", "First"]);
+    const row = screen.getByTestId("session-second").closest("li")!;
+    await u.click(within(row).getByRole("button", { name: "Unpin" }));
+    expect(rowTitles()).toEqual(["First", "Second"]);
+    expect(toast).toHaveBeenLastCalledWith("Unpinned", expect.anything());
+    expect(screen.queryByRole("button", { name: "Unpin" })).toBeNull();
   });
 
   it("says when it pins or unpins, and Undo puts a pin back where it was", async () => {
@@ -221,7 +237,7 @@ describe("a session's menu in the sessions list", () => {
     expect(rowTitles()).toEqual(["Second", "First"]);
     undo();
     expect(rowTitles()).toEqual(["First", "Second"]);
-    expect(screen.getAllByRole("img", { name: "Pinned" })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "Unpin" })).toHaveLength(2);
   });
 
   it("marks a session with new work as read, and Undo makes it new again", async () => {
@@ -459,7 +475,7 @@ function heldSession(over: Partial<DesktopSessionSnapshot> = {}) {
   return {
     sessionId: "first",
     nodeDid: NODE,
-    agentId: "default",
+    agentDid: "default",
     title: "First",
     turnState: "completed",
     timelineItems: [],
@@ -510,7 +526,22 @@ describe("a session's menu in its header", () => {
     const items = within(menu)
       .getAllByRole("menuitem")
       .map((item) => item.textContent);
-    expect(items).toEqual(["Rename", "Pin", "Copy", "Archive"]);
+    expect(items).toEqual([
+      `Find in session…${MOD}F`,
+      "Rename",
+      "Pin",
+      "Copy",
+      "Archive",
+    ]);
+  });
+
+  it("opens find in the session, with the focus in its field", async () => {
+    renderHeader(first);
+    const { u, menu } = await openHeaderMenu();
+    await u.click(within(menu).getByRole("menuitem", { name: /Find in session/ }));
+    const field = await screen.findByRole("textbox", { name: "Find in session" });
+    await waitFor(() => expect(field).toHaveFocus());
+    act(() => closeFind());
   });
 
   it("starts the header's own rename", async () => {

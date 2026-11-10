@@ -17,10 +17,10 @@ import { usePinnedSessions } from "@/preferences";
 import { useListViews } from "../app/listViews";
 import { passes } from "../lib/session-filter";
 
-import { folderOf, recentFolders } from "../../hooks/chatFolders";
+import { recentFolders, sessionFolder } from "../../hooks/chatFolders";
 import { useIncompatibleHome } from "../../hooks/useIncompatibleHome";
 import { useApp, useView } from "../app/AppContext";
-import { isLocalNode } from "../lib/firstRun";
+import { configIsRead, isLocalNode } from "../lib/firstRun";
 import { isWorkingNode, workingNode } from "../lib/nodes";
 import {
   defaultScope,
@@ -35,6 +35,14 @@ import { clientRunning, syncHealthOf } from "../../hooks/clientStore";
 
 export function useBootstrap() {
   return useStore(useApp().stores.client, (state) => state.snapshot?.bootstrap);
+}
+
+/** the DID this app itself uses to reach its nodes */
+export function useThisAppDid() {
+  return useStore(
+    useApp().stores.client,
+    (state) => state.snapshot?.client?.clientDid ?? null,
+  );
 }
 
 export function useHomeDid() {
@@ -55,11 +63,18 @@ export function useSelectedNode(): NodeView | null {
   return useFleet((state) => nodeOrFirst(state, nodeDid));
 }
 
+/** Why a node's settings can't be changed here, or null when they can. A
+    node's settings are only editable once the app has read them from its
+    operator endpoint (the save path refuses otherwise). An enrolled remote
+    node's Node document still reaches the app, so its settings show, read
+    only, once that node replicates it. */
 export function useNodeConfigReadOnly(node: NodeView): string | null {
   const homeDid = useHomeDid();
-  return !isLocalNode(node, homeDid) && !node.graphql
-    ? "Remote configuration is read-only. This enrolled connection has no operator endpoint; configure this node on its host."
-    : null;
+  const read = useStore(useApp().stores.client, (state) =>
+    state.snapshot ? configIsRead(state.snapshot, node.nodeDid) : false,
+  );
+  if (isLocalNode(node, homeDid) || read) return null;
+  return `Read-only here: change ${node.node.displayName ?? node.label}'s settings on that machine.`;
 }
 
 export function useSelectedNodeMailboxItem(
@@ -175,14 +190,19 @@ export function usePinnedSessionList() {
   });
 }
 
-export function useSelectedAgentId() {
-  return useView((view) => view.agentReadiness.agentId);
+export function useSelectedAgentDid() {
+  return useView((view) => view.agentReadiness.agentDid);
 }
 
 export function useChatFolder() {
   const { stores } = useApp();
   const sessionId = stores.selection.use.sessionId();
-  return useStore(stores.chat, (state) => folderOf(state.folders, sessionId));
+  const nodeDid = useSelectedNodeDid();
+  const homeDid = useHomeDid();
+  const folders = useStore(stores.chat, (state) => state.folders);
+  return useFleet((fleet) =>
+    sessionFolder(folders, fleet, homeDid, nodeDid, sessionId),
+  );
 }
 
 export function useRecentFolders() {
@@ -194,9 +214,9 @@ export function useRecentFolders() {
 export function useMailboxCause() {
   const { stores } = useApp();
   const route = stores.selection.use.mailboxRoute();
-  const agentId = useSelectedAgentId();
+  const agentDid = useSelectedAgentDid();
   const sessionId = stores.selection.use.sessionId();
-  return route ? { itemId: route.itemId, agentId: agentId ?? "", sessionId } : null;
+  return route ? { itemId: route.itemId, agentDid: agentDid ?? "", sessionId } : null;
 }
 
 export function useStartup() {

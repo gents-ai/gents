@@ -105,3 +105,27 @@ test("configuration returns to a responsive new session", async ({ page }) => {
     await expect(composer(page)).toHaveText(`Navigation ${pass}`);
   }
 });
+
+test("New session leaves a session its first message just created", async ({
+  page,
+}) => {
+  test.skip(test.info().project.name === "chromium-narrow", "Desktop rail navigation");
+  await gotoHarness(page);
+  const newSession = page
+    .getByRole("link", { name: "New session", exact: true })
+    .first();
+  await newSession.click();
+  await expect(page.getByText(/Start a new chat with/)).toBeVisible();
+  await composer(page).click();
+  await page.keyboard.type("First message of a new session");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("[data-transcript-list]")).toContainText(
+    "First message of a new session",
+  );
+  /* the route follows the session the send created, so New session is a
+     different place again */
+  await expect(newSession).not.toHaveAttribute("aria-current", "page");
+  await newSession.click();
+  await expect(page.getByText(/Start a new chat with/)).toBeVisible();
+  await expect(page.locator("[data-transcript-list]")).toHaveCount(0);
+});

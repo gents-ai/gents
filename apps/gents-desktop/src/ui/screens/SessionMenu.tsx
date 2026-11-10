@@ -1,4 +1,4 @@
-import { useRef, type ComponentType, type ReactElement, type ReactNode } from "react";
+import { useState, type ComponentType, type ReactElement, type ReactNode } from "react";
 import { toast } from "sonner";
 import {
   Archive,
@@ -34,7 +34,7 @@ import { toastFailure } from "@/lib/failure";
 import { sessionMarkdown } from "@/lib/session-markdown";
 import { seenMarkOf, useIsNew } from "@/lib/seen";
 import { preferences, usePinnedSessions } from "@/preferences";
-import { folderOf } from "../../hooks/chatFolders";
+import { sessionFolder } from "../../hooks/chatFolders";
 import { sessionKeyOf } from "../../hooks/fleetStore";
 
 type ItemProps = {
@@ -72,22 +72,31 @@ export const DROPDOWN_MENU: MenuParts = {
 
 /** A rename started from a menu keeps the focus its field takes; the menu
     would otherwise hand focus back to its trigger as it closes, and the
-    field would end on that blur. Pass `finalFocus` to the menu's content. */
+    field would end on that blur. Pass `finalFocus` to the menu's content
+    and `onOpenChange` to its root to reset the override for the next opening. */
 export function useRenameFromMenu(start: (() => void) | null) {
-  const started = useRef(false);
+  const [started, setStarted] = useState(false);
   return {
     onRename:
       start &&
       (() => {
-        started.current = true;
+        setStarted(true);
         start();
       }),
-    finalFocus: () => {
-      const back = !started.current;
-      started.current = false;
-      return back;
+    finalFocus: started ? false : undefined,
+    onOpenChange: (open: boolean) => {
+      if (open) setStarted(false);
     },
   };
+}
+
+/** Pins or unpins a session, with an Undo that puts it back where it was. */
+export function pinSession(key: string, next: boolean, pinned: readonly string[]) {
+  const at = pinned.indexOf(key);
+  preferences.setPinned(key, next);
+  toast(next ? "Pinned" : "Unpinned", {
+    action: { label: "Undo", onClick: () => preferences.setPinned(key, !next, at) },
+  });
 }
 
 /** what can be done to a session wherever it shows: its row and its header */
@@ -108,7 +117,13 @@ export function SessionItems({
   const key = sessionKeyOf(session);
   const pinnedKeys = usePinnedSessions();
   const pinned = pinnedKeys.includes(key);
-  const folder = folderOf(stores.chat.getState().folders, session.sessionId);
+  const folder = sessionFolder(
+    stores.chat.getState().folders,
+    stores.fleet.getState(),
+    stores.client.getState().snapshot?.bootstrap?.initNodeDid,
+    session.nodeDid,
+    session.sessionId,
+  );
   const title = session.title ?? "Untitled session";
   const unread = useIsNew(session);
 
@@ -133,13 +148,7 @@ export function SessionItems({
       },
     });
   };
-  const pin = (next: boolean) => {
-    const at = pinnedKeys.indexOf(key);
-    preferences.setPinned(key, next);
-    toast(next ? "Pinned" : "Unpinned", {
-      action: { label: "Undo", onClick: () => preferences.setPinned(key, !next, at) },
-    });
-  };
+  const pin = (next: boolean) => pinSession(key, next, pinnedKeys);
   const archive = (target: SessionSummary, archived: boolean) => {
     actions.setSessionArchived(target, archived).then(
       (receipt) => {

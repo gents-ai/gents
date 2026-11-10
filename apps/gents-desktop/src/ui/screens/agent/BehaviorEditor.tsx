@@ -1,7 +1,14 @@
 import type { NodeView } from "../../../hooks/fleetStore";
 import { dependentsWarning } from "./dependents";
-import { Fragment, useRef, useState } from "react";
-import { ArrowLeftRight, ArrowUpRight, Copy, MoreHorizontal, Plus } from "lucide-react";
+import { Fragment, useEffect, useRef, useState } from "react";
+import {
+  ArrowLeftRight,
+  ArrowUpRight,
+  Copy,
+  MoreHorizontal,
+  Pencil,
+  Plus,
+} from "lucide-react";
 import type { AgentContext, AgentView } from "@source-inc/gents-desktop-client";
 import {
   AlertDialog,
@@ -14,6 +21,7 @@ import {
 } from "@gents/ui/components/alert-dialog";
 import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
+import { cn } from "@gents/ui/lib/utils";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -23,13 +31,13 @@ import {
 } from "@gents/ui/components/dropdown-menu";
 import { href } from "@/lib/router";
 import { agentReadiness } from "@/lib/agent-readiness";
-import { AccessSentence, AgentInitials } from "../parts";
+import { AccessSentence, AgentInitials, type AccessPart } from "../parts";
 import {
   AreaRow,
   ChipsRow,
-  ChoiceRow,
   DraftActions,
   FactRow,
+  MarkdownRow,
   RefRow,
   TagsRow,
   TextRow,
@@ -37,13 +45,14 @@ import {
 import { ProfileSheet } from "./ProfileSheet";
 import { profileLabel, toolsInWords } from "./automation";
 import { ToolsSheet } from "./ToolsSheet";
+import { CompactionSheet, compactionInWords } from "./CompactionEditor";
 import { NewSkillSheet } from "./NewSkillSheet";
 import { EditorSheet } from "./EditorSheet";
 import { ToolsEditor } from "./ToolsPanel";
 import { ProfileEditor, modelSentence } from "./ProfileEditor";
 import { focusFirstProblem, newId, useDraft } from "./draft";
-import { ConfirmDelete, DeleteButton } from "./ListDetail";
-import { Group } from "./rows";
+import { ConfirmDelete, DeleteButton, packOrigin } from "./ListDetail";
+import { focusField, Group, Unfold } from "./rows";
 import { rememberContextOrigin } from "./contextOrigin";
 import { useApp } from "@/app/AppContext";
 import {
@@ -62,6 +71,7 @@ import {
   type SaveIntent,
 } from "./behaviorDraft";
 import { ContextPicker } from "./ContextPicker";
+import { AgentSummaryCards } from "./AgentCard";
 import { contextOutcome, writeAgentDraft } from "./behaviorSave";
 
 export function AgentEditor({
@@ -75,7 +85,10 @@ export function AgentEditor({
   draft?: DraftMode;
   embedded?: boolean;
 }) {
-  const { changeConfig } = useApp().actions;
+  const { changeConfig, provisionAgentIdentity } = useApp().actions;
+  const pendingIdentity = useRef<Awaited<
+    ReturnType<typeof provisionAgentIdentity>
+  > | null>(null);
   const base = {
     name: "agent" as const,
     nodeDid: deployment.nodeDid,
@@ -98,11 +111,41 @@ export function AgentEditor({
     null,
   );
   const [newTools, setNewTools] = useState<((id: string | null) => void) | null>(null);
+  const [newCompaction, setNewCompaction] = useState<
+    ((id: string | null) => void) | null
+  >(null);
+  const [openCompaction, setOpenCompaction] = useState<string | null>(null);
   const [newSkill, setNewSkill] = useState<((id: string | null) => void) | null>(null);
+  /* name, description and tags show in the header; their fields open
+     under it on Edit, and always for an agent being made */
+  const [editingAbout, setEditingAbout] = useState(false);
   const [configure, setConfigure] = useState<{
     kind: "tools" | "profile";
     id: string;
+    /** the control to bring into view once the sheet shows it */
+    focus?: string;
   } | null>(null);
+  /* the sheet slides in, so its control may not exist yet on the first frame */
+  useEffect(() => {
+    const target = configure?.focus;
+    if (!target) return;
+    let frame = 0;
+    let tries = 0;
+    const find = () => {
+      const el = document.getElementById(target);
+      if (!el && tries++ < 30) {
+        frame = requestAnimationFrame(find);
+        return;
+      }
+      el?.scrollIntoView({ block: "center" });
+      const control = el?.matches("button, input, select, [tabindex]")
+        ? el
+        : el?.querySelector<HTMLElement>("button, input, select, [tabindex]");
+      control?.focus({ preventScroll: true });
+    };
+    frame = requestAnimationFrame(find);
+    return () => cancelAnimationFrame(frame);
+  }, [configure]);
   const pendingContextId = useRef<string | null>(null);
   const d = useDraft(
     saved,
@@ -110,6 +153,13 @@ export function AgentEditor({
       const want = (intent ?? {}) as SaveIntent;
       const written = await writeAgentDraft({
         changeConfig,
+        identity: async () => {
+          if (agent.creationNonce)
+            return { agent_did: agent.agentDid, creation_nonce: agent.creationNonce };
+          return (pendingIdentity.current ??= await provisionAgentIdentity(
+            deployment.nodeDid,
+          ));
+        },
         deployment,
         agent,
         next,
@@ -132,11 +182,12 @@ export function AgentEditor({
       problems: (next) => problems(deployment, next, draftMode !== undefined),
     },
   );
-  const id = (f: string) => `${agent.agentId}-${f}`;
+  const id = (f: string) => `${agent.agentDid}-${f}`;
   const errors = d.problems;
   const finish = async (intent: SaveIntent) => {
     const ok = await d.save(intent);
-    if (ok && draftMode) draftMode.onSaved(agent.agentId);
+    if (ok && draftMode)
+      draftMode.onSaved(pendingIdentity.current?.agent_did ?? agent.agentDid);
   };
   const fields = Object.fromEntries(
     FIELD_ORDER.map(([field, slug]) => [field, id(slug)]),
@@ -159,7 +210,7 @@ export function AgentEditor({
     deployment.contexts.find((c) => c.context_id === d.draft.copiedFrom) ?? null;
   const others = selected
     ? usersOf(deployment, selected.context_id).filter(
-        (b) => b.agentId !== agent.agentId,
+        (b) => b.agentDid !== agent.agentDid,
       )
     : [];
   const [confirmShared, setConfirmShared] = useState(false);
@@ -229,7 +280,7 @@ export function AgentEditor({
     ? href({ ...base, section: "contexts", item: selected.context_id })
     : null;
   const rememberOrigin = () => {
-    if (selected) rememberContextOrigin(selected.context_id, agent.agentId);
+    if (selected) rememberContextOrigin(selected.context_id, agent.agentDid);
   };
   const toolsSharers = d.draft.toolsId
     ? deployment.contexts.filter(
@@ -249,7 +300,7 @@ export function AgentEditor({
     : null;
   const agentLink = (b: AgentView) => (
     <a
-      href={href({ ...base, item: b.agentId })}
+      href={href({ ...base, item: b.agentDid })}
       className="text-foreground underline-offset-2 hover:underline"
     >
       {b.displayName}
@@ -261,7 +312,7 @@ export function AgentEditor({
         Shared with{" "}
         {others.length <= 2 ? (
           others.map((b, i) => (
-            <Fragment key={b.agentId}>
+            <Fragment key={b.agentDid}>
               {i > 0 && " and "}
               {agentLink(b)}
             </Fragment>
@@ -284,24 +335,39 @@ export function AgentEditor({
   const soleContext =
     context &&
     (usersByContext.get(context.context_id) ?? []).every(
-      (b) => b.agentId === agent.agentId,
+      (b) => b.agentDid === agent.agentDid,
     )
       ? context
       : null;
-  const readiness = agentReadiness(deployment, agent.agentId);
-  const env = deployment.agentEnvironments.find((e) => e.agentId === agent.agentId);
+  const readiness = agentReadiness(deployment, agent.agentDid);
+  /* the sentence's parts are set in the agent's Tools; with none chosen, the
+     Tools row is where to choose or make one */
+  const openAccess = (part: AccessPart) => {
+    const toolsId = d.draft.toolsId;
+    if (toolsId && deployment.tools.some((t) => t.tools_id === toolsId)) {
+      setConfigure({
+        kind: "tools",
+        id: toolsId,
+        focus: part === "network" ? "tools-bash-network" : `${toolsId}-${part}`,
+      });
+      return;
+    }
+    document.getElementById(id("tools"))?.scrollIntoView({ block: "center" });
+  };
+  const env = deployment.agentEnvironments.find((e) => e.agentDid === agent.agentDid);
   const attention =
     agent.enabled && !readiness.ready ? `It can’t run: ${readiness.reason}.` : null;
   return (
     <>
       <header
         data-testid="agent-header"
-        className="mb-8 rounded-3xl bg-raised px-5 py-4 shadow-sm ring-1 ring-foreground/5"
+        /* as the node page's header: on the page, not a box of its own */
+        className={draftMode ? "mb-8" : "mb-4"}
       >
-        <div className="flex min-w-0 items-start gap-3 max-md:flex-col">
+        <div className="flex min-w-0 items-start gap-4">
           <AgentInitials
             name={draftMode ? d.draft.displayName.trim() || "New" : agent.displayName}
-            className="size-10 shrink-0 text-sm"
+            className="size-14 shrink-0 text-base"
           />
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
@@ -312,18 +378,65 @@ export function AgentEditor({
               </h2>
               {agent.isDefault && <Badge variant="secondary">Default</Badge>}
               {draftMode && <Badge variant="secondary">Draft</Badge>}
+              {!draftMode && (
+                <Button
+                  size="xs"
+                  variant="quiet"
+                  aria-expanded={editingAbout}
+                  aria-controls={id("about")}
+                  onClick={() => setEditingAbout((open) => !open)}
+                >
+                  {editingAbout ? (
+                    "Done"
+                  ) : (
+                    <>
+                      <Pencil /> Edit
+                    </>
+                  )}
+                </Button>
+              )}
             </div>
             {draftMode ? null : (
               <>
+                {d.draft.description.trim() && (
+                  <p className="mt-0.5 text-sm text-foreground/80">
+                    {d.draft.description}
+                  </p>
+                )}
                 <p
                   data-testid="agent-summary"
-                  className="mt-0.5 text-sm text-muted-foreground"
+                  className={cn(
+                    "text-sm text-muted-foreground",
+                    d.draft.description.trim() ? "mt-1.5" : "mt-0.5",
+                  )}
                 >
-                  <AccessSentence name={agent.displayName} env={env} />
+                  <AccessSentence
+                    name={agent.displayName}
+                    env={env}
+                    onOpen={openAccess}
+                  />
                 </p>
+                {d.draft.tags.length > 0 && (
+                  <ul aria-label="Tags" className="mt-2 flex flex-wrap gap-1">
+                    {d.draft.tags.map((tag) => (
+                      <li key={tag}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingAbout(true);
+                            focusField(id("tags"));
+                          }}
+                          className="cursor-pointer rounded-md bg-muted px-1.5 py-0.5 text-xs text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+                        >
+                          {tag}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
                 {attention && (
                   <p
-                    id={`${agent.agentId}-status-note`}
+                    id={`${agent.agentDid}-status-note`}
                     data-testid="agent-status-note"
                     className="mt-0.5 text-sm text-muted-foreground"
                   >
@@ -335,35 +448,43 @@ export function AgentEditor({
           </div>
         </div>
       </header>
+      {!draftMode && (
+        <AgentSummaryCards deployment={deployment} agentDid={agent.agentDid} />
+      )}
 
-      <Group title="About">
-        {!draftMode && (
-          <FactRow label="Agent ID" mono>
-            {agent.agentId}
-          </FactRow>
-        )}
-        <TextRow
-          id={id("name")}
-          label="Display name"
-          value={d.draft.displayName}
-          onChange={(v) => d.set("displayName", v)}
-          error={errors.displayName}
-        />
-        <AreaRow
-          id={id("description")}
-          label="Description"
-          description="One or two sentences, shown in the agent picker."
-          value={d.draft.description}
-          onChange={(v) => d.set("description", v)}
-          rows={2}
-        />
-        <TagsRow
-          id={id("tags")}
-          label="Tags"
-          value={d.draft.tags}
-          onChange={(v) => d.set("tags", v)}
-        />
-      </Group>
+      <Unfold
+        open={Boolean(draftMode || editingAbout || errors.displayName)}
+        id={id("about")}
+      >
+        <Group title="About">
+          {!draftMode && (
+            <FactRow label="Agent ID" mono>
+              {agent.agentDid}
+            </FactRow>
+          )}
+          <TextRow
+            id={id("name")}
+            label="Display name"
+            value={d.draft.displayName}
+            onChange={(v) => d.set("displayName", v)}
+            error={errors.displayName}
+          />
+          <AreaRow
+            id={id("description")}
+            label="Description"
+            description="One or two sentences, shown in the agent picker."
+            value={d.draft.description}
+            onChange={(v) => d.set("description", v)}
+            rows={2}
+          />
+          <TagsRow
+            id={id("tags")}
+            label="Tags"
+            value={d.draft.tags}
+            onChange={(v) => d.set("tags", v)}
+          />
+        </Group>
+      </Unfold>
 
       <section
         data-testid="context-frame"
@@ -495,14 +616,13 @@ export function AgentEditor({
         {(selected || creating) && (
           <div className="mt-5 [&>fieldset:last-child]:mb-0">
             <Group>
-              <AreaRow
+              <MarkdownRow
                 id={id("prompt")}
                 label="System prompt"
                 description="What the agent is told at the start of every session."
                 value={d.draft.systemPrompt}
                 onChange={(v) => d.set("systemPrompt", v)}
-                rows={6}
-                stacked
+                empty="No system prompt yet."
               />
             </Group>
             <Group title="Capabilities">
@@ -517,6 +637,7 @@ export function AgentEditor({
                 items={deployment.tools.map((t) => ({
                   value: t.tools_id,
                   label: `${t.display_name ?? t.tools_id} · ${toolsInWords(t)}`,
+                  pack: packOrigin(t.tags),
                 }))}
                 createLabel="New tools…"
                 onCreate={() =>
@@ -535,6 +656,7 @@ export function AgentEditor({
                 error={errors.skillIds}
                 items={deployment.skills.map((sk) => ({
                   value: sk.skillId,
+                  pack: packOrigin(sk.tags),
                   label: sk.displayName ?? sk.name ?? sk.skillId,
                 }))}
                 placeholder="Add a skill"
@@ -546,10 +668,15 @@ export function AgentEditor({
                   })
                 }
               />
-              <ChoiceRow
+              <RefRow
                 id={id("compact")}
                 label="Compaction"
-                description="How a long session is summarized."
+                description={compactionInWords(
+                  deployment,
+                  deployment.compactions.find(
+                    (c) => c.compaction_id === d.draft.compactionId,
+                  ),
+                )}
                 value={d.draft.compactionId}
                 onChange={(v) => d.set("compactionId", v)}
                 none="Runtime default"
@@ -558,6 +685,13 @@ export function AgentEditor({
                   value: c.compaction_id,
                   label: c.display_name ?? c.compaction_id,
                 }))}
+                createLabel="New compaction…"
+                onCreate={() =>
+                  new Promise<string | null>((resolve) => {
+                    setNewCompaction(() => resolve);
+                  })
+                }
+                onOpen={(compactionId) => setOpenCompaction(compactionId)}
               />
             </Group>
           </div>
@@ -576,6 +710,7 @@ export function AgentEditor({
           items={deployment.inferenceProfiles.map((p) => ({
             value: p.profile_id,
             label: profileLabel(deployment, p.profile_id),
+            pack: packOrigin(p.tags),
           }))}
           createLabel="New profile…"
           onCreate={() =>
@@ -592,6 +727,16 @@ export function AgentEditor({
         onClose={(profileId) => {
           newProfile?.(profileId);
           setNewProfile(null);
+        }}
+      />
+      <CompactionSheet
+        deployment={deployment}
+        creating={newCompaction !== null}
+        editing={openCompaction}
+        onClose={(created) => {
+          newCompaction?.(created);
+          setNewCompaction(null);
+          setOpenCompaction(null);
         }}
       />
       <ToolsSheet
@@ -662,7 +807,7 @@ export function AgentEditor({
       />
 
       <AlertDialog open={confirmShared} onOpenChange={setConfirmShared}>
-        <AlertDialogContent aria-modal="true" className="sm:max-w-lg">
+        <AlertDialogContent className="sm:max-w-lg">
           <AlertDialogHeader>
             <AlertDialogTitle>This also changes {sharedWith}</AlertDialogTitle>
             <AlertDialogDescription>
@@ -730,7 +875,7 @@ export function AgentEditor({
       {!draftMode && !embedded && (
         <DeleteButton
           label={agent.displayName}
-          warning={dependentsWarning(deployment, "agent", agent.agentId)}
+          warning={dependentsWarning(deployment, "agent", agent.agentDid)}
           base={base}
           companion={
             soleContext
@@ -746,7 +891,7 @@ export function AgentEditor({
           }
           onDelete={() =>
             changeConfig("deleteAgentConfig", {
-              agentId: agent.agentId,
+              agentDid: agent.agentDid,
               nodeDid: deployment.nodeDid,
             })
           }

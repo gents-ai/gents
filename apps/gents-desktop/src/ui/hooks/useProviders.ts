@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useStore } from "zustand";
 
 import type {
@@ -32,17 +32,27 @@ export function useAccounts(nodeDid: string) {
 export function useProviderUsage(nodeDid: string, backendId?: string) {
   const { stores, actions } = useApp();
   const { loadProviderUsage, refreshProviderUsage } = actions;
-  const usage = useStore(stores.providers, (state) => state.usage[nodeDid] ?? NO_USAGE);
+  const read = useStore(stores.providers, (state) => state.usage[nodeDid]);
+  const usage = read ?? NO_USAGE;
+  /* a failed first read settles too, so nothing waits on it for good */
+  const [settledFor, setSettledFor] = useState<string | null>(null);
   useEffect(() => {
-    void loadProviderUsage(nodeDid);
+    let live = true;
+    void Promise.resolve(loadProviderUsage(nodeDid)).finally(() => {
+      if (live) setSettledFor(nodeDid);
+    });
+    return () => {
+      live = false;
+    };
   }, [loadProviderUsage, nodeDid, backendId]);
+  const loading = read === undefined && settledFor !== nodeDid;
   const refresh = useCallback(
     async (provider: string | null) => {
       await refreshProviderUsage(nodeDid, provider);
     },
     [refreshProviderUsage, nodeDid],
   );
-  return { usage, refresh };
+  return { usage, loading, refresh };
 }
 
 export function useSetupCatalog() {

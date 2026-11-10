@@ -11,8 +11,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Check, Copy } from "lucide-react";
-import { toast } from "sonner";
+import { Copy } from "lucide-react";
 import type {
   DerivedCancelCauseView,
   DesktopSessionSnapshot,
@@ -22,8 +21,13 @@ import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
 import { cn } from "@gents/ui/lib/utils";
 import { AssistantMessage, UserMessage } from "@gents/ui/conversation";
+import { formatMessageTime } from "@source-inc/gents-desktop-ui";
+import { failureText, stopSourceText } from "../../lib/reasonText";
+import { Notice } from "../components/Notice";
 import { SentText } from "./SkillChips";
+import { writtenText } from "@/lib/skillLines";
 import { useTranscriptList, type ReaderPlace } from "@/lib/transcriptList";
+import { FindBar } from "./session/FindBar";
 import { useHeldRows } from "@/lib/useHeldRows";
 import { sequenceOf } from "@/lib/transcriptRows";
 import {
@@ -31,7 +35,6 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@gents/ui/components/collapsible";
-import { Hint } from "./Hint";
 
 import { ActivityLine } from "./Thinking";
 import { activityStatus } from "./activity-status";
@@ -52,21 +55,33 @@ import {
 import { type Workers } from "./workers";
 import {
   AutomatedInput,
+  BackgroundResults,
+  oneLine,
   UserInputWithState,
   pendingInputState,
+  SentContext,
+  unavailableReason,
 } from "./TranscriptInputs";
 import { type ParentWork } from "./parentWork";
 import { useEditInBranch } from "./session/editInBranch";
-import { DayMarker, dayOpenings } from "./TranscriptMarker";
+import { CompactionMarker, DayMarker, dayOpenings } from "./TranscriptMarker";
+import { Hint } from "./Hint";
 import { WorkerActionsContext, type WorkerActions } from "./WorkerActions";
 import { readableReasoning, reasoningWithheld } from "./tool-summary";
-import { groupTranscript, type TranscriptEntry } from "./transcript-groups";
-import { useCopied } from "@/lib/clipboard";
+import {
+  type BackgroundResult,
+  groupTranscript,
+  type TranscriptEntry,
+} from "./transcript-groups";
+import { copyText } from "@/lib/clipboard";
 import type { SessionScope } from "../../lib/recordedFiles";
 import { sameChangedFiles, turnChanges, type ChangedFile } from "@/lib/turnChanges";
+import { duration } from "@/lib/duration";
+import { LONG_TURN_MS, turnsWorked } from "@/lib/turnWorked";
 import { TurnChanges } from "./TurnChanges";
 import { toastFailure } from "@/lib/failure";
 import { sessionViews } from "@/app/sessionViews";
+import { messagePlaces, usePlaceRequest } from "@/app/messagePlaces";
 import { createHeightLearner, guessHeight, type RowShape } from "@/lib/rowHeights";
 import { useApp, useView } from "@/app/AppContext";
 import {
@@ -78,14 +93,14 @@ import {
 
 function FailedEarlier({ message }: { message: string }) {
   return (
-    <div className="rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3">
-      <p className="text-sm font-medium">
-        This request could not finish. The session continued on a later one.
-      </p>
-      <pre className="mt-1 font-mono text-[11px] whitespace-pre-wrap text-muted-foreground">
-        {message}
-      </pre>
-    </div>
+    <Notice
+      tone="destructive"
+      title="An earlier attempt couldn't finish, and the session carried on"
+      description={
+        failureText(message) ?? "Something went wrong while the agent was answering."
+      }
+      details={message}
+    />
   );
 }
 
@@ -94,15 +109,81 @@ function copyActions(text: string | null | undefined) {
     {
       label: "Copy",
       icon: <Copy />,
-      onClick: () => {
-        void navigator.clipboard?.writeText(text ?? "");
-        toast("Copied");
-      },
+      onClick: () => copyText(text ?? ""),
     },
   ];
 }
 
+type PersonInput = Extract<
+  RenderedTimelineItem,
+  { kind: "userMessage" | "pendingUserTurn" }
+>;
+
+/* the bridge sends an input whose text this device can't read without it,
+   with the reason */
+const unavailableOf = (item: PersonInput) =>
+  item.kind === "userMessage" ? unavailableReason(item.reconstruction) : null;
+
+/** A person's input: its text, skills and captured context, or why its
+    text can't be shown. */
+function InputText({ item }: { item: PersonInput }) {
+  const unavailable = unavailableOf(item);
+  if (unavailable)
+    return (
+      <span className="text-muted-foreground" data-testid="user-input-unavailable">
+        {unavailable}
+      </span>
+    );
+  return (
+    <>
+      {item.content?.trim() || item.selectedSkillIds?.length ? (
+        <SentText content={item.content ?? ""} skills={item.selectedSkillIds} />
+      ) : null}
+      <SentContext items={item.capturedContext} />
+    </>
+  );
+}
+
+/* an input of only attachments: they show below, and a bubble would hold
+   nothing; while it waits, a line says what it carries, under its state */
+const onlyAttachments = (item: PersonInput) =>
+  !unavailableOf(item) &&
+  !item.content?.trim() &&
+  !item.selectedSkillIds?.length &&
+  !item.capturedContext?.length;
+
+function AttachmentsOnly({ item }: { item: PersonInput }) {
+  const count = item.attachments?.length ?? 0;
+  return (
+    <span className="text-muted-foreground">
+      {count} {count === 1 ? "attachment" : "attachments"}
+    </span>
+  );
+}
+
 const ParentContext = createContext<ParentWork | null>(null);
+
+/* how far below the view's top a place asked for lands, so the reader sees
+   what led up to it */
+const PLACE_OFFSET = 96;
+
+/* when a message was sent, beside its actions: the time, with the date
+   when it isn't today, and the full date and time on hover, with how long
+   its turn worked; a long turn says that beside the time too */
+function sentAt(at: string | null | undefined, worked?: number) {
+  const label = formatMessageTime(at);
+  if (!label) return undefined;
+  const full = new Date(at!).toLocaleString();
+  const took = worked === undefined ? null : `Worked for ${duration(worked)}`;
+  return (
+    <>
+      <Hint label={took ? `${full} · ${took}` : full}>
+        <time dateTime={at!}>{label}</time>
+      </Hint>
+      {took && worked! > LONG_TURN_MS && <span> · {took}</span>}
+    </>
+  );
+}
 
 function OwnInput({
   item,
@@ -112,15 +193,26 @@ function OwnInput({
   state: string | null;
 }) {
   const branch = useEditInBranch(item.kind === "userMessage" ? item : null);
+  const bare = onlyAttachments(item);
   return (
     <div>
-      <UserInputWithState
-        content={
-          <SentText content={item.content ?? ""} skills={item.selectedSkillIds} />
-        }
-        state={state}
-        actions={[...copyActions(item.content), ...(branch ? [branch] : [])]}
-      />
+      {bare && !state ? null : (
+        <UserInputWithState
+          content={bare ? <AttachmentsOnly item={item} /> : <InputText item={item} />}
+          state={state}
+          actions={
+            unavailableOf(item) || bare
+              ? false
+              : [
+                  ...copyActions(
+                    writtenText(item.content ?? "", item.selectedSkillIds),
+                  ),
+                  ...(branch ? [branch] : []),
+                ]
+          }
+          meta={item.kind === "userMessage" ? sentAt(item.timestamp) : undefined}
+        />
+      )}
       <SentAttachments
         items={item.attachments}
         requestId={item.requestId}
@@ -136,71 +228,64 @@ function ModelInputReduction({
   item: Extract<RenderedTimelineItem, { kind: "requestContextReductionSummary" }>;
 }) {
   return (
-    <div
-      className="mx-auto my-2 w-full max-w-3xl rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
+    <Notice
+      className="mx-auto my-2 max-w-3xl"
       data-testid="request-context-reduction-summary"
       data-request-doc-id={item.requestDocId}
+      title={
+        <span className="flex flex-wrap items-baseline justify-between gap-x-3">
+          Earlier messages were shortened for the model
+          {item.latestTimestamp && (
+            <time
+              dateTime={item.latestTimestamp}
+              className="text-xs font-normal text-muted-foreground"
+            >
+              {formatMessageTime(item.latestTimestamp)}
+            </time>
+          )}
+        </span>
+      }
     >
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-        <span className="font-medium text-foreground">Request context reductions</span>
-        {item.latestTimestamp && (
-          <time dateTime={item.latestTimestamp}>{item.latestTimestamp}</time>
-        )}
-      </div>
-      <p className="mt-1">
-        {item.reductionCount.toLocaleString()} affected model inputs
-        {` · ${item.compactedCount.toLocaleString()} compacted`}
-        {` · ${item.repairedCount.toLocaleString()} repaired`}
-        {item.latestEstimatedInputTokens == null
-          ? " · latest estimate unavailable"
-          : ` · latest estimate ${item.latestEstimatedInputTokens.toLocaleString()} tokens`}
+      <p className="text-xs">
+        {item.reductionCount.toLocaleString()}{" "}
+        {item.reductionCount === 1
+          ? "request to the model was"
+          : "requests to the model were"}{" "}
+        shortened to fit
+        {/* a compaction with its own marker is not counted here */}
+        {item.compactedCount > 0 &&
+          `, ${item.compactedCount.toLocaleString()} by compacting`}
+        {item.repairedCount > 0 && `, ${item.repairedCount.toLocaleString()} repaired`}.
+        {item.latestEstimatedInputTokens != null &&
+          ` The latest came to about ${item.latestEstimatedInputTokens.toLocaleString()} tokens.`}
       </p>
-    </div>
-  );
-}
-
-function SessionCompaction({
-  item,
-}: {
-  item: Extract<RenderedTimelineItem, { kind: "sessionCompaction" }>;
-}) {
-  return (
-    <div
-      className="mx-auto my-2 w-full max-w-3xl rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
-      data-testid="session-compaction-event"
-      data-compaction-key={item.itemKey}
-    >
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-        <span className="font-medium text-foreground">Session history compacted</span>
-        {item.timestamp && <time dateTime={item.timestamp}>{item.timestamp}</time>}
-      </div>
-      <p className="mt-1">
-        {item.messagesCompacted == null
-          ? "Message count unavailable"
-          : `${item.messagesCompacted.toLocaleString()} messages compacted`}
-        {item.originalTokens == null || item.compactedTokens == null
-          ? " · Token estimates unavailable"
-          : ` · ${item.originalTokens.toLocaleString()} → ${item.compactedTokens.toLocaleString()} tokens`}
-      </p>
-    </div>
+    </Notice>
   );
 }
 
 const TranscriptItem = memo(function TranscriptItem({
   item,
-  final = false,
+  worked,
+  background,
+  workers,
 }: {
   item: RenderedTimelineItem;
-  final?: boolean;
+  /** how long the turn this item ends worked, in milliseconds */
+  worked?: number;
+  background?: BackgroundResult[];
+  workers?: Workers;
 }) {
   const parentWork = useContext(ParentContext);
   switch (item.kind) {
     case "automatedInput":
+      if (background)
+        return <BackgroundResults results={background} workers={workers} />;
       return (
         <AutomatedInput
           origin={item.origin}
           content={item.content}
           reconstruction={item.reconstruction}
+          stateKey={item.itemKey}
         />
       );
     case "userMessage":
@@ -211,16 +296,29 @@ const TranscriptItem = memo(function TranscriptItem({
           : null;
       if (item.kind === "pendingUserTurn" && item.origin) {
         return (
-          <AutomatedInput origin={item.origin} content={item.content} state={state} />
+          <AutomatedInput
+            origin={item.origin}
+            content={item.content}
+            state={state}
+            stateKey={item.itemKey}
+          />
         );
       }
       const sender = parentWork?.sentBy(item.requestId) ?? null;
       if (!sender) return <OwnInput item={item} state={state} />;
       const message = (
         <div>
-          <UserMessage actions={copyActions(item.content)}>
-            <SentText content={item.content ?? ""} skills={item.selectedSkillIds} />
-          </UserMessage>
+          {!onlyAttachments(item) && (
+            <UserMessage
+              actions={
+                unavailableOf(item)
+                  ? false
+                  : copyActions(writtenText(item.content ?? "", item.selectedSkillIds))
+              }
+            >
+              <InputText item={item} />
+            </UserMessage>
+          )}
           <SentAttachments
             items={item.attachments}
             requestId={item.requestId}
@@ -233,6 +331,8 @@ const TranscriptItem = memo(function TranscriptItem({
         <div className={cn("relative", state && "mb-2")}>
           <AgentInitials
             name={sender.agentName ?? senderName}
+            agentDid={sender.summary?.agentDid}
+            shared={sender.agentShared}
             className="absolute -top-1 right-2 size-6 text-[10px] ring-2 ring-background sm:top-3.5 sm:-right-8 sm:ring-0"
             aria-hidden={false}
             role="img"
@@ -255,21 +355,15 @@ const TranscriptItem = memo(function TranscriptItem({
     }
     case "assistantMessage":
     case "liveAssistant":
-      return <Reply item={item} final={final} />;
+      return <Reply item={item} worked={worked} />;
     case "toolGroup":
       return null;
     case "requestContextReductionSummary":
       return <ModelInputReduction item={item} />;
     case "sessionCompaction":
-      return <SessionCompaction item={item} />;
+      return <CompactionMarker item={item} />;
   }
 });
-
-const STOP_SOURCES: Record<string, string> = {
-  requestInterrupt: "a stop request on this request",
-  requestLifecycle: "the request's lifecycle state",
-  deadline: "its deadline",
-};
 
 function StoppedNotice({
   cause,
@@ -303,7 +397,7 @@ function StoppedNotice({
         <CollapsibleContent>
           <dl className="mt-2 grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1 font-mono text-[11px]">
             <dt>stopped by</dt>
-            <dd>{STOP_SOURCES[cause.source] ?? cause.source}</dd>
+            <dd>{stopSourceText(cause.source)}</dd>
             {at && !Number.isNaN(at.getTime()) && (
               <>
                 <dt>at</dt>
@@ -325,31 +419,56 @@ function StoppedNotice({
 
 function Reply({
   item,
-  final,
+  worked,
 }: {
   item: Extract<RenderedTimelineItem, { kind: "assistantMessage" | "liveAssistant" }>;
-  final: boolean;
+  worked?: number;
 }) {
   const live = item.kind === "liveAssistant";
+  const ready = item.kind === "liveAssistant" || item.reconstruction.state === "ready";
   return (
-    <div data-testid={live ? "live-assistant" : undefined}>
+    /* the space under a reply sits below its actions, so the copy button
+       and time stay with the text they belong to */
+    <div
+      data-testid={live ? "live-assistant" : undefined}
+      className={item.content ? "pb-4" : undefined}
+    >
       <AssistantMessage
-        className={item.content ? "py-4" : undefined}
-        actions={!live && item.content && !final ? copyActions(item.content) : false}
+        className={item.content ? "pt-4" : undefined}
+        actions={
+          !live && ready && item.content
+            ? copyActions(writtenText(item.content ?? "", []))
+            : false
+        }
+        meta={
+          !live && ready && item.content ? sentAt(item.timestamp, worked) : undefined
+        }
       >
-        {readableReasoning(item.reasoning) ? (
+        {ready && readableReasoning(item.reasoning) ? (
           <Reasoning
             text={readableReasoning(item.reasoning)!}
             stateKey={item.itemKey}
           />
-        ) : reasoningWithheld(item.reasoning) ? (
+        ) : ready && reasoningWithheld(item.reasoning) ? (
           <p className="pb-2 text-xs text-muted-foreground">
             Reasoning was not shared by the provider.
           </p>
         ) : null}
-        {item.content ? <ReplyText content={item.content} live={live} /> : null}
+        {item.kind === "assistantMessage" && item.reconstruction.state !== "ready" ? (
+          <p
+            role={item.reconstruction.state === "loading" ? "status" : "alert"}
+            data-testid="assistant-output-unavailable"
+          >
+            {item.reconstruction.state === "loading"
+              ? "Loading message…"
+              : item.reconstruction.state === "denied"
+                ? "Message unavailable: access denied."
+                : "Message could not be reconstructed."}
+          </p>
+        ) : item.content ? (
+          <ReplyText content={item.content} live={live} />
+        ) : null}
       </AssistantMessage>
-      {final && item.content ? <ResponseActions text={item.content} /> : null}
     </div>
   );
 }
@@ -360,46 +479,27 @@ function ReplyText({ content, live }: { content: string; live: boolean }) {
   return <StreamText text={content} directives />;
 }
 
-function ResponseActions({ text }: { text: string }) {
-  const { copied, copy } = useCopied();
-  return (
-    <div
-      className={cn(
-        "-mt-1 flex items-center gap-1 px-1 transition-opacity duration-150 motion-reduce:transition-none",
-        !copied &&
-          "sm:opacity-0 sm:group-hover/response:opacity-100 sm:focus-within:opacity-100",
-      )}
-      data-testid="response-actions"
-    >
-      <Hint label={copied ? "Copied" : "Copy response"}>
-        <Button
-          variant="quiet"
-          size="icon-xs"
-          aria-label="Copy response"
-          onClick={() => copy(text)}
-        >
-          {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-        </Button>
-      </Hint>
-    </div>
-  );
-}
-
 type ItemChanges = { scope: SessionScope; files: readonly ChangedFile[] };
 
 const ItemRow = memo(function ItemRow({
   rowKey,
   item,
-  final,
+  background,
+  workers,
   changes,
+  worked,
   day,
 }: {
   /** the key the row is drawn under, shared by every row for the message */
   rowKey: string;
   item: RenderedTimelineItem;
-  final: boolean;
+  background?: BackgroundResult[];
+  /** the sessions this one's calls reached, for background results */
+  workers?: Workers;
   /** the files the turn this row ends changed, in its session */
   changes?: ItemChanges;
+  /** how long the turn this row ends worked, in milliseconds */
+  worked?: number;
   /** the day this row opens, when it is the first of its day */
   day: number | null;
 }) {
@@ -416,7 +516,12 @@ const ItemRow = memo(function ItemRow({
           <DayMarker day={day} />
         </div>
       )}
-      <TranscriptItem item={item} final={final} />
+      <TranscriptItem
+        item={item}
+        worked={worked}
+        background={background}
+        workers={workers}
+      />
       {changes && (
         <TurnChanges scope={changes.scope} turn={rowKey} files={changes.files} />
       )}
@@ -473,9 +578,11 @@ function shapeOf(entry: TranscriptEntry, changedFiles = 0): RowShape {
     return { kind: "group", open: !entry.settled, steps: entry.members.length };
   const item = entry.item;
   switch (item.kind) {
+    case "automatedInput":
+      if (oneLine(item.origin)) return { kind: "other" };
+      return { kind: "user", text: item.content ?? "" };
     case "userMessage":
     case "pendingUserTurn":
-    case "automatedInput":
       return {
         kind: "user",
         text: item.content ?? "",
@@ -618,12 +725,13 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   /* A finished turn's changes keep their identity while later turns stream,
      so its memoised row is not drawn again on every update. */
   const keptChanges = useRef(new Map<string, ItemChanges>());
+  const startLoaded = rows.olderBefore === null;
   const changes = useMemo(() => {
     const was = keptChanges.current;
     const next = new Map<string, ItemChanges>();
     if (nodeDid && sessionKey) {
       const scope = { nodeDid, sessionId: sessionKey };
-      for (const [key, files] of turnChanges(entries, finalKeys)) {
+      for (const [key, files] of turnChanges(entries, finalKeys, startLoaded)) {
         const held = was.get(key);
         next.set(
           key,
@@ -638,15 +746,23 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     }
     keptChanges.current = next;
     return next;
-  }, [entries, finalKeys, nodeDid, sessionKey]);
+  }, [entries, finalKeys, startLoaded, nodeDid, sessionKey]);
+  const worked = useMemo(
+    () => turnsWorked(entries, finalKeys, startLoaded),
+    [entries, finalKeys, startLoaded],
+  );
   const groupState = useGroupState(sessionKey);
   const dayOpens = useMemo(
     () =>
       dayOpenings(
         entries,
         (entry) => entry.key,
+        /* a compaction is drawn by the message it follows, not its own
+           time, so it doesn't open a day */
         (entry) =>
-          entry.kind === "item" && "timestamp" in entry.item
+          entry.kind === "item" &&
+          entry.item.kind !== "sessionCompaction" &&
+          "timestamp" in entry.item
             ? entry.item.timestamp
             : null,
       ),
@@ -683,6 +799,18 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     },
     [entries, indexOf],
   );
+
+  /* how many of the session's messages are read: they are numbered from
+     0, and the oldest read is where the older pages begin */
+  const messagesRead = useMemo(() => {
+    if (rows.olderBefore === null) return null;
+    let newest: number | null = null;
+    for (let i = entries.length - 1; i >= 0 && newest === null; i -= 1)
+      newest = entrySequence(entries[i], sequences);
+    return newest === null
+      ? null
+      : { loaded: newest + 1 - rows.olderBefore, total: newest + 1 };
+  }, [entries, sequences, rows.olderBefore]);
 
   /* opening a session returns to where the reader left it: at once when
      that row is drawn, else once the page around its message is read */
@@ -737,6 +865,8 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   useEffect(() => {
     if (!sessionKey || returning.current === sessionKey || entries.length === 0) return;
     returning.current = sessionKey;
+    /* a place asked for from elsewhere wins over where the reader left it */
+    if (messagePlaces.request()?.sessionId === sessionKey) return;
     const place = sessionViews.placeOf(sessionKey);
     if (!place || indexOf.has(place.key) || place.sequence === null) return;
     rows.jump(place.sequence, () => {
@@ -750,6 +880,53 @@ export const TranscriptPanel = memo(function TranscriptPanel({
       pendingPlace.current = null;
       list.goTo(place);
     }
+  });
+
+  /* a place asked for from elsewhere: its row at once when drawn, else after
+     the page around its message is read; a row that page doesn't hold lands
+     on the message itself */
+  const asked = usePlaceRequest(sessionKey);
+  const jumpedFor = useRef<number | null>(null);
+  /* state, so the read's arrival draws again and settles the request */
+  const [readFor, setReadFor] = useState<number | null>(null);
+  useEffect(() => {
+    if (!asked || entries.length === 0) return;
+    const read = readFor === asked.id;
+    const byItem = asked.itemKey
+      ? entries.find((entry) =>
+          entry.kind === "item"
+            ? entry.item.itemKey === asked.itemKey
+            : entry.members.some((member) => member.key === asked.itemKey),
+        )
+      : undefined;
+    const byMessage =
+      !asked.itemKey || read
+        ? entries.find(
+            (entry) => (entrySequence(entry, sequences) ?? -1) >= asked.sequence,
+          )
+        : undefined;
+    /* the page read holds neither: the nearest row before the message */
+    const nearest = read
+      ? [...entries]
+          .reverse()
+          .find(
+            (entry) => (entrySequence(entry, sequences) ?? Infinity) <= asked.sequence,
+          )
+      : undefined;
+    const target = byItem ?? byMessage ?? nearest;
+    if (target) {
+      jumpedFor.current = null;
+      list.goTo({ key: entryKey(target), offset: PLACE_OFFSET });
+      messagePlaces.landed(asked.id, target === byItem);
+      return;
+    }
+    if (read) {
+      messagePlaces.landed(asked.id, false);
+      return;
+    }
+    if (jumpedFor.current === asked.id) return;
+    jumpedFor.current = asked.id;
+    rows.jump(asked.sequence, () => setReadFor(asked.id));
   });
 
   /* the reader's place, kept as they read; at the foot there is none */
@@ -803,11 +980,47 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     }
   };
 
+  if (rows.failure?.denied) {
+    return (
+      <Notice
+        tone="destructive"
+        title="Couldn’t load this session"
+        description={rows.failure.message}
+      />
+    );
+  }
+
   return (
     <div
       className="mt-6 grid grid-cols-[minmax(0,1fr)] [--step-scroll-inset:56]"
       data-testid="transcript-panel"
     >
+      {rows.failure && (
+        <Notice
+          tone="warning"
+          title="Couldn’t load these messages"
+          description={rows.failure.message}
+          actions={
+            <Button size="sm" variant="outline" onClick={rows.retryRead}>
+              Try again
+            </Button>
+          }
+        />
+      )}
+      <FindBar
+        scroller={scroller}
+        sessionKey={sessionKey}
+        entries={entries}
+        keyOf={entryKey}
+        goTo={list.goTo}
+        opener={groupState}
+        older={{
+          more: rows.olderBefore !== null,
+          loading: rows.loading === "older",
+          load: rows.loadOlder,
+          messages: messagesRead,
+        }}
+      />
       {rows.olderBefore !== null && (
         <div
           role="status"
@@ -834,8 +1047,10 @@ export const TranscriptPanel = memo(function TranscriptPanel({
                       <ItemRow
                         rowKey={drawKey(keys, entry.item)}
                         item={entry.item}
-                        final={finalKeys.has(entry.key)}
+                        background={entry.background}
+                        workers={entry.background && workers}
                         changes={changes.get(entry.key)}
+                        worked={worked.get(entry.key)}
                         day={dayOpens.get(entry.key) ?? null}
                       />
                     ) : (
@@ -861,36 +1076,41 @@ export const TranscriptPanel = memo(function TranscriptPanel({
                   />
                 )}
                 {showError && (
-                  <div className="rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3">
-                    <p className="text-sm font-medium">
-                      The assistant could not finish this turn.
-                    </p>
-                    <pre className="mt-1 font-mono text-[11px] whitespace-pre-wrap text-muted-foreground">
-                      {responseError}
-                    </pre>
+                  <Notice
+                    tone="destructive"
+                    title="This turn couldn't finish"
+                    description={
+                      failureText(latest?.failureReason) ??
+                      (latest?.failureReason
+                        ? "Something went wrong while the agent was answering."
+                        : "The request failed before a response was available.")
+                    }
+                    details={latest?.failureReason?.trim() || undefined}
+                    actions={
+                      session?.retryEligibility?.eligible && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={retrying}
+                          onClick={retry}
+                        >
+                          {retrying ? "Retrying…" : "Retry"}
+                        </Button>
+                      )
+                    }
+                  >
                     {session?.timelineItems.some(
                       (item) =>
                         (item.kind === "userMessage" ||
                           item.kind === "pendingUserTurn") &&
                         !!item.attachments?.length,
                     ) && (
-                      <p className="mt-2 text-xs text-muted-foreground">
+                      <p className="text-xs">
                         Attachments stay in this conversation. Start a new chat to
                         continue without them.
                       </p>
                     )}
-                    {session?.retryEligibility?.eligible && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="mt-3"
-                        disabled={retrying}
-                        onClick={retry}
-                      >
-                        {retrying ? "Retrying…" : "Retry"}
-                      </Button>
-                    )}
-                  </div>
+                  </Notice>
                 )}
                 {/* the run's line: laid out as a reply is, but not one */}
                 <div className="relative min-w-0">

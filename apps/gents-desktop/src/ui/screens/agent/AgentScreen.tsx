@@ -1,8 +1,10 @@
+import { Lock } from "lucide-react";
 import { href, navigate } from "@/lib/router";
 import { useNodeConfigReadOnly } from "@/hooks/useClient";
 import { useFleet } from "@/hooks/useFleet";
 import { nodeOf } from "../../../hooks/fleetStore";
 import { SectionedScreen } from "../SectionedScreen";
+import { ReadOnlyConfig } from "./rows";
 import { isListed, useAgentSections } from "./sections";
 
 export function AgentScreen({
@@ -64,18 +66,21 @@ function NodeSettings({
       scrollKey={`${nodeDid}/${section}/${item ?? ""}`}
       pageKey={deployment.nodeDid}
       testId="agent-screen"
+      banner={
+        readOnly && (
+          <p
+            role="status"
+            className="flex items-center gap-2 border-b border-border/60 bg-raised/95 px-6 py-2.5 text-sm text-foreground/85 backdrop-blur"
+          >
+            <Lock aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+            {readOnly}
+          </p>
+        )
+      }
     >
-      {readOnly && (
-        <p
-          role="status"
-          className="mx-6 mt-4 rounded-lg border border-border/60 bg-raised px-3 py-2 text-xs text-muted-foreground"
-        >
-          {readOnly}
-        </p>
-      )}
-      <fieldset disabled={Boolean(readOnly)} className="m-0 min-w-0 border-0 p-0">
+      <ReadOnlyConfig readOnly={Boolean(readOnly)}>
         {Panel && <Panel deployment={deployment} item={item} />}
-      </fieldset>
+      </ReadOnlyConfig>
     </SectionedScreen>
   );
 }

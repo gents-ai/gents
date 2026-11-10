@@ -279,11 +279,16 @@ def livePartialCases : List Case :=
   , mkCase "live_partial_rejects_short_extent" (world 5)
       [.appendRaw 1 5 (raw 100 0 0 5),
        .closePartial 5 7 { livePartialItem with closing := partialClose 101 0 0 5 }]
+  , mkCase "live_partial_recovers_stopped_reasoning" (world 5)
+      [.appendRaw 1 5 StreamingResponse.ReasoningAudit.stoppedObserved,
+       .closePartial 5 7 ⟨StreamingResponse.ReasoningAudit.stoppedClose,
+         some { StreamingResponse.ReasoningAudit.recoveredReasoning with createdAt := 5 }⟩]
   ]
 
 example : livePartialCases.map (fun value => value.expected.map
     (List.map (·.accepted))) =
-    [some [true, true, true, true], some [true, false], some [true, false]] := by
+    [some [true, true, true, true], some [true, false], some [true, false],
+      some [true, true]] := by
   native_decide
 
 example : ((livePartialCases.head?.bind (·.expected)).bind List.getLast?).map

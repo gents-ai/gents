@@ -12,11 +12,21 @@ export type SurfaceContext = {
 export type Surface = {
   id: string;
   title: string;
+  /** a shorter name for its tab in the dock, where tabs share one row */
+  tab?: string;
   icon: ComponentType<{ className?: string }>;
   placements: readonly Placement[];
   routes?: readonly string[];
   render: ComponentType<SurfaceContext>;
-  badge?: (fleet: FleetState, sessionId: string | null) => number | null;
+  badge?: (fleet: FleetState, sessionId: string | null) => SurfaceBadge | null;
+};
+
+/** A count by a tab's title. `label` says what it counts, for its hint and
+    name; `mark` puts a dot beside it, red for `alert`. */
+export type SurfaceBadge = {
+  count: number;
+  label?: string;
+  mark?: "active" | "alert" | null;
 };
 
 const registry = createRegistry<Surface>();

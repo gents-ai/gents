@@ -9,10 +9,10 @@ use std::collections::BTreeMap;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::document_config::{EvalDefinition, EvalReducer, EvalSplit, EvalTier};
+use crate::documents::{EvalDefinition, EvalReducer, EvalSplit, EvalTier};
 use crate::eval::report::evidence::{cell_usage, counted_slots, CellUsage, RunRows};
 use crate::eval::report::refused;
-use crate::eval::runner::freeze::definition_ref;
+use crate::eval::runner::freeze::documents::definition_ref;
 use crate::eval::{
     case_means_bp, case_trial_score, classify, exposure, headline_bp, CaseTrialScore, CellSpec,
     DefinitionRef, EvidenceClass, Invalidation, OutcomeKind, ProviderReason, RunHeader, RunRecord,
@@ -534,7 +534,7 @@ mod tests {
         );
     }
 
-    use crate::document_config::EvalSplit;
+    use crate::documents::EvalSplit;
     use crate::eval::report::evidence::CellUsage;
     use crate::eval::report::report_refused;
     use crate::eval::{OutcomeKind, RunHeader, TrialUsage, VerdictRecord};

@@ -1,3 +1,11 @@
+#[cfg(target_os = "macos")]
+mod browser;
+#[cfg(desktop)]
+mod links;
+#[cfg(target_os = "macos")]
+mod notifications;
+#[cfg(desktop)]
+mod plugin_window;
 mod product_telemetry;
 #[cfg(target_os = "macos")]
 mod swipe;
@@ -32,6 +40,12 @@ use tauri::Manager;
 #[cfg(desktop)]
 use tauri::{Emitter, Listener};
 
+/// The app's Tauri context. It expands once per crate, since it embeds the
+/// macOS Info.plist under a fixed symbol.
+pub(crate) fn context() -> tauri::Context<tauri::Wry> {
+    tauri::generate_context!()
+}
+
 pub fn run() {
     install_tracing(TracingConfig {
         filter: None,
@@ -50,7 +64,7 @@ pub fn run() {
     prefer_host_tools();
     install_runtime();
 
-    let context = tauri::generate_context!();
+    let context = context();
     #[cfg(all(feature = "native-e2e", debug_assertions, desktop))]
     let context = native_local_e2e_context(context);
     let mut context = context;
@@ -70,7 +84,9 @@ pub fn run() {
 
     let builder = tauri::Builder::default();
     #[cfg(desktop)]
-    let builder = builder.plugin(single_instance());
+    let builder = builder
+        .plugin(single_instance())
+        .plugin(tauri_plugin_deep_link::init());
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(browser_store_lock());
     let builder = builder
@@ -88,6 +104,7 @@ pub fn run() {
             }
             #[cfg(desktop)]
             {
+                links::setup(app)?;
                 setup_tray(app)?;
                 #[cfg(target_os = "macos")]
                 windows::setup(app)?;
@@ -99,16 +116,35 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(init(platform_bridge_config()))
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_opener::init());
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init());
     #[cfg(target_os = "macos")]
     let builder = builder.invoke_handler(tauri::generate_handler![
         windows::desktop_window_setup_complete,
         swipe::swipe_scroll_edges,
+        links::desktop_take_links,
+        plugin_window::desktop_open_plugin_window,
+        notifications::desktop_post_notification,
+        browser::browser_open,
+        browser::browser_select,
+        browser::browser_place,
+        browser::browser_hide,
+        browser::browser_go,
+        browser::browser_close_tab,
+        browser::browser_close,
         product_telemetry::product_telemetry_app_opened,
         product_telemetry::product_telemetry_status,
         product_telemetry::product_telemetry_set_enabled
     ]);
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(all(desktop, not(target_os = "macos")))]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        links::desktop_take_links,
+        plugin_window::desktop_open_plugin_window,
+        product_telemetry::product_telemetry_app_opened,
+        product_telemetry::product_telemetry_status,
+        product_telemetry::product_telemetry_set_enabled
+    ]);
+    #[cfg(not(desktop))]
     let builder = builder.invoke_handler(tauri::generate_handler![
         product_telemetry::product_telemetry_app_opened,
         product_telemetry::product_telemetry_status,
@@ -246,7 +282,7 @@ fn platform_bridge_config() -> BridgeConfig {
         snapshot_grants: SnapshotGrants::all(),
         managed_server: platform_managed_server_policy(),
         client_host: cfg!(all(desktop, any(unix, windows))),
-        store_key_custody: gents::store_key::StoreKeyCustodyChoice::default(),
+        store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice::default(),
     };
     #[cfg(all(feature = "native-e2e", debug_assertions, desktop))]
     let config = native_local_e2e_config(config);
@@ -275,7 +311,7 @@ fn native_local_e2e_config(config: BridgeConfig) -> BridgeConfig {
         store_key_custody: if std::env::var("GENTS_E2E_FILE_STORE_KEYS").ok().as_deref()
             == Some("1")
         {
-            gents::store_key::StoreKeyCustodyChoice::File
+            gents::store::local::store_key::StoreKeyCustodyChoice::File
         } else {
             config.store_key_custody
         },

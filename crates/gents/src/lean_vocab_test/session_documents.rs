@@ -50,6 +50,36 @@ mod tests {
     use serde_json::{json, Value};
 
     #[test]
+    fn generated_output_obligation_cases_match_runtime_input_classification() {
+        use gents_protocol::output::{authored, MessageRole};
+        let cases: Vec<_> = lean_contract_snapshot()
+            .session_document_cases
+            .projection
+            .iter()
+            .filter(|case| case["operation"] == "output_obligation_control")
+            .collect();
+        assert!(!cases.is_empty());
+        for case in cases {
+            let role = if case["user"].as_bool().unwrap() {
+                MessageRole::User
+            } else {
+                MessageRole::Assistant
+            };
+            assert_eq!(
+                authored::is_output_obligation(
+                    role,
+                    case["request"].as_str(),
+                    case["key"].as_str().unwrap()
+                ),
+                case["control"].as_bool().unwrap(),
+                "{}",
+                case["name"]
+            );
+        }
+        assert_eq!(authored::output_obligation_key(12), "output-obligation:12");
+    }
+
+    #[test]
     fn generated_pending_timeline_cases_preserve_request_identities_and_order() {
         let cases: Vec<_> = lean_contract_snapshot()
             .session_document_cases
@@ -113,6 +143,26 @@ mod tests {
                     TimelineSlot::Overlay => json!({"kind":"overlay"}),
                 }).collect();
             assert_eq!(json!(actual), case["slots"], "{}", case["name"]);
+        }
+    }
+
+    #[test]
+    fn generated_question_reply_source_cases_preserve_attribution() {
+        let cases: Vec<_> = lean_contract_snapshot()
+            .session_document_cases
+            .projection
+            .iter()
+            .filter(|case| case["operation"] == "question_reply_source")
+            .collect();
+        assert!(!cases.is_empty());
+        for case in cases {
+            let actual = gents_protocol::question_reply_source::question_reply_source(
+                case["person"].as_bool().unwrap(),
+                case["request_source"].as_str(),
+                case["evidence_source"].as_str(),
+                case["observed_question"].as_bool().unwrap(),
+            );
+            assert_eq!(actual, case["source"].as_str(), "{}", case["name"]);
         }
     }
 }

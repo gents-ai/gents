@@ -30,9 +30,9 @@ async fn one_time_workspace_approval_runs_the_reported_six_browser_cases() {
     workspace::scope(
         context,
         scope_interactive(true, async {
-            let tools = crate::toolset::ToolContext::new(project.clone(), false).unwrap();
-            let policy = crate::toolset::CommandExecutionPolicy::write_capable()
-                .with_mode(crate::toolset::CommandExecutionMode::WorkspaceWrite);
+            let tools = crate::tools::native::ToolContext::new(project.clone(), false).unwrap();
+            let policy = crate::tools::native::CommandExecutionPolicy::write_capable()
+                .with_mode(crate::tools::native::CommandExecutionMode::WorkspaceWrite);
             let args = vec![
                 "-lc".into(),
                 concat!(
@@ -46,7 +46,7 @@ async fn one_time_workspace_approval_runs_the_reported_six_browser_cases() {
                 cache.to_str().unwrap().into(),
             ];
             let run = || {
-                crate::toolset::run_command_for_test(
+                crate::tools::native::run_command_for_test(
                     &tools,
                     "bash",
                     "/bin/sh",
@@ -83,7 +83,7 @@ async fn one_time_workspace_approval_runs_the_reported_six_browser_cases() {
             assert_eq!(writable_root.as_ref(), Some(&project));
             assert_eq!(
                 bound.mode,
-                crate::toolset::CommandExecutionMode::WorkspaceWrite
+                crate::tools::native::CommandExecutionMode::WorkspaceWrite
             );
             decide(&home, &original, Answer::Once).unwrap();
             let outcome = first.await;

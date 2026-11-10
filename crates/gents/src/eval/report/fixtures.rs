@@ -1,7 +1,7 @@
 use serde_json::json;
 
-use crate::document_config::{EvalDefinition, EvalSplit, EvalTier};
-use crate::eval::runner::freeze::definition_ref;
+use crate::documents::{EvalDefinition, EvalSplit, EvalTier};
+use crate::eval::runner::freeze::documents::definition_ref;
 use crate::eval::{
     Anchor, CellSpec, OutcomeKind, RunOrigin, RunRecord, StageCompletion, SubjectRef,
     TrialCompletion, TrialIdentity, TrialRecord, TrialUsage, VerdictRecord, DENOMINATOR_POLICY_V1,
@@ -67,7 +67,7 @@ pub(crate) fn record(
                     label: (*cell_id).into(),
                     subject: SubjectRef {
                         pack_digest: "sha256:pack".into(),
-                        agent_id: "monitor".into(),
+                        agent_slot: "monitor".into(),
                     },
                     inference_profile_id: "local".into(),
                 })

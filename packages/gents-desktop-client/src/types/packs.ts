@@ -2,10 +2,16 @@ import type { PluginJobSettings } from "../generated/PluginJobSettings.js";
 
 export type { InstalledPackView as InstalledPack } from "../generated/InstalledPackView.js";
 export type { FoundPackView as FoundPack } from "../generated/FoundPackView.js";
+export type { PackInfoView as PackInfo } from "../generated/PackInfoView.js";
 export type { PackPluginSlotView as PackPluginSlot } from "../generated/PackPluginSlotView.js";
 export type { PackInferenceProfileOption as PackSlotProfile } from "../generated/PackInferenceProfileOption.js";
 export type { EditedDocuments as PackEditedChoice } from "../generated/EditedDocuments.js";
 export type { PackInstallRequest } from "../generated/PackInstallRequest.js";
+export type { PackInstallView as PackInstallReport } from "../generated/PackInstallView.js";
+export type { PackReviewDocumentView as PackReviewDocument } from "../generated/PackReviewDocumentView.js";
+export type { PackAuthorityAskView as PackAuthorityAsk } from "../generated/PackAuthorityAskView.js";
+export type { PackInferenceNeedsView as PackInferenceNeeds } from "../generated/PackInferenceNeedsView.js";
+export type { PackInferenceSlotNeedView as PackInferenceSlotNeed } from "../generated/PackInferenceSlotNeedView.js";
 export type { PackWireRequest } from "../generated/PackWireRequest.js";
 export type { DynamicWorkflowsView as DynamicWorkflows } from "../generated/DynamicWorkflowsView.js";
 export type { DynamicWorkflowSummary } from "../generated/DynamicWorkflowSummary.js";
@@ -14,7 +20,7 @@ export type { DynamicWorkflowView as DynamicWorkflow } from "../generated/Dynami
 export type { WorkflowPromoteRequest } from "../generated/WorkflowPromoteRequest.js";
 export type { WorkflowPromoteView as WorkflowPromoted } from "../generated/WorkflowPromoteView.js";
 
-/* The bridge's wire commands return the JSON `gents pack wire` reports, which
+/* The bridge's wire commands return the JSON `gents config pack wire` reports, which
    the bridge does not type (`serde_json::Value`); these are its shapes. */
 
 /** What wiring changed, answer first; `job` is the block the person consents to. */

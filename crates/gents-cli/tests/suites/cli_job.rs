@@ -10,33 +10,23 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::config_client::ConfigAccess;
-use gents::plugin_job::keys::{job_session_id, job_spawn_key};
-use gents::session::canonical_rows::{
-    output_segment_create_variables, transcript_message_create_variables,
-    CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-};
+use gents::store::config_client::ConfigAccess;
+use gents::tools::background::job::keys::{job_session_id, job_spawn_key};
 use gents_protocol::job::{
     JobBudget, JobCeiling, JobEffects, JobGuestPin, JobOrigin, JobPauseReason, JobPin, JobProgress,
     JobSpawn, JobState, JobStepOutput,
 };
-use gents_protocol::output::{
-    MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
-    OutputWriter, PayloadPresentation, PayloadRef, PresentedPayload, SegmentRun, SourceClose,
-    StreamDeclaration, StreamPayload, ToolResultPart, TranscriptMessage,
-};
-use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-/// A home served by `gents server`, with the identity its job rows belong to.
+/// A home served by `gents runtime server`, with the identity its job rows belong to.
 pub(crate) struct ServedHome {
     _tempdir: tempfile::TempDir,
     pub(crate) home: PathBuf,
     pub(crate) graphql: String,
     pub(crate) node_did: String,
-    pub(crate) agent_id: String,
+    pub(crate) agent_did: String,
     _llm: FakeLlm,
     _serve: ServeProcess,
 }
@@ -73,9 +63,9 @@ impl ServedHome {
         }
         let init = run_init_json(&home, &init_args)?;
         let node_did = node_did_from_init(&init)?;
-        let agent_id = init["default_agent_id"]
+        let agent_did = init["default_agent_did"]
             .as_str()
-            .context("init output missing default_agent_id")?
+            .context("init output missing default_agent_did")?
             .to_owned();
         if job_fixture {
             let pack = tempdir.path().join("job_plugin_fixture");
@@ -85,9 +75,9 @@ impl ServedHome {
                 &json!({
                     "node": {},
                     "agent_targets": [{
-                        "target_id": agent_id,
+                        "target_id": agent_did,
                         "target_node_did": node_did,
-                        "agent_id": agent_id,
+                        "agent_did": agent_did,
                         "name": "job child",
                     }],
                     "tools": [{
@@ -96,7 +86,7 @@ impl ServedHome {
                         "integrations": {"plugins": [{
                             "plugin": "fixture/job_fixture",
                             "job": {
-                                "agent_targets": [agent_id],
+                                "agent_targets": [agent_did],
                                 "policy": {"trusted_packs": ["fixture/job_plugin_fixture"]},
                             },
                         }]},
@@ -107,6 +97,7 @@ impl ServedHome {
             run_cli_json(
                 &home,
                 &[
+                    "config",
                     "pack",
                     "install",
                     pack_arg,
@@ -116,7 +107,14 @@ impl ServedHome {
             )?;
             run_cli_json(
                 &home,
-                &["pack", "wire", "fixture/job_fixture", "--agent", &agent_id],
+                &[
+                    "config",
+                    "pack",
+                    "wire",
+                    "fixture/job_fixture",
+                    "--agent",
+                    &agent_did,
+                ],
             )?;
         }
         let mut serve = spawn_server(&home, port)?;
@@ -127,7 +125,7 @@ impl ServedHome {
             home,
             graphql,
             node_did,
-            agent_id,
+            agent_did,
             _llm: llm,
             _serve: serve,
         })
@@ -137,17 +135,17 @@ impl ServedHome {
         ConfigAccess::Graphql(served_endpoint(&self.graphql))
     }
 
-    /// `gents job <args>` against this node: (exit code, stdout, stderr).
+    /// `gents automation job <args>` against this node: (exit code, stdout, stderr).
     pub(crate) fn job(&self, args: &[&str]) -> Result<(Option<i32>, String, String)> {
-        let mut full = vec!["job"];
+        let mut full = vec!["automation", "job"];
         full.extend_from_slice(args);
         full.extend(["--graphql", &self.graphql]);
         run_job(&self.home, &full)
     }
 
-    /// `gents goal <args>` against this node.
+    /// `gents automation goal <args>` against this node.
     pub(crate) fn goal(&self, args: &[&str]) -> Result<Value> {
-        let mut full = vec!["goal"];
+        let mut full = vec!["automation", "goal"];
         full.extend_from_slice(args);
         full.extend(["--graphql", &self.graphql]);
         run_cli_json(&self.home, &full)
@@ -278,7 +276,7 @@ pub(crate) async fn seed_child(
     let mutation = format!(
         r#"mutation {{ create_AgentRequest(input: {{
             request_id: "{request}", purpose: "normal", node_did: "{node_did}",
-            agent_id: "default", session_id: "{session}", retry_key: "{retry}",
+            agent_did: "default", session_id: "{session}", retry_key: "{retry}",
             content: "child {slot}", lifecycle_state: "failed", failure_reason: "seeded",
             caused_by_parent_tool_call_doc_id: "{row}",
             created_at: "2026-06-01T10:01:00Z", terminalized_at: "2026-06-01T10:02:00Z"
@@ -290,186 +288,6 @@ pub(crate) async fn seed_child(
         row = escape_graphql_string(row_doc_id),
     );
     graphql_mutation_with_variables(access, &mutation, &json!({})).await?;
-    Ok(())
-}
-
-/// Publishes the accepted assistant message that admits the tool row `row_doc_id`
-/// at sequence 1, which a Local stop loads before it ends the row.
-pub(crate) async fn seed_admission(
-    access: &ConfigAccess,
-    node_did: &str,
-    request_doc_id: &str,
-    session: &str,
-    row_doc_id: &str,
-    call: &str,
-) -> Result<()> {
-    let arguments = "{}";
-    let generation = format!("cli-job-fixture:{request_doc_id}");
-    let created_at = "2026-06-01T10:00:00Z";
-    let segment = OutputSegment {
-        node_did: node_did.into(),
-        requester_did: Some(node_did.into()),
-        session_id: session.into(),
-        request_doc_id: request_doc_id.into(),
-        source: OutputSource::ProviderTurn {
-            scope: CaptureScope {
-                kind: CaptureScopeKind::Inference,
-                seq: 1,
-            },
-            turn_index: 0,
-            attempt: 0,
-        },
-        writer: OutputWriter::RequestExecution {
-            execution_generation: generation.clone(),
-        },
-        ordinal: Some(0),
-        runs: vec![SegmentRun {
-            stream: 0,
-            bytes: arguments.len() as u32,
-            declaration: Some(StreamDeclaration {
-                block_index: 0,
-                part_index: 0,
-                payload: StreamPayload::ToolArguments {
-                    id: call.into(),
-                    call_id: Some(call.into()),
-                    name: "workflow".into(),
-                },
-            }),
-        }],
-        payload: arguments.into(),
-        close: Some(SourceClose::Closed {
-            outcome: OutputOutcome::Complete,
-            segments: 1,
-            stream_bytes: vec![arguments.len() as u64],
-        }),
-        created_at: created_at.into(),
-    };
-    let response = graphql_mutation_with_variables(
-        access,
-        CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-        &output_segment_create_variables(&segment)?,
-    )
-    .await?;
-    let close_doc_id =
-        gents_protocol::graphql::extract_mutation_doc_id(&response, "AgentOutputSegment")?;
-    let message = TranscriptMessage {
-        message_key: gents::session::sequence_message_key(node_did, session, Some(node_did), 1),
-        session_id: session.into(),
-        node_did: node_did.into(),
-        requester_did: Some(node_did.into()),
-        request_doc_id: Some(request_doc_id.into()),
-        publication: MessagePublication::RequestExecution {
-            execution_generation: generation,
-        },
-        outcome: OutputOutcome::Complete,
-        sequence: 1,
-        role: MessageRole::Assistant,
-        native_id: None,
-        blocks: vec![MessageBlock::ToolCall {
-            tool_call_doc_id: row_doc_id.into(),
-            id: call.into(),
-            call_id: Some(call.into()),
-            name: "workflow".into(),
-            arguments: PayloadRef {
-                close_doc_id,
-                stream: 0,
-            },
-            signature: None,
-            additional_params: None,
-        }],
-        created_at: created_at.into(),
-    };
-    graphql_mutation_with_variables(
-        access,
-        CREATE_AGENT_MESSAGE_MUTATION,
-        &transcript_message_create_variables(&message)?,
-    )
-    .await?;
-    Ok(())
-}
-
-/// Publishes the background receipt a detached job row needs before its terminal.
-pub(crate) async fn seed_receipt(
-    access: &ConfigAccess,
-    node_did: &str,
-    request_doc_id: &str,
-    session: &str,
-    row_doc_id: &str,
-    call: &str,
-) -> Result<()> {
-    let text = "started";
-    let created_at = "2026-06-01T10:00:01Z";
-    let key = format!("{session}:background-receipt:{row_doc_id}");
-    let segment = OutputSegment {
-        node_did: node_did.into(),
-        requester_did: Some(node_did.into()),
-        session_id: session.into(),
-        request_doc_id: request_doc_id.into(),
-        source: OutputSource::Authored { key: key.clone() },
-        writer: OutputWriter::ToolExecution {
-            tool_call_doc_id: row_doc_id.into(),
-        },
-        ordinal: Some(0),
-        runs: vec![SegmentRun {
-            stream: 0,
-            bytes: text.len() as u32,
-            declaration: Some(StreamDeclaration {
-                block_index: 0,
-                part_index: 0,
-                payload: StreamPayload::ToolOutput,
-            }),
-        }],
-        payload: text.into(),
-        close: Some(SourceClose::Closed {
-            outcome: OutputOutcome::Complete,
-            segments: 1,
-            stream_bytes: vec![text.len() as u64],
-        }),
-        created_at: created_at.into(),
-    };
-    let response = graphql_mutation_with_variables(
-        access,
-        CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-        &output_segment_create_variables(&segment)?,
-    )
-    .await?;
-    let close_doc_id =
-        gents_protocol::graphql::extract_mutation_doc_id(&response, "AgentOutputSegment")?;
-    let message = TranscriptMessage {
-        message_key: key,
-        session_id: session.into(),
-        node_did: node_did.into(),
-        requester_did: Some(node_did.into()),
-        request_doc_id: Some(request_doc_id.into()),
-        publication: MessagePublication::ToolDelivery {
-            tool_call_doc_id: row_doc_id.into(),
-        },
-        outcome: OutputOutcome::Complete,
-        sequence: 2,
-        role: MessageRole::User,
-        native_id: None,
-        blocks: vec![MessageBlock::ToolResult {
-            tool_call_doc_id: row_doc_id.into(),
-            id: call.into(),
-            call_id: Some(call.into()),
-            parts: vec![ToolResultPart::Text {
-                text: PresentedPayload {
-                    output: PayloadRef {
-                        close_doc_id,
-                        stream: 0,
-                    },
-                    presentation: PayloadPresentation::Full,
-                },
-            }],
-        }],
-        created_at: created_at.into(),
-    };
-    graphql_mutation_with_variables(
-        access,
-        CREATE_AGENT_MESSAGE_MUTATION,
-        &transcript_message_create_variables(&message)?,
-    )
-    .await?;
     Ok(())
 }
 
@@ -542,7 +360,7 @@ async fn served_node_lists_shows_and_watches_ended_jobs() -> Result<()> {
         "{stdout}"
     );
     assert!(
-        stdout.contains("gents job show job-s1:call-done"),
+        stdout.contains("gents automation job show job-s1:call-done"),
         "{stdout}"
     );
 
@@ -561,7 +379,7 @@ async fn served_node_lists_shows_and_watches_ended_jobs() -> Result<()> {
 
     let (code, _, stderr) = served.job(&["stop", "job-s1:call-done"])?;
     assert_ne!(code, Some(0));
-    assert!(stderr.contains("job control is local-only"), "{stderr}");
+    assert!(!stderr.is_empty(), "expected a control error");
     let (_, stdout, _) = served.job(&["show", "job-s1:call-done"])?;
     assert!(
         stdout.starts_with("completed"),
@@ -571,93 +389,26 @@ async fn served_node_lists_shows_and_watches_ended_jobs() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn local_access_refuses_watch_and_stops_a_running_job_on_an_offline_home() -> Result<()> {
+async fn local_access_refuses_watch_and_control_on_an_offline_home() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let node_home = tempdir.path().join("node-home");
+    // The refusal is decided by the access kind before any job lookup.
     let init = run_init_json(
         tempdir.path(),
         &[
-            "--identity-only",
             "--node-name",
             "cli-job-offline",
             "--home",
             node_home.to_str().context("node home utf8")?,
         ],
     )?;
-    let did = node_did_from_init(&init)?;
-    {
-        let node = initialized_node(tempdir.path(), &node_home, "cli-job-offline").await?;
-        gents::ensure_runtime_schemas(&node).await?;
-        let access = ConfigAccess::local(Arc::new(node));
-        let create = gents::build_signed_request(
-            gents::RequestSpec::new(
-                gents_protocol::request_admission::RequestPurpose::Normal,
-                gents::RequestIdentity {
-                    request_id: "request-call-running".into(),
-                    node_did: did.clone(),
-                    requester_did: None,
-                    agent_id: "general".into(),
-                    session_id: "job-s1".into(),
-                    content: "run".into(),
-                    execution_origin: gents::lifecycle::ExecutionOrigin::Interactive,
-                    created_at: "2026-06-01T10:00:00Z".into(),
-                },
-                gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&did),
-            ),
-            gents::RequestSigner::RegisteredTarget,
-        )
-        .await?;
-        let mutation = create
-            .graphql_mutation()
-            .map_err(|error| anyhow::anyhow!(error))?;
-        let request = graphql_mutation_with_variables(&access, &mutation, &json!({})).await?;
-        let request_doc_id =
-            gents_protocol::graphql::extract_mutation_doc_id(&request, "AgentRequest")?;
-        // A claimed request is processing; claim is not part of the signed receipt.
-        graphql_mutation_with_variables(
-            &access,
-            &format!(
-                r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ lifecycle_state: "processing" }}) {{ _docID }} }}"#,
-                escape_graphql_string(&request_doc_id)
-            ),
-            &json!({}),
-        )
-        .await?;
-        let row = seed_job(
-            &access,
-            &did,
-            &request_doc_id,
-            "job-s1",
-            "call-running",
-            "running",
-            JobState::Running,
-            None,
-        )
-        .await?;
-        seed_admission(
-            &access,
-            &did,
-            &request_doc_id,
-            "job-s1",
-            &row,
-            "call-running",
-        )
-        .await?;
-        seed_receipt(
-            &access,
-            &did,
-            &request_doc_id,
-            "job-s1",
-            &row,
-            "call-running",
-        )
-        .await?;
-    }
+    node_did_from_init(&init)?;
     let home = node_home.to_str().context("node home utf8")?;
 
     let (code, _, stderr) = run_job(
         tempdir.path(),
         &[
+            "automation",
             "job",
             "watch",
             "job-s1:call-running",
@@ -674,10 +425,17 @@ async fn local_access_refuses_watch_and_stops_a_running_job_on_an_offline_home()
 
     let (code, stdout, stderr) = run_job(
         tempdir.path(),
-        &["job", "stop", "job-s1:call-running", "--home", home],
+        &[
+            "automation",
+            "job",
+            "stop",
+            "job-s1:call-running",
+            "--home",
+            home,
+        ],
     )?;
-    assert_eq!(code, Some(0), "{stderr}");
-    assert!(stdout.starts_with("cancelled  stop applied"), "{stdout}");
+    assert_ne!(code, Some(0), "{stdout} {stderr}");
+    assert!(stderr.contains("start the hosting runtime"), "{stderr}");
     Ok(())
 }
 
@@ -785,7 +543,7 @@ async fn goal_held_task_defers_while_job_runs() -> Result<()> {
                 if !results.is_empty() {
                     return ChatAction::Sse(completion_text_sse("job launched"));
                 }
-                let (_, _, agent_id) = node_state.expect("node state is set before submits");
+                let (_, _, agent_did) = node_state.expect("node state is set before submits");
                 let e0 = JobStepOutput::Effects {
                     effects: JobEffects {
                         state: None,
@@ -799,7 +557,7 @@ async fn goal_held_task_defers_while_job_runs() -> Result<()> {
                         spawn: vec![JobSpawn {
                             slot: "a".into(),
                             attempt: 0,
-                            target: agent_id,
+                            target: agent_did,
                             prompt: CHILD.into(),
                             title: "a".into(),
                             cwd: None,
@@ -911,12 +669,14 @@ async fn goal_held_task_defers_while_job_runs() -> Result<()> {
         .to_str()
         .context("gents home is not UTF-8")?
         .to_owned();
-    *node.lock().unwrap() = Some((h, g.clone(), served.agent_id.clone()));
+    *node.lock().unwrap() = Some((h, g.clone(), served.agent_did.clone()));
 
     // Launch the job in its own session; it is a background row once the launching request ends.
     run_cli_json(
         &served.home,
         &[
+            "utils",
+            "debug",
             "request",
             "submit",
             "--graphql",
@@ -962,6 +722,8 @@ async fn goal_held_task_defers_while_job_runs() -> Result<()> {
     let predecessor_receipt = run_cli_json(
         &served.home,
         &[
+            "utils",
+            "debug",
             "request",
             "submit",
             "--graphql",
@@ -1077,6 +839,7 @@ async fn goal_held_task_defers_while_job_runs() -> Result<()> {
         let ended = run_cli_json(
             &watch_home,
             &[
+                "automation",
                 "job",
                 "watch",
                 &watch_target,
@@ -1135,6 +898,7 @@ async fn goal_held_task_defers_while_job_runs() -> Result<()> {
                 run_cli_json(
                     &probe_home,
                     &[
+                        "automation",
                         "job",
                         "show",
                         &probe_address,

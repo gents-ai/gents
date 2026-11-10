@@ -156,7 +156,7 @@ async fn codex_shim_derives_git_info_and_keeps_empty_thread_ephemeral() -> Resul
                 }}"#,
                 escape_graphql_string(&git_thread_id),
                 escape_graphql_string(&node_did),
-                escape_graphql_string(&node_did),
+                escape_graphql_string(&support::graphql::cli_user_did(&home_dir)?),
             ),
         ))
         .await?;
@@ -195,7 +195,7 @@ async fn codex_shim_derives_git_info_and_keeps_empty_thread_ephemeral() -> Resul
                 }}) {{ title }} }}"#,
                 escape_graphql_string(&git_thread_id),
                 escape_graphql_string(&node_did),
-                escape_graphql_string(&node_did),
+                escape_graphql_string(&support::graphql::cli_user_did(&home_dir)?),
             ),
         ))
         .await?;
@@ -232,6 +232,7 @@ async fn codex_shim_derives_git_info_and_keeps_empty_thread_ephemeral() -> Resul
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "codex shim is being removed"]
 async fn codex_shim_thread_fork_and_search_project_gents_sessions() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
@@ -338,7 +339,7 @@ async fn codex_shim_thread_fork_and_search_project_gents_sessions() -> Result<()
             }}"#,
                 escape_graphql_string(&forked_id),
                 escape_graphql_string(&node_did),
-                escape_graphql_string(&node_did),
+                escape_graphql_string(&support::graphql::cli_user_did(&home_dir)?),
             ),
         ))
         .await?;

@@ -3,10 +3,11 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
-use gents::config_client::ConfigAccess;
-use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
-use gents::session_origin::load_session;
+use defra_node::Node as EmbeddedNode;
+use gents::session::origin::load_session;
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
@@ -79,11 +80,16 @@ impl SubagentFinishStatus {
     }
 
     fn of(request: &AgentRequestRow) -> Option<Self> {
-        match request.lifecycle_state.map(|state| state.as_str()) {
-            Some("completed") => Some(Self::Completed),
-            Some("interrupted") => Some(Self::Cancelled),
-            Some("failed" | "dead" | "superseded") => Some(Self::Failed),
-            _ => None,
+        match request.lifecycle_state? {
+            RequestLifecycleState::Completed => Some(Self::Completed),
+            RequestLifecycleState::Interrupted => Some(Self::Cancelled),
+            RequestLifecycleState::Failed
+            | RequestLifecycleState::Dead
+            | RequestLifecycleState::Superseded => Some(Self::Failed),
+            RequestLifecycleState::WorkspaceBindingPending
+            | RequestLifecycleState::Pending
+            | RequestLifecycleState::Claimed
+            | RequestLifecycleState::Processing => None,
         }
     }
 }
@@ -274,7 +280,7 @@ pub(super) async fn project_caused_sessions(
             parent_session_id: session.caused_by_scope.session_id.clone(),
             parent_prompt_id: parent_prompt_id.map(ToOwned::to_owned),
             child_session_id: id.clone(),
-            subagent_type: session.agent_id.clone(),
+            subagent_type: session.agent_did.clone(),
             description,
             workflow_run_id: job_run.filter(|run| delivered_runs.contains(*run)).cloned(),
             context_normalized: true,
@@ -379,14 +385,29 @@ async fn cancel(
     session: &CausedSession,
     context_window: u64,
 ) -> Result<Value> {
-    if let Some(refusal) =
-        gents::session_message::interrupt_refusal(node, caller, &session.scope).await?
+    if let Some(refusal) = gents::session::message::interrupt_refusal(
+        node,
+        caller
+            .requester_did
+            .as_deref()
+            .context("missing caller identity")?,
+        caller,
+        &session.scope,
+    )
+    .await?
     {
         anyhow::bail!(refusal);
     }
-    if gents::session_message::interrupt_session(node, &session.scope)
-        .await?
-        .is_some()
+    if gents::session::message::interrupt_session(
+        node,
+        caller
+            .requester_did
+            .as_deref()
+            .context("missing caller identity")?,
+        &session.scope,
+    )
+    .await?
+    .is_some()
     {
         return Ok(json!({"subagentId": id, "cancelled": true, "outcome": {"kind": "cancelled"}}));
     }
@@ -417,12 +438,10 @@ async fn snapshot(
         .unwrap_or(0);
     let status = SubagentFinishStatus::of(latest)
         .map(SubagentFinishStatus::wire_name)
-        .unwrap_or_else(
-            || match latest.lifecycle_state.map(|state| state.as_str()) {
-                Some("pending" | "claimed") => "initializing",
-                _ => "running",
-            },
-        );
+        .unwrap_or_else(|| match latest.lifecycle_state {
+            Some(RequestLifecycleState::Pending | RequestLifecycleState::Claimed) => "initializing",
+            _ => "running",
+        });
     let duration = if latest.is_terminal() || started == 0 {
         progress.duration_ms
     } else {
@@ -432,7 +451,7 @@ async fn snapshot(
         "subagentId": session.scope.session_id,
         "parentSessionId": session.caused_by_scope.session_id,
         "childSessionId": session.scope.session_id,
-        "subagentType": session.agent_id,
+        "subagentType": session.agent_did,
         "description": description(session),
         "startedAtEpochMs": started,
         "durationMs": duration,
@@ -483,7 +502,9 @@ async fn final_output(node: &Arc<EmbeddedNode>, request: &AgentRequestRow) -> Re
         .as_deref()
         .context("terminal caused request omitted physical identity")?;
     match gents::load_caused_request_terminal(node, request_doc_id).await? {
-        Some(gents::tool_call_lifecycle::CausedRequestTerminal::Completed { output }) => Ok(output),
+        Some(gents::tools::call::lifecycle::CausedRequestTerminal::Completed { output }) => {
+            Ok(output)
+        }
         Some(_) => anyhow::bail!("caused request did not complete"),
         None => anyhow::bail!("completed caused request has no replicated terminal output yet"),
     }
@@ -534,7 +555,7 @@ async fn load_activity(
         .map(|(scope, doc_id)| {
             format!(
                 r#"{{{}, request_doc_id: {{_eq: "{}"}}}}"#,
-                gents::session::session_scope_filter(
+                gents_protocol::session::session_scope_filter(
                     &scope.node_did,
                     &scope.session_id,
                     scope.requester_did.as_deref()
@@ -757,7 +778,7 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        gents::schema::ensure_runtime_schemas(node.as_ref())
+        gents::store::schema::ensure_runtime_schemas(node.as_ref())
             .await
             .unwrap();
         let did = crate::caused_sessions::fixtures::FIXTURE_DID;
@@ -776,7 +797,7 @@ mod tests {
             .collect::<Vec<_>>();
         started.sort();
         assert_eq!(started, ["child-a", "child-b"]);
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     const DID: &str = crate::caused_sessions::fixtures::FIXTURE_DID;
@@ -789,7 +810,7 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        gents::schema::ensure_runtime_schemas(node.as_ref())
+        gents::store::schema::ensure_runtime_schemas(node.as_ref())
             .await
             .unwrap();
         node
@@ -802,7 +823,7 @@ mod tests {
             ))
             .await;
         assert!(!response.has_errors(), "{:?}", response.errors);
-        gents::graphql::single_mutation_document(&response, &format!("create_{collection}"))
+        gents::store::graphql::single_mutation_document(&response, &format!("create_{collection}"))
             .unwrap()
             .and_then(|document| document["_docID"].as_str().map(str::to_owned))
             .expect("created doc id")
@@ -825,7 +846,7 @@ mod tests {
             node,
             "AgentRequest",
             &format!(
-                r#"purpose: "normal", request_id: "parent-request", node_did: "{DID}", requester_did: "{DID}", agent_id: "worker", session_id: "parent", content: "run it", lifecycle_state: "completed", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "2026-09-26T00:00:00Z", retry_count: 0, max_retries: 3"#
+                r#"purpose: "normal", request_id: "parent-request", node_did: "{DID}", requester_did: "{DID}", agent_did: "worker", session_id: "parent", content: "run it", lifecycle_state: "completed", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "2026-09-26T00:00:00Z", retry_count: 0, max_retries: 3"#
             ),
         )
         .await;
@@ -841,7 +862,7 @@ mod tests {
             node,
             "AgentRequest",
             &format!(
-                r#"purpose: "normal", request_id: "child-request", node_did: "{DID}", requester_did: "{DID}", agent_id: "worker", session_id: "child", caused_by_parent_request_id: "parent-request", caused_by_parent_request_doc_id: "{parent}", caused_by_parent_tool_call_id: "call-run", caused_by_parent_tool_call_doc_id: "{call}", content: "work", lifecycle_state: "completed", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "2026-09-26T00:00:01Z", retry_count: 0, max_retries: 3"#
+                r#"purpose: "normal", request_id: "child-request", node_did: "{DID}", requester_did: "{DID}", agent_did: "worker", session_id: "child", caused_by_parent_request_id: "parent-request", caused_by_parent_request_doc_id: "{parent}", caused_by_parent_tool_call_id: "call-run", caused_by_parent_tool_call_doc_id: "{call}", content: "work", lifecycle_state: "completed", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "2026-09-26T00:00:01Z", retry_count: 0, max_retries: 3"#
             ),
         )
         .await;
@@ -907,7 +928,7 @@ mod tests {
             projection.updates[0].to_payload()["workflow_run_id"],
             "call-run"
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -925,7 +946,7 @@ mod tests {
                 .get("workflow_run_id")
                 .is_none());
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -934,7 +955,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let node = embedded_node(&dir).await;
         let parent = seed_job_child(&node).await;
-        let engine = ProjectionEngine::new(
+        let engine = ProjectionEngine::new_for_test(
             node.clone(),
             BoundModelContext::new("model".into(), "Model".into(), 1000),
         );
@@ -956,7 +977,7 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(spawned(&projection).workflow_run_id, None);
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -967,7 +988,7 @@ mod tests {
         let projection = project(&node, &parent, &["call-run"]).await;
         assert_eq!(spawned(&projection).description, "Audit the repo");
         assert!(!finished(&projection).will_wake);
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -985,7 +1006,7 @@ mod tests {
         );
         assert!(finished(&projection).will_wake);
         assert_eq!(projection.updates.len(), 2);
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -998,7 +1019,7 @@ mod tests {
             &node,
             "AgentSession",
             &format!(
-                r#"session_id: "child", node_did: "did:test:other", requester_did: "{DID}", agent_id: "worker", created_at: "2026-09-26T00:00:02Z", title: {{ text: "Duplicate", source: "task" }}, provenance: {{ parent_request_doc_id: "{}" }}"#,
+                r#"session_id: "child", node_did: "did:test:other", requester_did: "{DID}", agent_did: "worker", created_at: "2026-09-26T00:00:02Z", title: {{ text: "Duplicate", source: "task" }}, provenance: {{ parent_request_doc_id: "{}" }}"#,
                 parent.doc_id.as_deref().unwrap()
             ),
         )
@@ -1009,7 +1030,7 @@ mod tests {
             spawned(&projection).workflow_run_id.as_deref(),
             Some("call-run")
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -1080,7 +1101,7 @@ mod tests {
                     expected.into_iter().map(|(session, _)| session).collect();
                 assert_eq!(cards, sessions, "{}: {cause}", case["name"]);
             }
-            node.shutdown().await;
+            node.shutdown().await.expect("node shutdown");
         }
     }
 }

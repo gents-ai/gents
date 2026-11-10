@@ -38,6 +38,36 @@ impl FireIdentity {
     }
 }
 
+/// The fire key and task of a `TriggerFire` row, when the row is the fire
+/// `trigger` admitted for `request_id` into `session` on `node`: its key and
+/// request id must be the ones its identity derives.
+pub fn verified_task_fire<'a>(
+    fire: &'a serde_json::Value,
+    node: &str,
+    session: &str,
+    request_id: &str,
+    trigger: &str,
+) -> Option<(&'a str, &'a str)> {
+    let key = fire["fire_key"]
+        .as_str()
+        .filter(|value| !value.is_empty())?;
+    let task = fire["task_id"].as_str().filter(|value| !value.is_empty())?;
+    let identity = FireIdentity {
+        owner_did: node.to_owned(),
+        trigger_id: trigger.to_owned(),
+        source_collection: fire["source_collection"].as_str()?.to_owned(),
+        source_doc_id: fire["source_doc_id"].as_str()?.to_owned(),
+    };
+    if fire["trigger_id"].as_str() != Some(trigger)
+        || fire["session_id"].as_str() != Some(session)
+        || key != identity.fire_key()
+        || request_id != identity.request_id()
+    {
+        return None;
+    }
+    Some((key, task))
+}
+
 /// Admission fields are immutable and committed atomically with their AgentRequest.
 /// The sole mutable claim marker is set with the deferred Goal assignment; it
 /// records which assignment owns the outcome, not a second execution lifecycle.
@@ -86,6 +116,45 @@ pub struct FireOutcome {
     pub created_at: String,
 }
 
+/// The handoff route a native workflow document (CallbackResult,
+/// IsolatedWorkspace, WorkspaceReceipt) carries so that an outcome-enabled
+/// consumer reads it from the observed document alone, never from the
+/// producer's CallbackInvocation (Lean `Triggers.NativeRoute`). Its fields are
+/// the same `handoff_id`, `reply_session_id` and `attempt` columns authored
+/// collections declare.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HandoffRoute {
+    #[serde(default)]
+    pub handoff_id: Option<String>,
+    #[serde(default)]
+    pub reply_session_id: Option<String>,
+    #[serde(default)]
+    pub attempt: Option<i64>,
+}
+
+impl HandoffRoute {
+    /// Lean `stamp (projectRoute fields)` over a JSON object: a frozen
+    /// invocation input or an observed document. A blank or absent handoff
+    /// carries no route; a blank reply session is absent.
+    pub fn from_fields(fields: &serde_json::Value) -> Self {
+        let non_blank = |field: &str| {
+            fields
+                .get(field)
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_owned)
+        };
+        let Some(handoff_id) = non_blank("handoff_id") else {
+            return Self::default();
+        };
+        Self {
+            handoff_id: Some(handoff_id),
+            reply_session_id: non_blank("reply_session_id"),
+            attempt: fields.get("attempt").and_then(serde_json::Value::as_i64),
+        }
+    }
+}
+
 /// Position in DefraDB's receiving-node document-arrival journal. Each
 /// per-document consumer (trigger or callback binding) checkpoints
 /// independently in a non-branchable runtime document. Advancement requires a
@@ -98,4 +167,19 @@ pub struct EventSourceCursor {
     pub consumer: crate::event_delivery::EventConsumer,
     pub source_collection: String,
     pub after: String,
+}
+
+pub fn durable_fire_key(namespace: &str, components: &[&str]) -> String {
+    let mut key = format!("{}:{namespace}", namespace.chars().count());
+    for component in components {
+        key.push_str(&format!(":{}:{component}", component.chars().count()));
+    }
+    key
+}
+
+/// One per-document event invocation per binding and arrival; an edit after
+/// admission is not another arrival. Keys use `:` separators, unambiguous
+/// because collection and document IDs carry none.
+pub fn idempotency_key(binding_id: &str, source_collection: &str, source_doc_id: &str) -> String {
+    format!("{binding_id}:{source_collection}:{source_doc_id}")
 }

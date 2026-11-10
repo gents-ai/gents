@@ -7,7 +7,6 @@ import { href, type Route } from "@/lib/router";
 import {
   AreaRow,
   ChipsRow,
-  ChoiceRow,
   DraftActions,
   FactRow,
   RefRow,
@@ -15,11 +14,12 @@ import {
   TextRow,
 } from "./editors";
 import { ToolsSheet } from "./ToolsSheet";
+import { CompactionSheet, compactionInWords } from "./CompactionEditor";
 import { EditorSheet } from "./EditorSheet";
 import { ToolsEditor } from "./ToolsPanel";
 import { toolsInWords } from "./automation";
 import { useDraft } from "./draft";
-import { DeleteButton, ListDetail } from "./ListDetail";
+import { DeleteButton, ListDetail, packOrigin } from "./ListDetail";
 import { Group, NameLinks } from "./rows";
 import { someNames } from "./behaviorDraft";
 import { contextOrigin, forgetContextOrigins } from "./contextOrigin";
@@ -104,8 +104,22 @@ function Editor({
   const [newTools, setNewTools] = useState<((id: string | null) => void) | null>(null);
   const [besideTools, setBesideTools] = useState<string | null>(null);
   const besideDoc = deployment.tools.find((t) => t.tools_id === besideTools) ?? null;
+  const [newCompaction, setNewCompaction] = useState<
+    ((id: string | null) => void) | null
+  >(null);
+  const [openCompaction, setOpenCompaction] = useState<string | null>(null);
   return (
     <>
+      <CompactionSheet
+        deployment={deployment}
+        creating={newCompaction !== null}
+        editing={openCompaction}
+        onClose={(created) => {
+          newCompaction?.(created);
+          setNewCompaction(null);
+          setOpenCompaction(null);
+        }}
+      />
       <ToolsSheet
         deployment={deployment}
         open={newTools !== null}
@@ -151,9 +165,9 @@ function Editor({
             <NameLinks
               shown={USERS_SHOWN}
               items={users.map((b) => ({
-                key: b.agentId,
+                key: b.agentDid,
                 name: b.displayName,
-                href: href({ ...base, section: "agents", item: b.agentId }),
+                href: href({ ...base, section: "agents", item: b.agentDid }),
               }))}
             />
           ) : (
@@ -192,6 +206,7 @@ function Editor({
           items={deployment.tools.map((t) => ({
             value: t.tools_id,
             label: `${t.display_name ?? t.tools_id} · ${toolsInWords(t)}`,
+            pack: packOrigin(t.tags),
           }))}
           createLabel="New tools…"
           onCreate={() =>
@@ -201,19 +216,30 @@ function Editor({
           }
           onOpen={(toolsId) => setBesideTools(toolsId)}
         />
-        <ChoiceRow
+        <RefRow
           id={id("compact")}
           label="Compaction"
+          description={compactionInWords(
+            deployment,
+            deployment.compactions.find(
+              (c) => c.compaction_id === d.draft.compactionId,
+            ),
+          )}
           value={d.draft.compactionId}
           error={d.problems.compactionId}
           onChange={(v) => d.set("compactionId", v)}
-          items={[
-            { value: "", label: "Runtime default" },
-            ...deployment.compactions.map((c) => ({
-              value: c.compaction_id,
-              label: c.display_name ?? c.compaction_id,
-            })),
-          ]}
+          none="Runtime default"
+          items={deployment.compactions.map((c) => ({
+            value: c.compaction_id,
+            label: c.display_name ?? c.compaction_id,
+          }))}
+          createLabel="New compaction…"
+          onCreate={() =>
+            new Promise<string | null>((resolve) => {
+              setNewCompaction(() => resolve);
+            })
+          }
+          onOpen={(compactionId) => setOpenCompaction(compactionId)}
         />
         <ChipsRow
           id={id("skills")}
@@ -224,6 +250,7 @@ function Editor({
           onChange={(v) => d.set("skillIds", v)}
           items={deployment.skills.map((sk) => ({
             value: sk.skillId,
+            pack: packOrigin(sk.tags),
             label: sk.displayName ?? sk.name ?? sk.skillId,
           }))}
           placeholder="Add a skill"
@@ -283,7 +310,7 @@ export function ContextsPanel({
   const origin = agentOf(deployment, originId);
   const back = origin
     ? {
-        route: { ...base, section: "agents", item: origin.agentId },
+        route: { ...base, section: "agents", item: origin.agentDid },
         label: `Back to ${origin.displayName}`,
       }
     : undefined;

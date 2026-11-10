@@ -5,10 +5,8 @@ import type { AgentTargetDocument } from "./AgentTargetDocument.js";
 import type { Callback } from "./Callback.js";
 import type { CallbackBinding } from "./CallbackBinding.js";
 import type { CallbackModule } from "./CallbackModule.js";
-import type { ChainKeyBindingDocument } from "./ChainKeyBindingDocument.js";
 import type { CompactionConfig } from "./CompactionConfig.js";
 import type { DatastoreToolSurfaceDocument } from "./DatastoreToolSurfaceDocument.js";
-import type { EthToolDocument } from "./EthToolDocument.js";
 import type { EvalDefinition } from "./EvalDefinition.js";
 import type { EventSource } from "./EventSource.js";
 import type { InferenceBackend } from "./InferenceBackend.js";
@@ -27,9 +25,9 @@ import type { Tools } from "./Tools.js";
 import type { Trigger } from "./Trigger.js";
 
 /**
- * Canonical authored document bundle for packs; the
+ * Canonical materialized document bundle for packs; the
  * loader fills missing root node_did from PackInstallOptions and explicit
  * owners must match. Validate ownership, references, unknown authoring keys,
  * and resource bounds before persistence.
  */
-export type PackConfig = { node: Node, agents?: Array<Agent> | null, contexts?: Array<AgentContext> | null, compactions?: Array<CompactionConfig> | null, tools?: Array<Tools> | null, agent_targets?: Array<AgentTargetDocument> | null, skills?: Array<SkillDocument> | null, datastore_tool_surfaces?: Array<DatastoreToolSurfaceDocument> | null, chain_key_bindings?: Array<ChainKeyBindingDocument> | null, eth_tools?: Array<EthToolDocument> | null, inference_backends?: Array<InferenceBackend> | null, inference_profiles?: Array<InferenceProfile> | null, inference_sampling?: Array<InferenceSampling> | null, inference_execution?: Array<InferenceExecution> | null, inference_retry_policies?: Array<InferenceRetryPolicy> | null, tool_service_registries?: Array<ToolServiceRegistry> | null, projection_acp_bindings?: Array<ProjectionAcpBinding> | null, tasks?: Array<Task> | null, triggers?: Array<Trigger> | null, schedules?: Array<Schedule> | null, event_sources?: Array<EventSource> | null, callbacks?: Array<Callback> | null, callback_bindings?: Array<CallbackBinding> | null, callback_modules?: Array<CallbackModule> | null, repository_placements?: Array<RepositoryPlacement> | null, eval_definitions?: Array<EvalDefinition> | null, };
+export type PackConfig = { node: Node, agents?: Array<Agent> | null, contexts?: Array<AgentContext> | null, compactions?: Array<CompactionConfig> | null, tools?: Array<Tools> | null, agent_targets?: Array<AgentTargetDocument> | null, skills?: Array<SkillDocument> | null, datastore_tool_surfaces?: Array<DatastoreToolSurfaceDocument> | null, inference_backends?: Array<InferenceBackend> | null, inference_profiles?: Array<InferenceProfile> | null, inference_sampling?: Array<InferenceSampling> | null, inference_execution?: Array<InferenceExecution> | null, inference_retry_policies?: Array<InferenceRetryPolicy> | null, tool_service_registries?: Array<ToolServiceRegistry> | null, projection_acp_bindings?: Array<ProjectionAcpBinding> | null, tasks?: Array<Task> | null, triggers?: Array<Trigger> | null, schedules?: Array<Schedule> | null, event_sources?: Array<EventSource> | null, callbacks?: Array<Callback> | null, callback_bindings?: Array<CallbackBinding> | null, callback_modules?: Array<CallbackModule> | null, repository_placements?: Array<RepositoryPlacement> | null, eval_definitions?: Array<EvalDefinition> | null, };

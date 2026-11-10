@@ -8,7 +8,6 @@ use ts_rs::TS;
 use crate::accounts::usage::{AccountUsageView, ProviderUsageReadRequest, UsageWindowView};
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::inference_setup::InferenceSetupState;
-use crate::tauri_commands::chat::RequestResendResultView;
 use crate::tauri_commands::inference_setup::{
     ClaudeLoginRequest, ClaudeLoginResult, ClaudeLoginUrl, CodexLoginRequest, CodexLoginResult,
     CodexLoginUrl, GrokLoginRequest, GrokLoginResult, GrokLoginUrl,
@@ -68,8 +67,12 @@ fn normalize_generated_types(dir: &Path) -> Result<(), String> {
             .map(|line| {
                 let trimmed = line.trim_end();
                 if trimmed.starts_with("import type ")
+                    && (trimmed.contains(" from \"./") || trimmed.contains(" from \"../"))
                     && trimmed.ends_with("\";")
                     && !trimmed.ends_with(".js\";")
+                    && trimmed.rsplit_once(" from \"").is_some_and(|(_, module)| {
+                        module.starts_with("./") || module.starts_with("../")
+                    })
                 {
                     format!("{}.js\";", trimmed.trim_end_matches("\";"))
                 } else {
@@ -185,8 +188,6 @@ fn export_all(dir: &Path) -> Result<(), String> {
     export_types!(
         crate::accounts::BackendAuthenticationView,
         ConfiguredActionView,
-        crate::host::settings::ConfigEditorEntry,
-        gents_desktop_core::client::ConfigEditorDocument,
         RequestOutputView,
         gents_protocol::file_changes::ToolFileChanges,
         gents_protocol::file_inventory::FileInventoryObservation,
@@ -202,14 +203,6 @@ fn export_all(dir: &Path) -> Result<(), String> {
         gents_protocol::client_media::MediaPcmClip,
         gents_protocol::client_media::MediaMessage,
         gents_protocol::client_media::MediaDevices,
-        crate::host::speech::SpeechServiceView,
-        crate::host::speech::SpeechToolReference,
-        crate::host::speech::SpeechRecognizeRequest,
-        crate::host::speech::SpeechSynthesizeRequest,
-        crate::host::permissions::WorkspacePermissionsRequest,
-        crate::host::permissions::WorkspacePermissionsSaveRequest,
-        crate::host::permissions::WorkspacePermissionsForgetCommandsRequest,
-        crate::host::permissions::WorkspacePermissionsState,
         crate::host::protocol::ClientMessage,
         crate::host::protocol::ClientCommand,
         crate::host::protocol::HostMessage,
@@ -218,6 +211,8 @@ fn export_all(dir: &Path) -> Result<(), String> {
         ManagedServerRestartRequest,
         ManagedServerResetRequest,
         ManagedServerRootValidationRequest,
+        AgentWorkspaceRootSelectRequest,
+        gents_desktop_core::workspace_root::AgentWorkspaceRoot,
         PeerStatusFetchRequest,
         EnrollmentStatusRequest,
         ChatSendRequest,
@@ -227,6 +222,8 @@ fn export_all(dir: &Path) -> Result<(), String> {
         PendingMessageSteerRequest,
         PendingQueueEditResult,
         SessionGoalView,
+        SessionGoalState,
+        SessionGoalNextAction,
         GoalControlView,
         GoalControlAction,
         GoalControlRequest,
@@ -255,6 +252,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         ConfigComponentsPatchRequest,
         ConfigComponentPatch,
         AgentSaveRequest,
+        gents_protocol::agent_identity::AgentIdentityBinding,
         SkillDeleteRequest,
         TaskDeleteRequest,
         ScheduleDeleteRequest,
@@ -267,6 +265,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         AgentDeleteRequest,
         ContextDeleteRequest,
         BackendSaveRequest,
+        BackendRotationSetRequest,
         InferenceProfileSaveRequest,
         ToolsSaveRequest,
         ToolServiceSaveRequest,
@@ -312,17 +311,11 @@ fn export_all(dir: &Path) -> Result<(), String> {
         ManagedServerResetResult,
         PeerRemoveResponse,
         EnrollmentRequestView,
-        NetworkStatusView,
         ToolServiceTestResult,
         TaskRunResult,
         ChatSendResult,
-        ChatSubmissionReceipt,
-        ChatSubmissionRecovery,
-        ChatSubmissionQuery,
         ClientUpdateEvent,
-        SessionHydrationView,
         SyncHealthView,
-        PairingCollectionStatusView,
         DesktopOperationsSnapshot,
         SessionProvenanceView,
         InterruptRequestResult,
@@ -335,25 +328,25 @@ fn export_all(dir: &Path) -> Result<(), String> {
         SessionRowsView,
         SessionRowsWindow,
         MessageView,
+        QuestionReplyView,
         ToolCallView,
-        RequestResendResultView,
         SessionContextDetailsRequest,
-        gents::toolset::SessionContextDetails,
+        gents::tools::native::SessionContextDetails,
         WorkspaceListingView,
         DesktopObserverMetrics,
         InferenceProbeResult,
         InferenceDiscoveryFailure,
         InferenceDiscoveryResult,
-        gents::inference_setup::InferenceSetupCatalog,
-        gents::inference_setup::InferenceProviderOption,
-        gents::inference_setup::InferenceAuthOption,
-        gents::inference_setup::InferenceProviderId,
-        gents::inference_setup::InferenceAuthMethod,
-        gents::inference_setup::InferenceModelOption,
-        gents::inference_setup::InferenceModelRecommendation,
-        gents::inference_setup::RecommendedNumberControl,
-        gents::inference_setup::RecommendedIntegerControl,
-        gents::inference_setup::RecommendedReasoningControl,
+        gents::inference::backends::setup::InferenceSetupCatalog,
+        gents::inference::backends::setup::InferenceProviderOption,
+        gents::inference::backends::setup::InferenceAuthOption,
+        gents::inference::backends::setup::InferenceProviderId,
+        gents::inference::backends::setup::InferenceAuthMethod,
+        gents::inference::backends::setup::InferenceModelOption,
+        gents::inference::backends::setup::InferenceModelRecommendation,
+        gents::inference::backends::setup::RecommendedNumberControl,
+        gents::inference::backends::setup::RecommendedIntegerControl,
+        gents::inference::backends::setup::RecommendedReasoningControl,
         CodexLoginResult,
         CodexLoginUrl,
         GrokLoginResult,
@@ -366,6 +359,9 @@ fn export_all(dir: &Path) -> Result<(), String> {
         crate::tauri_commands::packs::PackInstallRequest,
         crate::tauri_commands::ux_plugins::PluginCallRequest,
         crate::tauri_commands::ux_plugins::UxDataCallRequest,
+        crate::tauri_commands::ux_plugins::UxDataCallKind,
+        crate::tauri_commands::ux_plugins::UxDataCallResult,
+        crate::tauri_commands::ux_plugins::UxDataWatchEvent,
         crate::tauri_commands::ux_plugins::UxDataSurfacesRequest,
         crate::tauri_commands::packs::PluginBindRequest,
         crate::tauri_commands::packs::PackWireRequest,
@@ -377,9 +373,16 @@ fn export_all(dir: &Path) -> Result<(), String> {
         WorkflowPromoteView,
         gents_server::packs::EditedDocuments,
         RequestTimelineView,
-        ToolSurfaceExplanationView,
         BackendDisplayState,
         InstalledPacksView,
+        JoinRequestView,
+        JoinRequestDecideRequest,
+        JoinRequestDecision,
+        JoinRequestDecisionView,
+        JoinMemberView,
+        JoinHistoryState,
+        JoinHistoryEntryView,
+        JoinHistoryView,
         PackSearchView,
         PackInfoView,
         PackInstallView,
@@ -484,6 +487,23 @@ fn list_ts_files(dir: &Path) -> Result<Vec<String>, String> {
 fn ts_rs_exports_tagged_enum_and_camel_case_structs() {
     let tmp = tempfile::tempdir().expect("tempdir");
     export_all(tmp.path()).expect("export");
+    let commands =
+        std::fs::read_to_string(tmp.path().join("DesktopCommands.ts")).expect("DesktopCommands.ts");
+    assert!(
+        commands.contains("import type { Channel } from \"@tauri-apps/api/core\";")
+            && !commands.contains("@tauri-apps/api/core.js")
+            && commands.contains("channel: Channel<UxDataWatchEvent>"),
+        "the watch command must carry its typed Tauri event channel: {commands}"
+    );
+    let watch_event = std::fs::read_to_string(tmp.path().join("UxDataWatchEvent.ts"))
+        .expect("UxDataWatchEvent.ts");
+    assert!(
+        watch_event.contains("\"snapshot\"")
+            && watch_event.contains("UxDataCallResult")
+            && watch_event.contains("\"reconnecting\", delay_ms: number")
+            && watch_event.contains("\"error\""),
+        "the watch channel must expose its snapshot, reconnecting and error events: {watch_event}"
+    );
     let goal = std::fs::read_to_string(tmp.path().join("GoalControlAction.ts"))
         .expect("GoalControlAction.ts");
     assert!(
@@ -619,6 +639,22 @@ fn bigint_normalization_only_rewrites_typescript_identifier_tokens() {
 }
 
 #[test]
+fn generated_imports_keep_package_specifiers_and_suffix_relative_modules() {
+    let dir = tempfile::tempdir().expect("generated directory");
+    let path = dir.path().join("Example.ts");
+    std::fs::write(
+        &path,
+        "import type { Channel } from \"@tauri-apps/api/core\";\nimport type { A } from \"./A\";\nimport type { B } from \"../B\";\nimport type { C } from \"./C.js\";\n",
+    )
+    .unwrap();
+    normalize_generated_types(dir.path()).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "import type { Channel } from \"@tauri-apps/api/core\";\nimport type { A } from \"./A.js\";\nimport type { B } from \"../B.js\";\nimport type { C } from \"./C.js\";\n"
+    );
+}
+
+#[test]
 fn inventory_wire_tags_survive_type_generation() {
     use gents_protocol::file_inventory::{FileImageMetadata, FileInventoryReadAction};
     use ts_rs::TS;
@@ -737,7 +773,7 @@ fn media_commands_preserve_the_native_tag_in_generated_types() {
 
 #[test]
 fn eval_capture_types_preserve_native_wire_tags() {
-    use gents::document_config::EvalCapture;
+    use gents::documents::EvalCapture;
     let declaration = EvalCapture::decl();
     for capture in [
         EvalCapture::Schema {
@@ -764,7 +800,7 @@ fn eval_capture_types_preserve_native_wire_tags() {
 #[test]
 fn canonical_config_requests_preserve_compact_authoring_and_auth_wire_tags() {
     let dir = tempfile::tempdir().expect("generated directory");
-    gents::mailbox::MailboxNotificationPolicy::export_all_to(dir.path())
+    gents::session::mailbox::MailboxNotificationPolicy::export_all_to(dir.path())
         .expect("notification export");
     let notification = std::fs::read_to_string(dir.path().join("NotificationIdentity.ts")).unwrap();
     assert!(
@@ -788,14 +824,14 @@ fn canonical_config_requests_preserve_compact_authoring_and_auth_wire_tags() {
     assert!(effort.contains("high") && effort.contains("none"));
     let auth = std::fs::read_to_string(dir.path().join("BackendAuth.ts")).unwrap();
     for configured in [
-        gents::document_config::BackendAuth::Unauthenticated,
-        gents::document_config::BackendAuth::ApiKey {
+        gents::documents::BackendAuth::Unauthenticated,
+        gents::documents::BackendAuth::ApiKey {
             key: "secret".into(),
         },
-        gents::document_config::BackendAuth::Environment {
+        gents::documents::BackendAuth::Environment {
             variable: "API_KEY".into(),
         },
-        gents::document_config::BackendAuth::NodeOAuth { account_ref: None },
+        gents::documents::BackendAuth::NodeOAuth { account_ref: None },
     ] {
         let wire = serde_json::to_value(configured).unwrap();
         assert!(auth.contains(wire["kind"].as_str().unwrap()));

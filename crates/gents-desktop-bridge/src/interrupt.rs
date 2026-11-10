@@ -1,4 +1,4 @@
-// Adapter over the canonical interrupt owner (`gents::interrupt`), which
+// Adapter over the canonical interrupt owner (`gents::request::interrupt`), which
 // latches `interrupt_requested_at` and drains pending automated wakes in one
 // transaction for the exact physical row handed to it. This pre-check reads
 // terminality before the owner's transaction; a request that becomes terminal
@@ -6,8 +6,8 @@
 
 use std::sync::Arc;
 
-use gents::config_client::ConfigAccess;
-use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::escape_graphql_string;
 use gents_desktop_core::client::ClientCore;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde_json::Value;
@@ -25,7 +25,7 @@ struct Target {
 /// The one request with this logical id within `node_did`'s documents. Two
 /// physical requests under one logical id are ambiguous and refused.
 async fn resolve(
-    core: &Arc<ClientCore>,
+    access: &ConfigAccess,
     request_id: &str,
     node_did: Option<&str>,
 ) -> Result<Target, String> {
@@ -40,13 +40,12 @@ async fn resolve(
         }} }}"#,
         escape_graphql_string(request_id)
     );
-    let response = graphql_with_transaction_retry(core.node(), &query, "interrupt target")
+    let response = access
+        .execute(&query)
         .await
         .map_err(|error| format!("request {request_id} lookup failed: {error:#}"))?;
     let rows = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
+        .pointer("/data/AgentRequest")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
@@ -90,7 +89,14 @@ pub async fn interrupt_request(
             req.cause
         ));
     }
-    let target = resolve(core, &req.request_id, req.node_did.as_deref()).await?;
+    let node_did = req
+        .node_did
+        .clone()
+        .ok_or("Select the hosting runtime before interrupting a request.")?;
+    let access = core
+        .operator_access(&node_did)
+        .map_err(|error| error.to_string())?;
+    let target = resolve(&access, &req.request_id, Some(&node_did)).await?;
     let result = |interrupt_requested_at, already_interrupted| InterruptRequestResult {
         request_id: req.request_id.clone(),
         accepted: true,
@@ -108,19 +114,18 @@ pub async fn interrupt_request(
             req.request_id
         ));
     }
-    gents::interrupt::interrupt_request_by_doc_id_with_access(
-        &ConfigAccess::local(core.node_arc()),
+    gents::request::interrupt::interrupt_request_by_doc_id_with_access(
+        &access,
         &target.doc_id,
         &target.node_did,
         target.requester_did.as_deref(),
     )
     .await
     .map_err(|error| format!("interrupt of {} failed: {error:#}", req.request_id))?;
-    let latched =
-        gents::interrupt::fetch_interrupt_requested_at_by_doc_id(core.node(), &target.doc_id)
-            .await
-            .map_err(|error| {
-                format!("interrupt readback of {} failed: {error:#}", req.request_id)
-            })?;
+    let observed = resolve(&access, &req.request_id, Some(&node_did)).await?;
+    if observed.doc_id != target.doc_id {
+        return Err("interrupt readback changed physical request identity".into());
+    }
+    let latched = observed.interrupt_requested_at;
     Ok(result(latched, false))
 }

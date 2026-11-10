@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -10,8 +10,9 @@ pub struct SessionStopReceipt {
     pub drained_request_ids: Vec<String>,
 }
 
-pub async fn stop_session(
+pub async fn stop_session_with_access(
     node: &Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
@@ -27,32 +28,29 @@ pub async fn stop_session(
     let node_did = node_did.to_owned();
     let session_id = session_id.to_owned();
     let requester_did = requester_did.map(str::to_owned);
-    let actor = ::identity::Did::new(node_did.clone())?;
-    crate::config_client::ConfigAccess::transact_local_write(
-        node,
-        Some(actor),
-        "session.stop",
-        move |txn| {
+    access
+        .transact_write("session.stop", move |txn| {
             let node_did = node_did.clone();
             let session_id = session_id.clone();
             let requester_did = requester_did.clone();
             Box::pin(async move {
-                let owner = crate::session::load_agent_session_row_in_txn(
-                    txn,
-                    &node_did,
-                    &session_id,
-                    requester_did.as_deref(),
-                )
-                .await?
-                .context("cannot stop a missing or differently scoped session")?;
+                let owner =
+                    crate::store::config_client::agent_session::load_agent_session_row_in_txn(
+                        txn,
+                        &node_did,
+                        &session_id,
+                        requester_did.as_deref(),
+                    )
+                    .await?
+                    .context("cannot stop a missing or differently scoped session")?;
                 let stopped_at = chrono::Utc::now().to_rfc3339();
-                let doc_id = crate::graphql::escape_graphql_string(&owner.doc_id);
-                let scope = crate::session::session_scope_filter(
+                let doc_id = crate::store::graphql::escape_graphql_string(&owner.doc_id);
+                let scope = gents_protocol::session::session_scope_filter(
                     &node_did,
                     &session_id,
                     requester_did.as_deref(),
                 );
-                let stopped_at = crate::graphql::escape_graphql_string(&stopped_at);
+                let stopped_at = crate::store::graphql::escape_graphql_string(&stopped_at);
                 let response = txn
                     .execute(&format!(
                         r#"mutation {{ update_AgentSession(filter: {{
@@ -66,7 +64,7 @@ pub async fn stop_session(
                     "session stop latch was not committed to the selected session"
                 );
                 let drained_request_ids =
-                    crate::lifecycle::queue::drain_all_pending_session_requests_in_txn(
+                    crate::request::lifecycle::queue::drain_all_pending_session_requests_in_txn(
                         txn,
                         &session_id,
                         &node_did,
@@ -74,13 +72,14 @@ pub async fn stop_session(
                         "request interrupted because the owning session was stopped",
                     )
                     .await?;
-                let interrupted_request_id = crate::interrupt::interrupt_active_session_in_txn(
-                    txn,
-                    &session_id,
-                    &node_did,
-                    requester_did.as_deref(),
-                )
-                .await?;
+                let interrupted_request_id =
+                    crate::request::interrupt::interrupt_active_session_in_txn(
+                        txn,
+                        &session_id,
+                        &node_did,
+                        requester_did.as_deref(),
+                    )
+                    .await?;
                 if interrupted_request_id.is_none() {
                     crate::goal::pause_goal_for_interrupt_in_txn(txn, &node_did, &session_id)
                         .await?;
@@ -96,21 +95,21 @@ pub async fn stop_session(
                     drained_request_ids,
                 })
             })
-        },
-    )
-    .await
+        })
+        .await
 }
 
 /// Resume uses the target node runtime's existing execution registry and job driver as quiescence
 /// witnesses; callers must not substitute fresh owners. This relies on the one-active-runtime-per-
 /// node operating convention while process and job ownership is checked with the session latch.
-pub async fn resume_session(
+pub async fn resume_session_with_access(
     node: &Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
-    background_executions: crate::hook::BackgroundExecutionRegistry,
-    job_driver: Arc<crate::plugin_job::driver::JobDriver>,
+    background_executions: crate::tools::call::hook::BackgroundExecutionRegistry,
+    job_driver: Arc<crate::tools::background::job::driver::JobDriver>,
 ) -> Result<()> {
     anyhow::ensure!(
         !session_id.trim().is_empty() && !node_did.trim().is_empty(),
@@ -123,15 +122,23 @@ pub async fn resume_session(
     let node_did = node_did.to_owned();
     let session_id = session_id.to_owned();
     let requester_did = requester_did.map(str::to_owned);
-    let identity = Arc::new(crate::identity::RegisteredIdentity::from_registered_did(
-        &node_did, None,
-    )?);
-    let actor = ::identity::Did::new(node_did.clone())?;
-    crate::config_client::ConfigAccess::transact_local_write(
-        node,
-        Some(actor),
-        "session.resume",
-        move |txn| {
+    let identity: Arc<dyn crate::store::identity::NodeIdentity> = match access
+        .managed_agent_signer()
+    {
+        Some(signer) => Arc::new(signer),
+        None => {
+            let actor = access
+                .actor_did()
+                .context("session resume actor unavailable")?;
+            anyhow::ensure!(
+                node.node_identity_did() == Some(actor.as_str()),
+                "session resume requires a managed Agent signer"
+            );
+            Arc::new(crate::store::identity::RegisteredIdentity::from_registered_did(actor, None)?)
+        }
+    };
+    access
+        .transact_write("session.resume", move |txn| {
             let identity = identity.clone();
             let node_did = node_did.clone();
             let session_id = session_id.clone();
@@ -139,14 +146,15 @@ pub async fn resume_session(
             let background_executions = background_executions.clone();
             let job_driver = job_driver.clone();
             Box::pin(async move {
-                let owner = crate::session::load_agent_session_row_in_txn(
-                    txn,
-                    &node_did,
-                    &session_id,
-                    requester_did.as_deref(),
-                )
-                .await?
-                .context("cannot resume a missing or differently scoped session")?;
+                let owner =
+                    crate::store::config_client::agent_session::load_agent_session_row_in_txn(
+                        txn,
+                        &node_did,
+                        &session_id,
+                        requester_did.as_deref(),
+                    )
+                    .await?
+                    .context("cannot resume a missing or differently scoped session")?;
                 ensure_session_executions_settled_in_txn(
                     txn,
                     &node_did,
@@ -156,8 +164,8 @@ pub async fn resume_session(
                     &job_driver,
                 )
                 .await?;
-                let doc_id = crate::graphql::escape_graphql_string(&owner.doc_id);
-                let scope = crate::session::session_scope_filter(
+                let doc_id = crate::store::graphql::escape_graphql_string(&owner.doc_id);
+                let scope = gents_protocol::session::session_scope_filter(
                     &node_did,
                     &session_id,
                     requester_did.as_deref(),
@@ -182,20 +190,19 @@ pub async fn resume_session(
                 )
                 .await
             })
-        },
-    )
-    .await
+        })
+        .await
 }
 
 async fn ensure_session_executions_settled_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
-    background_executions: &crate::hook::BackgroundExecutionRegistry,
-    job_driver: &crate::plugin_job::driver::JobDriver,
+    background_executions: &crate::tools::call::hook::BackgroundExecutionRegistry,
+    job_driver: &crate::tools::background::job::driver::JobDriver,
 ) -> Result<()> {
-    let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
+    let scope = gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
     let unsettled = session_tool_call_exists_in_txn(
         txn,
         &format!(
@@ -222,7 +229,7 @@ async fn ensure_session_executions_settled_in_txn(
                 .into_iter()
                 .filter(|record| {
                     record.identity.observe()
-                        != crate::managed_exec::ownership::ProcessObservation::Exited
+                        != crate::tools::exec::ownership::ProcessObservation::Exited
                 })
                 .map(|record| record.tool_call_doc_id)
                 .collect::<Vec<_>>(),
@@ -245,13 +252,13 @@ async fn ensure_session_executions_settled_in_txn(
 }
 
 async fn session_doc_exists_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     scope: &str,
     doc_ids: impl IntoIterator<Item = String>,
 ) -> Result<bool> {
     let doc_ids = doc_ids
         .into_iter()
-        .map(|id| format!("\"{}\"", crate::graphql::escape_graphql_string(&id)))
+        .map(|id| format!("\"{}\"", crate::store::graphql::escape_graphql_string(&id)))
         .collect::<Vec<_>>();
     if doc_ids.is_empty() {
         return Ok(false);
@@ -267,7 +274,7 @@ async fn session_doc_exists_in_txn(
 }
 
 async fn session_tool_call_exists_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     arguments: &str,
 ) -> Result<bool> {
     let response = txn

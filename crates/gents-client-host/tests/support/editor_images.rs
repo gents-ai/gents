@@ -88,8 +88,8 @@ pub async fn verify(
     for (session, content) in cases {
         let rows = access.execute(&format!(
         r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, purpose: {{_eq: "normal"}}}}) {{ {} }} }}"#,
-        gents::graphql::escape_graphql_string(node),
-        gents::graphql::escape_graphql_string(session),
+        gents::store::graphql::escape_graphql_string(node),
+        gents::store::graphql::escape_graphql_string(session),
         gents::SIGNED_REQUEST_FIELDS,
     )).await?;
         let rows: Vec<gents_protocol::row::AgentRequestRow> =

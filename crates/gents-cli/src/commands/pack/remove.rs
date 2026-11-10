@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use gents::config_client::ConfigAccess;
 use gents::pack::{InstalledPackPlugin, PackKind, RemoveReport};
+use gents::store::config_client::ConfigAccess;
 use serde_json::{json, Value};
 
 use crate::cli::PackRemoveArgs;
@@ -29,7 +29,7 @@ pub(crate) async fn remove(args: PackRemoveArgs) -> Result<()> {
             documents_record = true;
         }
         anyhow::ensure!(
-            gents::home::init_config_path(&home).is_file(),
+            gents::store::local::home::init_config_path(&home).is_file(),
             "{coordinate} is not installed in {}",
             home.display()
         );
@@ -92,7 +92,9 @@ pub(crate) async fn remove(args: PackRemoveArgs) -> Result<()> {
     }
     .await;
     if let Some(node) = access.local_node() {
-        node.shutdown().await;
+        if let Err(error) = node.shutdown().await {
+            tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
+        }
     }
     crate::print_json(&result?)
 }
@@ -154,7 +156,7 @@ async fn release_archives(
         return Ok(Vec::new());
     }
     let referenced = gents::pack::referenced_pack_digests(home, node).await?;
-    let store = gents::pack_store::PackStore::new(home);
+    let store = gents::pack::store::PackStore::new(home);
     let mut released = Vec::new();
     for digest in digests {
         if referenced.contains(digest) {
@@ -185,23 +187,16 @@ pub(super) static REMOVAL_TEST_PAUSE: std::sync::Mutex<Option<std::sync::Arc<Rem
 pub(crate) async fn ensure_home_plugins_unreferenced(
     home: &Path,
     plugins: &BTreeSet<String>,
+    guard: &gents::plugin::store::StoreGuard,
 ) -> Result<()> {
-    if plugins.is_empty() || !gents::home::init_config_path(home).is_file() {
+    if plugins.is_empty() {
         return Ok(());
     }
-    let scope = crate::cli::ScopeArgs {
-        home: Some(home.to_path_buf()),
-        graphql: None,
-        node_did: None,
-    };
-    let (access, owner) = super::resolve_scope_owner(&scope).await?;
-    let result = gents::pack::ensure_plugins_unreferenced(&access, &owner, plugins).await;
-    if let Some(node) = access.local_node() {
-        node.shutdown().await;
+    if !gents::store::local::home::init_config_path(home).is_file() {
+        return Err(gents::pack::PackRemovalError::ReferenceInventoryUnavailable.into());
     }
-    drop(access);
     #[cfg(test)]
-    if result.is_ok() {
+    {
         let pause = REMOVAL_TEST_PAUSE
             .lock()
             .unwrap()
@@ -213,6 +208,14 @@ pub(crate) async fn ensure_home_plugins_unreferenced(
             pause.release.notified().await;
         }
     }
+    let (access, owner) = super::resolve_home_owner_under_plugin_store(home, guard).await?;
+    let result = gents::pack::ensure_plugins_unreferenced(&access, &owner, plugins).await;
+    if let Some(node) = access.local_node() {
+        if let Err(error) = node.shutdown().await {
+            tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
+        }
+    }
+    drop(access);
     result
 }
 
@@ -238,7 +241,7 @@ pub(crate) async fn remove_home_install_with_guard(
         .iter()
         .map(|plugin| format!("{namespace}/{}", plugin.name))
         .collect();
-    ensure_home_plugins_unreferenced(home, &plugins).await?;
+    ensure_home_plugins_unreferenced(home, &plugins, &guard).await?;
     let checked_record = record;
     let mut retained = Vec::new();
     let mut assets_removed = Vec::new();

@@ -8,12 +8,14 @@ import type {
   DeploymentView,
   DesktopSessionSnapshot,
   NodeReadinessDecision,
+  RequestLifecycleState,
   SessionSummary,
 } from "@source-inc/gents-desktop-client";
 import { projectDeploymentOperationalState } from "@source-inc/gents-desktop-client";
 import {
   inferenceActivityStatus,
   projectChatShell as projectChatShellWithReadiness,
+  reconcileProjectedWorkflow,
   requestProgressPresentation,
   type ChatBlockedReason,
   type ChatWorkflowState,
@@ -22,7 +24,7 @@ import {
 
 const readyNodeReadiness = {
   kind: "ready",
-  agentId: "general",
+  agentDid: "general",
   agentLabel: "General",
 } as const;
 
@@ -30,21 +32,29 @@ function operationalStateFor(
   decision: NodeReadinessDecision = readyNodeReadiness,
   routeReady = true,
 ) {
-  const agentId = decision.agentId ?? "general";
+  const agentDid = decision.agentDid ?? "general";
   const readinessStatus =
     decision.kind === "unavailable"
-      ? { state: "unavailable" as const, agentId, reason: decision.reason }
-      : { state: "ready" as const, agentId };
+      ? { state: "unavailable" as const, agentDid, reason: decision.reason }
+      : { state: "ready" as const, agentDid };
   return projectDeploymentOperationalState({
     nodeDid: "did:key:node",
     source: "enrollment",
     dialSucceeded: true,
+    runtimeConnection: "connected",
     chatSafe: routeReady,
+    chatRefusal: routeReady
+      ? null
+      : {
+          cause: "no_endpoint",
+          nextAction: "connect_runtime",
+          detail: "connect this runtime with its authenticated endpoint",
+        },
     lastError: null,
     runtime: null,
     node: {
       nodeDid: "did:key:node",
-      defaultAgentId: agentId,
+      defaultAgentDid: agentDid,
     },
     nodeReadiness: {
       source:
@@ -58,7 +68,7 @@ function operationalStateFor(
     },
     agents: [
       {
-        agentId,
+        agentDid,
         displayName:
           decision.kind === "unknown" ? "General" : decision.agentLabel,
         enabled: true,
@@ -97,6 +107,7 @@ type LeanClientShellCase = {
   frontend_session_turn_state: TurnState | null;
   frontend_session_pending_request_id: number | null;
   frontend_session_queued_request_ids: number[];
+  frontend_session_pending_queue_request_ids: number[];
   frontend_session_folded_request_ids: number[];
   frontend_local_workflow_kind: string;
   frontend_local_workflow_session: number | null;
@@ -118,7 +129,7 @@ type LeanContractSnapshot = {
   frontend_client_shell_cases: LeanClientShellCase[];
   request_progress_cases: Array<{
     name: string;
-    lifecycleState: string;
+    lifecycleState: RequestLifecycleState;
     label: string;
     animated: boolean;
   }>;
@@ -132,7 +143,7 @@ function session(
   return {
     sessionId: "session-1",
     nodeDid: "did:test:amy",
-    agentId: "default",
+    agentDid: "default",
     title: "conversation",
     previewText: "preview",
     status: "active",
@@ -306,6 +317,16 @@ function sessionFromContract(contractCase: LeanClientShellCase) {
       origin: null,
       createdAt: "2026-04-21T12:01:30Z",
     })),
+    pendingQueue: contractCase.frontend_session_pending_queue_request_ids.map(
+      (id) => ({
+        requestDocId: `doc-${id}`,
+        requestId: requestId(id)!,
+        content: "queued prompt",
+        editable: true,
+        steerable: true,
+        editGroup: null,
+      }),
+    ),
     foldedInputs: contractCase.frontend_session_folded_request_ids.map(
       (id) => ({
         requestId: requestId(id)!,
@@ -411,7 +432,7 @@ describe("projectChatShell", () => {
     "matches generated Lean ClientShell projection contracts",
     async () => {
       const contractCases = await loadLeanClientShellCases();
-      expect(contractCases).toHaveLength(29);
+      expect(contractCases).toHaveLength(31);
       expect(
         contractCases.some(
           (contractCase) =>
@@ -481,6 +502,60 @@ describe("projectChatShell", () => {
   );
 });
 
+test.each(["remove", "edit"])(
+  "keeps the active turn target after pending-only message %s",
+  (action) => {
+    const common = {
+      clientAvailable: true,
+      selectedNodeDid: "did:test:amy",
+      selectedSessionId: "session-1",
+      sending: false,
+      selectedSessionSummary: null,
+    };
+    const awaiting = {
+      kind: "awaitingObservation",
+      nodeDid: "did:test:amy",
+      sessionId: "session-1",
+      requestId: "queued",
+    } as const;
+    const entry = {
+      requestDocId: "queued-doc",
+      requestId: "queued",
+      content: "Queued message",
+      editable: true,
+      steerable: true,
+      editGroup: null,
+    };
+    const observed = projectChatShell({
+      ...common,
+      localWorkflow: awaiting,
+      session: session({ turnState: "running", pendingQueue: [entry] }),
+    });
+    expect(observed.workflow).toMatchObject({
+      kind: "turnInProgress",
+      requestId: "req-1",
+    });
+    const localWorkflow = reconcileProjectedWorkflow(
+      awaiting,
+      observed.workflow,
+    );
+    const next = projectChatShell({
+      ...common,
+      localWorkflow,
+      session: session({
+        turnState: "running",
+        pendingQueue:
+          action === "edit" ? [{ ...entry, requestId: "replacement" }] : [],
+      }),
+    });
+    expect(next.workflow).toMatchObject({
+      kind: "turnInProgress",
+      requestId: "req-1",
+    });
+    expect(next.nonEmptyContentSendStatus.kind).toBe("queue");
+  },
+);
+
 describe("a session this app doesn't own", () => {
   const workerSummary = (unsendableReason: string | null) =>
     ({
@@ -518,6 +593,160 @@ describe("a session this app doesn't own", () => {
   });
 });
 
+describe("a sent message held in the pending queue", () => {
+  const sent: ChatWorkflowState = {
+    kind: "awaitingObservation",
+    nodeDid: "did:key:node",
+    sessionId: "session-1",
+    requestId: "req-sent",
+  };
+  const queuedAs = (requestId: string) => ({
+    requestDocId: `doc-${requestId}`,
+    requestId,
+    content: "queued prompt",
+    editable: true,
+    steerable: false,
+    editGroup: null,
+  });
+  const project = (overrides: Partial<DesktopSessionSnapshot>) =>
+    projectChatShell({
+      clientAvailable: true,
+      selectedNodeDid: "did:key:node",
+      selectedSessionId: "session-1",
+      sending: false,
+      selectedSessionSummary: null,
+      session: session({ nodeDid: "did:key:node", ...overrides }),
+      localWorkflow: sent,
+    });
+
+  test("is no longer awaited, so editing or removing it leaves the composer free", () => {
+    const projection = project({
+      turnState: "completed",
+      pendingQueue: [queuedAs("req-sent")],
+    });
+    expect(projection.workflow).toEqual({ kind: "ready" });
+    expect(projection.nonEmptyContentSendStatus.kind).toBe("ready");
+  });
+
+  test("waits behind the running turn rather than offering to stop itself", () => {
+    const projection = project({
+      turnState: "running",
+      pendingQueue: [queuedAs("req-sent")],
+    });
+    expect(projection.workflow).toMatchObject({
+      kind: "turnInProgress",
+      requestId: "req-1",
+    });
+    expect(projection.activeRequestId).toBe("req-1");
+  });
+});
+
+describe("why Send waits, in the person's terms", () => {
+  const base = {
+    clientAvailable: true,
+    selectedNodeDid: "did:key:node",
+    selectedSessionId: "session-1",
+    sending: false,
+    selectedSessionSummary: null,
+  } as const;
+  const sent: ChatWorkflowState = {
+    kind: "awaitingObservation",
+    nodeDid: "did:key:node",
+    sessionId: "session-1",
+    requestId: "req-sent",
+  };
+
+  test("while the send is still in flight", () => {
+    expect(
+      projectChatShell({
+        ...base,
+        sending: true,
+        session: session({ nodeDid: "did:key:node" }),
+        localWorkflow: {
+          kind: "submittingRequest",
+          nodeDid: "did:key:node",
+          sessionId: "session-1",
+        },
+      }).nonEmptyContentSendStatus,
+    ).toEqual({
+      kind: "disabled",
+      reason: "submittingRequest",
+      hint: "Still sending your last message. Try again in a moment.",
+    });
+  });
+
+  test("while the sent message has not reached the session yet", () => {
+    expect(
+      projectChatShell({
+        ...base,
+        session: session({ nodeDid: "did:key:node" }),
+        localWorkflow: sent,
+      }).nonEmptyContentSendStatus,
+    ).toEqual({
+      kind: "disabled",
+      reason: "waitingForRequestObservation",
+      hint: "Your last message is still on its way. Try again in a moment.",
+    });
+  });
+
+  test("while the selected session has not loaded", () => {
+    expect(
+      projectChatShell({
+        ...base,
+        session: null,
+        localWorkflow: { kind: "ready" },
+      }).nonEmptyContentSendStatus,
+    ).toEqual({
+      kind: "disabled",
+      reason: "sessionMissingFromSnapshot",
+      hint: "This session is still loading. Try again in a moment.",
+    });
+  });
+
+  test("while the latest message's state has not synced", () => {
+    const expected = {
+      kind: "disabled",
+      reason: "inconsistentTurnObservation",
+      hint: "Still syncing this session. Try again in a moment.",
+    };
+    expect(
+      projectChatShell({
+        ...base,
+        session: session({ nodeDid: "did:key:node", turnState: null }),
+        localWorkflow: { kind: "ready" },
+      }).nonEmptyContentSendStatus,
+    ).toEqual(expected);
+    expect(
+      projectChatShell({
+        ...base,
+        session: session({
+          nodeDid: "did:key:node",
+          turnState: null,
+          latestRequestId: "req-sent",
+        }),
+        localWorkflow: sent,
+      }).nonEmptyContentSendStatus,
+    ).toEqual(expected);
+  });
+
+  test("behind a turn that has not started or is running", () => {
+    const project = (turnState: TurnState) =>
+      projectChatShell({
+        ...base,
+        session: session({ nodeDid: "did:key:node", turnState }),
+        localWorkflow: { kind: "ready" },
+      }).nonEmptyContentSendStatus;
+    expect(project("waitingForClaim")).toMatchObject({
+      kind: "queue",
+      hint: "Queued behind the message waiting to start",
+    });
+    expect(project("running")).toMatchObject({
+      kind: "queue",
+      hint: "Queued behind the running turn",
+    });
+  });
+});
+
 describe("requestProgressPresentation", () => {
   test(
     "matches every generated Lean request lifecycle projection",
@@ -538,7 +767,9 @@ describe("requestProgressPresentation", () => {
 });
 
 test("inference activity has distinct shared presentation", () => {
-  expect(inferenceActivityStatus("awaiting_provider")?.label).toBe("Waiting for provider…");
+  expect(inferenceActivityStatus("awaiting_provider")?.label).toBe(
+    "Waiting for provider…",
+  );
   expect(inferenceActivityStatus("working")?.label).toBe("Agent is working…");
   expect(inferenceActivityStatus("waiting")?.label).toBe("Waiting…");
   expect(inferenceActivityStatus("retrying")?.label).toBe("Retrying provider…");

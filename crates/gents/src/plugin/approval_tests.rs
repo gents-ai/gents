@@ -246,7 +246,9 @@ fn questions_without_a_waiter_deadline_fail_with_a_version_error() {
 #[test]
 fn incompatible_responders_and_orphaned_questions_do_not_share_the_current_queue() {
     let home = tempfile::tempdir().unwrap();
-    let incompatible = home.path().join(crate::home::PLUGIN_APPROVALS_DIR_NAME);
+    let incompatible = home
+        .path()
+        .join(crate::store::local::home::PLUGIN_APPROVALS_DIR_NAME);
     std::fs::create_dir_all(&incompatible).unwrap();
     let mark = incompatible.join(".listening");
     std::fs::write(&mark, []).unwrap();
@@ -356,7 +358,10 @@ async fn a_call_with_nobody_listening_fails_at_once_naming_the_command() {
         .await
         .unwrap_err();
     let message = format!("{error:#}");
-    assert!(message.contains("gents plugin dirs add"), "{message}");
+    assert!(
+        message.contains("gents config pack plugin dirs add"),
+        "{message}"
+    );
     assert!(started.elapsed() < Duration::from_secs(5));
     assert!(pending(home.path()).unwrap().is_empty());
 }

@@ -10,7 +10,7 @@ type-complexity-threshold = 250
 # threads.
 disallowed-methods = [
     { path = "std::thread::sleep", reason = "await tokio::time::sleep or the owner's notification" },
-    { path = "tokio::runtime::Handle::block_on", reason = "await the future; drive non-Send embedded-node futures through storage_backend::drive_unsendable" },
+    { path = "tokio::runtime::Handle::block_on", reason = "await the future; drive non-Send embedded-node futures through store::local::storage_backend::drive_unsendable" },
     { path = "tokio::task::block_in_place", reason = "run synchronous work on spawn_blocking" },
     { path = "futures::executor::block_on", reason = "await the future" },
     { path = "tauri::async_runtime::block_on", reason = "await the future" },

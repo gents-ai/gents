@@ -7,7 +7,7 @@ fn session() -> AgentSession {
         session_id: "sess-1".into(),
         node_did: "did:test:amy".into(),
         requester_did: None,
-        agent_id: "default".into(),
+        agent_did: "default".into(),
         created_at: "2026-04-21T12:00:00Z".into(),
         closed_at: None,
         archived_at: None,
@@ -26,7 +26,7 @@ fn request(id: &str, session_id: &str, second: u32) -> AgentRequestRow {
         doc_id: Some(format!("doc-{id}")),
         request_id: id.into(),
         node_did: Some("did:test:amy".into()),
-        agent_id: Some("default".into()),
+        agent_did: Some("default".into()),
         session_id: Some(session_id.into()),
         content: Some(format!("{id} text")),
         lifecycle_state: Some(RequestLifecycleState::Completed),
@@ -38,6 +38,37 @@ fn request(id: &str, session_id: &str, second: u32) -> AgentRequestRow {
 
 fn input(value: serde_json::Value) -> Option<gents_protocol::request_input::RequestInput> {
     Some(serde_json::from_value(value).expect("request input"))
+}
+
+#[test]
+fn goal_continuation_exposes_recorded_wrapup_without_fabricating_older_values() {
+    let store = automated_store();
+    let mut continuation = request("goal", "sess-1", 1);
+    continuation.caused_by_trigger_id = Some("goal-1".into());
+    continuation.input = input(serde_json::json!({
+        "goal_continuation": { "sequence": 3, "wrapup": true }
+    }));
+    let origin = crate::snapshot::session::request_origin_view(&store, &continuation).unwrap();
+    assert_eq!(
+        origin,
+        RequestOriginView::GoalContinuation {
+            goal_id: Some("goal-1".into()),
+            sequence: Some(3),
+            wrapup: Some(true),
+        }
+    );
+    continuation.input = input(serde_json::json!({
+        "queue": { "source": "goal", "policy": "append" }
+    }));
+    let origin = crate::snapshot::session::request_origin_view(&store, &continuation).unwrap();
+    assert_eq!(
+        origin,
+        RequestOriginView::GoalContinuation {
+            goal_id: Some("goal-1".into()),
+            sequence: None,
+            wrapup: None,
+        }
+    );
 }
 
 fn automated_store() -> ClientStore {
@@ -66,7 +97,9 @@ fn automated_store() -> ClientStore {
                 "background_completion_wake_version": 1
             }
         })),
-        content: Some(gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT.into()),
+        content: Some(
+            gents::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT.into(),
+        ),
         ..request("wake", "sess-1", 4)
     };
     let goal = AgentRequestRow {
@@ -131,7 +164,7 @@ fn automated_store() -> ClientStore {
             "doc-wake",
             7,
             MessageRole::User,
-            gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
+            gents::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
         ),
         (
             "authored:doc-goal:prompt",
@@ -179,7 +212,12 @@ fn external_inputs_keep_their_sender_and_internal_inputs_remain_inspectable() {
                 RequestOriginView::SessionMessage { .. } => "automated:sessionMessage".into(),
                 RequestOriginView::Trigger { .. } => "automated:trigger".into(),
                 RequestOriginView::GoalContinuation { .. } => "automated:goal".into(),
-                RequestOriginView::BackgroundCompletion => "automated:background".into(),
+                RequestOriginView::BackgroundCompletion { notification: true } => {
+                    "automated:notification".into()
+                }
+                RequestOriginView::BackgroundCompletion {
+                    notification: false,
+                } => "automated:wake".into(),
             },
             other => format!("{other:?}"),
         })
@@ -192,8 +230,8 @@ fn external_inputs_keep_their_sender_and_internal_inputs_remain_inspectable() {
             "automated:sessionMessage",
             "assistant:reviewed",
             "automated:trigger",
-            "automated:background",
-            "automated:background",
+            "automated:notification",
+            "automated:wake",
             "automated:goal",
             "assistant:goal answer",
         ]
@@ -357,7 +395,9 @@ fn active_background_request_keeps_interrupt_and_queue_visible_after_public_comp
             "source":"background_completion", "policy":"coalesce",
             "key":"background_completion:sess-1", "background_completion_wake_version":1
         }})),
-        content: Some(gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT.into()),
+        content: Some(
+            gents::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT.into(),
+        ),
         ..request("wake", "sess-1", 1)
     };
     let queued = AgentRequestRow {
@@ -396,7 +436,8 @@ fn active_background_request_keeps_interrupt_and_queue_visible_after_public_comp
     );
     assert!(snapshot.pending_turn.is_none());
     let serialized = serde_json::to_string(&snapshot.timeline_items).unwrap();
-    assert!(!serialized.contains(gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT));
+    assert!(!serialized
+        .contains(gents::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT));
     let summaries = session_summaries(&[header], &store.requests, "did:test:amy", &[], &[]);
     assert_eq!(summaries[0].latest_request_id.as_deref(), Some("wake"));
     assert_eq!(summaries[0].turn_state.as_deref(), Some("running"));
@@ -427,7 +468,7 @@ fn queued_and_folded_observations_retain_the_active_owners_trigger() {
             observed.lifecycle_state = Some(RequestLifecycleState::Superseded);
             observed.superseded_by_request = Some("owner".into());
             observed.superseded_by_request_doc_id = Some("doc-owner".into());
-            observed.failure_reason = Some(gents::lifecycle::FOLDED_REASON.into());
+            observed.failure_reason = Some(gents::request::lifecycle::FOLDED_REASON.into());
         }
         let mut header = session();
         header.observation = Some(SessionObservation {
@@ -445,4 +486,46 @@ fn queued_and_folded_observations_retain_the_active_owners_trigger() {
         assert_eq!(summaries[0].trigger_id.as_deref(), Some("nightly"));
         assert_eq!(summaries[0].trigger_kind.as_deref(), Some("schedule"));
     }
+}
+
+#[test]
+fn question_reply_keeps_the_signed_choice_on_the_persons_request() {
+    let store = automated_store();
+    let mut answer = request("answer", "sess-1", 1);
+    answer.caused_by_source_doc_id = Some("question-doc".into());
+    answer.input = input(serde_json::json!({ "question_reply": {
+        "source_doc_id": "question-doc",
+        "question_hash": "sha256:question",
+        "answer": { "option_ids": ["blue"], "free_text": "please" }
+    }}));
+    let view = crate::snapshot::session::question_reply_view(&store, &store, &answer).unwrap();
+    assert_eq!(view.source_doc_id, "question-doc");
+    assert_eq!(view.answer.unwrap().option_ids, ["blue"]);
+    answer.caused_by_source_doc_id = Some("different-question".into());
+    assert!(crate::snapshot::session::question_reply_view(&store, &store, &answer).is_none());
+    answer.caused_by_source_doc_id = Some("question-doc".into());
+    answer.caused_by_trigger_id = Some("scheduled".into());
+    assert!(crate::snapshot::session::question_reply_view(&store, &store, &answer).is_none());
+}
+
+#[test]
+fn legacy_question_reply_requires_the_matching_observed_question() {
+    let store = automated_store();
+    let mut answer = request("answer", "sess-1", 1);
+    answer.caused_by_source_doc_id = Some("question-doc".into());
+    answer.requester_did = Some("did:test:person".into());
+    let mut questions = ClientStore::default();
+    assert!(crate::snapshot::session::question_reply_view(&store, &questions, &answer).is_none());
+    let question: gents_protocol::row::MailboxItemRow = serde_json::from_value(serde_json::json!({
+        "_docID": "question-doc", "item_key": "question", "requester_did": "did:test:person",
+        "node_did": "did:test:amy", "status": "resolved", "kind": "ask", "action": "start_request",
+        "title": "Question", "source_kind": "request", "source_id": "source", "session_id": "sess-1",
+        "target_node_did": "did:test:amy", "target_agent_did": "default", "created_at": "2026-04-21T12:00:00Z"
+    })).unwrap();
+    questions.mailbox_items.push(question);
+    let view = crate::snapshot::session::question_reply_view(&store, &questions, &answer).unwrap();
+    assert_eq!(view.source_doc_id, "question-doc");
+    assert!(view.answer.is_none());
+    questions.mailbox_items[0].session_id = Some("other-session".into());
+    assert!(crate::snapshot::session::question_reply_view(&store, &questions, &answer).is_none());
 }

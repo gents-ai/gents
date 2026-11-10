@@ -20,6 +20,7 @@ export function createHostActions({ api }: { api: DesktopApiAdapter }) {
     listPackPluginSlots: () => api.listPackPluginSlots(),
     readPackAccount: () => api.readPackAccount(),
     searchPacks: (query: string, page: number) => api.searchPacks(query, page),
+    packInfo: (pack: string) => api.packInfo(pack),
     installPack: (request: PackInstallRequest) => api.installPack(request),
     updatePack: (pack: string, edited: PackEditedChoice) =>
       api.updatePack(pack, edited),
@@ -47,6 +48,16 @@ export function createHostActions({ api }: { api: DesktopApiAdapter }) {
     readUxPluginSource: (id: string) => api.readUxPluginSource(id),
     callPackPlugin: (request: PackPluginCallRequest) => api.callPackPlugin(request),
     callUxData: (request: UxDataCallRequest) => api.callUxData(request),
+    watchUxData: (
+      request: UxDataCallRequest,
+      listener: (
+        event: import("@source-inc/gents-desktop-client").UxDataWatchEvent,
+      ) => void,
+    ) => {
+      if (!api.watchUxData)
+        return Promise.reject(new Error("Pack updates are unavailable."));
+      return api.watchUxData(request, listener);
+    },
     listUxDataSurfaces: (request: UxDataSurfacesRequest) =>
       api.listUxDataSurfaces(request),
     async openExternalUrl(url: string) {

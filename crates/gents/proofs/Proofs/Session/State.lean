@@ -96,7 +96,7 @@ structure QueueEntry where
   queueKey : Option QueueKey
   queuedAfter : Option RequestId
   origin : ExecutionOrigin := .interactive
-  /-- The signed requester principal of the admitted request. -/
+  /-- Signed immutable session requester provenance; the admission signer is the acting principal. -/
   requester : Option Nat := none
   /-- Abstract identity of the request-scoped execution settings the admission
   carries besides its content; equal values run under the same configuration. -/
@@ -131,7 +131,7 @@ instance (entry : QueueEntry) (key : QueueKey) : Decidable (entry.coalesceWellFo
 
 def queuedUserMessage (entry : QueueEntry) : Prop :=
   entry.source = .user ∧ entry.policy = .append ∧ entry.origin = .interactive ∧
-    entry.queuedAfter.isSome
+    entry.queuedAfter.isSome ∧ entry.delivery = .steer
 
 instance (entry : QueueEntry) : Decidable entry.queuedUserMessage := by
   unfold QueueEntry.queuedUserMessage

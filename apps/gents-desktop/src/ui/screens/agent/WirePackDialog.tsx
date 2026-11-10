@@ -20,6 +20,7 @@ import {
 } from "@gents/ui/components/select";
 import type { AgentView, PackWireResult } from "@source-inc/gents-desktop-client";
 import { useApp } from "@/app/AppContext";
+import { useCopied } from "@/lib/clipboard";
 
 export type WirePackDialogProps = {
   /** the plugin to wire, `<namespace>/<name>` */
@@ -35,6 +36,24 @@ export type WirePackDialogProps = {
 const message = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
+/* The runtime won't pin a plugin through GraphQL while it serves the node's
+   home, because the commit's outcome could be unknown; its refusal names
+   the command to run with the node stopped. */
+const WHILE_RUNNING = "cannot publish a plugin pin through GraphQL";
+export const refusedWhileRunning = (error: string) =>
+  error.includes(WHILE_RUNNING) ? (error.match(/`([^`]+)`/)?.[1] ?? null) : undefined;
+
+const shellArgument = (value: string) => `'${value.replace(/'/g, "'\\''")}'`;
+const wireCommand = (plugin: string, agent: string, targetsFrom: string[]) =>
+  [
+    "gents config pack wire",
+    shellArgument(plugin),
+    "--agent",
+    shellArgument(agent),
+    ...targetsFrom.flatMap((target) => ["--targets-from", shellArgument(target)]),
+    "--home 'NODE_HOME'",
+  ].join(" ");
+
 export function WirePackDialog({
   plugin,
   agents,
@@ -43,14 +62,15 @@ export function WirePackDialog({
   onClose,
 }: WirePackDialogProps) {
   const { actions } = useApp();
-  const [agentId, setAgentId] = useState(agent ?? agents[0]?.agentId ?? "");
+  const [agentDid, setAgentDid] = useState(agent ?? agents[0]?.agentDid ?? "");
   const [preview, setPreview] = useState<PackWireResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [refused, setRefused] = useState(false);
   const [busy, setBusy] = useState(false);
-  const request = { plugin, agent: agentId, targetsFrom, remove: false };
+  const request = { plugin, agent: agentDid, targetsFrom, remove: false };
 
   useEffect(() => {
-    if (!agentId) return;
+    if (!agentDid) return;
     let current = true;
     setPreview(null);
     setError(null);
@@ -62,7 +82,7 @@ export function WirePackDialog({
       current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [actions, plugin, agentId, targetsFrom.join("\n")]);
+  }, [actions, plugin, agentDid, targetsFrom.join("\n")]);
 
   async function confirm() {
     setBusy(true);
@@ -71,7 +91,10 @@ export function WirePackDialog({
       await actions.wirePack({ ...request, preview: false });
       onClose(true);
     } catch (e) {
-      setError(message(e));
+      const text = message(e);
+      if (refusedWhileRunning(text) !== undefined) {
+        setRefused(true);
+      } else setError(text);
       setBusy(false);
     }
   }
@@ -79,7 +102,7 @@ export function WirePackDialog({
   const job = preview?.report.job;
   return (
     <Dialog open onOpenChange={(open) => !open && onClose(false)}>
-      <DialogContent aria-modal="true" className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Enable {plugin} for an agent</DialogTitle>
           <DialogDescription>Nothing is written until you enable it.</DialogDescription>
@@ -89,18 +112,18 @@ export function WirePackDialog({
             <FieldLabel htmlFor="wire-agent">Agent</FieldLabel>
             <Select
               items={agents.map((a) => ({
-                value: a.agentId,
+                value: a.agentDid,
                 label: a.displayName,
               }))}
-              value={agentId}
-              onValueChange={(v) => v && setAgentId(v)}
+              value={agentDid}
+              onValueChange={(v) => v && setAgentDid(v)}
             >
               <SelectTrigger id="wire-agent" className="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 {agents.map((a) => (
-                  <SelectItem key={a.agentId} value={a.agentId}>
+                  <SelectItem key={a.agentDid} value={a.agentDid}>
                     {a.displayName}
                   </SelectItem>
                 ))}
@@ -131,7 +154,16 @@ export function WirePackDialog({
               ))}
             </ul>
           )}
-          {error && <FieldError>{error}</FieldError>}
+          {refused ? (
+            <Refusal
+              plugin={plugin}
+              command={wireCommand(plugin, agentDid, targetsFrom)}
+            />
+          ) : (
+            error && (
+              <FieldError className="[overflow-wrap:anywhere]">{error}</FieldError>
+            )
+          )}
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => onClose(false)}>
@@ -139,7 +171,7 @@ export function WirePackDialog({
           </Button>
           <Button
             variant="brand"
-            disabled={busy || !preview}
+            disabled={busy || !preview || refused}
             onClick={() => void confirm()}
           >
             Enable
@@ -147,5 +179,32 @@ export function WirePackDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/* why Enable can't work on a running node yet, with the command to run once
+   it's stopped */
+function Refusal({ plugin, command }: { plugin: string; command: string }) {
+  const { copied, copy } = useCopied();
+  return (
+    <div role="alert" className="grid gap-2 rounded-xl bg-raised/50 p-3 text-sm">
+      <p>
+        {plugin} can’t be enabled from the app while this node is running yet. Until it
+        can, stop the node, replace NODE_HOME with its home directory, then run this in
+        a POSIX shell:
+      </p>
+      <div className="relative">
+        <pre className="rounded-lg bg-background/70 p-2.5 pr-16 font-mono text-xs break-all whitespace-pre-wrap">
+          {command}
+        </pre>
+        <button
+          type="button"
+          onClick={() => copy(command)}
+          className="absolute top-1.5 right-2 rounded-md px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
+        >
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+    </div>
   );
 }

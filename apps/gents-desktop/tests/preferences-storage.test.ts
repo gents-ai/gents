@@ -1,7 +1,7 @@
 import { waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { restoreListViews } from "../src/ui/app/listViews";
+import { recentDefault, restoreListViews } from "../src/ui/app/listViews";
 import { emptyFilter } from "../src/ui/lib/session-filter";
 import {
   applyChosenTheme,
@@ -16,23 +16,63 @@ import { onZoomKeys, stepZoom, zoomKey } from "../src/ui/lib/zoom";
 const defaults: Preferences = {
   theme: "light",
   nav: "hover",
+  navHidden: false,
+  navCollapsed: "hover",
+  navWidth: 304,
   zoom: 1,
   sentTurn: "follow",
   followUp: "steer",
   pinnedSessions: [],
+  flags: {},
+  navLayout: { order: [], shown: {} },
+  openOn: null,
+  hiddenNodes: [],
+  hiddenAgents: [],
+  notify: { finished: true, failed: true, question: true, mailbox: true },
+  pluginNotify: [],
 };
 
 describe("preferences read back from storage", () => {
+  it("keeps the node to open on and what is hidden, dropping what isn't a string", () => {
+    const back = restorePreferences(
+      {
+        openOn: "did:key:vega",
+        hiddenNodes: ["did:key:juno", 3],
+        hiddenAgents: ["did:key:vega ops"],
+      },
+      defaults,
+    );
+    expect(back.openOn).toBe("did:key:vega");
+    expect(back.hiddenNodes).toEqual(["did:key:juno"]);
+    expect(back.hiddenAgents).toEqual(["did:key:vega ops"]);
+    expect(restorePreferences({ openOn: 7, hiddenNodes: "x" }, defaults)).toMatchObject(
+      {
+        openOn: null,
+        hiddenNodes: [],
+      },
+    );
+  });
+
   it("keeps the defaults for values that are not preferences", () => {
     expect(restorePreferences({ theme: "sepia", nav: 3 }, defaults)).toEqual(defaults);
     expect(restorePreferences(null, defaults)).toEqual(defaults);
     expect(restorePreferences({ theme: "dark", nav: "collapsed" }, defaults)).toEqual({
       theme: "dark",
       nav: "collapsed",
+      navHidden: false,
+      navCollapsed: "hover",
+      navWidth: 304,
       zoom: 1,
       sentTurn: "follow",
       followUp: "steer",
       pinnedSessions: [],
+      flags: {},
+      navLayout: { order: [], shown: {} },
+      openOn: null,
+      hiddenNodes: [],
+      hiddenAgents: [],
+      notify: { finished: true, failed: true, question: true, mailbox: true },
+      pluginNotify: [],
     });
     expect(restorePreferences({ sentTurn: "anchor" }, defaults).sentTurn).toBe(
       "anchor",
@@ -40,6 +80,14 @@ describe("preferences read back from storage", () => {
     expect(restorePreferences({ sentTurn: "top" }, defaults).sentTurn).toBe("follow");
     expect(restorePreferences({ followUp: "queue" }, defaults).followUp).toBe("queue");
     expect(restorePreferences({ followUp: "later" }, defaults).followUp).toBe("steer");
+  });
+
+  it("keeps a hidden sidebar, and a width only within the sidebar's range", () => {
+    expect(restorePreferences({ navHidden: true }, defaults).navHidden).toBe(true);
+    expect(restorePreferences({ navHidden: "yes" }, defaults).navHidden).toBe(false);
+    expect(restorePreferences({ navWidth: 360.4 }, defaults).navWidth).toBe(360);
+    expect(restorePreferences({ navWidth: 120 }, defaults).navWidth).toBe(304);
+    expect(restorePreferences({ navWidth: 900 }, defaults).navWidth).toBe(304);
   });
 
   it("keeps the pinned sessions' keys, and only those", () => {
@@ -143,17 +191,26 @@ describe("list views read back from storage", () => {
     });
   });
 
-  it("discards obsolete per-list node picks while retaining content filters", () => {
+  it("discards obsolete per-list node picks and mailbox kinds, keeping the mailbox tab", () => {
     expect(
       restoreListViews({
         sessionNodes: ["a"],
         mailboxNodes: ["b"],
         mailboxKinds: ["failed", 1],
+        mailboxTab: "wrong",
+        mailboxOpen: { nodeDid: null, itemId: "kept", at: 0, where: "/mailbox" },
+        mailboxQuery: "kept",
       }),
     ).toEqual({
       sessionFilter: emptyFilter,
-      recentFilter: emptyFilter,
-      mailboxKinds: ["failed"],
+      recentFilter: recentDefault,
+      mailboxTab: "wrong",
+      mailboxOpen: null,
+      mailboxQuery: null,
     });
+  });
+
+  it("restores an unknown mailbox tab as all of it", () => {
+    expect(restoreListViews({ mailboxTab: "someday" }).mailboxTab).toBe("all");
   });
 });

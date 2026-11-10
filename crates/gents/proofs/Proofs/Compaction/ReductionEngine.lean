@@ -442,6 +442,63 @@ def commitRequestLocal (before : RequestLocalState) : Outcome → RequestLocalSt
       { reductions := before.reductions ++ [(compactedPrefix.length, checkpoint)] }
   | _ => before
 
+/-- A request-local reduction is staged until its rebuilt request is authorized
+for dispatch; only `.dispatch` writes its durable row (#3283). A rebuilt request
+that fails projection, stays over threshold or lacks output capacity discards the
+staged reduction, so a request that fails `CannotFit` leaves no reduction row. -/
+def commitRequestLocalAfterRebuild {Error Request : Type} (before : RequestLocalState)
+    (outcome : Outcome) : RebuiltDispatch Error Request → RequestLocalState
+  | .dispatch _ _ => commitRequestLocal before outcome
+  | _ => before
+
+theorem request_local_undispatched_rebuild_does_not_commit
+    {Error Request : Type} (before : RequestLocalState) (outcome : Outcome)
+    (dispatch : RebuiltDispatch Error Request)
+    (h : ∀ projected outputTokens, dispatch ≠ .dispatch projected outputTokens) :
+    commitRequestLocalAfterRebuild before outcome dispatch = before := by
+  cases dispatch with
+  | dispatch projected outputTokens => exact (h projected outputTokens rfl).elim
+  | _ => rfl
+
+theorem request_local_still_over_does_not_commit
+    {Error Request : Type} (before : RequestLocalState) (outcome : Outcome)
+    (projected : RebuiltRequest Request) :
+    commitRequestLocalAfterRebuild (Error := Error) before outcome
+      (.stillOverThreshold projected) = before := by
+  rfl
+
+theorem request_local_commit_requires_authorized_dispatch
+    {Request Error : Type} (rebuild : Nat → List Nat → Except Error Request)
+    (estimate : Request → Except Error Nat) (before : RequestLocalState) (outcome : Outcome)
+    (effectiveInputBudget contextWindow configuredMaxOutputTokens : Nat)
+    (h : commitRequestLocalAfterRebuild before outcome
+      (rebuildAndAuthorize rebuild estimate outcome effectiveInputBudget contextWindow
+        configuredMaxOutputTokens) ≠ before) :
+    ∃ projected outputTokens,
+      rebuildAndAuthorize rebuild estimate outcome effectiveInputBudget contextWindow
+        configuredMaxOutputTokens = .dispatch projected outputTokens ∧
+      decideThreshold projected.inputTokens effectiveInputBudget = .notNeeded ∧
+      PromptAssembly.Budget.CanDispatch projected.inputTokens contextWindow
+        configuredMaxOutputTokens := by
+  cases hdispatch : rebuildAndAuthorize rebuild estimate outcome effectiveInputBudget
+      contextWindow configuredMaxOutputTokens with
+  | dispatch projected outputTokens =>
+      obtain ⟨hthreshold, hcapacity, _⟩ := rebuilt_dispatch_is_authorized rebuild estimate
+        outcome effectiveInputBudget contextWindow configuredMaxOutputTokens outputTokens
+        projected hdispatch
+      exact ⟨projected, outputTokens, rfl, hthreshold, hcapacity⟩
+  | _ => rw [hdispatch] at h; exact (h rfl).elim
+
+theorem request_local_dispatch_commits_exactly_one
+    {Error Request : Type} (before : RequestLocalState)
+    (compactedPrefix retainedSuffix : List Nat) (checkpoint : Nat)
+    (projected : RebuiltRequest Request) (outputTokens : Nat) :
+    (commitRequestLocalAfterRebuild (Error := Error) before
+      (.reduced compactedPrefix retainedSuffix checkpoint)
+      (.dispatch projected outputTokens)).reductions =
+      before.reductions ++ [(compactedPrefix.length, checkpoint)] := by
+  rfl
+
 theorem session_noop_does_not_commit
     (before : SessionState) (messages : List Nat) :
     commitSession before (.notNeeded messages) = before ∧

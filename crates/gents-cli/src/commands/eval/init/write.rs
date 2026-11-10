@@ -3,14 +3,13 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use gents::config_client::{
-    apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyPlan,
-};
-use gents::document_config::{EvalDefinition, EvalSplit};
+use gents::documents::apply_desired_state_plan;
+use gents::documents::{EvalDefinition, EvalSplit};
 use gents::eval::runner::embedded::EmbeddedHome;
 use gents::pack::{
     interpolate, is_valid_pack_name, load_pack_config, PackInstallOptions, PackManifest,
 };
+use gents::store::config_client::{read_desired_state_record_in_txn, DesiredStateApplyPlan};
 use gents::{Collection, ConfigAccess};
 use serde_json::json;
 use tempfile::TempDir;
@@ -23,7 +22,7 @@ pub(crate) use recovery::recover_output;
 
 const CONFIG: &str = "pack_config.json";
 const README: &str = "README.md";
-const GENERATED_BY: &str = "gents eval init";
+const GENERATED_BY: &str = "gents utils eval init";
 
 pub(crate) struct PilotNote {
     pub(crate) run_ids: Vec<String>,
@@ -108,10 +107,10 @@ pub(crate) fn commit(
             std::fs::rename(existing, &old_pack)
                 .with_context(|| format!("moving {} aside", existing.display()))?;
             // Whatever is aside now is what would be deleted: it must still be
-            // a pack gents eval init wrote, with nothing else in it.
+            // a pack gents utils eval init wrote, with nothing else in it.
             let changed = if !is_generated_eval_pack(&old_pack) {
                 Some(anyhow::anyhow!(
-                    "refusing to replace --out {}: it stopped being a definition pack gents eval init wrote while replacing it",
+                    "refusing to replace --out {}: it stopped being a definition pack gents utils eval init wrote while replacing it",
                     out.display()
                 ))
             } else {
@@ -233,12 +232,12 @@ fn replaceable_out(
     );
     anyhow::ensure!(
         is_generated_eval_pack(&resolved),
-        "refusing to replace --out {}: it is not a definition pack gents eval init wrote; choose another --out or remove it yourself",
+        "refusing to replace --out {}: it is not a definition pack gents utils eval init wrote; choose another --out or remove it yourself",
         out.display()
     );
     if let Some(extra) = undeclared_entry(&resolved)? {
         anyhow::bail!(
-            "refusing to replace --out {}: {} is not part of the pack gents eval init wrote; move it out or remove --out yourself",
+            "refusing to replace --out {}: {} is not part of the pack gents utils eval init wrote; move it out or remove --out yourself",
             out.display(),
             extra.display()
         );
@@ -365,11 +364,11 @@ pub(crate) fn readme(
     );
     let _ = writeln!(
         text,
-        "Eval definition `{}` (comparability version {}), drafted by `gents eval init` on {} for agent `{}` of pack `{}` ({}), bound to inference slot {}.\n",
+        "Eval definition `{}` (comparability version {}), drafted by `gents utils eval init` on {} for agent `{}` of pack `{}` ({}), bound to inference slot {}.\n",
         definition.definition_id,
         definition.comparability_version,
         chrono::Utc::now().format("%Y-%m-%d"),
-        subject.agent_id,
+        subject.agent_slot,
         subject.pack_name,
         subject.pack_digest,
         definition
@@ -511,7 +510,7 @@ fn write_files(
         "name": pack_name,
         "version": "1.0.0",
         "description": format!(
-            "Eval definition {}, drafted by gents eval init.",
+            "Eval definition {}, drafted by gents utils eval init.",
             definition.definition_id
         ),
         "authors": [GENERATED_BY],
@@ -544,14 +543,16 @@ fn write_files(
 
 async fn round_trip(dir: &Path, expected: &EvalDefinition) -> Result<EvalDefinition> {
     let (manifest, assets) = read_pack(dir)?;
-    let home = EmbeddedHome::create_temp("eval-init-roundtrip").await?;
-    let result = install_and_read_back(&home, &manifest, &assets, expected).await;
-    home.node.shutdown().await;
+    let mut home = EmbeddedHome::create_temp("eval-init-roundtrip").await?;
+    let result = install_and_read_back(&mut home, &manifest, &assets, expected).await;
+    if let Err(error) = home.node.shutdown().await {
+        tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down trial node");
+    }
     result
 }
 
 async fn install_and_read_back(
-    home: &EmbeddedHome,
+    home: &mut EmbeddedHome,
     manifest: &PackManifest,
     assets: &BTreeMap<String, Vec<u8>>,
     expected: &EvalDefinition,
@@ -583,8 +584,21 @@ async fn install_and_read_back(
         "the loaded definition differs from the validated draft"
     );
 
-    gents::ensure_node(&home.node, &owner).await?;
-    let access = ConfigAccess::local(home.node.clone());
+    // The scratch home's runtime admits the operator's client as an operator;
+    // the client then installs through the home's client-signed endpoint, as
+    // every User write does.
+    let caller = std::sync::Arc::new(crate::load_client_identity().await?);
+    let capability = gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+        caller.private_key_bytes(),
+    )?;
+    home.set_evaluator(caller.clone(), capability);
+    gents::store::identity::GrantSet::OperatorUser
+        .grant(
+            &ConfigAccess::local_as(home.node.clone(), owner.parse()?),
+            &caller.did().parse()?,
+        )
+        .await?;
+    let access = home.client_access(caller.did())?;
     let plan = DesiredStateApplyPlan::from_pack_config(&config)?;
     access
         .transact_write("eval.init.round_trip", |txn| {

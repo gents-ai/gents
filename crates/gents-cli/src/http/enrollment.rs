@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::{Duration, SecondsFormat, Utc};
-use gents::defra_node::EmbeddedNode;
-use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
+use gents::defra_node::Node as EmbeddedNode;
+use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 use gents::NodeIdentity;
 use gents_protocol::enrollment::{
     derive_enrollment_id, EnrollmentOfferRecord, EnrollmentOperatorAction,
@@ -14,7 +14,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::RwLock;
 
-pub use gents::agent::p2p_reconcile::{EnrollmentOfferIssuer, EnrollmentOfferStatus};
+pub use gents::runtime::agent::p2p_reconcile::{EnrollmentOfferIssuer, EnrollmentOfferStatus};
 
 pub(crate) type EnrollmentOfferIssuerHandle = Arc<RwLock<Option<EnrollmentOfferIssuer>>>;
 pub(crate) type EnrollmentDecisionServiceHandle = Arc<RwLock<Option<EnrollmentDecisionService>>>;
@@ -23,13 +23,13 @@ pub(crate) type EnrollmentDecisionServiceHandle = Arc<RwLock<Option<EnrollmentDe
 pub(crate) struct EnrollmentDecisionService {
     identity: Arc<dyn NodeIdentity>,
     node: Arc<EmbeddedNode>,
-    store: gents::agent::p2p_reconcile::GraphqlEnrollmentStore,
+    store: gents::runtime::agent::p2p_reconcile::GraphqlEnrollmentStore,
 }
 
 impl EnrollmentDecisionService {
     pub(crate) fn new(identity: Arc<dyn NodeIdentity>, node: Arc<EmbeddedNode>) -> Self {
         Self {
-            store: gents::agent::p2p_reconcile::GraphqlEnrollmentStore::new(
+            store: gents::runtime::agent::p2p_reconcile::GraphqlEnrollmentStore::new(
                 node.clone(),
                 identity.clone(),
             ),
@@ -41,7 +41,7 @@ impl EnrollmentDecisionService {
     pub(crate) async fn decide(
         &self,
         command: &EnrollmentOperatorDecisionCommand,
-    ) -> Result<gents::agent::p2p_reconcile::EnrollmentDecisionOutcome> {
+    ) -> Result<gents::runtime::agent::p2p_reconcile::EnrollmentDecisionOutcome> {
         let now = Utc::now();
         authenticate_operator_command(self.identity.as_ref(), command, now).await?;
         consume_operator_nonce(&self.node, &command.admin_did, &command.nonce, now).await?;
@@ -69,41 +69,104 @@ impl EnrollmentDecisionService {
         }
     }
 
-    pub(crate) async fn pending(
+    pub(crate) async fn query(
         &self,
         command: &EnrollmentOperatorQueryCommand,
-    ) -> Result<Vec<serde_json::Value>> {
+    ) -> Result<serde_json::Value> {
         let now = Utc::now();
         authenticate_operator_query(self.identity.as_ref(), command, now).await?;
         consume_operator_nonce(&self.node, &command.admin_did, &command.nonce, now).await?;
-        anyhow::ensure!(
-            command.query == EnrollmentOperatorQuery::Pending,
-            "unsupported enrollment operator query"
-        );
         let projection = self.store.load_projection().await?;
         anyhow::ensure!(
             projection.conflict.is_none(),
             "enrollment root authority is conflicted"
         );
-        Ok(projection
-            .pending
-            .into_iter()
-            .map(|pending| {
-                serde_json::json!({
+        match command.query {
+            EnrollmentOperatorQuery::Pending => Ok(serde_json::json!({
+                "pending": projection.pending.into_iter().map(|pending| serde_json::json!({
                     "request_id": pending.request.request_id,
                     "network_id": pending.request.network_id,
                     "candidate_did": pending.request.candidate_did,
                     "candidate_peer": pending.request.candidate_peer,
-                    "owner_agent": pending.request.owner_agent,
+                    "candidate_name": pending.request.candidate_name,
+                    "owner_node_did": pending.request.owner_node_did,
+                    "signed_request": pending.request,
+                    "profile": pending.request.profile,
+                    "issued_at": pending.request.issued_at,
                     "expires_at": pending.request.expires_at,
-                })
-            })
-            .collect())
+                })).collect::<Vec<_>>()
+            })),
+            EnrollmentOperatorQuery::Members => Ok(serde_json::json!({
+                "members": projection.active.into_iter()
+                    .filter(|entry| gents_protocol::enrollment::authorization_lease_is_fresh_at(&entry.revision.authorization_expires_at, now))
+                    .map(|entry| serde_json::json!({
+                        "request_id": entry.request.request_id,
+                        "network_id": entry.request.network_id,
+                        "candidate_did": entry.request.candidate_did,
+                        "candidate_peer": entry.request.candidate_peer,
+                        "profile": entry.request.profile,
+                        "authorization_expires_at": entry.revision.authorization_expires_at,
+                    })).collect::<Vec<_>>()
+            })),
+            EnrollmentOperatorQuery::History => {
+                let conflicts_omitted = !projection.request_conflicts.is_empty()
+                    || !projection.scoped_conflicts.is_empty();
+                let mut history = Vec::new();
+                for entry in projection.active {
+                    /* a lapsed lease is no longer a member (the Members
+                    query's freshness rule): its approval has ended */
+                    let lapsed = !gents_protocol::enrollment::authorization_lease_is_fresh_at(
+                        &entry.revision.authorization_expires_at,
+                        now,
+                    );
+                    history.push(serde_json::json!({
+                        "request_id": entry.request.request_id, "candidate_did": entry.request.candidate_did,
+                        "candidate_peer": entry.request.candidate_peer, "profile": entry.request.profile,
+                        "state": if lapsed { "expired" } else { "approved" }, "decided_at": entry.decision.decided_at,
+                        "decided_by": entry.decision.signer_did, "revoked_at": null, "revoked_by": null,
+                        "expired_at": lapsed.then_some(&entry.revision.authorization_expires_at),
+                    }));
+                }
+                for entry in projection.denied {
+                    history.push(serde_json::json!({
+                        "request_id": entry.request.request_id, "candidate_did": entry.request.candidate_did,
+                        "candidate_peer": entry.request.candidate_peer, "profile": entry.request.profile,
+                        "state": "denied", "decided_at": entry.decision.decided_at,
+                        "decided_by": entry.decision.signer_did, "revoked_at": null, "revoked_by": null,
+                    }));
+                }
+                for entry in projection.revoked {
+                    history.push(serde_json::json!({
+                        "request_id": entry.request.request_id, "candidate_did": entry.request.candidate_did,
+                        "candidate_peer": entry.request.candidate_peer, "profile": entry.request.profile,
+                        "state": "revoked", "decided_at": entry.decision.decided_at,
+                        "decided_by": entry.decision.signer_did, "revoked_at": entry.revision.issued_at,
+                        "revoked_by": entry.revision.signer_did,
+                    }));
+                }
+                history.sort_by(|a, b| {
+                    let latest = |value: &serde_json::Value| {
+                        value["revoked_at"]
+                            .as_str()
+                            .or_else(|| value["expired_at"].as_str())
+                            .or_else(|| value["decided_at"].as_str())
+                            .unwrap_or("")
+                            .to_owned()
+                    };
+                    latest(b).cmp(&latest(a))
+                });
+                let observed_count = history.len();
+                history.truncate(50);
+                Ok(
+                    serde_json::json!({ "history": history, "observed_count": observed_count, "limit": 50, "omits_superseded": true, "conflicts_omitted": conflicts_omitted }),
+                )
+            }
+        }
     }
 }
 
 impl EnrollmentDecisionService {
-    pub(crate) async fn authenticate_signed(
+    pub(crate) async fn authenticate_node_reader(
         &self,
         signer_did: &str,
         payload: &[u8],
@@ -111,12 +174,24 @@ impl EnrollmentDecisionService {
         nonce: &str,
     ) -> Result<()> {
         anyhow::ensure!(
-            signer_did == self.identity.did(),
-            "operator command signer does not own this runtime"
-        );
-        anyhow::ensure!(
             self.identity.verify(signer_did, payload, sig).await?,
             "operator command signature is invalid"
+        );
+        let access = gents::store::config_client::ConfigAccess::local_as(
+            self.node.clone(),
+            identity::Did::new(signer_did)?,
+        );
+        let response = access
+            .execute(&format!(
+                "{{ Node(filter: {{ node_did: {{ _eq: \"{}\" }} }}) {{ _docID }} }}",
+                gents::store::graphql::escape_graphql_string(self.identity.did()),
+            ))
+            .await?;
+        anyhow::ensure!(
+            response["data"]["Node"]
+                .as_array()
+                .is_some_and(|rows| rows.len() == 1),
+            "the client cannot read this Node"
         );
         consume_operator_nonce(&self.node, signer_did, nonce, Utc::now()).await
     }
@@ -133,6 +208,11 @@ async fn consume_operator_nonce(
     nonce: &str,
     now: chrono::DateTime<Utc>,
 ) -> Result<()> {
+    let runtime = identity::Did::new(
+        node.node_identity_did()
+            .context("enrollment nonce requires the configured runtime identity")?,
+    )?;
+    let access = gents::store::config_client::ConfigAccess::local_as(node.clone(), runtime.clone());
     let nonce_key = derive_enrollment_id("gents-enrollment-operator-nonce-v1", &[admin_did, nonce]);
     let now = now.to_rfc3339_opts(SecondsFormat::Secs, true);
     let expires_at = (chrono::DateTime::parse_from_rfc3339(&now)?
@@ -147,31 +227,44 @@ async fn consume_operator_nonce(
             delete_EnrollmentOperatorNonce(filter: {{ expires_at: {{ _lte: "{now_escaped}" }} }}) {{ _docID }}
             create_EnrollmentOperatorNonce(input: {{
                 nonce_key: "{nonce_key_escaped}", admin_did: "{admin_did}",
-                expires_at: "{expires_at}", consumed_at: "{now_escaped}"
+                expires_at: "{expires_at}", consumed_at: "{now_escaped}", parent_linked: false
             }}) {{ _docID }}
         }}"#
     );
-    match gents::config_client::ConfigAccess::write_local(
-        node,
-        "cli.enrollment.consume_operator_nonce",
-        &mutation,
-    )
-    .await
+    match access
+        .transact_write("cli.enrollment.consume_operator_nonce", |txn| {
+            let mutation = &mutation;
+            let runtime = &runtime;
+            Box::pin(async move {
+                let response = txn.execute(mutation).await?;
+                let doc = gents_protocol::graphql::extract_mutation_doc_id(
+                    &response,
+                    "EnrollmentOperatorNonce",
+                )?;
+                gents::store::config_client::maybe_link_deferred_operation_in_txn(
+                    txn,
+                    "EnrollmentOperatorNonce",
+                    &doc,
+                    runtime,
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await
     {
         Ok(_) => Ok(()),
         Err(write_error) => {
             let query = format!(
                 r#"{{ EnrollmentOperatorNonce(filter: {{ nonce_key: {{ _eq: "{nonce_key_escaped}" }} }}) {{ nonce_key expires_at }} }}"#
             );
-            let consumed = graphql_with_transaction_retry(
-                node,
-                &query,
-                "check consumed enrollment operator nonce",
-            )
-            .await
-            .is_ok_and(|response| {
-                rows::<ConsumedNonceRow>(&response, "EnrollmentOperatorNonce")
-                    .is_ok_and(|rows| rows.iter().any(|row| row.nonce_key == nonce_key))
+            let consumed = access.execute(&query).await.is_ok_and(|response| {
+                gents_protocol::graphql::graphql_rows_from_response(
+                    &response,
+                    "EnrollmentOperatorNonce",
+                )
+                .iter()
+                .any(|row| row["nonce_key"].as_str() == Some(nonce_key.as_str()))
             });
             if consumed {
                 anyhow::bail!("enrollment operator nonce was already consumed");
@@ -179,11 +272,6 @@ async fn consume_operator_nonce(
             Err(write_error).context("persisting enrollment operator nonce replay fence")
         }
     }
-}
-
-#[derive(Deserialize)]
-struct ConsumedNonceRow {
-    nonce_key: String,
 }
 
 async fn authenticate_operator_command(
@@ -332,7 +420,11 @@ pub async fn ensure_enrollment_network(
                     }}) {{ _docID }}
                 }}"#
             );
-            gents::config_client::ConfigAccess::write_local(
+            anyhow::ensure!(
+                node.node_identity_did() == Some(identity.did()),
+                "enrollment Network author must be the local runtime Node"
+            );
+            gents::store::config_client::ConfigAccess::write_local(
                 node,
                 "cli.enrollment.create_agent_network",
                 &mutation,
@@ -347,8 +439,7 @@ pub async fn ensure_enrollment_network(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::defra_node::{EmbeddedNode, StorageBackend};
-    use gents::graphql::ensure_no_errors;
+    use gents::defra_node::{Node as EmbeddedNode, StorageBackend};
     use gents_protocol::enrollment::ENROLLMENT_PROTOCOL_VERSION;
     use gents_protocol::enrollment::{
         EnrollmentOperatorAction, EnrollmentOperatorQuery,
@@ -403,6 +494,20 @@ mod tests {
         assert!(authenticate_operator_query(&other, &query, now)
             .await
             .is_err());
+        for kind in [
+            EnrollmentOperatorQuery::Members,
+            EnrollmentOperatorQuery::History,
+        ] {
+            let mut changed = query.clone();
+            changed.query = kind;
+            assert!(authenticate_operator_query(&identity, &changed, now)
+                .await
+                .is_err());
+            changed.admin_sig = identity.sign(&changed.signing_payload()).await.unwrap();
+            authenticate_operator_query(&identity, &changed, now)
+                .await
+                .unwrap();
+        }
     }
 
     async fn nonce_test_node(path: &std::path::Path) -> Arc<EmbeddedNode> {
@@ -417,7 +522,7 @@ mod tests {
                 .await
                 .expect("nonce test node"),
         );
-        gents::migration::ensure_all_runtime_migrations(node.clone())
+        gents::store::schema::migration::ensure_all_runtime_migrations(node.clone())
             .await
             .expect("nonce schema");
         node
@@ -440,7 +545,7 @@ mod tests {
         let duplicate = first.err().or_else(|| second.err()).unwrap();
         assert!(duplicate.to_string().contains("already consumed"));
 
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
         drop(node);
         let restarted = nonce_test_node(&node_path).await;
         let replay = consume_operator_nonce(&restarted, "did:key:admin", "nonce-concurrent", now)
@@ -468,14 +573,17 @@ mod tests {
         .await
         .unwrap();
 
-        let response = node
+        let actor = identity::Did::new(node.node_identity_did().unwrap()).unwrap();
+        let response = gents::store::config_client::ConfigAccess::local_as(node.clone(), actor)
             .execute("{ EnrollmentOperatorNonce { nonce_key } }")
-            .await;
-        ensure_no_errors(&response, "load retained enrollment operator nonces").unwrap();
+            .await
+            .unwrap();
         assert_eq!(
-            rows::<ConsumedNonceRow>(&response, "EnrollmentOperatorNonce")
-                .unwrap()
-                .len(),
+            gents_protocol::graphql::graphql_rows_from_response(
+                &response,
+                "EnrollmentOperatorNonce"
+            )
+            .len(),
             1
         );
     }

@@ -4,8 +4,8 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use super::{GoalDocument, GOAL_FIELDS};
-use crate::config_client::ConfigRead;
-use crate::graphql::escape_graphql_string;
+use crate::store::config_client::ConfigRead;
+use crate::store::graphql::escape_graphql_string;
 
 #[derive(Debug, Deserialize)]
 struct GoalDocumentRef {

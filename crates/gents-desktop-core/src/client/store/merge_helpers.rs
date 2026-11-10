@@ -120,7 +120,7 @@ pub(super) fn normalize_sources(sources: &mut Vec<Option<String>>, row_count: us
 }
 
 pub(super) fn agent_merge_key(row: &Agent) -> String {
-    format!("{}\0{}", row.node_did, row.agent_id)
+    format!("{}\0{}", row.node_did, row.agent_did)
 }
 
 pub(super) fn request_merge_key(row: &AgentRequestRow) -> String {
@@ -332,11 +332,4 @@ pub(super) fn datastore_tool_surface_merge_key(
     _source_node_did: Option<&str>,
 ) -> String {
     format!("{}\0{}", row.node_did, row.surface_id)
-}
-
-pub(super) fn chain_key_binding_merge_key(
-    row: &ChainKeyBindingDocument,
-    _source_node_did: Option<&str>,
-) -> String {
-    format!("{}\0{}", row.node_did, row.binding_id)
 }

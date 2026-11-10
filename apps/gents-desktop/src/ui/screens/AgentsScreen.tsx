@@ -1,8 +1,19 @@
-import { memo, useState } from "react";
+import { memo, useCallback, useState } from "react";
 import { useStore } from "zustand";
-import { EllipsisVertical, Inbox, Plus, SlidersHorizontal } from "lucide-react";
+import {
+  ChevronDown,
+  EllipsisVertical,
+  Inbox,
+  Plus,
+  SlidersHorizontal,
+} from "lucide-react";
 import { toast } from "sonner";
-import { enrollmentActivationMessage } from "@source-inc/gents-desktop-client";
+import {
+  enrollmentActivationMessage,
+  type EndedAccessView,
+  type EnrollmentRequestView,
+} from "@source-inc/gents-desktop-client";
+import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
 import {
   AlertDialog,
@@ -36,26 +47,36 @@ import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { configIsRead, inferenceIsConfigured, isLocalNode } from "@/lib/firstRun";
 import { href } from "@/lib/router";
-import { isLive } from "@/lib/live";
-import { NodeAvatar } from "./AgentAvatar";
+import { NodeAvatar, nodeAvatarOf } from "./AgentAvatar";
 import { NodeHoverCard } from "./HoverCards";
 import { isWorkingNode } from "@/lib/nodes";
 import { toastFailure } from "@/lib/failure";
 import { useApp } from "@/app/AppContext";
-import { useBootstrap, useEnrollmentRequests, useHomeDid } from "@/hooks/useClient";
+import {
+  useBootstrap,
+  useEnrollmentRequests,
+  useHomeDid,
+  useSelectedNode,
+} from "@/hooks/useClient";
 import { supportsLocalManagedServer } from "../../lib/shellPlatform";
 import { SetupScreen } from "./setup/SetupScreen";
-import { NO_SESSIONS, useFleet } from "@/hooks/useFleet";
+import { activityOf, useFleet } from "@/hooks/useFleet";
 import { fleetNodes } from "@/lib/scope";
-import { nodeKeyOf, type NodeView } from "../../hooks/fleetStore";
+import type { NodeView } from "../../hooks/fleetStore";
 import { useShallow } from "zustand/react/shallow";
 import { errorText } from "../../lib/errorText";
+import { useHidden } from "@/lib/hidden";
+import { usePackGroups } from "./agent/ListDetail";
+import { preferences, useOpenOn } from "@/preferences";
+import { endedAccessDetail, endedAccessTitle, leaseLeft } from "../../hooks/nodeAccess";
+import { shortTime } from "./TranscriptMarker";
 
 export function AgentsScreen() {
   const {
     actions: { removePeer, renamePeer },
   } = useApp();
   const nodes = useFleet(useShallow(fleetNodes));
+  const ended = useFleet((fleet) => fleet.endedAccess);
   const [adding, setAdding] = useState(false);
   const [addingLocal, setAddingLocal] = useState(false);
   const [renaming, setRenaming] = useState<{
@@ -71,6 +92,37 @@ export function AgentsScreen() {
   const pending = useEnrollmentRequests();
   const homeDid = useHomeDid();
   const bootstrap = useBootstrap();
+  const hidden = useHidden();
+  const openOn = useOpenOn();
+  const selected = useSelectedNode()?.nodeDid ?? null;
+  const [hiding, setHiding] = useState<{
+    nodeDid: string;
+    name: string;
+    why: "active" | "openOn";
+  } | null>(null);
+  /* hiding the node in use, or the one the app opens on, asks first, since
+     neither then shows in the menus that would lead back to it */
+  const hide = useCallback(
+    (node: NodeView, hide: boolean) => {
+      const why =
+        node.nodeDid === selected
+          ? "active"
+          : node.nodeDid === openOn
+            ? "openOn"
+            : null;
+      if (hide && why)
+        return setHiding({
+          nodeDid: node.nodeDid,
+          name: node.node.displayName ?? node.label,
+          why,
+        });
+      preferences.setNodeHidden(node.nodeDid, hide);
+    },
+    [selected, openOn],
+  );
+  const shown = nodes.filter((d) => !hidden.node(d.nodeDid));
+  const groupChoices = usePackGroups("nodes");
+  const hiddenOpen = groupChoices.isOpen("hidden", false);
   if (addingLocal) {
     return (
       <SetupScreen
@@ -80,21 +132,37 @@ export function AgentsScreen() {
       />
     );
   }
+  /* a request waits among the remote nodes until its node is listed; the
+     node's own row then takes its place */
+  const waiting = (pending ?? []).filter(
+    (r) => !nodes.some((node) => node.nodeDid === r.ownerNode),
+  );
   const groups = [
     {
       key: "local",
       label: "Local node",
-      nodes: nodes.filter((d) => isWorkingNode(d, homeDid)),
+      nodes: shown.filter((d) => isWorkingNode(d, homeDid)),
       count: false,
     },
     {
       key: "remote",
       label: "Remote nodes",
-      nodes: nodes
+      nodes: shown
         .filter((d) => !isWorkingNode(d, homeDid))
         .sort((a, b) => Number(b.dialSucceeded) - Number(a.dialSucceeded)),
       count: true,
     },
+    /* out of the menus on this device, and only here when there are any */
+    ...(shown.length < nodes.length
+      ? [
+          {
+            key: "hidden",
+            label: "Hidden",
+            nodes: nodes.filter((d) => hidden.node(d.nodeDid)),
+            count: true,
+          },
+        ]
+      : []),
   ];
   return (
     <ScrollArea className="h-full" data-testid="agents-screen">
@@ -111,78 +179,77 @@ export function AgentsScreen() {
             database can be read.
           </p>
         )}
-        {pending && pending.length > 0 && (
-          <ul className="mt-4 grid grid-cols-[minmax(0,1fr)] gap-3">
-            {pending.map((r) => (
-              <li
-                key={r.requestId}
-                className="flex items-center gap-3 rounded-2xl border border-dashed border-border px-5 py-4"
-              >
-                <Spinner className="text-foreground" />
-                <div className="min-w-0">
-                  <p className="text-sm font-medium">
-                    {enrollmentActivationMessage(r)
-                      ? "Access approved · connection retrying"
-                      : r.state === "approved"
-                        ? "Approval received · finishing secure route"
-                        : `Waiting for ${r.serverLabel ?? r.serverPeer} to accept`}
-                  </p>
-                  {enrollmentActivationMessage(r) && (
-                    <p role="alert" className="break-words text-sm text-destructive">
-                      {enrollmentActivationMessage(r)}
-                    </p>
-                  )}
-                  <p className="truncate font-mono text-[11px] text-muted-foreground">
-                    {r.requestId}
-                    {r.state !== "approved" && (
-                      <> · expires {new Date(r.expiresAt).toLocaleTimeString()}</>
-                    )}
-                  </p>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
         {groups.map((g) => (
           <section key={g.key} className="mt-6">
-            <h2 className="flex items-baseline gap-2 font-mono text-[11px] tracking-wide text-muted-foreground uppercase">
-              {g.label}
-              {g.count && (
-                <span className="text-muted-foreground/70">{g.nodes.length}</span>
-              )}
-            </h2>
-            {g.nodes.length === 0 && (
-              <div className="mt-3 rounded-2xl border border-dashed border-border px-5 py-4 text-sm text-muted-foreground">
-                <p>
-                  {g.key === "local"
-                    ? "No node runs on this machine; work happens on the remote nodes."
-                    : "No remote nodes paired."}
-                </p>
-                {g.key === "local" &&
-                  bootstrap?.initConfigStatus === "absent" &&
-                  supportsLocalManagedServer() && (
-                    <Button
-                      className="mt-3"
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => setAddingLocal(true)}
-                    >
-                      Set up local node
-                    </Button>
-                  )}
-              </div>
+            {g.key === "hidden" ? (
+              /* folded unless opened, since these were put out of the way */
+              <h2>
+                <button
+                  type="button"
+                  aria-expanded={hiddenOpen}
+                  onClick={() => groupChoices.toggle("hidden", false)}
+                  className="flex items-center gap-2 font-mono text-[11px] tracking-wide text-muted-foreground uppercase hover:text-foreground"
+                >
+                  <ChevronDown
+                    aria-hidden
+                    className={cn(
+                      "size-3.5 transition-transform",
+                      !hiddenOpen && "-rotate-90",
+                    )}
+                  />
+                  {g.label}
+                  <span className="text-muted-foreground/70">{g.nodes.length}</span>
+                </button>
+              </h2>
+            ) : (
+              <h2 className="flex items-baseline gap-2 font-mono text-[11px] tracking-wide text-muted-foreground uppercase">
+                {g.label}
+                {g.count && (
+                  <span className="text-muted-foreground/70">{g.nodes.length}</span>
+                )}
+              </h2>
             )}
-            <ul className="mt-3 grid grid-cols-[minmax(0,1fr)] gap-3">
-              {g.nodes.map((d) => (
-                <AgentRow
-                  key={d.nodeDid}
-                  node={d}
-                  homeDid={homeDid}
-                  onRename={setRenaming}
-                  onRemove={setRemoving}
-                />
-              ))}
-            </ul>
+            {g.nodes.length === 0 &&
+              !(g.key === "remote" && (waiting.length > 0 || ended.length > 0)) && (
+                <div className="mt-3 rounded-2xl border border-dashed border-border px-5 py-4 text-sm text-muted-foreground">
+                  <p>
+                    {g.key === "local"
+                      ? "No node runs on this machine; work happens on the remote nodes."
+                      : "No remote nodes paired."}
+                  </p>
+                  {g.key === "local" &&
+                    bootstrap?.initConfigStatus === "absent" &&
+                    supportsLocalManagedServer() && (
+                      <Button
+                        className="mt-3"
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => setAddingLocal(true)}
+                      >
+                        Set up local node
+                      </Button>
+                    )}
+                </div>
+              )}
+            {(g.key !== "hidden" || hiddenOpen) && (
+              <ul className="mt-3 grid grid-cols-[minmax(0,1fr)] gap-3">
+                {g.key === "remote" &&
+                  waiting.map((r) => <PendingNodeRow key={r.requestId} request={r} />)}
+                {g.key === "remote" &&
+                  ended.map((e) => <EndedNodeRow key={e.nodeDid} ended={e} />)}
+                {g.nodes.map((d) => (
+                  <AgentRow
+                    key={d.nodeDid}
+                    node={d}
+                    homeDid={homeDid}
+                    hidden={g.key === "hidden"}
+                    onHide={hide}
+                    onRename={setRenaming}
+                    onRemove={setRemoving}
+                  />
+                ))}
+              </ul>
+            )}
           </section>
         ))}
       </div>
@@ -200,10 +267,36 @@ export function AgentsScreen() {
         onClose={() => setRenaming(null)}
       />
       <AlertDialog
+        open={hiding !== null}
+        onOpenChange={(open) => !open && setHiding(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Hide {hiding?.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {hiding?.why === "active"
+                ? "It's the node in use. It stays in use until you switch, but the node switcher, the sidebar and search won't offer it again."
+                : "It's the startup node, and the app still starts on it, but the node switcher, the sidebar and search won't offer it."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep it shown</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (hiding) preferences.setNodeHidden(hiding.nodeDid, true);
+                setHiding(null);
+              }}
+            >
+              Hide
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog
         open={removing !== null}
         onOpenChange={(open) => !open && !removingBusy && setRemoving(null)}
       >
-        <AlertDialogContent aria-modal="true">
+        <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Remove {removing?.label}?</AlertDialogTitle>
             <AlertDialogDescription>
@@ -244,6 +337,7 @@ function AddAgentDialog({ open, onClose }: { open: boolean; onClose: () => void 
     actions: { requestStatusEnrollment },
   } = useApp();
   const [address, setAddress] = useState("");
+  const [candidateName, setCandidateName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const close = () => {
@@ -255,9 +349,13 @@ function AddAgentDialog({ open, onClose }: { open: boolean; onClose: () => void 
     setBusy(true);
     setError(null);
     try {
-      const r = await requestStatusEnrollment(address.trim());
+      const r = await requestStatusEnrollment(
+        address.trim(),
+        candidateName.trim() || undefined,
+      );
       toast(`Enrolment request ${r.requestId} sent · waiting for acceptance`);
       setAddress("");
+      setCandidateName("");
       close();
     } catch (e) {
       const reason = errorText(e);
@@ -268,7 +366,7 @@ function AddAgentDialog({ open, onClose }: { open: boolean; onClose: () => void 
   };
   return (
     <Dialog open={open} onOpenChange={(o) => !o && close()}>
-      <DialogContent aria-modal="true">
+      <DialogContent>
         <DialogHeader>
           <DialogTitle>Add node</DialogTitle>
           <DialogDescription>
@@ -297,6 +395,15 @@ function AddAgentDialog({ open, onClose }: { open: boolean; onClose: () => void 
             disabled={busy}
             autoFocus
             data-testid="fleet-add-server-address"
+          />
+          <label htmlFor="enrol-name" className="text-sm">
+            Your name (optional)
+          </label>
+          <Input
+            id="enrol-name"
+            value={candidateName}
+            onChange={(e) => setCandidateName(e.target.value)}
+            disabled={busy}
           />
         </form>
         {error ? (
@@ -349,7 +456,7 @@ export function RenameDialog({
   };
   return (
     <Dialog open={value !== null} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent aria-modal="true">
+      <DialogContent>
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
@@ -383,11 +490,16 @@ export function RenameDialog({
 const AgentRow = memo(function AgentRow({
   node: d,
   homeDid,
+  hidden,
+  onHide,
   onRename,
   onRemove,
 }: {
   node: NodeView;
   homeDid: string | null;
+  /** left out of the menus on this device */
+  hidden: boolean;
+  onHide: (node: NodeView, hide: boolean) => void;
   onRename: (peer: { peerId: string; label: string }) => void;
   onRemove: (peer: { nodeDid: string; peerId: string; label: string }) => void;
 }) {
@@ -398,16 +510,14 @@ const AgentRow = memo(function AgentRow({
   const configRead = useStore(stores.client, (state) =>
     state.snapshot ? configIsRead(state.snapshot, d.nodeDid) : false,
   );
-  const live = useFleet(
-    (s) =>
-      (s.sessionsOf[nodeKeyOf(d)] ?? NO_SESSIONS).filter((c) => isLive(c.turnState))
-        .length,
-  );
-  const waiting = useFleet(
-    (s) => (s.mailboxOf[nodeKeyOf(d)] ?? []).filter((m) => m.status === "open").length,
+  const { running: live, waiting } = useFleet(
+    useShallow((s) => activityOf(s, d.nodeDid)),
   );
   const name = d.node.displayName ?? d.label;
   const online = d.dialSucceeded;
+  const lease = isLocalNode(d, homeDid) ? null : leaseLeft(d.leaseExpiresAt);
+  /* the node the app is working with, ringed as the rail's avatar is */
+  const active = useSelectedNode()?.nodeDid === d.nodeDid;
   const config = href({
     name: "agent",
     nodeDid: d.nodeDid,
@@ -426,17 +536,26 @@ const AgentRow = memo(function AgentRow({
   return (
     <li
       key={d.nodeDid}
-      className="flex items-center gap-4 rounded-2xl border border-border/60 bg-raised px-5 py-4 transition-colors hover:border-border hover:bg-accent"
+      className={cn(
+        "flex items-center gap-4 rounded-2xl border border-border/60 bg-raised px-5 py-4 transition-colors hover:border-border hover:bg-accent",
+        hidden && "opacity-75",
+      )}
     >
       <a
         href={href({ name: "sessions", nodeDid: d.nodeDid })}
 
         aria-label={`${name} sessions`}
+        aria-current={active ? "true" : undefined}
         className="-my-4 -ml-5 flex min-w-0 flex-1 items-center gap-3 overflow-hidden py-4 pl-5"
       >
         <NodeHoverCard deployment={d}>
-          <span className="block shrink-0">
-            <NodeAvatar name={name} className="size-8" />
+          <span
+            className={cn(
+              "block shrink-0 rounded-full",
+              active && "ring-2 ring-ink ring-offset-2 ring-offset-raised",
+            )}
+          >
+            <NodeAvatar name={name} {...nodeAvatarOf(d)} className="size-8" />
           </span>
         </NodeHoverCard>
         <span
@@ -451,9 +570,26 @@ const AgentRow = memo(function AgentRow({
           <span className="truncate font-heading text-base font-medium text-heading">
             {name}
           </span>
+          {d.node.enabled === false && <Badge variant="outline">Disabled</Badge>}
           {!isWorkingNode(d, homeDid) && d.label !== name && (
             <span className="min-w-0 truncate text-xs text-muted-foreground">
               {d.label}
+            </span>
+          )}
+          {lease && (
+            <span
+              data-testid="node-lease"
+              title={
+                d.leaseExpiresAt
+                  ? new Date(d.leaseExpiresAt).toLocaleString()
+                  : undefined
+              }
+              className={cn(
+                "min-w-0 truncate text-xs",
+                lease.soon ? "text-warning" : "text-muted-foreground",
+              )}
+            >
+              {lease.text}
             </span>
           )}
           {d.lastError && (
@@ -500,6 +636,11 @@ const AgentRow = memo(function AgentRow({
           <Spinner className="text-foreground" /> {live}
         </span>
       )}
+      {hidden && (
+        <Button variant="outline" size="sm" onClick={() => onHide(d, false)}>
+          Show
+        </Button>
+      )}
       <Button
         variant="quiet"
         size="icon-sm"
@@ -542,6 +683,9 @@ const AgentRow = memo(function AgentRow({
               Rename
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => void check()}>Check peer</DropdownMenuItem>
+            <DropdownMenuItem onClick={() => onHide(d, !hidden)}>
+              {hidden ? "Show in menus" : "Hide from menus"}
+            </DropdownMenuItem>
           </DropdownMenuGroup>
           {!isLocalNode(d, homeDid) && (
             <>
@@ -567,3 +711,93 @@ const AgentRow = memo(function AgentRow({
     </li>
   );
 });
+
+/** A node asked to accept this desktop, in the place its row will take: a
+    dashed outline where the node's portrait goes, its name, and where the
+    request stands. */
+function PendingNodeRow({ request: r }: { request: EnrollmentRequestView }) {
+  const failure = enrollmentActivationMessage(r);
+  const name = r.serverLabel ?? r.serverPeer;
+  return (
+    <li
+      data-testid="pending-node"
+      className="flex items-center gap-4 rounded-2xl border border-dashed border-border px-5 py-4"
+    >
+      <span className="grid size-8 shrink-0 place-items-center rounded-full ring-1 ring-border ring-dashed">
+        <Spinner className="size-3.5 text-muted-foreground" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="flex min-w-0 items-baseline gap-3">
+          <span className="truncate font-heading text-base font-medium text-heading">
+            {name}
+          </span>
+          <span className="min-w-0 truncate text-sm text-muted-foreground">
+            {failure
+              ? "Access approved · connection retrying"
+              : r.state === "approved"
+                ? "Approval received · finishing secure route"
+                : `Waiting for ${name} to accept`}
+          </span>
+        </p>
+        {failure && (
+          <p role="alert" className="break-words text-sm text-destructive">
+            {failure}
+          </p>
+        )}
+        <p className="truncate font-mono text-[11px] text-muted-foreground">
+          {r.requestId}
+          {r.state !== "approved" && (
+            <> · expires {new Date(r.expiresAt).toLocaleTimeString()}</>
+          )}
+        </p>
+      </div>
+    </li>
+  );
+}
+
+/** A joined node this app can no longer use, kept where its row was so the
+    person learns why it went, until they dismiss it or join again. */
+function EndedNodeRow({ ended }: { ended: EndedAccessView }) {
+  const {
+    actions: { dismissEndedAccess },
+  } = useApp();
+  const [busy, setBusy] = useState(false);
+  const when = shortTime(ended.endedAt);
+  return (
+    <li
+      data-testid="ended-node"
+      className="flex items-center gap-4 rounded-2xl border border-dashed border-border px-5 py-4"
+    >
+      <NodeAvatar name={ended.label} className="size-8 opacity-50 grayscale" />
+      <div className="min-w-0 flex-1">
+        <p className="flex min-w-0 items-baseline gap-3">
+          <span className="truncate font-heading text-base font-medium text-muted-foreground">
+            {ended.label}
+          </span>
+          <span className="min-w-0 truncate text-sm text-muted-foreground">
+            {ended.reason === "expired" ? "Access ran out" : "Access revoked"}
+            {when && <> · {when}</>}
+          </span>
+        </p>
+        <p className="text-sm text-muted-foreground">{endedAccessDetail(ended)}</p>
+      </div>
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={busy}
+        aria-label={`Dismiss: ${endedAccessTitle(ended)}`}
+        onClick={async () => {
+          setBusy(true);
+          try {
+            await dismissEndedAccess(ended.nodeDid);
+          } catch (error) {
+            toastFailure("Dismiss", error);
+            setBusy(false);
+          }
+        }}
+      >
+        Dismiss
+      </Button>
+    </li>
+  );
+}

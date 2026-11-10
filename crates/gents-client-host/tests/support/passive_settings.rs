@@ -52,10 +52,25 @@ pub async fn exercise(
             );
             *id += 1;
             for _ in 0..2 {
-                let settings = client
-                    .try_call(*id, "client_inference_setup_state", json!({"nodeDid":node}))
-                    .await?;
-                *id += 1;
+                let settings = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+                    loop {
+                        let settings = client
+                            .try_call(*id, "client_inference_setup_state", json!({"nodeDid":node}))
+                            .await?;
+                        *id += 1;
+                        if settings["node"]["displayName"] == "editor-fixture"
+                            && settings["node"]["enabled"] == true
+                            && settings["node"]["defaultAgentDid"]
+                                .as_str()
+                                .is_some_and(|id| !id.is_empty())
+                        {
+                            break Ok::<_, anyhow::Error>(settings);
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    }
+                })
+                .await
+                .context("enrolled client did not receive its node configuration")??;
                 ensure!(
                     settings["nodeDid"] == node && settings["node"]["nodeDid"] == node,
                     "model settings crossed runtime identity"
@@ -106,6 +121,7 @@ async fn installed_editor(paths: &DesktopPaths, node: &str) -> Result<()> {
         .parent()
         .context("disposable settings fixture root")?;
     let output = tokio::process::Command::new("node")
+        .envs(super::support::homes::ProcessHomes::under(root).env())
         .arg(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/tests/support/editor_passive_settings.mjs"

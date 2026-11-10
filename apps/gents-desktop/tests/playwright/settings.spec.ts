@@ -13,11 +13,10 @@ test.describe("the app's settings screen", () => {
     await expect(screen).toHaveAttribute("data-section", "general");
     await expect(links.first()).toHaveAttribute("aria-current", "page");
     await expect(links.last()).toHaveAttribute("aria-current", "page");
-    await page.getByRole("combobox", { name: "Theme" }).click();
-    await page.getByRole("option", { name: "Dark" }).click();
+    const theme = page.getByRole("group", { name: "Theme" });
+    await theme.getByRole("button", { name: "Dark" }).click();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-    await page.getByRole("combobox", { name: "Theme" }).click();
-    await page.getByRole("option", { name: "Light" }).click();
+    await theme.getByRole("button", { name: "Light" }).click();
     await expect(page.locator("html")).not.toHaveAttribute("data-theme", "dark");
   });
 
@@ -43,6 +42,54 @@ test.describe("the app's settings screen", () => {
       "data-section",
       "general",
     );
-    await expect(page.getByRole("combobox", { name: "Theme" })).toBeVisible();
+    await expect(page.getByRole("group", { name: "Theme" })).toBeVisible();
   });
+});
+
+test("an agent's access sentence opens the setting each part describes", async ({
+  page,
+}) => {
+  await gotoHarness(page, "mobile-performance");
+  await page.getByRole("link", { name: "Active node" }).click();
+  await page
+    .getByRole("link", { name: /^Agents/ })
+    .first()
+    .click();
+  await page.getByText("Default", { exact: true }).first().click();
+  await page
+    .getByTestId("agent-summary")
+    .getByRole("button", { name: /commands$/ })
+    .click();
+  const sheet = page.getByRole("dialog");
+  await expect(sheet).toBeVisible();
+  await expect(sheet.locator(":focus")).toBeInViewport();
+  await expect(sheet.locator(":focus")).toHaveAttribute("id", /-bash$/);
+});
+
+test("an agent's Edit opens its name and tags at the first field, and a header tag opens them at Tags", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1400, height: 900 });
+  await gotoHarness(page, "mobile-performance");
+  await page.getByRole("link", { name: "Active node" }).click();
+  await page
+    .getByRole("link", { name: /^Agents/ })
+    .first()
+    .click();
+  await page.getByText("Default", { exact: true }).first().click();
+  /* Edit opens the fields with focus at the first */
+  await page.getByRole("button", { name: "Edit" }).click();
+  await expect(page.getByRole("textbox", { name: "Display name" })).toBeFocused();
+  await page.getByRole("textbox", { name: "Tags" }).fill("demo");
+  await page.keyboard.press("Enter");
+  await page.getByRole("button", { name: "Done" }).click();
+  await expect(
+    page.getByRole("textbox", { name: "Display name" }),
+  ).not.toBeInViewport();
+  /* a tag in the header opens them at Tags */
+  await page
+    .getByRole("list", { name: "Tags" })
+    .getByRole("button", { name: "demo" })
+    .click();
+  await expect(page.getByRole("textbox", { name: "Tags" })).toBeFocused();
 });

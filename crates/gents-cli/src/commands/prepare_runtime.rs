@@ -1,9 +1,9 @@
 use std::net::{IpAddr, Ipv4Addr};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::config_client::GraphqlEndpoint;
+use gents::store::config_client::GraphqlEndpoint;
 use gents_protocol::serve_lifecycle::{
     control::{
         current_capabilities, RuntimeControlCommand, RuntimeControlDisposition,
@@ -17,7 +17,7 @@ use gents_protocol::serve_lifecycle::{
 };
 use tokio::io::AsyncWriteExt as _;
 
-use crate::cli::{P2pTransportArg, ServeArgs};
+use crate::cli::{P2pTransportArg, PrepareRuntimeArgs};
 use crate::home_state::{load_initialized_home_identity, read_init_config, read_runtime_state};
 use crate::shared::{StoredInitConfig, StoredRuntimeState};
 
@@ -57,8 +57,8 @@ fn refusal(reason: RuntimePreparationRefusal, message: impl Into<String>) -> any
 }
 
 fn refusal_reason(error: &anyhow::Error) -> RuntimePreparationRefusal {
-    if gents::store_key::store_key_unavailable(error.as_ref()).is_some()
-        || gents::identity::identity_key_unavailable(error.as_ref()).is_some()
+    if gents::store::local::store_key::store_key_unavailable(error.as_ref()).is_some()
+        || gents::store::identity::identity_key_unavailable(error.as_ref()).is_some()
     {
         RuntimePreparationRefusal::KeyAccess
     } else {
@@ -69,8 +69,9 @@ fn refusal_reason(error: &anyhow::Error) -> RuntimePreparationRefusal {
 }
 
 pub(crate) struct PreparedStartup {
-    pub(crate) reservation: gents::home::RuntimeStartupReservation,
+    pub(crate) reservation: gents::store::local::home::RuntimeStartupReservation,
     pub(crate) outcome: RuntimePreparationOutcome,
+    pub(crate) pending_config: Option<(StoredInitConfig, StoredInitConfig)>,
 }
 
 pub(crate) async fn emit(result: RuntimePreparationResult) -> Result<()> {
@@ -89,7 +90,10 @@ pub(crate) async fn emit(result: RuntimePreparationResult) -> Result<()> {
 /// build; digest inequality is not evidence that either executable is newer.
 /// The preparation process becomes the server, retaining the startup lock
 /// through native readiness instead of handing an unlocked home to a child.
-pub(crate) async fn prepare(args: ServeArgs, runtime: tokio::runtime::Handle) -> Result<()> {
+pub(crate) async fn prepare(
+    args: PrepareRuntimeArgs,
+    runtime: tokio::runtime::Handle,
+) -> Result<()> {
     let result = prepare_inner(args, runtime).await;
     if let Err(error) = &result {
         let reason = refusal_reason(error);
@@ -105,7 +109,15 @@ pub(crate) async fn prepare(args: ServeArgs, runtime: tokio::runtime::Handle) ->
     result
 }
 
-async fn prepare_inner(mut args: ServeArgs, runtime: tokio::runtime::Handle) -> Result<()> {
+async fn prepare_inner(
+    preparation: PrepareRuntimeArgs,
+    runtime: tokio::runtime::Handle,
+) -> Result<()> {
+    let mut args = preparation.serve;
+    let requested_root = preparation
+        .change_tool_root
+        .map(validate_requested_root)
+        .transpose()?;
     let _keychain_prompt_guard =
         crate::process_resources::prevent_keychain_prompts(!args.keychain_startup_approval)?;
     crate::process_resources::prepare()?;
@@ -115,17 +127,37 @@ async fn prepare_inner(mut args: ServeArgs, runtime: tokio::runtime::Handle) -> 
     );
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let home = tokio::task::spawn_blocking(move || std::fs::canonicalize(home)).await??;
-    let build = gents::runtime_service::executable_build_id().await?;
-    let reservation =
-        tokio::time::timeout(STARTUP_WAIT, gents::home::reserve_runtime_startup(&home))
-            .await
-            .map_err(|_| {
-                refusal(
-                    RuntimePreparationRefusal::StartupBusy,
-                    "Another runtime preparation is still in progress. Retry after it finishes.",
-                )
-            })??;
-    let (config, state) = tokio::task::spawn_blocking({
+    let build = gents::runtime::service::executable_build_id().await?;
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        let check_home = home.clone();
+        let check_build = build.clone();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let manager = crate::native_service::NativeServiceManager::new(crate::native_service::NativeServiceConfig::new(check_home.clone(), std::env::current_exe()?)?)?;
+            if let Some(id) = manager.pending_update()? {
+                return Err(refusal(RuntimePreparationRefusal::StartupBusy, format!("Managed update {id} is pending; inspect service update-status --home {} {id} before selecting another package.", check_home.display())));
+            }
+            if manager.definition_owned_by_home()? && manager.has_managed_executable()? {
+                let selected = manager.installed_executable_path()?;
+                if crate::service_update::executable_digest(&selected)? != check_build {
+                    return Err(refusal(RuntimePreparationRefusal::Unsupported, "The node has an explicitly selected managed-update executable. Use that package or an explicit managed update; this package will not replace it automatically."));
+                }
+            }
+            Ok(())
+        }).await??;
+    }
+    let reservation = tokio::time::timeout(
+        STARTUP_WAIT,
+        gents::store::local::home::reserve_runtime_startup(&home),
+    )
+    .await
+    .map_err(|_| {
+        refusal(
+            RuntimePreparationRefusal::StartupBusy,
+            "Another runtime preparation is still in progress. Retry after it finishes.",
+        )
+    })??;
+    let (mut config, state) = tokio::task::spawn_blocking({
         let home = home.clone();
         move || read_home(&home)
     })
@@ -140,6 +172,7 @@ async fn prepare_inner(mut args: ServeArgs, runtime: tokio::runtime::Handle) -> 
     .await??;
     let mut outcome = RuntimePreparationOutcome::Started;
     let mut recorded_endpoint = None;
+    let mut credentials_checked = false;
     if let Some(state) = &state {
         args.p2p_transport = match state.p2p_transport.as_str() {
             "none" => P2pTransportArg::None,
@@ -161,7 +194,7 @@ async fn prepare_inner(mut args: ServeArgs, runtime: tokio::runtime::Handle) -> 
         )
         .await?;
         if let Some(observation) = observation {
-            if observation.build == build && !observation.retiring {
+            if observation.build == build && !observation.retiring && requested_root.is_none() {
                 if observation.lifecycle != ServeLifecycle::Ready {
                     return Err(refusal(
                         RuntimePreparationRefusal::Starting,
@@ -187,32 +220,23 @@ async fn prepare_inner(mut args: ServeArgs, runtime: tokio::runtime::Handle) -> 
                 .await;
             }
             if !observation.retiring {
-                let identity = tokio::task::spawn_blocking({
-                    let home = home.clone();
-                    let config = config.clone();
-                    move || {
-                        if let Some(encryption) = config.store_encryption.as_ref() {
-                            encryption.load(
-                                &gents::store_key::home_key_file(&home),
-                                &gents::home::default_data_dir(&home),
-                            )?;
-                        }
-                        load_initialized_home_identity(&home, &config)
-                    }
-                })
-                .await?
-                .map_err(|error| {
-                    if refusal_reason(&error) == RuntimePreparationRefusal::KeyAccess {
-                        error.context("The recorded runtime keys need access")
-                    } else {
-                        refusal(
-                            RuntimePreparationRefusal::Credentials,
-                            format!("The runtime credentials are unavailable: {error:#}"),
-                        )
-                    }
-                })?;
+                let identity = load_runtime_identity(&home, &config).await?;
+                credentials_checked = true;
                 let authorization =
-                    GraphqlEndpoint::as_principal(endpoint.to_string(), identity.did());
+                    GraphqlEndpoint::as_principal(endpoint.to_string(), identity.did())
+                        .with_client_signing_capability(identity.client_signing_capability()?)?;
+                if requested_root.is_some() {
+                    let status = super::status::fetch_local_operator_status(&authorization, CONTROL_TIMEOUT)
+                        .await
+                        .map_err(|error| refusal(
+                            RuntimePreparationRefusal::Unavailable,
+                            format!("Could not confirm the running runtime's access settings: {error:#}"),
+                        ))?;
+                    validate_running_authority(&status, &config)?;
+                }
+                if let Some(root) = &requested_root {
+                    ensure_requested_root_published(&authorization, &config, root).await?;
+                }
                 let retired = control(&client, &endpoint, &config.node_did, RuntimeOperation::Retire { expected_build: observation.build }, Some(&authorization)).await?
                     .ok_or_else(|| refusal(RuntimePreparationRefusal::Unavailable, "The runtime closed before retirement could be confirmed. Retry to inspect its state."))?;
                 match retired.disposition {
@@ -222,7 +246,7 @@ async fn prepare_inner(mut args: ServeArgs, runtime: tokio::runtime::Handle) -> 
                     _ => return Err(refusal(RuntimePreparationRefusal::Unavailable, "The observed runtime changed before retirement. Retry to inspect its state.")),
                 }
             }
-            tokio::time::timeout(STARTUP_WAIT, gents::home::wait_for_store_release(&home, &gents::home::default_data_dir(&home)))
+            tokio::time::timeout(STARTUP_WAIT, gents::store::local::home::wait_for_store_release(&home, &gents::store::local::home::default_data_dir(&home)))
                 .await.map_err(|_| refusal(RuntimePreparationRefusal::StoreBusy, "The retiring runtime has not released its store. Retry after shutdown finishes."))??;
             outcome = RuntimePreparationOutcome::Replaced;
         }
@@ -230,7 +254,7 @@ async fn prepare_inner(mut args: ServeArgs, runtime: tokio::runtime::Handle) -> 
     }
     tokio::task::spawn_blocking({
         let home = home.clone();
-        move || gents::home::lock_home_store(&home).map(drop)
+        move || gents::store::local::home::lock_home_store(&home).map(drop)
     })
     .await?
     .map_err(|error| {
@@ -243,6 +267,26 @@ async fn prepare_inner(mut args: ServeArgs, runtime: tokio::runtime::Handle) -> 
             error.into()
         }
     })?;
+    let pending_config = if let Some(root) = requested_root {
+        if !credentials_checked {
+            drop(load_runtime_identity(&home, &config).await?);
+        }
+        let checked = validate_requested_root(root.clone())?;
+        anyhow::ensure!(
+            checked == root,
+            "The requested tool root changed during runtime retirement"
+        );
+        let expected = config.clone();
+        config.tool_root = Some(
+            root.to_str()
+                .context("The tool root is not valid UTF-8")?
+                .to_owned(),
+        );
+        args.tool_root = Some(root);
+        Some((expected, config))
+    } else {
+        None
+    };
     let (address, port) = if let Some(endpoint) = recorded_endpoint {
         (
             endpoint
@@ -283,9 +327,109 @@ async fn prepare_inner(mut args: ServeArgs, runtime: tokio::runtime::Handle) -> 
         PreparedStartup {
             reservation,
             outcome,
+            pending_config,
         },
     )
     .await
+}
+
+async fn load_runtime_identity(
+    home: &Path,
+    config: &StoredInitConfig,
+) -> Result<std::sync::Arc<dyn gents::NodeIdentity>> {
+    let home = home.to_path_buf();
+    let config = config.clone();
+    tokio::task::spawn_blocking(move || {
+        if let Some(encryption) = config.store_encryption.as_ref() {
+            encryption.load(
+                &gents::store::local::store_key::home_key_file(&home),
+                &gents::store::local::home::default_data_dir(&home),
+            )?;
+        }
+        load_initialized_home_identity(&home, &config)
+    })
+    .await?
+    .map_err(|error| {
+        if refusal_reason(&error) == RuntimePreparationRefusal::KeyAccess {
+            error.context("The recorded runtime keys need access")
+        } else {
+            refusal(
+                RuntimePreparationRefusal::Credentials,
+                format!("The runtime credentials are unavailable: {error:#}"),
+            )
+        }
+    })
+}
+
+fn validate_requested_root(root: PathBuf) -> Result<PathBuf> {
+    anyhow::ensure!(
+        root.is_absolute(),
+        "The tool root must be an absolute directory"
+    );
+    let root =
+        std::fs::canonicalize(root).context("The tool root must be an existing directory")?;
+    anyhow::ensure!(root.is_dir(), "The tool root must be an existing directory");
+    anyhow::ensure!(root.to_str().is_some(), "The tool root is not valid UTF-8");
+    Ok(root)
+}
+
+/// Serve admits a host tool root only when a WorkspaceRoot published for the
+/// Node covers it. Asking the running runtime through the same owner refuses an
+/// unpublished root before that runtime is retired; publishing stays with the
+/// operator, since preparation must not widen the Node's authority.
+async fn ensure_requested_root_published(
+    authorization: &GraphqlEndpoint,
+    config: &StoredInitConfig,
+    root: &Path,
+) -> Result<()> {
+    if matches!(config.tool_ceiling, crate::cli::ToolCeilingArg::MetaOnly) {
+        return Ok(());
+    }
+    let access = gents::ConfigAccess::Graphql(authorization.clone());
+    gents::tools::surface::ensure_root_published_for_node(&access, &config.node_did, root)
+        .await
+        .map_err(|error| {
+            refusal(
+                RuntimePreparationRefusal::Failed,
+                format!("The running runtime keeps its current workspace root: {error:#}"),
+            )
+        })
+}
+
+fn validate_running_authority(status: &serde_json::Value, config: &StoredInitConfig) -> Result<()> {
+    let expected_ceiling = crate::format_tool_ceiling(config.tool_ceiling);
+    let matches = status.get("node_did").and_then(serde_json::Value::as_str)
+        == Some(config.node_did.as_str())
+        && status
+            .get("tool_ceiling")
+            .and_then(serde_json::Value::as_str)
+            == Some(expected_ceiling)
+        && status
+            .get("tool_root_error")
+            .is_some_and(serde_json::Value::is_null)
+        && status
+            .get("cli_tools")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(Vec::is_empty);
+    if !matches {
+        return Err(refusal(
+            RuntimePreparationRefusal::Unavailable,
+            "The running runtime's access settings differ from its saved configuration. Stop it through its owner and reconcile access before changing the workspace root.",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn commit_root_change(
+    home: &Path,
+    expected: &StoredInitConfig,
+    updated: &StoredInitConfig,
+) -> Result<()> {
+    anyhow::ensure!(
+        read_init_config(home)?.as_ref() == Some(expected),
+        "Runtime configuration changed during startup; retry the workspace access change"
+    );
+    crate::home_state::write_init_config(home, updated)
 }
 
 fn read_home(home: &Path) -> Result<(StoredInitConfig, Option<StoredRuntimeState>)> {
@@ -335,7 +479,7 @@ fn local_endpoint(raw: &str) -> Result<reqwest::Url> {
     Ok(endpoint)
 }
 
-async fn control(
+pub(crate) async fn control(
     client: &reqwest::Client,
     endpoint: &reqwest::Url,
     node_did: &str,
@@ -369,6 +513,11 @@ async fn control(
             ))
         }
     };
+    if response.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE
+        && matches!(command.operation, RuntimeOperation::Observe)
+    {
+        return Ok(None);
+    }
     if matches!(
         response.status(),
         reqwest::StatusCode::NOT_FOUND | reqwest::StatusCode::NOT_IMPLEMENTED
@@ -399,7 +548,7 @@ async fn control(
         bytes.extend_from_slice(&chunk);
     }
     let receipt = serde_json::from_slice(&bytes)?;
-    gents::runtime_service::verify_control_receipt(&command, &receipt).map_err(|error| {
+    gents::runtime::service::verify_control_receipt(&command, &receipt).map_err(|error| {
         refusal(
             RuntimePreparationRefusal::InvalidHome,
             format!("The live runtime could not authenticate this node: {error:#}"),

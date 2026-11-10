@@ -1,9 +1,9 @@
-use gents::config_client::GraphqlEndpoint;
+use gents::store::config_client::GraphqlEndpoint;
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 use gents_protocol::row::{ToolServiceHealthStateRow, ToolServiceRegistryRow};
 use gents_protocol::tool_service_health::{ToolServiceHealthProjection, ToolServiceHealthState};
 use serde::{Deserialize, Serialize};
@@ -39,6 +39,7 @@ pub(crate) struct McpPoolService {
     pub(crate) lan_ip: Option<String>,
     pub(crate) mcp_port: Option<i64>,
     pub(crate) mcp_path: Option<String>,
+    pub(crate) endpoint_url: Option<String>,
     pub(crate) send_node_did: bool,
     pub(crate) status: Option<String>,
     pub(crate) version: Option<String>,
@@ -82,8 +83,9 @@ fn mcp_pool_query(node_did: &str) -> String {
     let node_did = escape_graphql_string(node_did);
     format!(
         r#"{{
-            ToolServiceRegistry(order: {{ service_id: ASC }}) {{
+            ToolServiceRegistry(filter: {{ node_did: {{ _eq: "{node_did}" }} }}, order: {{ service_id: ASC }}) {{
                 service_id
+                enabled
                 display_name
                 description
                 hostname
@@ -91,6 +93,7 @@ fn mcp_pool_query(node_did: &str) -> String {
                 lan_ip
                 mcp_port
                 mcp_path
+                endpoint_url
                 send_node_did
                 status
                 version
@@ -149,14 +152,25 @@ fn build_mcp_pool_snapshot(
             continue;
         }
         totals.registered += 1;
-        if status_eq(registry.status.as_deref(), "online") {
+        let health = health_by_service.remove(&service_id);
+        if registry.enabled != Some(false)
+            && matches!(
+                health
+                    .as_ref()
+                    .and_then(|row| ToolServiceHealthState::parse_opt(row.status.as_deref()))
+                    .map(ToolServiceHealthState::project),
+                Some(ToolServiceHealthProjection::Healthy)
+            )
+        {
             totals.online += 1;
         }
-
-        let health = health_by_service.remove(&service_id);
         count_health_status(
             &mut totals,
-            health.as_ref().and_then(|row| row.status.as_deref()),
+            if registry.enabled == Some(false) {
+                None
+            } else {
+                health.as_ref().and_then(|row| row.status.as_deref())
+            },
         );
 
         services.push(McpPoolService {
@@ -168,6 +182,7 @@ fn build_mcp_pool_snapshot(
             lan_ip: registry.lan_ip,
             mcp_port: registry.mcp_port,
             mcp_path: registry.mcp_path,
+            endpoint_url: registry.endpoint_url,
             send_node_did: registry.send_node_did,
             status: registry.status,
             version: registry.version,
@@ -194,12 +209,6 @@ fn build_mcp_pool_snapshot(
         totals,
         services,
     }
-}
-
-fn status_eq(value: Option<&str>, expected: &str) -> bool {
-    value
-        .map(str::trim)
-        .is_some_and(|value| value.eq_ignore_ascii_case(expected))
 }
 
 fn count_health_status(totals: &mut McpPoolTotals, status: Option<&str>) {
@@ -234,7 +243,24 @@ mod tests {
             snapshot.services[0].health_status.as_deref(),
             Some("healthy")
         );
+        assert_eq!(snapshot.totals.online, 1);
         assert!(mcp_pool_query("did:key:zAgent")
             .contains("[{ service_id: ASC }, { updated_at: DESC }, { _docID: ASC }]"));
+        assert!(mcp_pool_query("did:key:zAgent")
+            .contains("ToolServiceRegistry(filter: { node_did: { _eq: \"did:key:zAgent\" } }"));
+    }
+
+    #[test]
+    fn disabled_or_unmeasured_services_are_not_reported_online() {
+        let envelope: McpPoolEnvelope = serde_json::from_value(serde_json::json!({
+            "ToolServiceRegistry": [
+                {"service_id":"disabled", "enabled":false, "status":"online"},
+                {"service_id":"unmeasured", "enabled":true, "status":"online"}
+            ],
+            "ToolServiceHealthState": [{"service_id":"disabled", "status":"healthy"}]
+        }))
+        .unwrap();
+        let snapshot = build_mcp_pool_snapshot(Utc::now(), "node".into(), envelope);
+        assert_eq!(snapshot.totals.online, 0);
     }
 }

@@ -47,6 +47,7 @@ async fn wait_for_main_provider_request(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "codex shim is being removed"]
 async fn codex_shim_turn_steer_queues_gents_request_on_active_turn() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
@@ -256,6 +257,7 @@ async fn codex_shim_turn_steer_queues_gents_request_on_active_turn() -> Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "codex shim is being removed"]
 async fn codex_shim_interrupt_completes_with_running_background_tool() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
@@ -338,7 +340,7 @@ async fn codex_shim_interrupt_completes_with_running_background_tool() -> Result
     let started = read_turn_started(&mut ws).await?;
     assert_eq!(started.turn.id, turn_start.turn.id);
 
-    let (gents_request_id, session_id, _agent_id) =
+    let (gents_request_id, session_id, _agent_did) =
         wait_for_request(&graphql, &node_did, &prompt).await?;
     assert_eq!(session_id, thread_id);
     let tool_call_key = format!("{session_id}:codex-bg-interrupt");
@@ -409,6 +411,7 @@ async fn codex_shim_interrupt_completes_with_running_background_tool() -> Result
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "codex shim is being removed"]
 async fn codex_shim_turn_steer_drains_queued_request_before_completing_turn() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
@@ -548,7 +551,7 @@ async fn codex_shim_turn_steer_drains_queued_request_before_completing_turn() ->
         capture.text
     );
 
-    let (initial_request_id, initial_session_id, _agent_id) =
+    let (initial_request_id, initial_session_id, _agent_did) =
         wait_for_request(&graphql, &node_did, &initial_prompt).await?;
     assert_eq!(initial_session_id, thread_id);
     let (steering_request_id, steering_session_id, input) =
@@ -599,7 +602,10 @@ async fn codex_shim_turn_steer_drains_queued_request_before_completing_turn() ->
         .context("consumed steering request")?;
     assert_eq!(active["lifecycle_state"], "completed");
     assert_eq!(consumed["lifecycle_state"], "superseded");
-    assert_eq!(consumed["failure_reason"], gents::lifecycle::FOLDED_REASON);
+    assert_eq!(
+        consumed["failure_reason"],
+        gents::request::lifecycle::FOLDED_REASON
+    );
     assert_eq!(consumed["superseded_by_request_doc_id"], active["_docID"]);
     let captures = graphql_query(&graphql, &format!(r#"{{ RenderedRequest(filter: {{ request_id: {{_in:["{}","{}"]}} }}) {{ request_id request_doc_id }} }}"#, escape_graphql_string(&initial_request_id), escape_graphql_string(&steering_request_id))).await?;
     let captures = captures["data"]["RenderedRequest"]
@@ -706,6 +712,7 @@ async fn wait_for_real_caused_request(graphql: &str, parent: &str) -> Result<(St
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "codex shim is being removed"]
 async fn codex_shim_turn_interrupt_on_caused_thread_interrupts_its_own_request() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
@@ -784,14 +791,14 @@ async fn codex_shim_turn_interrupt_on_caused_thread_interrupts_its_own_request()
         ))
         .await?;
 
-    let agent_id = init["default_agent_id"]
+    let agent_did = init["default_agent_did"]
         .as_str()
         .context("default agent id")?;
     let agent = graphql_query(
         &graphql,
         &format!(
-            r#"{{ Agent(filter: {{agent_id: {{_eq: "{}"}}}}) {{context_id}} }}"#,
-            escape_graphql_string(agent_id)
+            r#"{{ Agent(filter: {{agent_did: {{_eq: "{}"}}}}) {{context_id}} }}"#,
+            escape_graphql_string(agent_did)
         ),
     )
     .await?;
@@ -811,11 +818,11 @@ async fn codex_shim_turn_interrupt_on_caused_thread_interrupts_its_own_request()
         .context("agent tools")?;
     let mutation = format!(
         r#"mutation {{
-        create_AgentTarget(input: {{target_id: "fixture-child", node_did: "{node}", target_node_did: "{node}", agent_id: "{agent}", name: "fixture-child"}}) {{_docID}}
+        create_AgentTarget(input: {{target_id: "fixture-child", node_did: "{node}", target_node_did: "{node}", agent_did: "{agent}", name: "fixture-child"}}) {{_docID}}
         update_Tools(filter: {{node_did: {{_eq: "{node}"}}, tools_id: {{_eq: "{tools}"}}}}, input: {{agents: {{enabled: true, target_ids: ["fixture-child"]}}}}) {{_docID}}
     }}"#,
         node = escape_graphql_string(&node_did),
-        agent = escape_graphql_string(agent_id),
+        agent = escape_graphql_string(agent_did),
         tools = escape_graphql_string(tools_id)
     );
     let configured = graphql_query(&graphql, &mutation).await?;

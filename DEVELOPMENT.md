@@ -8,6 +8,7 @@ Building Gents from source. To use Gents, install the desktop app from the
 - **Rust** — via [rustup](https://rustup.rs), which installs the toolchain
   pinned in `rust-toolchain.toml`.
 - **C/C++ toolchain** — `cc`, `c++`, and `make` (native crypto dependencies).
+- **CMake** — `brew install cmake` or `apt-get install cmake`.
 - **protoc** — `brew install protobuf` or `apt-get install protobuf-compiler`.
 - **OpenSSL headers, `pkg-config`, and `perl`** — `brew install openssl pkg-config`
   or `apt-get install pkg-config libssl-dev perl`.

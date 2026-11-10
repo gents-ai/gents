@@ -53,7 +53,6 @@ structure Surface where
   goalCreate : Bool
   defraQuery : Bool
   selfConfig : Bool
-  memory : Bool
   schemaManagement : Bool
   /-- Native P2P observations require explicit node-management authority. -/
   p2pRead : Bool
@@ -71,14 +70,11 @@ structure Surface where
   cliTools : EndpointScope ToolId (Finset String)
   mcpServices : EndpointScope ToolId Unit
   defraCollections : EndpointScope ToolId Unit
-  p2pCollections : EndpointScope ToolId Unit
   selfConfigCategories : EndpointScope ToolId Unit
   agentTargets : EndpointScope (String × String) Unit
   backgroundTools : EndpointScope ToolId Unit
   writeTools : EndpointScope (String × String) (Finset String)
   queryTools : EndpointScope (String × String) (Finset String)
-  ethQueryMethods : EndpointScope String Unit
-  ethCallTools : EndpointScope ToolId Unit
   pluginTools : EndpointScope ToolId Unit
 
 abbrev Avail := Surface

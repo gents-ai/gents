@@ -1,6 +1,7 @@
 import { useHomeDid, useSelectedNode, useSelectedNodeDid } from "@/hooks/useClient";
 import { isLocalNode } from "@/lib/firstRun";
 import { href } from "@/lib/router";
+import { NodeHoverCard } from "@/screens/HoverCards";
 
 export function ActiveNodeLabel({ composer = false }: { composer?: boolean }) {
   const node = useSelectedNode();
@@ -12,7 +13,7 @@ export function ActiveNodeLabel({ composer = false }: { composer?: boolean }) {
     : selectedDid
       ? "Node unavailable"
       : "Select a node";
-  return (
+  const link = (
     <a
       href={href(
         node
@@ -20,15 +21,26 @@ export function ActiveNodeLabel({ composer = false }: { composer?: boolean }) {
           : { name: "nodes" },
       )}
       aria-label={composer ? "Message destination" : "Active node"}
-      title={selectedDid ? `${label} · ${selectedDid}` : label}
-      className="flex min-w-0 max-w-52 items-center gap-1.5 truncate rounded-md px-1 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+      title={node ? undefined : selectedDid ? `${label} · ${selectedDid}` : label}
+      className="flex min-w-0 max-w-52 items-center gap-1.5 truncate rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
     >
-      <span className="truncate">{label}</span>
+      <span dir="auto" className="truncate">
+        {label}
+      </span>
       {selectedDid && (
         <span className="shrink-0 font-mono text-[10px] opacity-70">
           {selectedDid.slice(-8)}
         </span>
       )}
     </a>
+  );
+  /* the node's card, as on the rail's avatar; it opens away from what the
+     label sits beside */
+  return node ? (
+    <NodeHoverCard deployment={node} side={composer ? "top" : "bottom"}>
+      {link}
+    </NodeHoverCard>
+  ) : (
+    link
   );
 }

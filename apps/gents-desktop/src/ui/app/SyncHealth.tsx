@@ -30,12 +30,10 @@ export function SyncHealth({
           : "bg-yellow";
   const rows: [string, string | number | null][] = [
     ["State", d.state ?? "unknown"],
+    ["Cause", d.cause ?? "—"],
+    ["Next action", d.nextAction ?? "—"],
     ["Connected peers", d.connectedPeerCount],
-    ["Pending receive DAGs", d.pendingDagCount ?? "—"],
-    ["Persisted pending DAGs", d.persistedPendingDagCount ?? "—"],
-    ["Pending push retries", d.pushRetryMarkerCount ?? "—"],
-    ["Exhausted fetches", d.exhaustedFetchCount ?? "—"],
-    ["Quarantined DAGs", d.quarantinedDagCount ?? "—"],
+    ["Enrollment failures", d.activationErrorCount],
   ];
   return (
     <Popover
@@ -48,7 +46,11 @@ export function SyncHealth({
         title={status.detail}
         className={cn(
           "flex shrink-0 cursor-pointer items-center gap-2 whitespace-nowrap text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
-          row ? "h-8 w-full rounded-lg pr-2 text-sm" : "h-7 rounded-full text-xs",
+          /* in the nav a status, not a destination: quieter than the items
+             around it */
+          row
+            ? "h-8 w-full rounded-lg pr-2 text-xs text-muted-foreground/80"
+            : "h-7 rounded-full text-xs",
           !row && (compact ? "w-7 justify-center" : "px-2"),
         )}
       >
@@ -63,19 +65,21 @@ export function SyncHealth({
           )}
         </span>
         {!compact && (
-          <span className={cn(!row && "max-sm:hidden")}>{status.shortLabel}</span>
+          <span className={cn(row ? "min-w-0 truncate" : "max-sm:hidden")}>
+            {status.shortLabel}
+          </span>
         )}
       </PopoverTrigger>
       <PopoverContent
         ref={popover.popupRef}
         role={popover.open ? "dialog" : "presentation"}
-        aria-label={popover.open ? "Database sync details" : undefined}
+        aria-label={popover.open ? "Sync details" : undefined}
         aria-hidden={popover.open ? undefined : true}
         align={compact ? "start" : "end"}
         side={compact ? "right" : "bottom"}
         className="w-96"
       >
-        <p className="font-heading text-sm font-medium text-heading">Database sync</p>
+        <p className="font-heading text-sm font-medium text-heading">Sync</p>
         <p className="mt-0.5 text-sm text-muted-foreground">{status.detail}</p>
         <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5 text-sm">
           {rows.map(([k, v]) => (

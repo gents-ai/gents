@@ -7,16 +7,17 @@ use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 
 use super::{SessionGoalControl, SessionGoalControlReceipt};
-use crate::config_client::ConfigRead;
-use crate::graphql::escape_graphql_string;
-use crate::identity::verify_did_signature;
+use crate::store::config_client::ConfigRead;
+use crate::store::graphql::escape_graphql_string;
+use crate::store::identity::verify_did_signature;
 
 const PAGE_SIZE: usize = 32;
 
 #[derive(Deserialize)]
 struct ControlRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
     intent_json: String,
-    receipt_json: Option<String>,
 }
 
 struct Candidate<'a> {
@@ -26,7 +27,7 @@ struct Candidate<'a> {
 }
 
 /// The projected requests are lookup hints. Attribution requires their canonical
-/// signed input, the runtime's applied receipts, and each Goal's physical root.
+/// signed input, the selected agent's applied receipts, and each Goal's physical root.
 /// These facts survive completion and deletion independently of current Goal
 /// state. Pages batch observation reads rather than add a round trip per row.
 pub async fn load_applied_opening_goal_ids(
@@ -66,10 +67,12 @@ impl Hint<'_> {
                     && request.node_did.as_deref() == Some(message.node_did.as_str())
                     && request.session_id.as_deref() == Some(message.session_id.as_str())
                     && request.requester_did == message.requester_did
-                    && crate::lifecycle::input_message_owner(request).is_some_and(|(doc, key)| {
-                        Some(doc.as_str()) == message.request_doc_id.as_deref()
-                            && key == message.message_key
-                    })
+                    && crate::request::lifecycle::input_message_owner(request).is_some_and(
+                        |(doc, key)| {
+                            Some(doc.as_str()) == message.request_doc_id.as_deref()
+                                && key == message.message_key
+                        },
+                    )
             }
         }
     }
@@ -111,18 +114,25 @@ pub async fn load_applied_opening_goal_provenance(
                 .map(Hint::Origin),
         )
         .collect::<Vec<_>>();
+    let mut by_doc: BTreeMap<String, Vec<Hint<'_>>> = BTreeMap::new();
+    for hint in hints {
+        if let Some(doc) = hint.doc_id().map(str::to_owned) {
+            by_doc.entry(doc).or_default().push(hint);
+        }
+    }
+    let hints = by_doc.into_iter().collect::<Vec<_>>();
     let mut confirmed = OpeningGoalProvenance::default();
     for page in hints.chunks(PAGE_SIZE) {
         let ids = page
             .iter()
-            .filter_map(Hint::doc_id)
+            .map(|(doc, _)| doc.as_str())
             .map(|doc| format!("\"{}\"", escape_graphql_string(doc)))
             .collect::<Vec<_>>()
             .join(", ");
         let data = access
             .execute_read(&format!(
                 "{{ AgentRequest(docIDs: [{ids}]) {{ {} }} }}",
-                crate::SIGNED_REQUEST_FIELDS,
+                gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
             ))
             .await?;
         let requests: Vec<AgentRequestRow> = serde_json::from_value(
@@ -132,12 +142,12 @@ pub async fn load_applied_opening_goal_provenance(
         )?;
         let candidates = page
             .iter()
-            .filter_map(|hint| {
+            .filter_map(|(doc, hints)| {
                 let mut rows = requests
                     .iter()
-                    .filter(|row| row.doc_id.as_deref() == hint.doc_id());
+                    .filter(|row| row.doc_id.as_deref() == Some(doc.as_str()));
                 let request = rows.next()?;
-                if rows.next().is_some() || !hint.matches(request) {
+                if rows.next().is_some() || !hints.iter().any(|hint| hint.matches(request)) {
                     return None;
                 }
                 let goal_id = super::super::request_assignment::verified_opening_goal_id(request)?;
@@ -159,7 +169,7 @@ pub async fn load_applied_opening_goal_provenance(
             let request = candidate.request;
             let node = escape_graphql_string(request.node_did.as_deref().unwrap_or_default());
             let session = escape_graphql_string(request.session_id.as_deref().unwrap_or_default());
-            let requester = request.requester_did.as_deref().map(|did| {
+            let requester = request.admission_signer_did.as_deref().map(|did| {
                 format!("\"{}\"", escape_graphql_string(did))
             }).unwrap_or_else(|| "null".into());
             let goal = escape_graphql_string(candidate.goal_id);
@@ -167,7 +177,9 @@ pub async fn load_applied_opening_goal_provenance(
             let doc = escape_graphql_string(request.doc_id.as_deref().unwrap_or_default());
             format!(r#"
                 goal_{i}: Goal(filter: {{node_did: {{_eq: "{node}"}}, session_id: {{_eq: "{session}"}}, goal_id: {{_eq: "{goal}"}}, assignment_root_request_doc_id: {{_eq: "{doc}"}}}}, showDeleted: true, limit: 1) {{assignment_root_request_doc_id}}
-                control_{i}: AgentSessionGoalControl(filter: {{command_id: {{_eq: "{command}"}}, node_did: {{_eq: "{node}"}}, session_id: {{_eq: "{session}"}}, requester_did: {{_eq: {requester}}}}}, limit: 2) {{intent_json receipt_json}}
+                session_{i}: AgentSession(filter: {{node_did: {{_eq: "{node}"}}, session_id: {{_eq: "{session}"}}}}, limit: 2) {{_docID requester_did agent_did}}
+                control_{i}: AgentSessionGoalControl(filter: {{command_id: {{_eq: "{command}"}}, node_did: {{_eq: "{node}"}}, session_id: {{_eq: "{session}"}}, requester_did: {{_eq: {requester}}}}}, limit: 2) {{_docID intent_json}}
+                receipt_{i}: AgentSessionGoalReceipt(filter: {{command_id: {{_eq: "{command}"}}}}, limit: 2) {{command_doc_id receipt_json}}
             "#)
         }).collect::<Vec<_>>().join("\n");
         let data = access.execute_read(&format!("{{ {selections} }}")).await?;
@@ -186,11 +198,33 @@ pub async fn load_applied_opening_goal_provenance(
             let [control] = controls.as_slice() else {
                 continue;
             };
-            if applied(candidate, control)? {
-                for hint in page.iter().filter(|hint| {
-                    hint.doc_id() == candidate.request.doc_id.as_deref()
-                        && hint.matches(candidate.request)
-                }) {
+            let receipts = data["data"][format!("receipt_{i}")]
+                .as_array()
+                .context("opening provenance omitted receipt rows")?;
+            let [receipt] = receipts.as_slice() else {
+                continue;
+            };
+            if receipt["command_doc_id"].as_str() != Some(control.doc_id.as_str()) {
+                continue;
+            }
+            let sessions = data["data"][format!("session_{i}")]
+                .as_array()
+                .context("opening provenance omitted session rows")?;
+            let [session] = sessions.as_slice() else {
+                continue;
+            };
+            if applied(
+                candidate,
+                control,
+                receipt["receipt_json"].as_str(),
+                session,
+            )? {
+                for hint in page
+                    .iter()
+                    .filter(|(doc, _)| Some(doc.as_str()) == candidate.request.doc_id.as_deref())
+                    .flat_map(|(_, hints)| hints)
+                    .filter(|hint| hint.matches(candidate.request))
+                {
                     match hint {
                         Hint::Request(request) => {
                             if let Some(doc) = request.doc_id.as_ref() {
@@ -220,14 +254,17 @@ pub async fn load_applied_opening_goal_id(
     Ok(observed.doc_id.as_ref().and_then(|doc| roots.remove(doc)))
 }
 
-fn applied(candidate: &Candidate<'_>, control: &ControlRow) -> Result<bool> {
+fn applied(
+    candidate: &Candidate<'_>,
+    control: &ControlRow,
+    receipt_json: Option<&str>,
+    session: &serde_json::Value,
+) -> Result<bool> {
     let Ok(command) = serde_json::from_str::<SessionGoalControl>(&control.intent_json) else {
         return Ok(false);
     };
-    let Some(receipt) = control
-        .receipt_json
-        .as_deref()
-        .and_then(|raw| serde_json::from_str::<SessionGoalControlReceipt>(raw).ok())
+    let Some(receipt) =
+        receipt_json.and_then(|raw| serde_json::from_str::<SessionGoalControlReceipt>(raw).ok())
     else {
         return Ok(false);
     };
@@ -239,12 +276,17 @@ fn applied(candidate: &Candidate<'_>, control: &ControlRow) -> Result<bool> {
         || command.command_id != candidate.command_id
         || Some(command.node_did.as_str()) != request.node_did.as_deref()
         || Some(command.session_id.as_str()) != request.session_id.as_deref()
-        || Some(command.requester_did.as_str()) != request.requester_did.as_deref()
+        || session["_docID"].as_str() != command.session_doc_id.as_deref()
+        || session["requester_did"].as_str() != request.requester_did.as_deref()
+        || session["agent_did"].as_str() != Some(command.agent_did.as_str())
         || !matches!(command.operation, GoalOperation::Create { .. })
         || initial.request_id != request.request_id
         || initial.node_did != command.node_did
+        || initial.agent_did != command.agent_did
+        || Some(command.agent_did.as_str()) != request.agent_did.as_deref()
         || initial.session_id != command.session_id
-        || initial.requester_did != command.requester_did
+        || Some(initial.requester_did.as_str()) != request.requester_did.as_deref()
+        || initial.admission.signer_did != command.requester_did
         || Some(&initial.input) != request.input.as_ref()
         || request.admission_signature.as_deref()
             != Some(
@@ -266,7 +308,7 @@ fn applied(candidate: &Candidate<'_>, control: &ControlRow) -> Result<bool> {
         .unwrap_or(false)
         || receipt.validate_for(&command).is_err()
         || !verify_did_signature(
-            &command.node_did,
+            &command.agent_did,
             &receipt.signing_payload()?,
             &receipt.signature,
         )
@@ -278,4 +320,61 @@ fn applied(candidate: &Candidate<'_>, control: &ControlRow) -> Result<bool> {
         matches!(receipt.outcome, GoalControlOutcome::Applied {goal_id: ref goal, request_id: Some(ref id)}
         if goal == candidate.goal_id && id == &request.request_id),
     )
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+    use gents_protocol::request_input::{GoalAssignmentInput, RequestInput};
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct Reader(Mutex<Vec<Vec<String>>>);
+
+    #[async_trait::async_trait]
+    impl ConfigRead for Reader {
+        async fn execute_read(
+            &self,
+            document: &str,
+        ) -> std::result::Result<serde_json::Value, crate::store::config_client::ConfigClientError>
+        {
+            let (_, suffix) = document.split_once("docIDs: [").unwrap();
+            let (ids, _) = suffix.split_once(']').unwrap();
+            let ids = serde_json::from_str::<Vec<String>>(&format!("[{ids}]"))?;
+            self.0.lock().unwrap().push(ids);
+            Ok(serde_json::json!({"data": {"AgentRequest": []}}))
+        }
+    }
+
+    #[tokio::test]
+    async fn repeated_opening_hints_share_bounded_authoritative_reads() {
+        let reader = Reader::default();
+        let rows = (0..100)
+            .map(|index| AgentRequestRow {
+                doc_id: Some(format!("doc-{}", index % 33)),
+                input: Some(RequestInput {
+                    goal_assignment: Some(GoalAssignmentInput {
+                        goal_id: "goal".into(),
+                        root_request_doc_id: None,
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>();
+        let observed = rows.iter().collect::<Vec<_>>();
+        let result = load_applied_opening_goal_provenance(&reader, &observed, &[])
+            .await
+            .unwrap();
+        assert!(result.by_request_doc_id.is_empty());
+        let batches = reader.0.lock().unwrap();
+        assert_eq!(batches.len(), 2);
+        let ids = batches
+            .iter()
+            .flatten()
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(ids.len(), 33);
+        assert_eq!(batches.iter().map(Vec::len).sum::<usize>(), 33);
+        assert!(batches.iter().all(|batch| batch.len() <= PAGE_SIZE));
+    }
 }

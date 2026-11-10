@@ -1,4 +1,4 @@
-import { act, fireEvent, screen, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -13,6 +13,7 @@ vi.mock("../src/ui/screens/Markdown", () => ({
   Markdown: ({ children }: { children: string }) => <div>{children}</div>,
 }));
 
+import { messagePlaces, openAt } from "../src/ui/app/messagePlaces";
 import { BackgroundToolButton } from "../src/ui/screens/BackgroundToolButton";
 import { TranscriptPanel } from "../src/ui/screens/Transcript";
 import { ToolBody } from "../src/ui/screens/tool-views";
@@ -60,7 +61,7 @@ function session(overrides: Partial<DesktopSessionSnapshot>): DesktopSessionSnap
   return {
     sessionId: "session-1",
     nodeDid: "did:test:node",
-    agentId: "agent-default",
+    agentDid: "agent-default",
     title: "Session",
     previewText: null,
     status: "processing",
@@ -170,11 +171,22 @@ function command(
 }
 
 describe("long command output", () => {
-  it("says how many lines a multi-line output holds", () => {
+  it("labels output only where two need telling apart, and tints errors", () => {
     const stdout =
       Array.from({ length: 1200 }, (_, i) => `line ${i}`).join("\n") + "\n";
-    render(<ToolBody tool={tool(command({ stdout, stderr: "one warning" }))} />);
-    expect(screen.getByText(/1,200 lines/)).toBeInTheDocument();
+    const { rerender } = render(
+      <ToolBody tool={tool(command({ stdout, stderr: "" }))} />,
+    );
+    /* output alone reads as itself, like a terminal's */
+    expect(screen.queryByText(/^stdout$/i)).toBeNull();
+    expect(screen.queryByText(/ lines$/)).toBeNull();
+    rerender(<ToolBody tool={tool(command({ stdout: "", stderr: "a\nb\nc" }))} />);
+    expect(screen.queryByText(/^stderr$|^errors/i)).toBeNull();
+    expect(
+      document.querySelector("pre")!.closest("[data-slot=scroll-area]"),
+    ).toHaveClass("border-destructive/30");
+    rerender(<ToolBody tool={tool(command({ stdout, stderr: "a\nb\nc" }))} />);
+    expect(screen.getByText(/^Errors/)).toHaveTextContent("Errors · 3 lines");
     expect(screen.getAllByText(/ lines$/)).toHaveLength(1);
   });
 
@@ -278,7 +290,7 @@ describe("activity status", () => {
   });
 });
 
-describe("a folded group with a failure in it", () => {
+describe("a group with a failure in it", () => {
   const command = (key: string, failed: boolean): RenderedToolCallView => ({
     ...tool({
       kind: "command",
@@ -305,17 +317,39 @@ describe("a folded group with a failure in it", () => {
   const header = () =>
     screen.getByRole("button", { name: /ran 2 commands/i, expanded: undefined });
 
-  it("names the failure on the header and starts open", () => {
-    render(
-      panel(
-        session({ timelineItems: [group([command("a", false), command("b", true)])] }),
-        false,
+  it("opens the failed step by default and honors later group collapse", () => {
+    const failed = {
+      ...tool(
+        {
+          kind: "generic",
+          summary: null,
+          input: '{"argv":["run"]}',
+          output:
+            '{"code":"plugin_job_policy_denied","message":"The job policy refused this call.","next":"Ask the operator for the required capability."}',
+        },
+        "error",
       ),
+      itemKey: "plugin",
+      toolName: "plugin_tool",
+    };
+    render(
+      panel(session({ timelineItems: [group([command("a", false), failed])] }), false),
     );
-    const button = header();
-    expect(button).toHaveTextContent("Ran 2 commands, 1 failed");
+    const button = screen.getByRole("button", { name: /1 failed/i });
     expect(button).toHaveAttribute("aria-expanded", "true");
     expect(button).toHaveAttribute("data-failed", "true");
+    const step = document.querySelector('[data-step-key="plugin"]');
+    if (!(step instanceof HTMLElement)) throw new Error("plugin step is missing");
+    expect(step).toHaveAttribute("data-open");
+    expect(within(step).getByText(/The job policy refused this call/)).toBeVisible();
+    expect(
+      within(step).getByText(/Ask the operator for the required capability/),
+    ).toBeVisible();
+    fireEvent.click(within(step).getByRole("button", { name: "Hide detail" }));
+    expect(step).not.toHaveAttribute("data-open");
+    expect(button).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(button);
+    expect(button).toHaveAttribute("aria-expanded", "false");
   });
 
   it("stays folded when every call worked", () => {
@@ -329,6 +363,106 @@ describe("a folded group with a failure in it", () => {
     expect(button).toHaveTextContent("Ran 2 commands");
     expect(button).not.toHaveTextContent("failed");
     expect(button).toHaveAttribute("aria-expanded", "false");
+  });
+});
+
+describe("a background step's meta", () => {
+  it("keeps the outcome apart from its In background label", () => {
+    render(
+      panel(
+        session({
+          timelineItems: [
+            {
+              kind: "toolGroup",
+              itemKey: "group",
+              messageSequence: 1,
+              tools: [
+                {
+                  ...tool(
+                    {
+                      kind: "command",
+                      command: "cargo test",
+                      exitCode: 1,
+                      timedOut: false,
+                      failed: true,
+                      durationMs: 10,
+                      cwd: "~",
+                      executionMode: "sandboxed",
+                      networkMode: "disabled",
+                      stdout: "",
+                      stderr: "",
+                      fallbackOutput: null,
+                    },
+                    "error",
+                  ),
+                  awaitMode: "background",
+                },
+              ],
+            },
+          ],
+        }),
+        false,
+      ),
+    );
+    const label = screen.getByText("In background");
+    const meta = label.parentElement!;
+    expect(meta).toHaveClass("inline-flex", "gap-1.5");
+    /* each its own flex item, so the gap falls between them */
+    expect([...meta.childNodes].map((node) => node.textContent)).toEqual([
+      "exit 1",
+      "In background",
+    ]);
+  });
+});
+
+describe("a step asked for from elsewhere", () => {
+  it("opens its folded group, opens the step and marks it", async () => {
+    const command = (key: string): RenderedToolCallView => ({
+      ...tool({
+        kind: "command",
+        command: `run ${key}`,
+        exitCode: 0,
+        timedOut: false,
+        failed: false,
+        durationMs: 10,
+        cwd: "~",
+        executionMode: "sandboxed",
+        networkMode: "disabled",
+        stdout: "",
+        stderr: "",
+        fallbackOutput: null,
+      }),
+      itemKey: key,
+    });
+    render(
+      panel(
+        session({
+          timelineItems: [
+            {
+              kind: "toolGroup",
+              itemKey: "group",
+              messageSequence: 1,
+              tools: [command("a"), command("b")],
+            },
+          ],
+        }),
+        false,
+      ),
+    );
+    const header = screen.getByRole("button", { name: /ran 2 commands/i });
+    expect(header).toHaveAttribute("aria-expanded", "false");
+
+    act(() =>
+      openAt({ sessionId: "session-1", sequence: 1, itemKey: "b", open: true }),
+    );
+    await waitFor(() => expect(header).toHaveAttribute("aria-expanded", "true"));
+    const step = document.querySelector('[data-step-key="b"]')!;
+    expect(step).toHaveAttribute("data-open");
+    expect(step).toHaveClass("bg-accent");
+    expect(document.querySelector('[data-step-key="a"]')).not.toHaveAttribute(
+      "data-open",
+    );
+    expect(messagePlaces.request()).toBeNull();
   });
 });
 

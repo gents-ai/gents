@@ -1,6 +1,7 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "codex shim is being removed"]
 async fn codex_shim_model_list_enumerates_backend_models() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
@@ -207,7 +208,7 @@ async fn codex_shim_config_read_reflects_doc_mutation() -> Result<()> {
         ],
     )?;
     let node_did = node_did_from_init(&init)?;
-    let default_agent_id = format!("{node_did}:default");
+    let default_agent_did = agent_did_from_init(&init)?;
     let default_backend_id = default_backend_id(&node_did);
     let alt_model_name = format!("alt-model-{}", Uuid::new_v4().simple());
     let alt_model_selection = gents_model_selection_id(&default_backend_id, &alt_model_name);
@@ -234,7 +235,7 @@ async fn codex_shim_config_read_reflects_doc_mutation() -> Result<()> {
     let switch_profile = format!(
         r#"mutation {{
             update_InferenceProfile(
-                filter: {{ profile_id: {{ _eq: "{default_agent_id}-profile" }} }},
+                filter: {{ profile_id: {{ _eq: "{default_agent_did}-profile" }} }},
                 input: {{ model_name: "{alt_model_name}" }}
             ) {{ _docID }}
         }}"#
@@ -290,6 +291,51 @@ async fn codex_shim_config_read_reflects_doc_mutation() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_read_trusts_a_directory_only_inside_the_tool_root() -> Result<()> {
+    let outside = tempfile::tempdir().context("creating the outside directory")?;
+    let outside = fs::canonicalize(outside.path())?;
+    let shim = AgentShim::start(|_| vec![], &[]).await?;
+    let root = std::path::PathBuf::from(
+        shim.runtime(None).await?["tool_root"]
+            .as_str()
+            .context("the home has a tool root")?,
+    );
+    let inside = root.join("project");
+    fs::create_dir(&inside)?;
+    let (mut ws, _) = connect_async(shim.url("/")).await?;
+    initialize_config_and_thread(&mut ws, &shim.home_dir).await?;
+
+    let mut read_projects = async |id: i64, cwd: Option<String>| -> Result<Option<Value>> {
+        send_client_request(
+            &mut ws,
+            codex::ClientRequest::ConfigRead {
+                request_id: request_id(id),
+                params: codex::ConfigReadParams {
+                    include_layers: true,
+                    cwd,
+                },
+            },
+        )
+        .await?;
+        let read: codex::ConfigReadResponse = read_typed_response(&mut ws, request_id(id)).await?;
+        Ok(read.config.additional.get("projects").cloned())
+    };
+
+    let cwd = inside.to_string_lossy().into_owned();
+    assert_eq!(
+        read_projects(301, Some(cwd.clone())).await?,
+        Some(json!({ cwd: { "trust_level": "trusted" } }))
+    );
+    assert_eq!(
+        read_projects(302, Some(outside.to_string_lossy().into_owned())).await?,
+        None
+    );
+    assert_eq!(read_projects(303, None).await?, None);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "codex shim is being removed"]
 async fn codex_shim_config_value_write_model_mutates_agent() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
@@ -312,8 +358,8 @@ async fn codex_shim_config_value_write_model_mutates_agent() -> Result<()> {
         ],
     )?;
     let node_did = node_did_from_init(&init)?;
-    let default_agent_id = format!("{node_did}:default");
-    let original_profile_id = format!("{node_did}:default-profile");
+    let default_agent_did = agent_did_from_init(&init)?;
+    let original_profile_id = inference_profile_id_from_init(&init)?;
     let alt_model_name = format!("mock-codex-shim-alt-model-{}", Uuid::new_v4().simple());
     let alt_endpoint = MockChatEndpoint::start(&alt_model_name, "irrelevant")?;
     let alt_backend_id = format!("alt-backend-{}", Uuid::new_v4().simple());
@@ -420,7 +466,7 @@ async fn codex_shim_config_value_write_model_mutates_agent() -> Result<()> {
             &format!(
                 r#"{{
                 Agent(
-                    filter: {{ agent_id: {{ _eq: "{default_agent_id}" }} }},
+                    filter: {{ agent_did: {{ _eq: "{default_agent_did}" }} }},
                     limit: 1
                 ) {{ inference_profile_id }}
             }}"#
@@ -479,9 +525,9 @@ async fn codex_shim_config_value_write_rejects_unknown_model() -> Result<()> {
         ],
     )?;
     let node_did = node_did_from_init(&init)?;
-    let default_agent_id = format!("{node_did}:default");
+    let default_agent_did = agent_did_from_init(&init)?;
     let original_backend_id = format!("{node_did}:backend");
-    let original_profile_id = format!("{node_did}:default-profile");
+    let original_profile_id = inference_profile_id_from_init(&init)?;
 
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
@@ -553,7 +599,7 @@ async fn codex_shim_config_value_write_rejects_unknown_model() -> Result<()> {
             &format!(
                 r#"{{
                 Agent(
-                    filter: {{ agent_id: {{ _eq: "{default_agent_id}" }} }},
+                    filter: {{ agent_did: {{ _eq: "{default_agent_did}" }} }},
                     limit: 1
                 ) {{ inference_profile_id }}
             }}"#

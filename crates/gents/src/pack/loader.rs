@@ -2,7 +2,94 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 
 use super::{asset_path, interpolate, validate_pack_manifest, PackInstallOptions, PackManifest};
-use crate::document_config::{EvalCase, PackConfig};
+use crate::documents::{EvalCase, PackConfig};
+
+/// Resolves a dependency's install variables (Lean
+/// `Configuration.resolvePackInstallVariable`) and records each referenced value
+/// once. Without overrides the ambient environment applies; with overrides an
+/// installed dependency keeps its recorded values and never reads ambient ones.
+pub struct DependencyVariableResolver<'a> {
+    installed: bool,
+    previous: &'a std::collections::BTreeMap<String, Option<String>>,
+    overrides: Option<&'a std::collections::BTreeMap<String, Option<String>>>,
+    environment: &'a (dyn Fn(&str) -> Option<String> + Sync),
+    captured: std::sync::Mutex<std::collections::BTreeMap<String, Option<String>>>,
+    unknown: std::sync::Mutex<std::collections::BTreeSet<String>>,
+}
+
+impl<'a> DependencyVariableResolver<'a> {
+    pub fn new(
+        installed: bool,
+        previous: &'a std::collections::BTreeMap<String, Option<String>>,
+        overrides: Option<&'a std::collections::BTreeMap<String, Option<String>>>,
+        environment: &'a (dyn Fn(&str) -> Option<String> + Sync),
+    ) -> Self {
+        Self {
+            installed,
+            previous,
+            overrides,
+            environment,
+            captured: Default::default(),
+            unknown: Default::default(),
+        }
+    }
+
+    pub fn resolve(&self, name: &str) -> Option<String> {
+        let mut captured = self.captured.lock().unwrap_or_else(|e| e.into_inner());
+        captured
+            .entry(name.to_owned())
+            .or_insert_with(|| {
+                let Some(overrides) = self.overrides else {
+                    return (self.environment)(name);
+                };
+                let explicit = overrides.get(name).cloned();
+                let ambient = if !self.installed && explicit.is_none() {
+                    (self.environment)(name)
+                } else {
+                    None
+                };
+                interpolate::resolve_install_variable(
+                    true,
+                    self.installed,
+                    self.previous.get(name).cloned(),
+                    explicit,
+                    ambient,
+                )
+                .unwrap_or_else(|| {
+                    self.unknown
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .insert(name.to_owned());
+                    None
+                })
+            })
+            .clone()
+    }
+
+    /// The captured values, refusing unknown recorded bindings and overrides
+    /// the configuration never references.
+    pub fn finish(self) -> Result<std::collections::BTreeMap<String, Option<String>>> {
+        let unknown = self.unknown.into_inner().unwrap_or_else(|e| e.into_inner());
+        anyhow::ensure!(unknown.is_empty(),
+            "installed dependency has unknown variable bindings: {}; explicitly configure them before reinstalling",
+            unknown.into_iter().collect::<Vec<_>>().join(", "));
+        let captured = self
+            .captured
+            .into_inner()
+            .unwrap_or_else(|e| e.into_inner());
+        for name in self
+            .overrides
+            .into_iter()
+            .flat_map(|overrides| overrides.keys())
+        {
+            anyhow::ensure!(
+                captured.contains_key(name),
+                "dependency does not use variable {name:?}"
+            );
+        }
+        Ok(captured)
+    }
+}
 
 pub fn load_pack_config(
     manifest: &PackManifest,
@@ -17,6 +104,27 @@ pub fn load_pack_config(
         .context("pack has no configuration")?;
     let bytes = read_asset(path).with_context(|| format!("reading pack config {path}"))?;
     let value: Value = serde_json::from_slice(&bytes).context("parsing pack config JSON")?;
+    load_pack_config_value(manifest, options, value, read_asset, environment)
+}
+
+pub(super) fn load_pack_config_value(
+    manifest: &PackManifest,
+    options: &PackInstallOptions,
+    value: Value,
+    read_asset: &dyn Fn(&str) -> Result<Vec<u8>>,
+    environment: &dyn Fn(&str) -> Option<String>,
+) -> Result<PackConfig> {
+    let path = match manifest.config.as_deref() {
+        Some(path) => path,
+        None if matches!(
+            manifest.metadata.kind,
+            super::PackKind::Plugins | super::PackKind::Assets
+        ) =>
+        {
+            ""
+        }
+        None => anyhow::bail!("pack has no configuration"),
+    };
     let mut config = decode_pack_config(value, Some(options), environment, &|_, _, reference| {
         let mut prompt = reference.to_owned();
         hydrate_sidecar(&mut prompt, path, manifest, read_asset)?;
@@ -29,11 +137,11 @@ pub fn load_pack_config(
 }
 
 pub fn ensure_pack_leaves_default_unselected(config: &PackConfig) -> Result<()> {
-    if let Some(default) = &config.node.default_agent_id {
+    if let Some(default) = &config.node.default_agent_did {
         anyhow::bail!(
-            "pack node sets default_agent_id {default:?}; a pack must not choose \
+            "pack node sets default_agent_did {default:?}; a pack must not choose \
              the default agent. Remove it from the pack: the user selects the default \
-             (\"Make default\" in the desktop, or default_agent_id in the \
+             (\"Make default\" in the desktop, or default_agent_did in the \
              node of their own `gents config apply` root)"
         );
     }
@@ -146,10 +254,9 @@ pub fn decode_pack_config(
 fn pin_callback_plugin(
     manifest: &PackManifest,
     read_asset: &dyn Fn(&str) -> Result<Vec<u8>>,
-    callback: &mut crate::document_config::Callback,
+    callback: &mut crate::documents::Callback,
 ) -> Result<()> {
-    let crate::document_config::CallbackHandler::Plugin { plugin, digest, .. } =
-        &mut callback.handler
+    let crate::documents::CallbackHandler::Plugin { plugin, digest, .. } = &mut callback.handler
     else {
         return Ok(());
     };
@@ -198,13 +305,18 @@ fn own_plugin(
     )))
 }
 
+/// The field `bind_owner` fills on every document that omits it.
+const OWNER_FIELD: &str = "node_did";
+/// The eval definition field whose `./` entries `hydrate_eval_cases` reads.
+const EVAL_CASES_FIELD: &str = "cases";
+
 fn bind_owner(value: &mut Value, owner: &str, location: &str) -> Result<()> {
     let object = value
         .as_object_mut()
         .with_context(|| format!("{location} must be a document object"))?;
-    match object.get("node_did") {
+    match object.get(OWNER_FIELD) {
         None => {
-            object.insert("node_did".into(), owner.into());
+            object.insert(OWNER_FIELD.into(), owner.into());
         }
         Some(value) => anyhow::ensure!(
             value.as_str() == Some(owner),
@@ -230,7 +342,10 @@ fn hydrate_eval_cases(
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_owned();
-        let Some(cases) = definition.get_mut("cases").and_then(Value::as_array_mut) else {
+        let Some(cases) = definition
+            .get_mut(EVAL_CASES_FIELD)
+            .and_then(Value::as_array_mut)
+        else {
             continue;
         };
         for case in cases {
@@ -255,7 +370,7 @@ fn hydrate_eval_cases(
     Ok(())
 }
 
-fn interpolate_values(
+pub(super) fn interpolate_values(
     value: &mut Value,
     environment: &dyn Fn(&str) -> Option<String>,
 ) -> Result<()> {
@@ -310,6 +425,9 @@ fn hydrate_sidecar(
         String::from_utf8(bytes).with_context(|| format!("pack sidecar {path} is not UTF-8"))?;
     Ok(())
 }
+
+mod authored_schema;
+pub use authored_schema::{authored_document_schema, authored_pack_config_schema};
 
 #[cfg(test)]
 mod tests;

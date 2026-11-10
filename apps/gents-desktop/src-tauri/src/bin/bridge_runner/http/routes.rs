@@ -1,12 +1,16 @@
+#[path = "routes/operations_snapshot.rs"]
+mod operations_snapshot;
+#[path = "routes/retained_reasoning.rs"]
+mod retained_reasoning;
+
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use chrono::Utc;
-use gents_desktop_core::client::ClientCore;
 use gents_desktop_core::local_runtime::fetch_runtime_connection_payload;
 use serde::{Deserialize, Serialize};
 
+use self::operations_snapshot::operations_snapshot_response;
+use self::retained_reasoning::retained_provider_reasoning;
 use super::protocol::{HttpRequestData, HttpResponse};
 use crate::diagnostics::{
     build_desktop_client_snapshot, build_desktop_session_snapshot, build_request_diagnostics_bundle,
@@ -17,35 +21,37 @@ use gents_desktop_bridge::commands::mcp_health::{
 };
 use gents_desktop_bridge::commands::{
     delete_event_source_config, delete_schedule_config, delete_tools_config, delete_trigger_config,
-    rename_session, repair_p2p, run_schedule_config, run_task_config, save_agent_config,
-    save_backend_config, save_event_source_config, save_inference_profile_config, save_node_config,
+    rename_session, run_schedule_config, run_task_config, save_agent_config, save_backend_config,
+    save_event_source_config, save_inference_profile_config, save_node_config,
     save_schedule_config, save_task_config, save_tool_service_config, save_tools_config,
-    save_trigger_config, send_chat_message, session_rows, set_default_agent,
-    test_tool_service_config,
+    save_trigger_config, send_chat_message, session_rows, set_backend_rotation_config,
+    set_default_agent, test_tool_service_config,
 };
 use gents_desktop_bridge::interrupt::interrupt_request;
 use gents_desktop_bridge::provenance::session_provenance_request;
 use gents_desktop_bridge::snapshot::build_session_live_delta;
-use gents_desktop_bridge::snapshot::operations_snapshot::{
-    project_backgrounded_tools, stuck_diagnostics_from_tool_calls, ToolCallRow,
-};
 use gents_desktop_bridge::tauri_commands::inference_setup::{
     discover_inference_models_for_core, inference_backend_recommendation,
     inference_model_recommendation, InferenceBackendRecommendationRequest,
     InferenceDiscoveryRequest, InferenceRecommendationRequest,
 };
 use gents_desktop_bridge::tauri_commands::operations::list_backends_with_health_for_core;
+use gents_desktop_bridge::tauri_commands::packs::PackInstallRequest;
+use gents_desktop_bridge::tauri_commands::ux_plugins::{
+    PluginCallRequest, UxDataCallRequest, UxDataSurfacesRequest,
+};
 use gents_desktop_bridge::types::{
-    AgentSaveRequest, BackendSaveRequest, ChatSendRequest, DefaultAgentSetRequest,
-    DesktopInterruptRequest, DesktopOperationsSnapshot, DesktopOperationsSnapshotRequest,
+    AgentSaveRequest, BackendRotationSetRequest, BackendSaveRequest, ChatSendRequest,
+    DefaultAgentSetRequest, DesktopInterruptRequest, DesktopOperationsSnapshotRequest,
     DesktopProbeMcpServiceRequest, DesktopSessionProvenanceRequest, EnrollmentRequestView,
     EnrollmentStatusRequest, EventSourceDeleteRequest, EventSourceSaveRequest,
-    InferenceProfileSaveRequest, NativeExecutorStatusView, NodeConfigSaveRequest,
-    PeerStatusFetchRequest, RuntimeLivenessView, ScheduleDeleteRequest, ScheduleRunRequest,
-    ScheduleSaveRequest, SessionRenameRequest, SessionRowsWindow, TaskRunRequest, TaskSaveRequest,
-    ToolServiceSaveRequest, ToolServiceTestRequest, ToolsDeleteRequest, ToolsSaveRequest,
-    TriggerDeleteRequest, TriggerSaveRequest,
+    InferenceProfileSaveRequest, NodeConfigSaveRequest, PeerStatusFetchRequest,
+    ScheduleDeleteRequest, ScheduleRunRequest, ScheduleSaveRequest, SessionRenameRequest,
+    SessionRowsWindow, TaskRunRequest, TaskSaveRequest, ToolServiceSaveRequest,
+    ToolServiceTestRequest, ToolsDeleteRequest, ToolsSaveRequest, TriggerDeleteRequest,
+    TriggerSaveRequest,
 };
+use gents_server::packs;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -55,7 +61,6 @@ struct SessionSnapshotRequest {
     session_id: String,
     request_id: Option<String>,
     timeline_limit: Option<usize>,
-    timeline_before_item_key: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -122,8 +127,130 @@ struct VersionResponse {
 pub(super) async fn handle_request(
     fixture: &Arc<LiveBridgeFixture>,
     request: HttpRequestData,
+    runtime: &tokio::runtime::Handle,
 ) -> Result<HttpResponse> {
     match (request.method.as_str(), request.path.as_str()) {
+        ("GET", "/desktop/packs/plugin-slots") => {
+            let home = fixture.node_home().to_path_buf();
+            json(run_pack(runtime, move || packs::plugin_slots(home)).await?)
+        }
+        ("GET", "/desktop/packs/wire-sources") => {
+            let home = fixture.node_home().to_path_buf();
+            json(run_pack(runtime, move || packs::wire_sources(home)).await?)
+        }
+        ("GET", "/desktop/packs/account") => {
+            let home = fixture.node_home().to_path_buf();
+            json(run_pack(runtime, move || packs::whoami(home, None)).await?)
+        }
+        ("GET", "/desktop/packs/installed") => {
+            let home = fixture.node_home().to_path_buf();
+            let node_did = fixture.node_did().to_owned();
+            let access = gents::ConfigAccess::Graphql(
+                fixture
+                    .desktop_core()
+                    .local_home_operator_endpoint(&node_did, &home)?,
+            );
+            json(
+                run_pack(runtime, move || {
+                    packs::installed_with_access(home, None, access, node_did)
+                })
+                .await?,
+            )
+        }
+        ("POST", "/desktop/packs/search") => {
+            let query = decode::<PackSearchRequest>(&request.body, "decoding pack search")?;
+            json(
+                run_pack(runtime, move || {
+                    packs::search(None, query.query, query.page.max(1))
+                })
+                .await?,
+            )
+        }
+        ("POST", "/desktop/packs/info") => {
+            let request = decode::<PackInfoRequest>(&request.body, "decoding pack info")?;
+            json(run_pack(runtime, move || packs::info(None, request.package)).await?)
+        }
+        ("POST", "/desktop/packs/install") => {
+            let request = decode::<PackInstallRequest>(&request.body, "decoding pack install")?;
+            let home = fixture.node_home().to_path_buf();
+            json(
+                run_pack(runtime, move || {
+                    packs::install(
+                        home,
+                        request.package,
+                        request.registry,
+                        request.inference_slots,
+                        request.edited,
+                        request.grant_authority,
+                        request.preview,
+                        request.expect_digest,
+                    )
+                })
+                .await?,
+            )
+        }
+        ("GET", "/desktop/ux/plugins") => {
+            json(serde_json::json!({ "plugins": packs::ux_list(fixture.node_home())? }))
+        }
+        ("POST", "/desktop/ux/source") => {
+            let request = decode::<UxSourceRequest>(&request.body, "decoding ux source")?;
+            let home = fixture.node_home().to_path_buf();
+            json(serde_json::to_value(
+                run_pack(runtime, move || packs::ux_module(home, request.id)).await?,
+            )?)
+        }
+        ("POST", "/desktop/ux/data") => {
+            let request = decode::<UxDataCallRequest>(&request.body, "decoding ux data")?;
+            let access = fixture.desktop_core().operator_access(&request.node_did)?;
+            json(
+                packs::ux_data_call(
+                    fixture.node_home().to_path_buf(),
+                    access,
+                    gents::observe::ux_data::UxDataCall {
+                        ux: request.ux,
+                        node_did: request.node_did,
+                        surface: request.surface,
+                        tool: request.tool,
+                        args: request.args,
+                    },
+                )
+                .await?,
+            )
+        }
+        ("POST", "/desktop/ux/surfaces") => {
+            let request = decode::<UxDataSurfacesRequest>(&request.body, "decoding ux surfaces")?;
+            let access = fixture.desktop_core().operator_access(&request.node_did)?;
+            json(
+                packs::ux_data_surfaces(
+                    fixture.node_home().to_path_buf(),
+                    access,
+                    request.ux,
+                    request.node_did,
+                )
+                .await?,
+            )
+        }
+        ("POST", "/desktop/ux/plugin-call") => {
+            let request = decode::<PluginCallRequest>(&request.body, "decoding plugin call")?;
+            let home = fixture.node_home().to_path_buf();
+            let operator = if packs::plugin_call_uses_data(&home, &request.ux, &request.name)? {
+                let node_did = packs::ux_installing_node(&home)?;
+                let access = gents::ConfigAccess::Graphql(
+                    fixture
+                        .desktop_core()
+                        .local_home_operator_endpoint(&node_did, &home)?,
+                );
+                Some((access, node_did))
+            } else {
+                None
+            };
+            let output = run_pack(runtime, move || {
+                packs::plugin_call(home, request.ux, request.name, request.input, operator)
+            })
+            .await?;
+            json(serde_json::json!({ "output": output }))
+        }
+
         ("OPTIONS", _) => Ok(HttpResponse::empty("204 No Content")),
         ("GET", "/health") => Ok(HttpResponse::json_ok(
             serde_json::json!({ "status": "ok" }).to_string(),
@@ -135,25 +262,26 @@ pub(super) async fn handle_request(
                 .as_ref()
                 .and_then(|client| client.deployments.first())
                 .ok_or_else(|| anyhow!("live bridge runner has no deployment"))?;
-            let server = fixture.remote_core();
-            let identity: Arc<dyn gents::NodeIdentity> = Arc::new(server.node_identity().clone());
+            let node = fixture.runtime_node()?;
+            let identity = Arc::clone(fixture.runtime_identity()?);
             let network = gents_desktop_bridge::enrollment::ensure_enrollment_network(
-                &server.node_arc(),
+                node,
                 identity.as_ref(),
                 fixture.deployment_label(),
             )
             .await?;
             let issuer = gents_desktop_bridge::enrollment::EnrollmentOfferIssuer::new(
                 identity,
-                Arc::clone(server.p2p()),
+                fixture.runtime_p2p()?,
                 network.network_id,
                 fixture.node_did().to_string(),
                 "client".to_string(),
             );
             let enrollment = issuer.mint().await?;
-            let schema =
-                gents::agent::p2p_reconcile::read_client_replicated_schema(server.node_arc())
-                    .await?;
+            let schema = gents::runtime::agent::p2p_reconcile::read_client_replicated_schema(
+                Arc::clone(node),
+            )
+            .await?;
             Ok(HttpResponse::json_ok(
                 serde_json::json!({
                     "enrollment": enrollment,
@@ -181,7 +309,7 @@ pub(super) async fn handle_request(
             Ok(HttpResponse::json_ok(serde_json::to_string(&snapshot)?))
         }
         ("GET", "/desktop/inference/setup/catalog") => Ok(HttpResponse::json_ok(
-            serde_json::to_string(&gents::inference_setup::inference_setup_catalog())?,
+            serde_json::to_string(&gents::inference::backends::setup::inference_setup_catalog())?,
         )),
         ("POST", "/desktop/inference/models/discover") => {
             let request = decode::<InferenceDiscoveryRequest>(
@@ -273,8 +401,7 @@ pub(super) async fn handle_request(
                 .await?
                 .context("desktop has no shareable address for route drift")?;
             fixture
-                .remote_core()
-                .p2p()
+                .runtime_p2p()?
                 .add_replicator(
                     vec!["Network".to_string()],
                     Some(&desktop_address),
@@ -283,12 +410,12 @@ pub(super) async fn handle_request(
                     None,
                 )
                 .await?;
-            let replicators = fixture.remote_core().p2p().get_replicators().await?;
+            let replicators = fixture.runtime_p2p()?.get_replicators().await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&replicators)?))
         }
         ("GET", "/desktop/test-fixture/remote-replicators") => {
             require_live_fixture()?;
-            let replicators = fixture.remote_core().p2p().get_replicators().await?;
+            let replicators = fixture.runtime_p2p()?.get_replicators().await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&replicators)?))
         }
         ("POST", "/desktop/peer/status") => {
@@ -321,10 +448,6 @@ pub(super) async fn handle_request(
                 &EnrollmentRequestView::from(enrollment),
             )?))
         }
-        ("POST", "/desktop/p2p/repair") => {
-            repair_p2p(fixture.desktop_core().as_ref(), Duration::from_millis(250)).await?;
-            snapshot_response(fixture).await
-        }
         ("POST", "/desktop/session/snapshot") => {
             let request = serde_json::from_str::<SessionSnapshotRequest>(&request.body)
                 .context("decoding session snapshot request")?;
@@ -334,7 +457,6 @@ pub(super) async fn handle_request(
                 &request.session_id,
                 request.request_id.as_deref(),
                 request.timeline_limit,
-                request.timeline_before_item_key.as_deref(),
             )
             .await;
             Ok(HttpResponse::json_ok(serde_json::to_string(&snapshot)?))
@@ -369,7 +491,7 @@ pub(super) async fn handle_request(
             .await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&delta)?))
         }
-        ("POST", "/desktop/session/hydration/retry") => {
+        ("POST", "/desktop/session/reload") => {
             let request = serde_json::from_str::<SessionSnapshotRequest>(&request.body)
                 .context("decoding session hydration retry request")?;
             let node_did = request.node_did.or_else(|| {
@@ -384,10 +506,10 @@ pub(super) async fn handle_request(
             });
             let node_did = node_did
                 .as_deref()
-                .ok_or_else(|| anyhow!("session hydration retry requires a node"))?;
+                .ok_or_else(|| anyhow!("session reload requires a node"))?;
             fixture
                 .desktop_core()
-                .retry_session_hydration(&request.session_id, node_did)
+                .reload_session(&request.session_id, node_did)
                 .await?;
             Ok(HttpResponse::json_ok("null".to_string()))
         }
@@ -411,8 +533,9 @@ pub(super) async fn handle_request(
                 .request_id
                 .as_deref()
                 .ok_or_else(|| anyhow!("requestId is required"))?;
+            let access = fixture.desktop_core().operator_access(fixture.node_did())?;
             let result = retained_provider_reasoning(
-                fixture.remote_core().as_ref(),
+                &access,
                 fixture.node_did(),
                 &request.session_id,
                 request_id,
@@ -425,27 +548,41 @@ pub(super) async fn handle_request(
                 &request.body,
                 "decoding operations snapshot request",
             )?;
-            let snapshot =
-                operations_snapshot_response(Arc::clone(fixture.desktop_core()), request).await?;
+            let node_did = request
+                .node_did
+                .as_deref()
+                .unwrap_or_else(|| fixture.node_did());
+            let access = fixture.desktop_core().operator_access(node_did)?;
+            let snapshot = operations_snapshot_response(&access, request).await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&snapshot)?))
         }
         ("POST", "/desktop/session-provenance") => {
-            let request = decode::<DesktopSessionProvenanceRequest>(
+            let mut request = decode::<DesktopSessionProvenanceRequest>(
                 &request.body,
                 "decoding session provenance request",
             )?;
+            // The runner serves one frontend, whose selection is the core's.
+            request.node_did = request
+                .node_did
+                .or_else(|| fixture.desktop_core().selected_node_did());
             let view = session_provenance_request(fixture.desktop_core(), request)
                 .await
                 .map_err(|e| anyhow!("{e}"))?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&view)?))
         }
         ("GET", "/desktop/backend-health") => {
+            // The runner serves one frontend, whose selection is the core's.
+            let core = fixture.desktop_core();
             let rows =
-                list_backends_with_health_for_core(Arc::clone(fixture.desktop_core())).await?;
+                list_backends_with_health_for_core(Arc::clone(core), core.selected_node_did())
+                    .await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&rows)?))
         }
         ("GET", "/desktop/mcp-health") => {
-            let rows = load_mcp_services_with_health(fixture.desktop_core().as_ref()).await?;
+            let core = fixture.desktop_core();
+            let rows =
+                load_mcp_services_with_health(core.as_ref(), core.selected_node_did().as_deref())
+                    .await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&rows)?))
         }
         ("POST", "/desktop/mcp/probe") => {
@@ -466,32 +603,6 @@ pub(super) async fn handle_request(
             let result = send_chat_message(fixture.desktop_core().as_ref(), request).await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
         }
-        ("POST", "/desktop/chat/recover") => {
-            let query = decode::<gents_desktop_bridge::types::ChatSubmissionQuery>(
-                &request.body,
-                "decoding chat submission query",
-            )?;
-            let result = gents_desktop_bridge::commands::recover_chat_submission(
-                fixture.desktop_core().as_ref(),
-                query,
-            )
-            .await?;
-            Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
-        }
-        ("POST", "/desktop/chat/acknowledge") => {
-            let receipt = decode::<gents_desktop_bridge::types::ChatSubmissionReceipt>(
-                &request.body,
-                "decoding chat submission receipt",
-            )?;
-            gents_desktop_bridge::commands::acknowledge_chat_submission(
-                fixture.desktop_core().as_ref(),
-                receipt,
-            )
-            .await?;
-            Ok(HttpResponse::json_ok(
-                serde_json::json!({ "status": "ok" }).to_string(),
-            ))
-        }
         ("POST", "/desktop/queue/edit") => {
             let request = decode::<gents_desktop_bridge::types::PendingQueueEditRequest>(
                 &request.body,
@@ -510,18 +621,6 @@ pub(super) async fn handle_request(
                 "decoding session archive request",
             )?;
             let result = gents_desktop_bridge::commands::set_session_archived(
-                fixture.desktop_core().as_ref(),
-                request,
-            )
-            .await?;
-            Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
-        }
-        ("POST", "/desktop/session/history") => {
-            let request = decode::<gents_desktop_bridge::types::SessionHistoryRequest>(
-                &request.body,
-                "decoding session history request",
-            )?;
-            let result = gents_desktop_bridge::commands::session_history(
                 fixture.desktop_core().as_ref(),
                 request,
             )
@@ -554,8 +653,7 @@ pub(super) async fn handle_request(
             save_agent_config(fixture.desktop_core().as_ref(), request).await?;
             snapshot_response(fixture).await
         }
-        // Test-only: write on the remote core so the desktop-snapshot read
-        // exercises the real P2P propagation path (cross-node witness).
+        // Test-only: write to the runtime as the desktop User for the propagation witness.
         ("POST", "/desktop/test-fixture/remote-save-agent") => {
             if std::env::var("GENTS_TAURI_LIVE").as_deref() != Ok("1") {
                 return Ok(HttpResponse::json_error(
@@ -565,8 +663,8 @@ pub(super) async fn handle_request(
             }
             let req =
                 decode::<AgentSaveRequest>(&request.body, "decoding remote agent save request")?;
-            tracing::info!(agent_id = %req.document.agent_id, "remote-save-agent: writing to remote core");
-            save_agent_config(fixture.remote_core().as_ref(), req).await?;
+            tracing::info!(agent_did = %req.document.agent_did, "remote-save-agent: writing to runtime as desktop user");
+            save_agent_config(fixture.desktop_core().as_ref(), req).await?;
             Ok(HttpResponse::json_ok(
                 serde_json::json!({ "ok": true }).to_string(),
             ))
@@ -590,25 +688,25 @@ pub(super) async fn handle_request(
         // the same wire shapes as a deployed runtime's HTTP client.
         ("GET", "/p2p/info") => {
             require_live_fixture()?;
-            let addresses = fixture.remote_core().p2p().listen_addresses().await?;
+            let addresses = fixture.runtime_p2p()?.listen_addresses().await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&addresses)?))
         }
         ("GET", "/p2p/active-peers") => {
             require_live_fixture()?;
-            let peers = fixture.remote_core().p2p().connected_peers().await?;
+            let peers = fixture.runtime_p2p()?.connected_peers().await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&peers)?))
         }
         ("POST", "/p2p/connect") => {
             require_live_fixture()?;
             let addresses = decode::<Vec<String>>(&request.body, "decoding P2P connect")?;
             for address in addresses {
-                fixture.remote_core().p2p().connect_peer(&address).await?;
+                fixture.runtime_p2p()?.connect_peer(&address).await?;
             }
             Ok(HttpResponse::json_ok("{}".to_string()))
         }
         ("GET", "/p2p/replicators") => {
             require_live_fixture()?;
-            let replicators = fixture.remote_core().p2p().get_replicators().await?;
+            let replicators = fixture.runtime_p2p()?.get_replicators().await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&replicators)?))
         }
         ("POST", "/p2p/replicators") => {
@@ -618,8 +716,7 @@ pub(super) async fn handle_request(
             let filters = serde_json::from_value(request.filters)
                 .context("decoding P2P replication filters")?;
             fixture
-                .remote_core()
-                .p2p()
+                .runtime_p2p()?
                 .add_replicator(
                     request.collections,
                     request.addresses.first().map(String::as_str),
@@ -637,26 +734,21 @@ pub(super) async fn handle_request(
                 "decoding P2P replicator teardown",
             )?;
             fixture
-                .remote_core()
-                .p2p()
+                .runtime_p2p()?
                 .remove_replicator(request.collections, Some(&request.id))
                 .await?;
             Ok(HttpResponse::json_ok("{}".to_string()))
         }
         ("GET", "/p2p/collections") => {
             require_live_fixture()?;
-            let collections = fixture.remote_core().p2p().get_collections().await?;
+            let collections = fixture.runtime_p2p()?.get_collections().await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&collections)?))
         }
         ("POST", "/p2p/collections") => {
             require_live_fixture()?;
             let collections =
                 decode::<Vec<String>>(&request.body, "decoding P2P collection install")?;
-            fixture
-                .remote_core()
-                .p2p()
-                .add_collections(collections)
-                .await?;
+            fixture.runtime_p2p()?.add_collections(collections).await?;
             Ok(HttpResponse::json_ok("{}".to_string()))
         }
         ("DELETE", "/p2p/collections") => {
@@ -664,8 +756,7 @@ pub(super) async fn handle_request(
             let collections =
                 decode::<Vec<String>>(&request.body, "decoding P2P collection teardown")?;
             fixture
-                .remote_core()
-                .p2p()
+                .runtime_p2p()?
                 .remove_collections(collections)
                 .await?;
             Ok(HttpResponse::json_ok("{}".to_string()))
@@ -674,6 +765,14 @@ pub(super) async fn handle_request(
             let request =
                 decode::<BackendSaveRequest>(&request.body, "decoding backend save request")?;
             save_backend_config(fixture.desktop_core().as_ref(), request).await?;
+            snapshot_response(fixture).await
+        }
+        ("POST", "/desktop/backend/rotation") => {
+            let request = decode::<BackendRotationSetRequest>(
+                &request.body,
+                "decoding backend rotation request",
+            )?;
+            set_backend_rotation_config(fixture.desktop_core().as_ref(), request).await?;
             snapshot_response(fixture).await
         }
         ("POST", "/desktop/inference-profile/save") => {
@@ -718,7 +817,7 @@ pub(super) async fn handle_request(
                 "decoding component apply request",
             )?;
             gents_desktop_bridge::commands::apply_config_components(
-                fixture.remote_core().as_ref(),
+                fixture.desktop_core().as_ref(),
                 request,
             )
             .await?;
@@ -730,7 +829,7 @@ pub(super) async fn handle_request(
                 "decoding component patch request",
             )?;
             gents_desktop_bridge::commands::patch_config_components(
-                fixture.remote_core().as_ref(),
+                fixture.desktop_core().as_ref(),
                 request,
             )
             .await?;
@@ -802,8 +901,12 @@ pub(super) async fn handle_request(
             Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
         }
         ("POST", "/desktop/interrupt/request") => {
-            let request =
+            let mut request =
                 decode::<DesktopInterruptRequest>(&request.body, "decoding interrupt request")?;
+            // The runner serves one frontend, whose selection is the core's.
+            request.node_did = request
+                .node_did
+                .or_else(|| fixture.desktop_core().selected_node_did());
             let result = interrupt_request(fixture.desktop_core(), &request)
                 .await
                 .map_err(|e| anyhow!("{e}"))?;
@@ -811,255 +914,6 @@ pub(super) async fn handle_request(
         }
         _ => Ok(HttpResponse::json_error("404 Not Found", "not found")),
     }
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct RetainedProviderReasoning {
-    request_doc_id: String,
-    reasoning_by_source: Vec<String>,
-}
-
-async fn retained_provider_reasoning(
-    core: &ClientCore,
-    node_did: &str,
-    session_id: &str,
-    request_id: &str,
-) -> Result<RetainedProviderReasoning> {
-    use gents::session::canonical_rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
-    use gents_protocol::output::{
-        reconstruction::{reconstruct_stream, ObservedSegment},
-        OutputSource, PayloadRef, SourceClose, StreamPayload,
-    };
-
-    let node = gents::graphql::escape_graphql_string(node_did);
-    let session = gents::graphql::escape_graphql_string(session_id);
-    let logical = gents::graphql::escape_graphql_string(request_id);
-    let request_query = format!(
-        r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{node}" }}, session_id: {{ _eq: "{session}" }}, request_id: {{ _eq: "{logical}" }} }}, limit: 2) {{ _docID }} }}"#
-    );
-    let response = gents::graphql::graphql_with_transaction_retry(
-        core.node(),
-        &request_query,
-        "retained reasoning request lookup",
-    )
-    .await?;
-    let requests = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(serde_json::Value::as_array)
-        .context("retained reasoning request lookup returned no rows")?;
-    anyhow::ensure!(requests.len() == 1, "expected one exact physical request");
-    let request_doc_id = requests[0]
-        .get("_docID")
-        .and_then(serde_json::Value::as_str)
-        .context("request omitted physical _docID")?
-        .to_owned();
-    let physical = gents::graphql::escape_graphql_string(&request_doc_id);
-    let segment_query = format!(
-        r#"{{ AgentOutputSegment(filter: {{ node_did: {{ _eq: "{node}" }}, session_id: {{ _eq: "{session}" }}, request_doc_id: {{ _eq: "{physical}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#
-    );
-    let response = gents::graphql::graphql_with_transaction_retry(
-        core.node(),
-        &segment_query,
-        "retained reasoning segment lookup",
-    )
-    .await?;
-    let values = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentOutputSegment"))
-        .and_then(serde_json::Value::as_array)
-        .context("retained reasoning segment lookup returned no rows")?;
-    let rows = values
-        .iter()
-        .map(decode_output_segment_row)
-        .collect::<Result<Vec<_>>>()?;
-    let mut sources = Vec::new();
-    for row in &rows {
-        if matches!(&row.segment.source, OutputSource::ProviderTurn { .. })
-            && !row.segment.source.is_auxiliary_audit()
-            && !sources.contains(&row.segment.source)
-        {
-            sources.push(row.segment.source.clone());
-        }
-    }
-    let mut reasoning_by_source = Vec::new();
-    for source in sources {
-        let facts = rows
-            .iter()
-            .filter(|row| row.segment.source == source)
-            .collect::<Vec<_>>();
-        let closes = facts
-            .iter()
-            .filter(|row| row.segment.close.is_some())
-            .collect::<Vec<_>>();
-        anyhow::ensure!(closes.len() == 1, "provider source lacks one exact closure");
-        let SourceClose::Closed { stream_bytes, .. } = closes[0].segment.close.as_ref().unwrap()
-        else {
-            continue;
-        };
-        let observed = facts
-            .iter()
-            .map(|row| ObservedSegment {
-                doc_id: &row.doc_id,
-                segment: &row.segment,
-            })
-            .collect::<Vec<_>>();
-        let mut reasoning = String::new();
-        for stream in 0..stream_bytes.len() {
-            let reconstructed = reconstruct_stream(
-                &observed,
-                &[],
-                &[],
-                &PayloadRef {
-                    close_doc_id: closes[0].doc_id.clone(),
-                    stream: stream as u32,
-                },
-            )?;
-            if matches!(
-                reconstructed.declaration.payload,
-                StreamPayload::Reasoning | StreamPayload::ReasoningSummary
-            ) {
-                reasoning.push_str(&reconstructed.text);
-            }
-        }
-        reasoning_by_source.push(reasoning);
-    }
-    Ok(RetainedProviderReasoning {
-        request_doc_id,
-        reasoning_by_source,
-    })
-}
-
-async fn operations_snapshot_response(
-    core: Arc<ClientCore>,
-    request: DesktopOperationsSnapshotRequest,
-) -> Result<DesktopOperationsSnapshot> {
-    let native_executors = gents::native_executor_status::active_native_executors()
-        .into_iter()
-        .map(|executor| NativeExecutorStatusView {
-            id: executor.id as i64,
-            pid: executor.pid as u32,
-            argv0: executor.argv0,
-            tool_name: executor.tool_name,
-            started_at: executor.started_at,
-            age_ms: executor.age_ms,
-        })
-        .collect();
-    let tool_call_rows = fetch_background_tool_calls(&core)
-        .await
-        .map_err(|error| anyhow!("failed to query AgentToolCall: {error}"))?;
-    let liveness = RuntimeLivenessView {
-        expired_processing_count: 0,
-        requests: Vec::new(),
-        active_tool_calls: Vec::new(),
-        active_native_executors_available: true,
-        active_native_executors: native_executors,
-    };
-    let backgrounded_tools = project_backgrounded_tools(&tool_call_rows, &liveness);
-    let stuck_diagnostics = stuck_diagnostics_from_tool_calls(&tool_call_rows);
-
-    Ok(DesktopOperationsSnapshot {
-        fetched_at: Utc::now().to_rfc3339(),
-        node_did: request.node_did,
-        liveness: Some(liveness),
-        liveness_unavailable_reason: None,
-        backgrounded_tools,
-        stuck_diagnostics,
-    })
-}
-
-async fn fetch_background_tool_calls(core: &Arc<ClientCore>) -> Result<Vec<ToolCallRow>, String> {
-    let query = r#"
-        query {
-            AgentToolCall(
-                filter: { await_mode: { _eq: "background" } }
-            ) {
-                _docID
-                request_id
-                tool_call_id
-                tool_name
-                lifecycle_state
-                status
-                started_at
-                completed_at
-                deadline_at
-                await_mode
-                stuck_since
-                job_pin
-            }
-        }
-    "#;
-
-    let response =
-        gents::graphql::graphql_with_transaction_retry(core.node(), query, "AgentToolCall query")
-            .await
-            .map_err(|error| format!("{error:#}"))?;
-
-    let data = response
-        .data
-        .ok_or_else(|| "AgentToolCall query returned no data".to_string())?;
-    let rows = data
-        .get("AgentToolCall")
-        .and_then(|value| value.as_array())
-        .cloned()
-        .unwrap_or_default();
-
-    Ok(rows
-        .into_iter()
-        .map(|row| ToolCallRow {
-            tool_call_doc_id: row
-                .get("_docID")
-                .and_then(|value| value.as_str())
-                .map(str::to_owned),
-            request_id: row
-                .get("request_id")
-                .and_then(|value| value.as_str())
-                .unwrap_or("")
-                .to_string(),
-            tool_call_id: row
-                .get("tool_call_id")
-                .and_then(|value| value.as_str())
-                .unwrap_or("")
-                .to_string(),
-            tool_name: row
-                .get("tool_name")
-                .and_then(|value| value.as_str())
-                .unwrap_or("")
-                .to_string(),
-            lifecycle_state: row
-                .get("lifecycle_state")
-                .and_then(|value| value.as_str())
-                .map(str::to_string),
-            status: row
-                .get("status")
-                .and_then(|value| value.as_str())
-                .map(str::to_string),
-            started_at: row
-                .get("started_at")
-                .and_then(|value| value.as_str())
-                .map(str::to_string),
-            completed_at: row
-                .get("completed_at")
-                .and_then(|value| value.as_str())
-                .map(str::to_string),
-            deadline_at: row
-                .get("deadline_at")
-                .and_then(|value| value.as_str())
-                .map(str::to_string),
-            await_mode: row
-                .get("await_mode")
-                .and_then(|value| value.as_str())
-                .map(str::to_string),
-            stuck_since: row
-                .get("stuck_since")
-                .and_then(|value| value.as_str())
-                .map(str::to_string),
-            job: row.get("job_pin").is_some_and(|pin| !pin.is_null()),
-        })
-        .collect())
 }
 
 fn decode<T>(body: &str, context: &str) -> Result<T>
@@ -1079,4 +933,31 @@ fn require_live_fixture() -> Result<()> {
 async fn snapshot_response(fixture: &Arc<LiveBridgeFixture>) -> Result<HttpResponse> {
     let snapshot = build_desktop_client_snapshot(fixture).await;
     Ok(HttpResponse::json_ok(serde_json::to_string(&snapshot)?))
+}
+
+#[derive(Deserialize)]
+struct PackSearchRequest {
+    query: String,
+    page: u32,
+}
+#[derive(Deserialize)]
+struct PackInfoRequest {
+    package: String,
+}
+#[derive(Deserialize)]
+struct UxSourceRequest {
+    id: String,
+}
+
+fn json(value: serde_json::Value) -> Result<HttpResponse> {
+    Ok(HttpResponse::json_ok(serde_json::to_string(&value)?))
+}
+
+async fn run_pack<F, Fut, T>(runtime: &tokio::runtime::Handle, operation: F) -> Result<T>
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<T>>,
+    T: Send + 'static,
+{
+    gents::store::local::storage_backend::drive_unsendable(runtime, operation).await?
 }

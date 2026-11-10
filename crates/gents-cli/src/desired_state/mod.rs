@@ -19,7 +19,7 @@ pub(crate) use document_handle::document_handle;
 use gents::Collection;
 use serde::Serialize;
 
-pub(crate) use gents::document_config::{Node as DesiredNode, PackConfig as DesiredStateManifest};
+pub(crate) use gents::documents::{Node as DesiredNode, PackConfig as DesiredStateManifest};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DocRef {

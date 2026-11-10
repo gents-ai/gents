@@ -7,7 +7,7 @@ fn timeline_session() -> AgentSession {
         session_id: "sess-1".into(),
         node_did: "did:test:amy".into(),
         requester_did: None,
-        agent_id: "default".into(),
+        agent_did: "default".into(),
         created_at: "2026-04-21T12:00:00Z".into(),
         closed_at: None,
         archived_at: None,
@@ -101,7 +101,10 @@ fn interrupted_queued_steering_keeps_request_owned_input_without_transcript() {
     let pending = snapshot.pending_turn.expect("request-owned steering input");
     assert_eq!(pending.request_doc_id.as_deref(), Some("steering-doc-1"));
     assert_eq!(pending.content, "queued steering text");
-    assert_eq!(pending.lifecycle_state.as_deref(), Some("interrupted"));
+    assert_eq!(
+        pending.lifecycle_state,
+        Some(RequestLifecycleState::Interrupted)
+    );
     assert!(snapshot.messages.is_empty());
 }
 
@@ -150,6 +153,7 @@ fn session_timeline_pages_are_bounded_and_cursor_stable() {
     .expect("snapshot");
     snapshot.timeline_items = (0..100)
         .map(|index| RenderedTimelineItem::UserMessage {
+            question_reply: None,
             started_goal_id: None,
             item_key: format!("message-{index:03}"),
             request_id: Some(format!("request-{index:03}")),
@@ -164,22 +168,12 @@ fn session_timeline_pages_are_bounded_and_cursor_stable() {
             reconstruction: ready(),
         })
         .collect();
-    let mut older_snapshot = snapshot.clone();
-    apply_session_timeline_page(&mut snapshot, None, Some(40)).expect("tip page");
+    apply_session_timeline_page(&mut snapshot, Some(40)).expect("tip page");
     let tip = snapshot.timeline_page.as_ref().expect("metadata");
     assert_eq!(snapshot.timeline_items.len(), 40);
     assert_eq!(tip.oldest_item_key.as_deref(), Some("message-060"));
     assert!(tip.has_older);
     assert!(!tip.has_newer);
-    apply_session_timeline_page(&mut older_snapshot, Some("message-060"), Some(40))
-        .expect("older page");
-    assert_eq!(
-        older_snapshot
-            .timeline_page
-            .as_ref()
-            .and_then(|page| page.oldest_item_key.as_deref()),
-        Some("message-020")
-    );
 }
 
 #[test]
@@ -195,6 +189,7 @@ fn queried_timeline_page_reports_database_work_and_does_not_rescan_for_cursor() 
     .expect("snapshot");
     snapshot.timeline_items = (0..81)
         .map(|index| RenderedTimelineItem::UserMessage {
+            question_reply: None,
             started_goal_id: None,
             item_key: format!("message-{index:03}"),
             request_id: None,
@@ -222,13 +217,7 @@ fn queried_timeline_page_reports_database_work_and_does_not_rescan_for_cursor() 
         requests: Vec::new(),
         result_messages: Vec::new(),
     };
-    apply_session_timeline_page_with_query(
-        &mut snapshot,
-        Some("message-081"),
-        Some(40),
-        Some(&page),
-    )
-    .expect("page");
+    apply_session_timeline_page_with_query(&mut snapshot, Some(40), Some(&page)).expect("page");
     let metadata = snapshot.timeline_page.expect("metadata");
     assert_eq!(
         (
@@ -318,7 +307,7 @@ fn queried_timeline_page_never_splits_a_sequence_group() {
         assistant_item("message-3", 3),
     ];
     let page = timeline_page(5, true, false);
-    apply_session_timeline_page_with_query(&mut snapshot, None, Some(4), Some(&page))
+    apply_session_timeline_page_with_query(&mut snapshot, Some(4), Some(&page))
         .expect("sequence-atomic page");
     assert_eq!(
         timeline_keys(&snapshot),
@@ -330,7 +319,7 @@ fn queried_timeline_page_never_splits_a_sequence_group() {
 fn queried_timeline_page_advances_past_non_rendering_rows() {
     let mut snapshot = empty_timeline_snapshot();
     let page = timeline_page(41, false, false);
-    apply_session_timeline_page_with_query(&mut snapshot, None, Some(40), Some(&page))
+    apply_session_timeline_page_with_query(&mut snapshot, Some(40), Some(&page))
         .expect("empty rendered page");
     assert!(snapshot.timeline_items.is_empty());
     assert!(snapshot.timeline_page.expect("metadata").has_older);
@@ -346,7 +335,7 @@ fn queried_timeline_page_drops_old_orphans_below_the_selected_sequence_window() 
         tool_group(1),
     ];
     let page = timeline_page(4, true, false);
-    apply_session_timeline_page_with_query(&mut snapshot, None, Some(3), Some(&page))
+    apply_session_timeline_page_with_query(&mut snapshot, Some(3), Some(&page))
         .expect("windowed page");
     assert_eq!(
         timeline_keys(&snapshot),
@@ -422,6 +411,62 @@ fn background_notification_is_control_by_message_key_with_honest_request_binding
 }
 
 #[test]
+fn output_obligation_reminders_do_not_appear_as_user_or_goal_messages() {
+    for goal in [false, true] {
+        let mut rows = active_store().to_rows();
+        if goal {
+            rows.requests[0].input = Some(
+                serde_json::from_value(serde_json::json!({
+                    "queue": { "source": "goal", "policy": "append" }
+                }))
+                .unwrap(),
+            );
+        }
+        push_canonical_text_message(
+            &mut rows,
+            "authored:req-1:output-obligation:0",
+            "sess-1",
+            Some("req-1"),
+            1,
+            MessageRole::User,
+            "The request cannot complete yet.",
+        );
+        let snapshot = build_session_snapshot_from_store(
+            &ClientStore::from_rows(rows),
+            "sess-1",
+            Some("req-1"),
+        )
+        .expect("snapshot");
+        assert!(snapshot.messages[0].runtime_control);
+        assert!(snapshot.messages[0].origin.is_none());
+        assert!(!snapshot.timeline_items.iter().any(|item| matches!(
+            item,
+            RenderedTimelineItem::UserMessage { .. } | RenderedTimelineItem::AutomatedInput { .. }
+        )));
+    }
+}
+
+#[test]
+fn reminder_key_from_another_request_remains_visible_as_user_input() {
+    let mut rows = active_store().to_rows();
+    push_canonical_text_message(
+        &mut rows,
+        "authored:other:output-obligation:0",
+        "sess-1",
+        Some("req-1"),
+        1,
+        MessageRole::User,
+        "user text",
+    );
+    let snapshot =
+        build_session_snapshot_from_store(&ClientStore::from_rows(rows), "sess-1", Some("req-1"))
+            .expect("snapshot");
+    assert!(!snapshot.messages[0].runtime_control);
+    assert!(snapshot.timeline_items.iter().any(|item| matches!(item,
+        RenderedTimelineItem::UserMessage { content: Some(content), .. } if content == "user text")));
+}
+
+#[test]
 fn versioned_background_wake_never_projects_as_a_user_turn() {
     let mut rows = active_store().to_rows();
     push_canonical_text_message(
@@ -440,6 +485,37 @@ fn versioned_background_wake_never_projects_as_a_user_turn() {
     assert!(matches!(snapshot.timeline_items.as_slice(), [
         RenderedTimelineItem::AutomatedInput { content: Some(content), .. }
     ] if content == "wake"));
+}
+
+#[test]
+fn question_reply_metadata_survives_the_published_user_turn() {
+    let mut rows = active_store().to_rows();
+    rows.requests[0].caused_by_source_doc_id = Some("question-doc".into());
+    rows.requests[0].input = Some(
+        serde_json::from_value(serde_json::json!({
+            "question_reply": {
+                "source_doc_id": "question-doc", "question_hash": "sha256:question",
+                "answer": { "option_ids": ["blue"] }
+            }
+        }))
+        .unwrap(),
+    );
+    push_canonical_text_message(
+        &mut rows,
+        "authored:req-1:prompt",
+        "sess-1",
+        Some("req-1"),
+        1,
+        MessageRole::User,
+        "Decision on colour: Blue",
+    );
+    let snapshot =
+        build_session_snapshot_from_store(&ClientStore::from_rows(rows), "sess-1", Some("req-1"))
+            .expect("snapshot");
+    assert!(snapshot.timeline_items.iter().any(|item| matches!(item,
+        RenderedTimelineItem::UserMessage { question_reply: Some(reply), .. }
+        if reply.source_doc_id == "question-doc" && reply.answer.as_ref().unwrap().option_ids == ["blue"]
+    )));
 }
 
 #[test]
@@ -502,7 +578,7 @@ fn folded_user_input_stays_visible_when_a_runtime_request_consumes_it() {
             .unwrap(),
         );
         input_request.lifecycle_state = Some(RequestLifecycleState::Superseded);
-        input_request.failure_reason = Some(gents::lifecycle::FOLDED_REASON.into());
+        input_request.failure_reason = Some(gents::request::lifecycle::FOLDED_REASON.into());
         input_request.superseded_by_request = Some("req-1".into());
         input_request.superseded_by_request_doc_id = Some("req-1".into());
         rows.requests[0].input = Some(
@@ -940,7 +1016,7 @@ fn structured_command_policy_denial_projects_to_rendered_tool() {
         session_id: "session-denial".into(),
         node_did: "did:test:amy".into(),
         requester_did: None,
-        agent_id: "default".into(),
+        agent_did: "default".into(),
         created_at: "2026-04-21T12:00:00Z".into(),
         closed_at: None,
         archived_at: None,
@@ -1068,6 +1144,7 @@ fn historical_pending_input_pages_with_its_durable_anchor() {
     let mut snapshot = empty_timeline_snapshot();
     snapshot.timeline_items = vec![
         RenderedTimelineItem::PendingUserTurn {
+            question_reply: None,
             item_key: "pending-interrupted".into(),
             request_id: "interrupted".into(),
             started_goal_id: None,
@@ -1075,7 +1152,7 @@ fn historical_pending_input_pages_with_its_durable_anchor() {
             captured_context: None,
             attachments: None,
             selected_skill_ids: vec![],
-            lifecycle_state: Some("interrupted".into()),
+            lifecycle_state: Some(RequestLifecycleState::Interrupted),
             folded_into_request_id: None,
             origin: None,
             created_at: None,
@@ -1085,14 +1162,14 @@ fn historical_pending_input_pages_with_its_durable_anchor() {
     ];
     let all_items = snapshot.timeline_items.clone();
     let page = timeline_page(2, true, false);
-    apply_session_timeline_page_with_query(&mut snapshot, None, Some(1), Some(&page)).unwrap();
+    apply_session_timeline_page_with_query(&mut snapshot, Some(1), Some(&page)).unwrap();
     assert_eq!(snapshot.timeline_items.len(), 1);
     assert!(!snapshot
         .timeline_items
         .iter()
         .any(|item| matches!(item, RenderedTimelineItem::PendingUserTurn { .. })));
     snapshot.timeline_items = all_items;
-    apply_session_timeline_page_with_query(&mut snapshot, None, Some(3), Some(&page)).unwrap();
+    apply_session_timeline_page_with_query(&mut snapshot, Some(3), Some(&page)).unwrap();
     assert!(matches!(
         snapshot.timeline_items[0],
         RenderedTimelineItem::PendingUserTurn { .. }
@@ -1108,6 +1185,7 @@ fn request_only_history_uses_existing_local_window_without_durable_cursor() {
     let mut snapshot = empty_timeline_snapshot();
     snapshot.timeline_items = (0..100)
         .map(|index| RenderedTimelineItem::PendingUserTurn {
+            question_reply: None,
             item_key: format!("pending-{index}"),
             request_id: format!("request-{index}"),
             started_goal_id: None,
@@ -1115,14 +1193,14 @@ fn request_only_history_uses_existing_local_window_without_durable_cursor() {
             captured_context: None,
             attachments: None,
             selected_skill_ids: vec![],
-            lifecycle_state: Some("interrupted".into()),
+            lifecycle_state: Some(RequestLifecycleState::Interrupted),
             folded_into_request_id: None,
             origin: None,
             created_at: None,
         })
         .collect();
     let mut local_snapshot = snapshot.clone();
-    apply_session_timeline_page(&mut local_snapshot, None, Some(40)).unwrap();
+    apply_session_timeline_page(&mut local_snapshot, Some(40)).unwrap();
     assert_eq!(local_snapshot.timeline_items.len(), 100);
     assert!(!local_snapshot.timeline_page.as_ref().unwrap().has_older);
     assert!(local_snapshot
@@ -1132,7 +1210,7 @@ fn request_only_history_uses_existing_local_window_without_durable_cursor() {
         .oldest_item_key
         .is_none());
     let page = timeline_page(0, true, false);
-    apply_session_timeline_page_with_query(&mut snapshot, None, Some(40), Some(&page)).unwrap();
+    apply_session_timeline_page_with_query(&mut snapshot, Some(40), Some(&page)).unwrap();
     assert_eq!(snapshot.timeline_items.len(), 100);
     let metadata = snapshot.timeline_page.unwrap();
     assert_eq!(metadata.page_items, 100);
@@ -1141,47 +1219,12 @@ fn request_only_history_uses_existing_local_window_without_durable_cursor() {
 }
 
 #[test]
-fn local_pending_history_pages_with_durable_anchor_cursor() {
-    let mut full = empty_timeline_snapshot();
-    let pending = RenderedTimelineItem::PendingUserTurn {
-        item_key: "pending-old".into(),
-        request_id: "old".into(),
-        started_goal_id: None,
-        content: "interrupted input".into(),
-        captured_context: None,
-        attachments: None,
-        selected_skill_ids: vec![],
-        lifecycle_state: Some("interrupted".into()),
-        folded_into_request_id: None,
-        origin: None,
-        created_at: None,
-    };
-    full.timeline_items = vec![
-        pending,
-        assistant_item("anchor", 1),
-        assistant_item("latest", 2),
-    ];
-    let mut before_anchor = full.clone();
-    apply_session_timeline_page(&mut before_anchor, Some("anchor"), Some(1)).unwrap();
-    assert!(before_anchor.timeline_items.is_empty());
-    let mut tip = full.clone();
-    apply_session_timeline_page(&mut tip, None, Some(1)).unwrap();
-    assert_eq!(timeline_keys(&tip), ["latest"]);
-    let cursor = tip.timeline_page.unwrap().oldest_item_key.unwrap();
-    apply_session_timeline_page(&mut full, Some(&cursor), Some(1)).unwrap();
-    assert_eq!(timeline_keys(&full), ["pending-old", "anchor"]);
-    let metadata = full.timeline_page.unwrap();
-    assert_eq!(metadata.oldest_item_key.as_deref(), Some("anchor"));
-    assert!(!metadata.has_older);
-    assert!(metadata.has_newer);
-}
-
-#[test]
 fn tail_request_input_is_not_anchored_to_an_old_orphan_tool_group() {
     let mut full = empty_timeline_snapshot();
     full.timeline_items = vec![
         assistant_item("latest", 2),
         RenderedTimelineItem::PendingUserTurn {
+            question_reply: None,
             item_key: "pending-current".into(),
             request_id: "current".into(),
             started_goal_id: None,
@@ -1189,7 +1232,7 @@ fn tail_request_input_is_not_anchored_to_an_old_orphan_tool_group() {
             captured_context: None,
             attachments: None,
             selected_skill_ids: vec![],
-            lifecycle_state: Some("interrupted".into()),
+            lifecycle_state: Some(RequestLifecycleState::Interrupted),
             folded_into_request_id: None,
             origin: None,
             created_at: None,
@@ -1197,10 +1240,10 @@ fn tail_request_input_is_not_anchored_to_an_old_orphan_tool_group() {
         tool_group(1),
     ];
     let mut local = full.clone();
-    apply_session_timeline_page(&mut local, None, Some(1)).unwrap();
+    apply_session_timeline_page(&mut local, Some(1)).unwrap();
     assert_eq!(timeline_keys(&local), ["latest", "pending-current"]);
     let page = timeline_page(2, true, false);
-    apply_session_timeline_page_with_query(&mut full, None, Some(1), Some(&page)).unwrap();
+    apply_session_timeline_page_with_query(&mut full, Some(1), Some(&page)).unwrap();
     assert_eq!(timeline_keys(&full), ["latest", "pending-current"]);
 }
 
@@ -1226,26 +1269,17 @@ fn context_events_page_with_their_durable_message_anchor() {
             original_tokens: Some(300),
             compacted_tokens: Some(90),
             timestamp: Some("2026-10-20T11:00:00Z".into()),
+            summary: None,
+            files_read: None,
+            files_modified: None,
         },
         assistant_item("message-2", 2),
     ];
     let mut snapshot = empty_timeline_snapshot();
-    snapshot.timeline_items = items.clone();
+    snapshot.timeline_items = items;
 
-    apply_session_timeline_page(&mut snapshot, None, Some(3)).unwrap();
+    apply_session_timeline_page(&mut snapshot, Some(3)).unwrap();
     assert_eq!(timeline_keys(&snapshot), ["message-2"]);
-    let cursor = snapshot.timeline_page.unwrap().oldest_item_key.unwrap();
-    let mut older = empty_timeline_snapshot();
-    older.timeline_items = items;
-    apply_session_timeline_page(&mut older, Some(&cursor), Some(3)).unwrap();
-    assert_eq!(
-        timeline_keys(&older),
-        [
-            "message-1",
-            "request-context-reduction:physical-req-1",
-            "session-compaction:checkpoint-1"
-        ]
-    );
 }
 
 #[test]
@@ -1388,4 +1422,43 @@ fn a_rows_read_draws_the_rows_the_session_snapshot_draws() {
             RenderedTimelineItem::AssistantMessage { .. },
         ] if prompt == "req-1"
     ));
+}
+
+#[test]
+fn a_compaction_row_carries_its_summary_and_files() {
+    let entry: gents_protocol::row::CompactionEntryRow =
+        serde_json::from_value(serde_json::json!({
+            "compaction_key": "checkpoint-1",
+            "summary": "## Goal\nFix the parser.",
+            "files_read": "[\"src/lib.rs\"]",
+            "files_modified": "not a list",
+            "messages_compacted": 4,
+            "compacted_through_sequence": 1,
+            "original_tokens": 300,
+            "compacted_tokens": 90,
+            "created_at": "2026-10-20T11:00:00Z"
+        }))
+        .expect("compaction entry");
+    let mut items = vec![assistant_item("message-1", 1)];
+    let page = [1_i64].into_iter().collect::<rapidhash::RapidHashSet<_>>();
+    crate::snapshot::session::attach_session_compaction_timeline_events(
+        &mut items,
+        &[entry],
+        &page,
+    );
+    let Some(RenderedTimelineItem::SessionCompaction {
+        summary,
+        files_read,
+        files_modified,
+        ..
+    }) = items
+        .iter()
+        .find(|item| matches!(item, RenderedTimelineItem::SessionCompaction { .. }))
+    else {
+        panic!("no compaction row");
+    };
+    assert_eq!(summary.as_deref(), Some("## Goal\nFix the parser."));
+    assert_eq!(files_read.as_deref(), Some(&["src/lib.rs".to_string()][..]));
+    /* a file list the bridge can't read is left out, not shown as text */
+    assert_eq!(files_modified, &None);
 }

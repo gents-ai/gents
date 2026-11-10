@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use gents::pack_registry::credentials;
+use gents::pack::registry::credentials;
 use serde_json::json;
 
 use super::registry::{
@@ -19,7 +19,7 @@ pub(crate) fn resolve_publish_token(
         return Ok(token);
     }
     credentials::get(home, registry)?.with_context(|| {
-        format!("you are not signed in to {registry}; run gents pack login, or pass --token")
+        format!("you are not signed in to {registry}; run gents config pack login, or pass --token")
     })
 }
 

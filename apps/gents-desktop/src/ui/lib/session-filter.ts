@@ -22,6 +22,14 @@ export const emptyFilter: SessionFilter = {
 export const hasFilter = (f: SessionFilter) =>
   f.states.length > 0 || f.sources.length > 0 || f.agents.length > 0;
 
+const sameChoices = (a: readonly string[], b: readonly string[]) =>
+  a.length === b.length && a.every((v) => b.includes(v));
+
+export const sameFilter = (a: SessionFilter, b: SessionFilter) =>
+  sameChoices(a.states, b.states) &&
+  sameChoices(a.sources, b.sources) &&
+  sameChoices(a.agents, b.agents);
+
 const STATES: readonly string[] = [
   "working",
   "waiting",
@@ -49,15 +57,15 @@ export const matchesState = (c: SessionSummary, state: SessionState) =>
 
 export const matchesSource = (c: SessionSummary, source: SessionSource) =>
   source === "task"
-    ? Boolean(c.taskId || c.triggerId)
+    ? Boolean(c.taskOrigin || c.taskId || c.triggerId)
     : source === "session"
       ? Boolean(c.startedBy)
-      : !(c.taskId || c.triggerId || c.startedBy);
+      : !(c.taskOrigin || c.taskId || c.triggerId || c.startedBy);
 
 export const passes = (c: SessionSummary, f: SessionFilter) =>
   (f.states.length === 0 || f.states.some((s) => matchesState(c, s))) &&
   (f.sources.length === 0 || f.sources.some((s) => matchesSource(c, s))) &&
-  (f.agents.length === 0 || f.agents.includes(c.agentId ?? ""));
+  (f.agents.length === 0 || f.agents.includes(c.agentDid ?? ""));
 
 /** A choice shows checked while nothing narrows its axis. */
 export const isShown = <V extends string>(picked: readonly V[], v: V) =>

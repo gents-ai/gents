@@ -19,7 +19,10 @@ import {
 import { SETUP_COMPLETE_DWELL_MS, StartupProgress } from "./StartupProgress";
 import { engineerPatches } from "@/lib/engineer";
 import { supportsLocalManagedServer } from "../../../lib/shellPlatform";
-import { NodeAvatar } from "@/screens/AgentAvatar";
+import { AvatarRoll } from "@/screens/AvatarRoll";
+import { saveNodeAvatar } from "@/screens/agent/AgentCard";
+import { avatarKey } from "@/lib/avatar";
+import { chosenAvatar, holdAvatar, rollAvatar } from "@/lib/avatarRoll";
 import { Mark } from "@/app/Mark";
 import { setupErrorMessage } from "../../../lib/setupErrors";
 import { ManagedRuntimeAuthorityPicker } from "@/components/ManagedRuntimeAuthority";
@@ -33,6 +36,10 @@ import { InferenceSetup } from "./InferenceSetup";
 import type { ProviderId } from "./inferenceSetupForm";
 
 type Step = "welcome" | "starting" | "enrollment" | "inference";
+
+/* the roll of the avatar beside the name being typed, before its node exists */
+const NAMING = "setup:naming";
+const NAMING_PAUSE_MS = 400;
 type FailedPhase = Exclude<DesktopStartupPhase, "ready">;
 type StartupDetail = "managedServer" | "configuration" | "client";
 
@@ -177,6 +184,7 @@ export function OnboardingWizard({
     allowLocal ? "local" : "remote",
   );
   const [address, setAddress] = useState("");
+  const [candidateName, setCandidateName] = useState("");
   const enrollmentRequests = useEnrollmentRequests();
   const snapshot = useStore(stores.client, (state) => state.snapshot);
   const [enrollment, setEnrollment] = useState<EnrollmentRequestView | null>(null);
@@ -188,6 +196,17 @@ export function OnboardingWizard({
   );
   const existingName = existingHome ? bootstrap?.initNodeName?.trim() || null : null;
   const nodeName = existingName ?? name;
+  const [avatar, setAvatar] = useState<string | null>(null);
+  /* until one is picked, the portrait rolls to the name's once typing pauses */
+  useEffect(() => {
+    if (avatar) return;
+    const to = avatarKey(nodeName);
+    const from = chosenAvatar(NAMING);
+    if (!from) return holdAvatar(NAMING, to);
+    if (from === to) return;
+    const timer = setTimeout(() => rollAvatar(NAMING, from, to), NAMING_PAUSE_MS);
+    return () => clearTimeout(timer);
+  }, [avatar, nodeName]);
   const [homeRoot, setHomeRoot] = useState<string | null>(
     actions.localServerOffers.status ? null : (bootstrap?.initToolRoot ?? null),
   );
@@ -245,6 +264,8 @@ export function OnboardingWizard({
     );
     if (!nextDeployment)
       throw new Error("The initialized node is not available in the client snapshot.");
+    if (avatar)
+      await saveNodeAvatar(changeConfig, nextDeployment, avatar).catch(() => undefined);
     const engineer = engineerPatches(nextDeployment);
     if (engineer.length) {
       await changeConfig("patchConfigComponents", {
@@ -314,6 +335,7 @@ export function OnboardingWizard({
       });
       failedPhase = "client-error";
       await actions.commitLocalServerAutoStart(requestedName);
+      await actions.enrollLocalServer();
       await actions.awaitLocalServerPairing();
       await finishProvisioning(initialized.nodeDid);
     } catch (e) {
@@ -326,7 +348,9 @@ export function OnboardingWizard({
   const enrol = async () => {
     dispatch({ type: "requesting" });
     try {
-      const request = await actions.requestStatusEnrollment(address.trim());
+      const request = candidateName.trim()
+        ? await actions.requestStatusEnrollment(address.trim(), candidateName.trim())
+        : await actions.requestStatusEnrollment(address.trim());
       setEnrollment(request);
       dispatch({ type: "requested" });
     } catch (e) {
@@ -357,7 +381,8 @@ export function OnboardingWizard({
                 : activationError
                   ? "Access is approved. The client will retry the secure connection automatically."
                   : active?.state === "approved"
-                    ? "Approval received. Finishing your secure connection…"
+                    ? (target?.chatRefusal?.detail ??
+                      "Approval received. Finishing your secure connection…")
                     : !observed
                       ? "Approval status is unavailable. Refresh to check again."
                       : active
@@ -512,8 +537,15 @@ export function OnboardingWizard({
               }
               icon={Server}
             >
-              <div className="flex items-end gap-3">
-                <NodeAvatar name={nodeName} className="mb-1 size-8 shrink-0" />
+              <div className="flex items-center gap-4">
+                <AvatarRoll
+                  rollId={NAMING}
+                  name={nodeName}
+                  avatar={avatar}
+                  onChange={setAvatar}
+                  disabled={busy}
+                  className="ring-offset-raised"
+                />
                 <div className="min-w-0 flex-1">
                   <Field
                     label="Node name"
@@ -538,6 +570,9 @@ export function OnboardingWizard({
                   </Field>
                 </div>
               </div>
+              <p className="text-xs text-muted-foreground">
+                Continuing connects this desktop and grants it access to the local node.
+              </p>
               {homeRoot ? (
                 <ManagedRuntimeAuthorityPicker
                   home={homeRoot}
@@ -616,6 +651,14 @@ export function OnboardingWizard({
                     placeholder="https://gents.example.net:8787"
                   />
                 </Field>
+                <Field label="Your name (optional)">
+                  <Input
+                    disabled={busy}
+                    value={candidateName}
+                    onChange={(event) => setCandidateName(event.target.value)}
+                  />
+                </Field>
+                <button type="submit" hidden />
                 <p className="text-xs text-muted-foreground">
                   Enter the node’s status address, reachable from this device. The
                   node’s administrator must approve this device’s access request.

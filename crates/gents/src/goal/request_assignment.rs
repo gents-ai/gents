@@ -1,5 +1,6 @@
 use super::GoalDocument;
-use crate::request_admission::verify_request_receipt_signature;
+use crate::store::identity::request_receipt::verify_request_receipt_signature;
+use gents_protocol::goal::RequestAssignmentScope;
 use gents_protocol::row::AgentRequestRow;
 
 /// Historical display uses the immutable signed request, independently of the
@@ -92,13 +93,6 @@ pub(super) fn observe_request_assignment(
     } else {
         RequestAssignmentObservation::None
     }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum RequestAssignmentScope {
-    Unassigned,
-    Unresolved { entry_doc_id: String },
-    Referenced(gents_protocol::request_input::GoalAssignmentInput),
 }
 
 fn request_assignment_scope(
@@ -258,20 +252,18 @@ pub(crate) fn latest_assignment_goals(
 }
 
 pub(crate) async fn load_request_assignment(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    access: &crate::ConfigAccess,
     request: &AgentRequestRow,
 ) -> anyhow::Result<RequestAssignmentObservation> {
-    crate::config_client::ConfigAccess::transact_local_readonly(
-        node,
-        None,
-        "goal.assignment_requests",
-        |txn| Box::pin(load_request_assignment_in_txn(txn, request)),
-    )
-    .await
+    access
+        .transact_readonly("goal.assignment_requests", |txn| {
+            Box::pin(load_request_assignment_in_txn(txn, request))
+        })
+        .await
 }
 
 pub(crate) async fn load_request_assignment_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequestRow,
 ) -> anyhow::Result<RequestAssignmentObservation> {
     let snapshot = assignment_snapshot_for_request(txn, request).await?;
@@ -279,7 +271,7 @@ pub(crate) async fn load_request_assignment_in_txn(
 }
 
 async fn assignment_snapshot_for_request(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequestRow,
 ) -> anyhow::Result<RequestAssignments> {
     use anyhow::Context;
@@ -307,6 +299,24 @@ pub(crate) struct RequestAssignments {
 }
 
 impl RequestAssignments {
+    pub(super) fn observe_physical_request(
+        &self,
+        doc: &str,
+        request_id: &str,
+    ) -> anyhow::Result<(&AgentRequestRow, RequestAssignmentObservation)> {
+        use anyhow::Context;
+        let request = &self.rows[*self
+            .index
+            .get(doc)
+            .context("Goal tool caller is absent or ambiguous in its owner/session")?];
+        anyhow::ensure!(
+            request.request_id == request_id,
+            "Goal tool caller differs from its physical request identity"
+        );
+        let (_, assignment) = self.observation(request)?;
+        Ok((request, assignment))
+    }
+
     pub(crate) fn request(&self, doc: &str) -> anyhow::Result<&AgentRequestRow> {
         use anyhow::Context;
         let row = &self.rows[*self
@@ -348,11 +358,10 @@ impl RequestAssignments {
             .doc_id
             .as_deref()
             .context("assignment request has no physical identity")?;
-        let current = self
-            .rows
-            .iter()
-            .find(|row| row.doc_id.as_deref() == Some(doc))
-            .context("assignment request is absent from its owner/session")?;
+        let current = &self.rows[*self
+            .index
+            .get(doc)
+            .context("assignment request is absent from its owner/session")?];
         anyhow::ensure!(
             current.request_id == request.request_id
                 && current.purpose
@@ -387,7 +396,7 @@ impl RequestAssignments {
 }
 
 pub(crate) async fn load_request_assignments_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     owner: &str,
     session: &str,
 ) -> anyhow::Result<RequestAssignments> {
@@ -426,7 +435,7 @@ fn request_assignments(
 
 pub(crate) struct RequestAssignmentScopes<'a, R>
 where
-    R: crate::config_client::ConfigRead,
+    R: crate::store::config_client::ConfigRead,
 {
     access: &'a R,
     requests: RequestAssignments,
@@ -436,7 +445,7 @@ where
 
 impl<R> RequestAssignmentScopes<'_, R>
 where
-    R: crate::config_client::ConfigRead,
+    R: crate::store::config_client::ConfigRead,
 {
     pub(crate) fn request(&self, doc: &str) -> anyhow::Result<&AgentRequestRow> {
         self.requests.request(doc)
@@ -517,7 +526,7 @@ pub(crate) async fn load_request_assignment_scopes<'a, R>(
     session: &str,
 ) -> anyhow::Result<RequestAssignmentScopes<'a, R>>
 where
-    R: crate::config_client::ConfigRead,
+    R: crate::store::config_client::ConfigRead,
 {
     let rows = super::request_head::load_session_requests(access, owner, session).await?;
     Ok(RequestAssignmentScopes {

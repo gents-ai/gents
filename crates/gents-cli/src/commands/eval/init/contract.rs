@@ -81,9 +81,9 @@ mod tests {
     #[test]
     fn an_example_that_invents_a_check_is_caught() {
         let registry = CheckRegistry::builtin();
-        let valid: gents::document_config::EvalCase = serde_json::from_str(EXAMPLE).unwrap();
+        let valid: gents::documents::EvalCase = serde_json::from_str(EXAMPLE).unwrap();
         assert!(case_catalog_conformance(&valid, &registry).is_empty());
-        let invented: gents::document_config::EvalCase =
+        let invented: gents::documents::EvalCase =
             serde_json::from_str(&EXAMPLE.replace("captured_rows_count", "invented_check"))
                 .unwrap();
         let violations = case_catalog_conformance(&invented, &registry);

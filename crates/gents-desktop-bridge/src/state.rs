@@ -30,6 +30,7 @@ pub struct DesktopAppState {
     pub policy: ResolvedBridgePolicy,
     pub managed_server: tokio::sync::Mutex<ManagedServerState>,
     pub pending_oauth_credentials: Arc<PendingOAuthCredentials>,
+    pub(crate) ux_watches: crate::ux_watch::UxWatchRegistry,
 }
 
 pub use crate::accounts::{CredentialSave, IssuedOAuthCredential, PendingOAuthCredentials};
@@ -37,16 +38,15 @@ pub use crate::accounts::{CredentialSave, IssuedOAuthCredential, PendingOAuthCre
 #[derive(Default)]
 pub struct ManagedServerState {
     pub pairing_task: Option<JoinHandle<()>>,
-    /// Cancels `pairing_task` before any enrollment document is authored.
-    pub pairing_cancel: Option<tokio_util::sync::CancellationToken>,
-    pub schema_observation_task: Option<JoinHandle<()>>,
+    /// Lets shutdown drain an explicit enrollment before releasing its core.
+    pub pairing_cancel: Option<Arc<tokio_util::sync::CancellationToken>>,
     pub starting: bool,
     pub last_error: Option<String>,
     /// Cancels a start that is waiting outside the lifecycle lock.
-    pub start_wait: Option<crate::tauri_commands::managed_server::StartWait>,
-    pub crash_loop: crate::tauri_commands::managed_server::CrashLoopWatch,
+    pub start_wait: Option<crate::tauri_commands::managed_server::start_wait::StartWait>,
+    pub crash_loop: crate::tauri_commands::managed_server::status::CrashLoopWatch,
     pub approval_refused: bool,
-    pub incompatible_store: Option<gents::storage_backend::IncompatibleStore>,
+    pub incompatible_store: Option<gents::store::local::storage_backend::IncompatibleStore>,
 }
 
 pub struct ProviderLoginWait {
@@ -70,7 +70,7 @@ pub struct DesktopBridge {
     /// Shared progress for an in-flight client start; waiters must not open a
     /// second node.
     pub start_inflight: Option<watch::Sender<ClientStartProgress>>,
-    pub incompatible_client_store: Option<gents::storage_backend::IncompatibleStore>,
+    pub incompatible_client_store: Option<gents::store::local::storage_backend::IncompatibleStore>,
 }
 
 impl DesktopBridge {
@@ -102,12 +102,60 @@ impl DesktopBridge {
         self.selected_nodes_by_window.contains_key(label)
     }
 
-    pub(crate) fn set_window_selected_node(&mut self, label: &str, node_did: Option<String>) {
+    /// `ClientWindowScope.commandNode`: the node a window's command acts on is
+    /// the node it names, else the calling window's own selection. Another
+    /// window's selection is never consulted, so each window keeps working
+    /// on its own node while others are open.
+    pub(crate) fn window_command_node(
+        &self,
+        label: &str,
+        explicit: Option<&str>,
+    ) -> Option<String> {
+        explicit
+            .map(str::trim)
+            .filter(|node| !node.is_empty())
+            .map(str::to_owned)
+            .or_else(|| self.selected_nodes_by_window.get(label).cloned().flatten())
+    }
+
+    pub(crate) fn window_selects_node(&self, label: &str, node_did: &str) -> bool {
+        self.selected_nodes_by_window
+            .get(label)
+            .and_then(Option::as_deref)
+            == Some(node_did)
+    }
+
+    fn set_window_selected_node(&mut self, label: &str, node_did: Option<String>) -> bool {
         let Some(selected) = self.selected_nodes_by_window.get_mut(label) else {
-            return;
+            return false;
         };
+        let changed = *selected != node_did;
         *selected = node_did;
         self.apply_window_selection();
+        changed
+    }
+
+    /// Changes a window's selected node and reports whether it changed. The
+    /// window's pack watches are cancelled first, while the old node is
+    /// still selected: a delivery holds only the watch registry's lock, so
+    /// cancelling after the write would let a watch of the old node deliver
+    /// to a window that already selects the new one (TLA `PackUxWatch`
+    /// `CancelBeforeSelect`). The caller holds the bridge lock across both.
+    pub(crate) fn select_window_node<F>(
+        &mut self,
+        label: &str,
+        node_did: Option<String>,
+        cancel_watches: F,
+    ) -> bool
+    where
+        F: FnOnce(&Self),
+    {
+        match self.selected_nodes_by_window.get(label) {
+            Some(selected) if *selected != node_did => {}
+            _ => return false,
+        }
+        cancel_watches(self);
+        self.set_window_selected_node(label, node_did)
     }
 }
 
@@ -135,7 +183,20 @@ impl DesktopAppState {
             policy,
             managed_server: tokio::sync::Mutex::new(ManagedServerState::default()),
             pending_oauth_credentials: Arc::default(),
+            ux_watches: Default::default(),
         }
+    }
+
+    /// [`DesktopBridge::window_command_node`] under the bridge lock.
+    pub(crate) fn window_command_node(
+        &self,
+        label: &str,
+        explicit: Option<&str>,
+    ) -> Option<String> {
+        self.bridge
+            .lock()
+            .expect("desktop bridge lock poisoned")
+            .window_command_node(label, explicit)
     }
 
     pub(crate) fn register_window(&self, label: &str) {
@@ -166,6 +227,9 @@ impl DesktopAppState {
                 .expect("explorer origin lock poisoned") = None;
         }
         let mut bridge = self.bridge.lock().expect("desktop bridge lock poisoned");
+        // Under the bridge lock, so a late watch command cannot register a
+        // watch between this cancellation and the selection's removal.
+        self.ux_watches.cancel_window(label);
         bridge.approvals_prompt_subscriptions.remove_window(label);
         for wait in [
             &bridge.codex_login_cancel,

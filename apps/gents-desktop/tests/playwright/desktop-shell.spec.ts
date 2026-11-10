@@ -102,6 +102,43 @@ test.describe("kit shell", () => {
       page.locator('[aria-hidden="false"] [data-testid="working-node"]'),
     ).toBeVisible();
   });
+  test("the rail flyout opens with each icon where the rail's was", async ({
+    page,
+  }) => {
+    test.skip(test.info().project.name === "chromium-narrow", "No desktop rail");
+    await gotoHarness(page);
+    const names = ["New session", "Mailbox", "Sessions", "Nodes", "Settings"];
+    const centers = (root: string) =>
+      page.locator(root).evaluate(
+        (el, names) =>
+          names.map((name) => {
+            const link = [...el.querySelectorAll("a, button")].find((candidate) =>
+              (candidate.getAttribute("aria-label") ?? candidate.textContent ?? "")
+                .trim()
+                .startsWith(name),
+            );
+            const box = link?.querySelector("svg")?.getBoundingClientRect();
+            return box ? [box.x + box.width / 2, box.y + box.height / 2] : null;
+          }),
+        names,
+      );
+    const rail = await centers("nav");
+    await page.getByRole("link", { name: /configuration/i }).focus();
+    await page.keyboard.press("Tab");
+    const panel = '[aria-hidden="false"]:has([data-testid="working-node"])';
+    await expect(page.locator(panel)).toHaveCSS("opacity", "1");
+    await expect(page.locator(panel)).toHaveCSS(
+      "transform",
+      /none|matrix\(1, 0, 0, 1, 0, 0\)/,
+    );
+    const flyout = await centers(panel);
+    names.forEach((name, at) => {
+      const [x, y] = flyout[at]!;
+      const [railX, railY] = rail[at]!;
+      expect(Math.abs(x - railX), `${name} x`).toBeLessThan(1);
+      expect(Math.abs(y - railY), `${name} y`).toBeLessThan(1);
+    });
+  });
   test("rail pointer focus does not cover a link before mouseup", async ({ page }) => {
     test.skip(test.info().project.name === "chromium-narrow", "No desktop rail");
     await gotoHarness(page);
@@ -231,7 +268,7 @@ test.describe("kit shell", () => {
     await gotoHarness(page);
     await page.getByRole("link", { name: "Nodes" }).first().click();
     const sync = page.getByRole("button", { name: /Sync healthy/ });
-    const syncDialog = page.getByRole("dialog", { name: "Database sync details" });
+    const syncDialog = page.getByRole("dialog", { name: "Sync details" });
 
     await sync.click();
     await expect(syncDialog).toBeVisible();
@@ -249,7 +286,7 @@ test.describe("kit shell", () => {
     await gotoHarness(page);
     const filters = page.getByLabel("Session filters");
     const agent = page.getByRole("dialog", { name: "Filter by agent" });
-    const sync = page.getByRole("dialog", { name: "Database sync details" });
+    const sync = page.getByRole("dialog", { name: "Sync details" });
 
     await startDialogObservation(page);
     await filters.getByRole("combobox", { name: "Agent" }).click();
@@ -273,7 +310,7 @@ test.describe("kit shell", () => {
       .first()
       .click();
 
-    await expect(page.getByRole("textbox", { name: "Tags" })).toBeVisible();
+    await expect(page.getByTestId("agent-header")).toBeVisible();
     await page.getByRole("button", { name: "Delete agent" }).click();
     const confirm = page.getByRole("textbox", {
       name: "Type Ops to confirm",
@@ -425,9 +462,7 @@ test.describe("kit shell", () => {
       .evaluate((element) => getComputedStyle(element).animationDuration);
     expect(closingDuration).toBe("0.6s");
     await page.getByRole("button", { name: /Sync healthy/ }).click();
-    await expect(
-      page.getByRole("dialog", { name: "Database sync details" }),
-    ).toBeVisible();
+    await expect(page.getByRole("dialog", { name: "Sync details" })).toBeVisible();
     await page.waitForTimeout(200);
 
     const observed = await finishDialogObservation(page);
@@ -487,10 +522,10 @@ test.describe("kit shell", () => {
     await startDialogObservation(page);
     await page.getByRole("button", { name: "Menu", exact: true }).click();
     await expect(
-      page.getByRole("dialog", { name: "Navigation", exact: true }),
+      page.getByRole("dialog", { name: "Sidebar", exact: true }),
     ).toBeVisible();
     await page
-      .getByRole("dialog", { name: "Navigation", exact: true })
+      .getByRole("dialog", { name: "Sidebar", exact: true })
       .getByRole("button", { name: "Search", exact: true })
       .click();
     await expect(
@@ -534,8 +569,11 @@ test.describe("kit shell", () => {
     await page.getByRole("link", { name: "Mailbox" }).click();
     await expect(page.getByTestId("mailbox-screen")).toBeVisible();
     await expectNoPageHorizontalOverflow(page);
+    await page.getByTestId("mailbox-item").getByRole("button").first().click();
+    await expect(page.getByTestId("mailbox-dialog")).toBeVisible();
+    await expectNoPageHorizontalOverflow(page);
 
-    const payload = page.getByTestId("mailbox-screen").locator("pre");
+    const payload = page.getByTestId("mailbox-dialog").locator("pre");
     await expect(payload).toBeVisible();
     const widths = await payload.evaluate((element) => ({
       lineWidth: element.scrollWidth,

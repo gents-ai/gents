@@ -4,7 +4,7 @@ import { Square } from "lucide-react";
 import type { CausedRequestView } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import { Hint } from "./Hint";
-import { isLive } from "@/lib/live";
+import { requestIsLive } from "./workers";
 
 export type WorkerActions = {
   interrupt: (request: CausedRequestView) => void;
@@ -35,6 +35,6 @@ export function RequestStop({
   request: CausedRequestView | null;
 }) {
   const actions = useContext(WorkerActionsContext);
-  if (!actions || !request || !isLive(request.lifecycleState)) return null;
+  if (!actions || !request || !requestIsLive(request.lifecycleState)) return null;
   return <StopButton name={name} onStop={() => actions.interrupt(request)} />;
 }

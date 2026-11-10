@@ -13,9 +13,9 @@ use axum::http::header::AUTHORIZATION;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use axum::Router;
+use axum::{Json, Router};
 use futures_util::{SinkExt, StreamExt};
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents_codex_protocol as codex;
 use subtle::ConstantTimeEq;
 use tokio::net::TcpListener;
@@ -54,11 +54,11 @@ mod state;
 
 #[allow(unused_imports)]
 pub(crate) use server::{
-    bind_codex_shim, resolve_codex_shim_agent_id, BoundCodexShim, CodexShimBindArgs,
-    CodexShimBindError,
+    bind_codex_shim, resolve_codex_shim_agent_did, BoundCodexShim, CodexShimBindArgs,
+    CodexShimBindError, RuntimeIdentity,
 };
 #[cfg(test)]
-use server::{request_is_authorized, validate_bind_security};
+use server::{default_thread_cwd, request_is_authorized, validate_bind_security};
 #[allow(unused_imports)]
 pub(crate) use state::{CodexSidecar, DEFAULT_MEMORY_MODE};
 use state::{ConnectionState, Outbound, ShimState, TurnStreamControl};

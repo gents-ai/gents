@@ -3,10 +3,14 @@ import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { createStore, type StoreApi } from "zustand/vanilla";
 
-import type {
-  DesktopSessionSnapshot,
-  RenderedTimelineItem,
-  RenderedToolCallView,
+import {
+  foldSessionGoalRead,
+  sessionGoalReadOf,
+  type DesktopSessionSnapshot,
+  type HeldSessionGoal,
+  type RenderedTimelineItem,
+  type RenderedToolCallView,
+  type SessionGoalRead,
 } from "@source-inc/gents-desktop-client";
 import type { SessionLoadState } from "../lib/loadingStatus";
 
@@ -14,6 +18,8 @@ export type SessionFacts = {
   rowsRevision: number;
   toolsRevision: number;
   tools: readonly RenderedToolCallView[];
+  /* each tool's message number, by its item key */
+  toolMessages: ReadonlyMap<string, number>;
   userRequestIds: ReadonlySet<string>;
 };
 
@@ -21,6 +27,9 @@ export type SessionState = {
   session: DesktopSessionSnapshot | null;
   facts: SessionFacts;
   load: SessionLoadState;
+  /* the fold of the selected session's Goal reads (Lean
+     `SessionObservation.fold`); only a read writes it */
+  goal: HeldSessionGoal | null;
 };
 
 export type SessionStore = StoreApi<SessionState>;
@@ -28,10 +37,12 @@ export type SessionStore = StoreApi<SessionState>;
 const NO_ITEMS: readonly RenderedTimelineItem[] = [];
 const NO_TOOLS: readonly RenderedToolCallView[] = [];
 const NO_REQUESTS: ReadonlySet<string> = new Set();
+const NO_MESSAGES: ReadonlyMap<string, number> = new Map();
 const NO_FACTS: SessionFacts = {
   rowsRevision: 0,
   toolsRevision: 0,
   tools: NO_TOOLS,
+  toolMessages: NO_MESSAGES,
   userRequestIds: NO_REQUESTS,
 };
 
@@ -41,6 +52,7 @@ export const IDLE_LOAD: SessionLoadState = {
   nodeDid: null,
   found: null,
   error: null,
+  reread: false,
 };
 
 export function createSessionStore(session: DesktopSessionSnapshot | null = null) {
@@ -48,8 +60,12 @@ export function createSessionStore(session: DesktopSessionSnapshot | null = null
     session: null,
     facts: NO_FACTS,
     load: IDLE_LOAD,
+    goal: null,
   }));
-  if (session) writeSession(store, session);
+  if (session) {
+    writeSession(store, session);
+    writeSessionGoalRead(store, sessionGoalReadOf(session));
+  }
   return store;
 }
 
@@ -75,8 +91,15 @@ export function writeSession(
   store.setState((state) => {
     const session = typeof next === "function" ? next(state.session) : next;
     if (session === state.session) return state;
-    return { ...state, session, facts: factsOf(state, session) };
+    /* dropping the session (deselected, or a refused read) drops its Goal */
+    const goal = session ? state.goal : null;
+    return { ...state, session, facts: factsOf(state, session), goal };
   });
+}
+
+/** Folds one Goal read of the selected session into what the store holds. */
+export function writeSessionGoalRead(store: SessionStore, read: SessionGoalRead) {
+  store.setState((state) => ({ goal: foldSessionGoalRead(state.goal, read) }));
 }
 
 export function writeSessionLoad(store: SessionStore, load: SessionLoadState) {
@@ -132,6 +155,15 @@ function factsOf(
     tools: toolsSame
       ? facts.tools
       : after.flatMap((item) => (item.kind === "toolGroup" ? item.tools : [])),
+    toolMessages: toolsSame
+      ? facts.toolMessages
+      : new Map(
+          after.flatMap((item) =>
+            item.kind === "toolGroup" && item.messageSequence != null
+              ? item.tools.map((tool) => [tool.itemKey, item.messageSequence!] as const)
+              : [],
+          ),
+        ),
     userRequestIds,
   };
 }
@@ -147,6 +179,7 @@ export function holdsRequest(
     latest === sent.requestId ||
     state.facts.userRequestIds.has(sent.requestId) ||
     session.queuedTurns.some((turn) => turn.requestId === sent.requestId) ||
+    (session.pendingQueue ?? []).some((entry) => entry.requestId === sent.requestId) ||
     session.foldedInputs.some((folded) => folded.requestId === sent.requestId) ||
     (latest !== null && latest !== sent.latestWhenSent)
   );
@@ -156,7 +189,7 @@ export type SessionHeader = Pick<
   DesktopSessionSnapshot,
   | "sessionId"
   | "nodeDid"
-  | "agentId"
+  | "agentDid"
   | "turnState"
   | "inferenceActivity"
   | "latestRequestId"
@@ -164,7 +197,6 @@ export type SessionHeader = Pick<
   | "queuedTurns"
   | "pendingQueue"
   | "foldedInputs"
-  | "hydration"
 >;
 
 export function headerOf(session: DesktopSessionSnapshot | null): SessionHeader | null {
@@ -172,7 +204,7 @@ export function headerOf(session: DesktopSessionSnapshot | null): SessionHeader 
   return {
     sessionId: session.sessionId,
     nodeDid: session.nodeDid,
-    agentId: session.agentId,
+    agentDid: session.agentDid,
     turnState: session.turnState,
     inferenceActivity: session.inferenceActivity,
     latestRequestId: session.latestRequestId,
@@ -180,7 +212,6 @@ export function headerOf(session: DesktopSessionSnapshot | null): SessionHeader 
     queuedTurns: session.queuedTurns,
     pendingQueue: session.pendingQueue,
     foldedInputs: session.foldedInputs,
-    hydration: session.hydration,
   };
 }
 

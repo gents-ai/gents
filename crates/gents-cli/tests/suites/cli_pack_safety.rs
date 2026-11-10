@@ -3,7 +3,7 @@ use crate::support::*;
 use std::path::Path;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use axum::{routing::get, Json, Router};
 use serde_json::{json, Value};
 
@@ -35,7 +35,7 @@ fn document_pack(
         config["tools"][0]["integrations"] = json!({"plugins": [reference]});
     }
     std::fs::write(root.join("pack_config.json"), serde_json::to_vec(&config)?)?;
-    Ok(gents::pack_archive::pack_dir(root)?.0)
+    Ok(gents::pack::archive::pack_dir(root)?.0)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -64,19 +64,24 @@ async fn remote_pack_install_update_and_diagnose_keep_plugin_failures_isolated()
     let root = temp.path().join("pack");
     document_pack(&root, "1.0.0", None)?;
     let root_arg = root.to_str().unwrap();
-    run_cli_json(&home, &["pack", "install", root_arg, "--graphql", &graphql])?;
+    run_cli_json(
+        &home,
+        &["config", "pack", "install", root_arg, "--graphql", &graphql],
+    )?;
     let query = "{ Tools { tools_id integrations display_name } PackInstallation { coordinate version digest } }";
     let before = graphql_query(&graphql, query).await?;
 
     let bytes = document_pack(&root, "1.1.0", Some(("private/missing", None)))?;
-    let error =
-        run_cli_failure_stderr(&home, &["pack", "install", root_arg, "--graphql", &graphql])?;
+    let error = run_cli_failure_stderr(
+        &home,
+        &["config", "pack", "install", root_arg, "--graphql", &graphql],
+    )?;
     assert!(
         error.contains("private/missing") && error.contains("neither the pack"),
         "{error}"
     );
     assert!(
-        error.contains("gents pack install <namespace>/<pack>"),
+        error.contains("gents config pack install <namespace>/<pack>"),
         "{error}"
     );
     assert_eq!(graphql_query(&graphql, query).await?, before);
@@ -110,6 +115,7 @@ async fn remote_pack_install_update_and_diagnose_keep_plugin_failures_isolated()
     let failed = run_cli_failure_stdout_json(
         &home,
         &[
+            "config",
             "pack",
             "update",
             "gents/safety",
@@ -132,14 +138,20 @@ async fn remote_pack_install_update_and_diagnose_keep_plugin_failures_isolated()
     // remotely install an exact pin through the runtime's guarded graph owner.
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../gents/tests/fixtures/packs/job_plugin_fixture");
-    run_cli_json(&home, &["pack", "install", fixture.to_str().unwrap()])?;
+    run_cli_json(
+        &home,
+        &["config", "pack", "install", fixture.to_str().unwrap()],
+    )?;
     let plugin = gents::plugin::store::read_record(&home.join(".gents"), "fixture", "job_fixture")?;
     document_pack(
         &root,
         "1.2.0",
         Some(("fixture/job_fixture", Some(&plugin.digest))),
     )?;
-    run_cli_json(&home, &["pack", "install", root_arg, "--graphql", &graphql])?;
+    run_cli_json(
+        &home,
+        &["config", "pack", "install", root_arg, "--graphql", &graphql],
+    )?;
     let installed = graphql_query(&graphql, query).await?;
     document_pack(
         &root,
@@ -149,32 +161,101 @@ async fn remote_pack_install_update_and_diagnose_keep_plugin_failures_isolated()
             Some("sha256:0000000000000000000000000000000000000000000000000000000000000000"),
         )),
     )?;
-    let wrong_pin =
-        run_cli_failure_stderr(&home, &["pack", "install", root_arg, "--graphql", &graphql])?;
+    let wrong_pin = run_cli_failure_stderr(
+        &home,
+        &["config", "pack", "install", root_arg, "--graphql", &graphql],
+    )?;
     assert!(
         wrong_pin.contains("pins plugin fixture/job_fixture"),
         "{wrong_pin}"
     );
     assert_eq!(graphql_query(&graphql, query).await?, installed);
 
-    let owner_escaped = escape_graphql_string(&owner);
-    let profile = escape_graphql_string(
-        &gents::document_config::default_inference_profile_id_for_node(&owner),
-    );
-    graphql_query(&graphql, &format!(r#"mutation {{
-        create_Tools(input: {{tools_id: "broken-tools", node_did: "{owner_escaped}", integrations: {{plugins: [{{plugin: "private/missing"}}]}}}}) {{_docID}}
-        create_AgentContext(input: {{context_id: "broken-context", node_did: "{owner_escaped}", tools_id: "broken-tools"}}) {{_docID}}
-        create_Agent(input: {{agent_id: "broken-agent", node_did: "{owner_escaped}", context_id: "broken-context", inference_profile_id: "{profile}", enabled: true}}) {{_docID}}
-    }}"#)).await?;
+    // The User creates a real managed Agent, then points its own Tools at a
+    // plugin the node does not hold; only that Agent's tool surface fails.
+    let default_agent = agent_did_from_init(&init)?;
+    let profile = init["inference_profile_id"]
+        .as_str()
+        .context("init output missing inference_profile_id")?
+        .to_owned();
+    let created = run_cli_json(
+        &home,
+        &[
+            "config",
+            "agent",
+            "create",
+            "--graphql",
+            &graphql,
+            "--node-did",
+            &owner,
+            "--display-name",
+            "Broken Agent",
+            "--clone-from",
+            &default_agent,
+            "--profile-id",
+            &profile,
+        ],
+    )?;
+    let broken_agent = created["agent_did"]
+        .as_str()
+        .context("created Agent DID")?
+        .to_owned();
+    let selection = graphql_query(
+        &graphql,
+        &format!(
+            r#"{{ Agent(filter: {{agent_did: {{_eq: "{}"}}}}) {{ context_id }} }}"#,
+            escape_graphql_string(&broken_agent)
+        ),
+    )
+    .await?;
+    let context_id = selection["data"]["Agent"][0]["context_id"]
+        .as_str()
+        .context("created Agent context")?
+        .to_owned();
+    let context = graphql_query(
+        &graphql,
+        &format!(
+            r#"{{ AgentContext(filter: {{context_id: {{_eq: "{}"}}}}) {{ tools_id }} }}"#,
+            escape_graphql_string(&context_id)
+        ),
+    )
+    .await?;
+    let tools_id = context["data"]["AgentContext"][0]["tools_id"]
+        .as_str()
+        .context("created Agent Tools")?
+        .to_owned();
+    let mut tools = run_cli_json(
+        &home,
+        &["config", "tools", "show", &tools_id, "--graphql", &graphql],
+    )?;
+    tools
+        .as_object_mut()
+        .context("Tools document")?
+        .remove("_docID");
+    tools["integrations"] = json!({"plugins": [{"plugin": "private/missing"}]});
+    let tools_file = temp.path().join("broken-tools.json");
+    std::fs::write(&tools_file, serde_json::to_vec(&tools)?)?;
+    run_cli_json(
+        &home,
+        &[
+            "config",
+            "tools",
+            "set",
+            "--file",
+            tools_file.to_str().unwrap(),
+            "--graphql",
+            &graphql,
+        ],
+    )?;
     wait_for_runtime_quiescence(&graphql, &owner, 2, Duration::from_millis(200)).await?;
-    let diagnosed = run_cli_json(&home, &["diagnose", "--graphql", &graphql])?;
+    let diagnosed = run_cli_json(&home, &["runtime", "diagnose", "--graphql", &graphql])?;
     let unavailable = diagnosed
         .pointer("/checks/runtime_node_readiness/unavailable_agents")
         .and_then(Value::as_array)
         .unwrap();
     let broken = unavailable
         .iter()
-        .find(|entry| entry["agent_id"] == "broken-agent")
+        .find(|entry| entry["agent_did"] == broken_agent.as_str())
         .unwrap();
     assert_eq!(broken["reason"], "tool_surface_unavailable");
     assert_eq!(
@@ -196,4 +277,156 @@ async fn remote_pack_install_update_and_diagnose_keep_plugin_failures_isolated()
         Some(&json!("ready"))
     );
     Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plugin_only_pack_installs_through_reviewed_user_session() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let home = temp.path().join("client");
+    std::fs::create_dir_all(&home)?;
+    let endpoint = MockModelEndpoint::start("plugin-session")?;
+    let user_home = temp.path().join("user");
+    let user_home_arg = user_home.to_string_lossy().into_owned();
+    let init_user_home = user_home_arg.clone();
+    let init_home = home.clone();
+    let inference_url = endpoint.endpoint().to_owned();
+    let init = tokio::task::spawn_blocking(move || {
+        run_cli_json_with_env(
+            &init_home,
+            &[
+                "init",
+                "--store-key-custody",
+                "file",
+                "--node-name",
+                "plugin-session",
+                "--model-name",
+                "plugin-session",
+                "--inference-url",
+                &inference_url,
+            ],
+            &[("GENTS_DESKTOP_HOME", &init_user_home)],
+        )
+    })
+    .await??;
+    let owner = node_did_from_init(&init)?;
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let mut server =
+        spawn_server_with_env(&home, port, &[], &[("GENTS_DESKTOP_HOME", &user_home_arg)])?;
+    wait_for_port(port, &mut server)?;
+    wait_for_runtime_ready(&graphql, &owner, Duration::from_secs(30)).await?;
+
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../gents/tests/fixtures/packs/job_plugin_fixture");
+    let plugin_pack = temp.path().join("plugin-only");
+    let fixture_copy = fixture.clone();
+    let plugin_copy = plugin_pack.clone();
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        copy_dir_all(&fixture_copy, &plugin_copy)?;
+        let manifest_path = plugin_copy.join("manifest.json");
+        let mut manifest: Value = serde_json::from_slice(&std::fs::read(&manifest_path)?)?;
+        manifest["kind"] = "plugins".into();
+        manifest.as_object_mut().unwrap().remove("config");
+        manifest["schemas"] = json!([]);
+        manifest["plugins"][0]["data"]["ops"] = json!(["query", "insert", "delete"]);
+        std::fs::write(manifest_path, serde_json::to_vec_pretty(&manifest)?)?;
+        Ok(())
+    })
+    .await??;
+    let pack_arg = plugin_pack.to_string_lossy().into_owned();
+    let node_home = home.join(".gents").to_string_lossy().into_owned();
+    let client_home = home.clone();
+    let install_user_home = user_home_arg.clone();
+    let outcome = tokio::task::spawn_blocking(move || {
+        run_cli_json_with_env(
+            &client_home,
+            &["config", "pack", "install", &pack_arg, "--home", &node_home],
+            &[("GENTS_DESKTOP_HOME", &install_user_home)],
+        )
+    })
+    .await?;
+    let snapshot: Value = gents_lean_contract::load_contract_snapshot()?;
+    let expected = snapshot["hosted_plugin_cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["reviewed"] == true && case["plan"] == true && case["native"] == true)
+        .unwrap()["allowed"]
+        .as_bool()
+        .unwrap();
+    assert_eq!(outcome.is_ok(), expected);
+    let outcome = outcome?;
+    assert_eq!(outcome["apply"]["plugins"][0]["name"], "job_fixture");
+    assert!(
+        outcome["schemas"].is_null(),
+        "plugin-only installation must not install schemas"
+    );
+    let installed =
+        gents::plugin::store::read_record(&home.join(".gents"), "fixture", "job_fixture")?;
+    assert!(installed
+        .declaration
+        .data
+        .unwrap()
+        .ops
+        .iter()
+        .any(|op| op == "delete"));
+    use gents::NodeIdentity as _;
+    let user = gents_desktop_core::client::PrincipalIdentity::load_existing(
+        &gents_desktop_core::client::DesktopPaths::from_root(user_home.join("cli")),
+    )?;
+    anyhow::ensure!(
+        user.did() != owner,
+        "client must use its held User identity"
+    );
+    let access = gents::ConfigAccess::Graphql(
+        gents::store::config_client::GraphqlEndpoint::as_principal(&graphql, user.did())
+            .with_client_signing_capability(user.client_signing_capability()?)?,
+    );
+    let graph = access
+        .execute("{ PackInstallation { coordinate plugins plugin_store } }")
+        .await?;
+    assert!(graph.to_string().contains("fixture/job_plugin_fixture"));
+    Ok(())
+}
+
+/// The hosted install route previews with the runtime's own environment; a
+/// preview it answers names that environment's variables without their values.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hosted_pack_install_preview_names_variables_without_their_values() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let home = temp.path().join("home");
+    std::fs::create_dir_all(&home)?;
+    let endpoint = MockModelEndpoint::start("pack-preview")?;
+    let init = run_init_json(
+        &home,
+        &[
+            "--node-name",
+            "pack-preview",
+            "--model-name",
+            "pack-preview",
+            "--inference-url",
+            endpoint.endpoint(),
+        ],
+    )?;
+    let owner = node_did_from_init(&init)?;
+    let secret = "hosted-preview-secret-51be0d";
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let mut server = spawn_server_with_env(&home, port, &[], &[("PACK_PREVIEW_SECRET", secret)])?;
+    wait_for_port(port, &mut server)?;
+    wait_for_runtime_ready(&graphql, &owner, Duration::from_secs(30)).await?;
+    let pack = documents_fixture_with_secret_variable(temp.path())?;
+    let preview = run_cli_json(
+        &home,
+        &[
+            "config",
+            "pack",
+            "install",
+            pack.to_str().context("pack path")?,
+            "--graphql",
+            &graphql,
+            "--preview",
+        ],
+    )?;
+    assert_preview_hides_the_secret(&preview, secret)
 }

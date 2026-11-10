@@ -17,13 +17,23 @@ export function Mark({ className }: { className?: string }) {
   );
 }
 
-export function MarkLink({ className }: { className?: string }) {
+export function MarkLink({
+  className,
+  current = false,
+}: {
+  className?: string;
+  /** the Nodes page, where the mark leads, is open: ringed as the rail's
+      node is on its own pages */
+  current?: boolean;
+}) {
   return (
     <a
       href={href({ name: "agents" })}
       aria-label="Nodes"
+      aria-current={current ? "page" : undefined}
       className={cn(
-        "grid size-7 shrink-0 place-items-center rounded-md bg-ink text-background",
+        "grid size-7 shrink-0 place-items-center rounded-md bg-ink text-background ring-offset-2 ring-offset-background transition-shadow",
+        current && "ring-2 ring-ink",
         className,
       )}
     >

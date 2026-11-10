@@ -73,6 +73,11 @@ def step? (s : State) : Action → Option State
       | .retracted .contextOverflow _ _ =>
           if ¬ s.compactUsed then some { s with phase := .compacting }
           else some { s with phase := .exhausted }
+      | .retracted .accountLimited _ _ =>
+          if s.accountUsed < s.budget.accountHops then
+            some { s with phase := .issuing, accountUsed := s.accountUsed + 1,
+                          attempt := s.attempt + 1 }
+          else some { s with phase := .exhausted }
       | .retracted .permanent _ _ => some { s with phase := .failedPermanent }
       | _ => none
   | .wake observedAt =>

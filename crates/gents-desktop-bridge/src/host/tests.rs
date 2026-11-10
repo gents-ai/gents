@@ -53,8 +53,8 @@ async fn two_attachments_share_a_core_and_detaching_does_not_close_it() {
             assert_eq!(response["id"], 1);
             assert!(response["error"].is_null(), "{response}");
             assert_eq!(
-                response["result"]["client"]["localPeerId"],
-                core.local_peer_id()
+                response["result"]["client"]["clientDid"],
+                core.node_identity().did()
             );
             assert_eq!(response["result"]["bootstrap"]["desktopHome"], "");
             break;
@@ -262,7 +262,6 @@ async fn request_retry_reaches_the_existing_parent_owner() {
                 request_id: "missing-parent".into(),
                 node_did: "node".into(),
             },
-            &super::approvals::AttachmentApprovals::default(),
             CancellationToken::new(),
         )
         .await
@@ -316,7 +315,6 @@ async fn provider_usage_read_rejects_an_unconfigured_runtime() {
                     provider: None,
                 },
             },
-            &super::approvals::AttachmentApprovals::default(),
             CancellationToken::new(),
         )
         .await
@@ -328,7 +326,7 @@ async fn provider_usage_read_rejects_an_unconfigured_runtime() {
 #[test]
 fn agent_model_selection_is_scoped_and_not_cancellable() {
     let mut request = json!({
-        "nodeDid":"did:fixture", "agentId":"agent", "backendId":"backend",
+        "nodeDid":"did:fixture", "agentDid":"agent", "backendId":"backend",
         "modelName":"model", "reasoningEffort":"high", "serviceTier":"fast"
     });
     let command: protocol::ClientCommand = serde_json::from_value(json!({
@@ -352,7 +350,6 @@ async fn inference_setup_state_rejects_an_unconfigured_runtime() {
             protocol::ClientCommand::InferenceSetupState {
                 node_did: "did:unconfigured".into(),
             },
-            &super::approvals::AttachmentApprovals::default(),
             CancellationToken::new(),
         )
         .await
@@ -371,7 +368,7 @@ async fn inference_settings_read_survives_a_concurrent_projection_replacement() 
     let home = directory.path().join("runtime");
     std::fs::create_dir_all(&home).unwrap();
     let key_path = home.join("node.key");
-    let identity = gents::identity::load_or_create_file_identity(&key_path).unwrap();
+    let identity = gents::store::identity::load_or_create_file_identity(&key_path).unwrap();
     let did = identity.did().unwrap().to_string();
     std::fs::write(
         home.join("init.json"),
@@ -400,7 +397,7 @@ async fn inference_settings_read_survives_a_concurrent_projection_replacement() 
         "inference_sampling":[], "inference_execution":[], "tasks":[],
         "schedules":[], "triggers":[], "skills":[], "compactions":[],
         "tool_service_registries":[], "event_sources":[], "agent_targets":[],
-        "datastore_tool_surfaces":[], "chain_key_bindings":[], "sessions":[], "requests":[]
+        "datastore_tool_surfaces":[], "sessions":[], "requests":[], "backend_observations":[]
     }});
     let store = core.store().clone();
     wiremock::Mock::given(wiremock::matchers::method("POST"))
@@ -416,7 +413,6 @@ async fn inference_settings_read_survives_a_concurrent_projection_replacement() 
             protocol::ClientCommand::InferenceSetupState {
                 node_did: did.clone(),
             },
-            &super::approvals::AttachmentApprovals::default(),
             CancellationToken::new(),
         )
         .await;
@@ -447,7 +443,7 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
     let home = directory.path().join("runtime");
     std::fs::create_dir_all(&home).unwrap();
     let key_path = home.join("node.key");
-    let identity = gents::identity::load_or_create_file_identity(&key_path).unwrap();
+    let identity = gents::store::identity::load_or_create_file_identity(&key_path).unwrap();
     let did = identity.did().unwrap().to_string();
     std::fs::write(
         home.join("init.json"),
@@ -472,15 +468,13 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
     )
     .await
     .unwrap();
-    assert!(!gents::identity::can_mint_defradb_bearer(&did));
+    assert!(!gents::store::identity::can_mint_defradb_bearer(&did));
     let host = ClientHost::new(core.clone());
-    let approvals = super::approvals::AttachmentApprovals::default();
     assert_eq!(
         host.execute(
             protocol::ClientCommand::RuntimeIsLocal {
                 node_did: did.clone()
             },
-            &approvals,
             CancellationToken::new(),
         )
         .await
@@ -489,34 +483,39 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
     );
     host.execute(
         protocol::ClientCommand::Snapshot {},
-        &approvals,
         CancellationToken::new(),
     )
     .await
     .unwrap();
-    let _ = host
-        .execute(
-            protocol::ClientCommand::AccountsList {
-                request: crate::accounts::ProviderAccountsRequest {
-                    node_did: did.clone(),
-                },
-            },
-            &approvals,
-            CancellationToken::new(),
-        )
-        .await;
     let _ = core
         .session_goal_observation(&did, "unavailable-session")
         .await;
     let _ = core
         .pending_user_queue_projection(&did, "unavailable-session", &[])
         .await;
-    assert!(!gents::identity::can_mint_defradb_bearer(&did));
+    assert!(!gents::store::identity::can_mint_defradb_bearer(&did));
     let requests = server.received_requests().await.unwrap();
     assert!(!requests.is_empty());
-    assert!(requests
-        .iter()
-        .all(|request| !request.headers.contains_key("authorization")));
+    // Passive reads are the User's: any bearer they carry is minted by the
+    // desktop's client key, never by the locked runtime identity.
+    let client = core.node_identity().did().to_owned();
+    for request in &requests {
+        let Some(authorization) = request.headers.get("authorization") else {
+            continue;
+        };
+        use base64::Engine as _;
+        let token = authorization
+            .to_str()
+            .unwrap()
+            .strip_prefix("Bearer ")
+            .expect("a bearer authorization");
+        let claims = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(token.split('.').nth(1).expect("a JWT payload"))
+            .unwrap();
+        let claims = String::from_utf8(claims).unwrap();
+        assert!(claims.contains(&client), "{claims}");
+        assert!(!claims.contains(&did), "{claims}");
+    }
     let settings = gents_desktop_core::inference::InferenceSetupState::project(
         &gents_desktop_core::client::ClientStore::default(),
         &did,
@@ -540,13 +539,12 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
             protocol::ClientCommand::InferenceSetupState {
                 node_did: did.clone(),
             },
-            &approvals,
             CancellationToken::new(),
         )
         .await
         .unwrap();
     assert_eq!(settings["nodeDid"], did);
-    assert!(!gents::identity::can_mint_defradb_bearer(&did));
+    assert!(!gents::store::identity::can_mint_defradb_bearer(&did));
     let requests = server.received_requests().await.unwrap();
     let settings_read = requests
         .iter()
@@ -564,74 +562,17 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
     core.shutdown().await.unwrap();
 }
 
-#[test]
-fn workspace_permissions_reads_cannot_supply_an_identity_or_mutate_the_selection() {
-    let mut request = json!({
-        "nodeDid": "did:key:runtime", "agentId": "engineer", "workspacePath": "/project"
-    });
-    let decode = |request: Value| {
-        serde_json::from_value::<protocol::ClientCommand>(json!({
-            "name": "client_workspace_permissions", "args": {"request": request}
-        }))
-    };
-    assert!(decode(request.clone()).unwrap().is_cancellable());
-    for field in ["requesterDid", "mode", "revision", "home", "endpoint"] {
-        request[field] = "untrusted".into();
-        assert!(decode(request.clone()).is_err(), "accepted {field}");
-        request.as_object_mut().unwrap().remove(field);
-    }
-    for field in ["nodeDid", "agentId", "workspacePath"] {
-        let mut incomplete = request.clone();
-        incomplete.as_object_mut().unwrap().remove(field);
-        assert!(decode(incomplete).is_err(), "missing {field}");
-    }
-}
-
-#[test]
-fn forgetting_commands_is_scoped_and_drains_the_native_write() {
-    let request = json!({
-        "scope":{"nodeDid":"runtime","agentId":"agent","workspacePath":"/project"},
-        "expectedRevision":"2","expectedWorkspacePath":"/project"
-    });
-    let decode = |request: Value| {
-        serde_json::from_value::<protocol::ClientCommand>(json!({
-            "name":"client_workspace_permissions_forget_commands","args":{"request":request}
-        }))
-    };
-    assert!(!decode(request.clone()).unwrap().is_cancellable());
-    for field in ["requesterDid", "home", "mode", "taskId"] {
-        let mut invalid = request.clone();
-        invalid[field] = "untrusted".into();
-        assert!(decode(invalid).is_err(), "accepted {field}");
-    }
-}
-
-#[test]
-fn workspace_permission_saves_are_strict_and_finish_submitted_mutations() {
-    let request = json!({
-        "scope":{"nodeDid":"runtime","agentId":"agent","workspacePath":"/project"},
-        "expectedRevision":"0","expectedWorkspacePath":"/project","mode":"autoReview"
-    });
-    let decode = |request: Value| {
-        serde_json::from_value::<protocol::ClientCommand>(json!({
-            "name":"client_workspace_permissions_save","args":{"request":request}
-        }))
-    };
-    assert!(!decode(request.clone()).unwrap().is_cancellable());
-    let mut invalid = request;
-    invalid["taskId"] = "another-task".into();
-    assert!(decode(invalid).is_err());
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn session_provenance_read_reaches_the_existing_lineage_owner() {
-    let (core, _directory, parent_doc_id) = crate::tests::support::seed_provenance_fixture().await;
+    let fixture = crate::tests::support::provenance_fixture().await;
+    let core = fixture.desktop.core.clone();
+    let parent_doc_id = fixture.parent_doc.clone();
     let host = Arc::new(ClientHost::new(core.clone()));
     let wire_command = json!({
         "name": "desktop_session_provenance", "args": { "request": {
-            "nodeDid": crate::tests::support::OPERATOR,
+            "nodeDid": fixture.desktop.node_did(),
             "sessionId": "sess_parent",
-            "requesterDid": crate::tests::support::OPERATOR
+            "requesterDid": fixture.desktop.user_did()
         }}
     });
     let command: protocol::ClientCommand = serde_json::from_value(wire_command.clone()).unwrap();
@@ -678,15 +619,17 @@ async fn session_provenance_read_reaches_the_existing_lineage_owner() {
     .unwrap();
     assert_eq!(observed["sessionId"], "sess_parent");
     let started = observed["started"].as_array().unwrap();
-    assert_eq!(started.len(), 2);
+    assert_eq!(started.len(), 1);
     assert!(started
         .iter()
         .all(|link| link["causeRequestDocId"] == parent_doc_id));
-    assert!(started.iter().any(|link| link["sessionId"] == "sess_child"));
-    assert!(started.iter().any(|link| link["sessionId"] == "sess_peer"));
+    assert!(started
+        .iter()
+        .any(|link| link["sessionId"] == fixture.child_session.as_str()));
     drop(client);
     task.await.unwrap().unwrap();
-    core.shutdown().await.unwrap();
+    drop(core);
+    fixture.shutdown().await;
 }
 
 #[tokio::test]
@@ -739,8 +682,8 @@ async fn retirement_requires_the_current_installation_build_and_never_retires_an
             if response["kind"] == "response" && response["id"] == 2 {
                 assert!(response["error"].is_null(), "{response}");
                 assert_eq!(
-                    response["result"]["client"]["localPeerId"],
-                    core.local_peer_id()
+                    response["result"]["client"]["clientDid"],
+                    core.node_identity().did()
                 );
                 break;
             }
@@ -861,4 +804,26 @@ fn image_attachment_read_commands_keep_scope_index_and_cancellation() {
         json!({"name":"desktop_request_attachments", "args": negative})
     )
     .is_err());
+}
+
+#[test]
+fn local_enrollment_is_a_distinct_explicit_host_command() {
+    let args = json!({"nodeHome": "/runtime"});
+    let connect: protocol::ClientCommand = serde_json::from_value(json!({
+        "name": "client_connect_local", "args": args,
+    }))
+    .unwrap();
+    let enroll: protocol::ClientCommand = serde_json::from_value(json!({
+        "name": "client_enroll_local", "args": {"nodeHome": "/runtime"},
+    }))
+    .unwrap();
+    assert!(matches!(
+        connect,
+        protocol::ClientCommand::ConnectLocal { .. }
+    ));
+    assert!(matches!(
+        enroll,
+        protocol::ClientCommand::EnrollLocal { .. }
+    ));
+    assert!(protocol::ClientCommand::NAMES.contains(&"client_enroll_local"));
 }

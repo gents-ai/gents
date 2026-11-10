@@ -3,8 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use gents::plugin_job::job::{JobChildState, JobState};
-use gents::ConfigAccess;
+use gents::tools::background::job::job::{JobChildState, JobState};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -33,7 +32,7 @@ struct JobCrashReady {
     child_states: Vec<(String, String)>,
 }
 
-fn entry(when: Value, output: gents::plugin_job::job::JobStepOutput) -> PlanEntry {
+fn entry(when: Value, output: gents::tools::background::job::job::JobStepOutput) -> PlanEntry {
     PlanEntry {
         when,
         output,
@@ -61,10 +60,10 @@ fn restart_job_plan() -> Vec<PlanEntry> {
 
 /// The children's (`_docID`, `lifecycle_state`), sorted by `_docID`.
 async fn child_states(h: &JobHarness, row_doc_id: &str) -> Vec<(String, String)> {
-    let response = ConfigAccess::local(h.db.node.clone())
+    let response = h.actors.fixture.access.clone()
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ caused_by_parent_tool_call_doc_id: {{ _eq: "{}" }} }}) {{ _docID lifecycle_state }} }}"#,
-            gents::graphql::escape_graphql_string(row_doc_id),
+            gents::store::graphql::escape_graphql_string(row_doc_id),
         ))
         .await
         .expect("read the job children");
@@ -87,10 +86,10 @@ async fn child_states(h: &JobHarness, row_doc_id: &str) -> Vec<(String, String)>
 }
 
 async fn job_row_fields(h: &JobHarness, row_doc_id: &str) -> Value {
-    let response = ConfigAccess::local(h.db.node.clone())
+    let response = h.actors.fixture.access.clone()
         .execute(&format!(
             r#"{{ AgentToolCall(docID: "{}") {{ lifecycle_state cancel_cause plugin_execution_receipt }} }}"#,
-            gents::graphql::escape_graphql_string(row_doc_id),
+            gents::store::graphql::escape_graphql_string(row_doc_id),
         ))
         .await
         .expect("read the job row");

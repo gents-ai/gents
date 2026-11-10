@@ -32,10 +32,12 @@ async fn check_shared_installation(home: &str) {
             .unwrap(),
     );
     let peer_id = seed.local_peer_id().to_owned();
+    let seed_did = seed.node_identity().did().to_owned();
     seed.shutdown().await.unwrap();
     drop(seed);
     let log = std::fs::File::create(dir.path().join("server.log")).unwrap();
     let mut server = Command::new(env!("CARGO_BIN_EXE_gents-client-host"))
+        .envs(support::homes::ProcessHomes::under(paths.root().parent().unwrap()).env())
         .arg("--serve")
         .arg("--home")
         .arg(paths.root())
@@ -63,8 +65,8 @@ async fn check_shared_installation(home: &str) {
     .expect("native installation startup");
     let mut first = Attachment::start(&paths).await;
     let mut second = Attachment::start(&paths).await;
-    assert_eq!(first.snapshot(1).await["client"]["localPeerId"], peer_id);
-    assert_eq!(second.snapshot(1).await["client"]["localPeerId"], peer_id);
+    assert_eq!(first.snapshot(1).await["client"]["clientDid"], seed_did);
+    assert_eq!(second.snapshot(1).await["client"]["clientDid"], seed_did);
     let error = match ClientCore::start_with_paths_and_options(
         paths.clone(),
         ClientCoreOptions::local_only(),
@@ -78,11 +80,11 @@ async fn check_shared_installation(home: &str) {
         }
     };
     assert!(
-        gents::home::store_lock_held(error.as_ref()).is_some(),
+        gents::store::local::home::store_lock_held(error.as_ref()).is_some(),
         "{error:#}"
     );
     first.close().await;
-    assert_eq!(second.snapshot(2).await["client"]["localPeerId"], peer_id);
+    assert_eq!(second.snapshot(2).await["client"]["clientDid"], seed_did);
     second.close().await;
     #[cfg(unix)]
     {
@@ -133,13 +135,13 @@ async fn updated_attachment_retires_the_previous_build_and_preserves_history() {
     );
     let peer = core.local_peer_id().to_owned();
     let client_did = core.node_identity().did().to_owned();
-    let did = gents::graphql::escape_graphql_string(&client_did);
-    gents::config_client::ConfigAccess::write_local(
+    let did = gents::store::graphql::escape_graphql_string(&client_did);
+    gents::store::config_client::ConfigAccess::write_local(
         &core.node_arc(),
         "installation_upgrade.seed",
         &format!(
             r#"mutation {{ create_AgentSession(input: {{session_id: "retained-session",
-            node_did: "{did}", requester_did: "{did}", agent_id: "agent",
+            node_did: "{did}", requester_did: "{did}", agent_did: "agent",
             created_at: "2026-10-25T00:00:00Z"}}) {{ _docID }} }}"#
         ),
     )
@@ -177,7 +179,6 @@ async fn updated_attachment_retires_the_previous_build_and_preserves_history() {
     assert_eq!(hello["installationBuild"], "previous-build");
     let mut updated = Attachment::start(&paths).await;
     let snapshot = updated.snapshot(1).await;
-    assert_eq!(snapshot["client"]["localPeerId"], peer);
     assert_eq!(snapshot["client"]["clientDid"], client_did);
     tokio::time::timeout(Duration::from_secs(30), old)
         .await
@@ -233,7 +234,7 @@ async fn updated_attachment_retires_the_previous_build_and_preserves_history() {
             frame.unwrap();
         }
         loop {
-            match gents::home::lock_store(paths.root(), paths.node_data_dir()) {
+            match gents::store::local::home::lock_store(paths.root(), paths.node_data_dir()) {
                 Ok(lock) => {
                     drop(lock);
                     break;
@@ -254,7 +255,7 @@ async fn updated_attachment_retires_the_previous_build_and_preserves_history() {
     );
     assert_eq!(reopened.local_peer_id(), peer);
     assert_eq!(reopened.node_identity().did(), client_did);
-    let rows = gents::config_client::ConfigAccess::local(reopened.node_arc())
+    let rows = gents::store::config_client::ConfigAccess::local(reopened.node_arc())
         .execute("{ AgentSession { session_id } }")
         .await
         .unwrap();
@@ -310,8 +311,8 @@ async fn different_build_with_compatible_inventory_is_reused_without_retirement(
 
     let mut attachment = Attachment::start(&paths).await;
     assert_eq!(
-        attachment.snapshot(1).await["client"]["localPeerId"],
-        core.local_peer_id()
+        attachment.snapshot(1).await["client"]["clientDid"],
+        core.node_identity().did()
     );
     assert!(
         !server.is_finished(),

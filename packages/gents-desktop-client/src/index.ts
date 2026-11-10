@@ -14,6 +14,7 @@ export {
   type ClientUpdateEvent,
   type OauthProvider,
   type Unlisten,
+  type UxDataWatchEvent,
 } from "./transport.js";
 export {
   BridgeInvokeError,
@@ -28,8 +29,14 @@ export type {
   ManagedServerStatus,
   ManagedServerResetResult,
   HomeResetDisposition,
+  JoinHistoryView,
+  JoinMemberView,
+  JoinRequestDecideRequest,
+  JoinRequestDecisionView,
+  JoinRequestView,
 } from "./api/types.js";
 export type { MailboxItemObservation } from "./generated/MailboxItemObservation.js";
+export type { QuestionReplyView } from "./generated/QuestionReplyView.js";
 export type { MailboxItemObservationRequest } from "./generated/MailboxItemObservationRequest.js";
 export type { IncompatibleStoreView } from "./generated/IncompatibleStoreView.js";
 export type { ManagedServerToolCeiling } from "./generated/ManagedServerToolCeiling.js";
@@ -44,6 +51,7 @@ export * from "./types.js";
 export const NARROW_BREAKPOINT_PX = 760;
 
 export * from "./sessionLiveDelta.js";
+export * from "./sessionGoal.js";
 export * from "./sessionTimeline.js";
 export * from "./pendingQueue.js";
 

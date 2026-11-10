@@ -1,6 +1,6 @@
 use super::{fake_llm, ChatAction};
 use anyhow::{ensure, Context, Result};
-use gents::graphql::escape_graphql_string as escape;
+use gents::store::graphql::escape_graphql_string as escape;
 use gents::ConfigAccess;
 use serde_json::{json, Value};
 

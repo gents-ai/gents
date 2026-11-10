@@ -5,93 +5,36 @@ extern crate self as gents;
 #[path = "../tests/support/mod.rs"]
 pub(crate) mod support;
 
-pub mod adapter_projection;
-pub(crate) mod admission;
-pub mod agent;
-pub mod application_write;
-pub mod backend_health;
-pub mod backend_provider;
-pub mod backend_registry;
-pub mod background_completion;
-mod background_completion_diagnostics;
-pub mod background_tools;
-pub mod blocked_turn;
-pub(crate) mod callback;
-pub mod chatgpt_codex;
-pub mod chatgpt_oauth_refresh;
-pub mod claude_messages;
-pub mod claude_oauth;
-pub mod claude_oauth_refresh;
-pub mod claude_subscription;
+pub mod claude_gateway_login;
+mod claude_request_context;
 pub mod codex_shim_binding;
-pub mod collection;
-pub mod compaction;
-pub(crate) mod completion_factory;
-pub mod config;
-pub mod config_client;
-pub mod configuration_discovery;
-pub mod defra_query;
-pub mod defra_write;
-pub mod document_config;
+pub mod documents;
 pub mod drop_cleanup;
 pub mod error;
-pub mod eth;
 pub mod eval;
-pub mod event_delivery_contract;
-pub mod external_adapter_capture;
-pub mod failure_text;
 pub mod file_inventory;
-pub mod file_lock;
 pub mod goal;
-pub mod graphql;
-pub mod health_checker;
-pub mod home;
-pub mod hook;
-pub mod identity;
-pub mod inference_http;
-pub mod inference_observation;
-pub mod inference_setup;
-pub mod interrupt;
+pub mod inference;
 #[cfg(test)]
 pub(crate) mod lean_vocab_test;
-pub mod native_logging;
-mod node_readiness_publisher;
-pub mod oauth_credential;
-pub(crate) mod oauth_http;
+pub mod observe;
 pub mod openai_wire;
-pub mod p2p_observability;
-pub mod p2p_tool;
 pub mod pack;
-pub mod pack_archive;
-pub mod pack_registry;
-pub mod pack_resolve;
-pub mod pack_store;
 pub mod plugin;
-pub mod plugin_job;
-pub mod provider_http;
-pub(crate) mod provider_input;
-pub mod ux_data;
-pub mod ux_plugin;
 pub use gents_loop::provider_input::ProviderInputProfile;
 pub mod provider_budget {
-    pub use crate::provider_input::budget::{effective_input_budget, threshold_budget};
+    pub use crate::turn::provider_input::budget::{effective_input_budget, threshold_budget};
 }
 #[cfg(test)]
 #[path = "lean_vocab_test/canonical_execution/native_adapter.rs"]
 mod canonical_execution_native_adapter;
 pub(crate) mod provider_usage;
-pub mod starter_recipes;
-pub mod startup_readiness;
-pub mod startup_recovery;
-pub mod storage_backend;
-pub mod store_key;
-pub mod usage_observation;
-pub mod xai_grok_oauth;
-pub mod xai_oauth_login;
-pub mod xai_oauth_refresh;
+pub mod runtime;
+pub mod store;
 
 #[cfg(test)]
 pub(crate) mod test_support {
+    pub(crate) mod acp_policies;
     pub(crate) mod read_observation;
 
     /// A test's `#[tokio::test]` runtime is its entry point; constructors take
@@ -111,12 +54,12 @@ pub(crate) mod test_support {
         let directory = tempfile::tempdir().unwrap();
         let identity =
             crate::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
-        defra_node::EmbeddedNode::builder().with_node_identity_did(identity.did())
+        defra_node::Node::builder().with_node_identity_did(identity.did())
     }
 
     const CAPTURED_EVENT_TARGETS: &[&str] = &[
-        crate::config_client::write_telemetry::WRITE_ATTEMPT_EVENT_TARGET,
-        crate::runtime_status::RECONCILE_PHASE_EVENT_TARGET,
+        crate::store::config_client::write_telemetry::WRITE_ATTEMPT_EVENT_TARGET,
+        crate::runtime::status::RECONCILE_PHASE_EVENT_TARGET,
         crate::session::REFUSAL_PROJECTION_EVENT_TARGET,
     ];
 
@@ -164,10 +107,11 @@ pub(crate) mod test_support {
             .map_err(|error| rig::completion::CompletionError::ProviderError(error.to_string()))?;
         body["stream"] = serde_json::Value::Bool(true);
         body["stream_options"] = serde_json::json!({ "include_usage": true });
-        let inner = crate::rendered_request::transport::CountingInner::default();
-        let transport = crate::rendered_request::transport::RenderedRequestCapturingHttpClient::new(
-            inner.clone(),
-        );
+        let inner = crate::inference::rendered_request::transport::CountingInner::default();
+        let transport =
+            crate::inference::rendered_request::transport::RenderedRequestCapturingHttpClient::new(
+                inner.clone(),
+            );
         let outbound = rig::http_client::Request::builder()
             .method("POST")
             .uri("https://scripted-provider.invalid/v1/chat/completions")
@@ -210,38 +154,347 @@ pub(crate) mod test_support {
         }
     }
 
-    pub(crate) async fn install_test_agent(
-        node: &std::sync::Arc<defra_node::EmbeddedNode>,
-        owner: &str,
-        agent_id: &str,
+    /// Recovers the runtime root held by this process for `node_did`. Loading a
+    /// `KeyIdentity` registers its signing key with DefraDB; Agent derivation
+    /// needs the held key, which `RegisteredIdentity` never carries.
+    pub(crate) fn held_runtime_identity(node_did: &str) -> crate::store::identity::KeyIdentity {
+        use crate::store::identity::NodeIdentity as _;
+        let config = defra_core::signing::get_identity(node_did).unwrap_or_else(|| {
+            panic!("fixture node identity {node_did} is not held in this process")
+        });
+        assert!(
+            config.has_local_private_key(),
+            "fixture node identity {node_did} has no local private key"
+        );
+        let dir = tempfile::tempdir().expect("held identity directory");
+        let path = dir.path().join("runtime.key");
+        {
+            use std::io::Write as _;
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt as _;
+                options.mode(0o600);
+            }
+            let mut file = options.open(&path).expect("create held identity key");
+            file.write_all(&config.private_key_bytes)
+                .expect("write held identity key");
+        }
+        let identity = crate::store::identity::KeyIdentity::load_existing(path.clone(), None)
+            .expect("reload held runtime identity");
+        assert_eq!(identity.did(), node_did);
+        identity
+    }
+
+    /// Creates the fixture Node through the runtime owner's signed access.
+    /// `ensure_node` only loads; production Nodes are created by an authenticated client.
+    pub(crate) async fn ensure_test_node(node: &std::sync::Arc<defra_node::Node>, node_did: &str) {
+        if crate::load_node(node, node_did).await.unwrap().is_some() {
+            return;
+        }
+        let access = crate::store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(node_did).unwrap(),
+        );
+        bootstrap_signed_test_node(&access, node_did).await;
+    }
+
+    pub(crate) async fn bootstrap_signed_test_node(
+        access: &crate::store::config_client::ConfigAccess,
+        node_did: &str,
     ) {
-        use crate::config_client::{
-            ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
-        };
-        use crate::Collection;
-        use serde_json::json;
-        crate::ensure_node(node, owner).await.unwrap();
-        let context = format!("{agent_id}:context");
-        let tools = format!("{agent_id}:tools");
-        let profile = format!("{agent_id}:inference");
-        let backend = format!("{agent_id}:backend");
-        let documents = [
-            (Collection::Agent, json!({"node_did":owner,"agent_id":agent_id,"context_id":context,"inference_profile_id":profile})),
-            (Collection::AgentContext, json!({"node_did":owner,"context_id":context,"tools_id":tools})),
-            (Collection::Tools, json!({"node_did":owner,"tools_id":tools})),
-            (Collection::InferenceProfile, json!({"node_did":owner,"profile_id":profile,"backend_id":backend,"model_name":"test-model"})),
-            (Collection::InferenceBackend, json!({"node_did":owner,"backend_id":backend,"name":"Test inference","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:1/v1","auth":{"kind":"unauthenticated"}})),
-        ].into_iter().map(|(collection,value)| DesiredStateApplyDocument {collection,add:value.clone(),update:value}).collect();
-        let plan = DesiredStateApplyPlan::new(documents).unwrap();
-        ConfigAccess::transact_local_write(node, None, "test.install_agent", |txn| {
-            let plan = &plan;
-            Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
+        use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+
+        let node_input = serde_json::json!({"node_did": node_did});
+        let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+            collection: crate::Collection::Node,
+            add: node_input.clone(),
+            update: node_input,
+        }])
+        .unwrap();
+        access
+            .transact_write("test.signed_node", |txn| {
+                let plan = &plan;
+                Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+            })
+            .await
+            .unwrap();
+    }
+
+    pub(crate) async fn signed_test_node(
+        name: &str,
+    ) -> (
+        crate::support::TestDb,
+        crate::KeyIdentity,
+        crate::store::config_client::ConfigAccess,
+        gents_protocol::agent_identity::AgentIdentityBinding,
+    ) {
+        let db = crate::support::test_db(name).await;
+        signed_test_node_from_db(db, name).await
+    }
+
+    pub(crate) async fn signed_test_node_without_agent(
+        name: &str,
+    ) -> (
+        crate::support::TestDb,
+        crate::KeyIdentity,
+        crate::store::config_client::ConfigAccess,
+    ) {
+        let db = crate::support::test_db(name).await;
+        signed_test_node_without_agent_from_db(db, name).await
+    }
+
+    pub(crate) async fn signed_test_node_without_agent_from_db(
+        db: crate::support::TestDb,
+        name: &str,
+    ) -> (
+        crate::support::TestDb,
+        crate::KeyIdentity,
+        crate::store::config_client::ConfigAccess,
+    ) {
+        use crate::store::config_client::ConfigAccess;
+        use crate::store::identity::{GrantSet, NodeIdentity};
+
+        let fixture_name = name.to_owned();
+        let user = tokio::task::spawn_blocking(move || {
+            crate::support::fixtures::test_identity(&fixture_name)
         })
         .await
         .unwrap();
-        crate::backend_registry::set_backend_probe_status(node, owner, &backend, "healthy")
+        let runtime = db.node_identity.as_ref();
+        assert_ne!(runtime.did(), user.did());
+        let admin =
+            ConfigAccess::local_as(db.node.clone(), identity::Did::new(runtime.did()).unwrap());
+        let user_did = identity::Did::new(user.did()).unwrap();
+        GrantSet::OperatorUser
+            .grant(&admin, &user_did)
             .await
             .unwrap();
+        let access = db.client_access(&user);
+        bootstrap_signed_test_node(&access, runtime.did()).await;
+        (db, user, access)
+    }
+
+    pub(crate) async fn signed_test_node_from_db(
+        db: crate::support::TestDb,
+        name: &str,
+    ) -> (
+        crate::support::TestDb,
+        crate::KeyIdentity,
+        crate::store::config_client::ConfigAccess,
+        gents_protocol::agent_identity::AgentIdentityBinding,
+    ) {
+        use crate::store::identity::NodeIdentity;
+
+        let (db, user, access) = signed_test_node_without_agent_from_db(db, name).await;
+        let runtime = db.node_identity.as_ref();
+        let user_did = identity::Did::new(user.did()).unwrap();
+        let binding = crate::store::identity::provision_agent_identity_authorized(
+            &db.node, runtime, &user_did,
+        )
+        .await
+        .unwrap();
+        install_test_agent_binding_with_access(
+            runtime.did(),
+            "Default fixture agent",
+            &binding,
+            &access,
+        )
+        .await;
+        set_test_default_agent_as(&access, runtime.did(), &binding.agent_did).await;
+        (db, user, access, binding)
+    }
+
+    pub(crate) async fn set_test_default_agent_as(
+        access: &crate::store::config_client::ConfigAccess,
+        runtime_did: &str,
+        agent_did: &str,
+    ) {
+        access
+            .transact_write("test.set_default_agent", |txn| {
+                Box::pin(async move {
+                    let (_, mut node) =
+                        crate::store::config_client::read_desired_state_record_in_txn(
+                            txn,
+                            crate::Collection::Node,
+                            runtime_did,
+                            runtime_did,
+                        )
+                        .await?
+                        .expect("fixture user must own one Node for its runtime");
+                    node["default_agent_did"] = serde_json::json!(agent_did);
+                    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+                        crate::store::config_client::DesiredStateApplyDocument {
+                            collection: crate::Collection::Node,
+                            add: node.clone(),
+                            update: node,
+                        },
+                    ])?;
+                    crate::documents::apply_desired_state_plan(txn, &plan).await
+                })
+            })
+            .await
+            .unwrap();
+    }
+
+    /// Replaces one field of the fixture Node through its configuring User's
+    /// signed desired-state owner; Node is configuration the User signs.
+    pub(crate) async fn set_test_node_field_as(
+        access: &crate::store::config_client::ConfigAccess,
+        runtime_did: &str,
+        field: &str,
+        value: serde_json::Value,
+    ) {
+        access
+            .transact_write("test.set_node_field", |txn| {
+                let value = value.clone();
+                Box::pin(async move {
+                    let (_, mut node) =
+                        crate::store::config_client::read_desired_state_record_in_txn(
+                            txn,
+                            crate::Collection::Node,
+                            runtime_did,
+                            runtime_did,
+                        )
+                        .await?
+                        .expect("fixture user must own one Node for its runtime");
+                    node[field] = value;
+                    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+                        crate::store::config_client::DesiredStateApplyDocument {
+                            collection: crate::Collection::Node,
+                            add: node.clone(),
+                            update: node,
+                        },
+                    ])?;
+                    crate::documents::apply_desired_state_plan(txn, &plan).await
+                })
+            })
+            .await
+            .unwrap();
+    }
+
+    pub(crate) async fn ensure_test_default_agent(
+        node: &std::sync::Arc<defra_node::Node>,
+        owner: &str,
+    ) -> gents_protocol::agent_identity::AgentIdentityBinding {
+        ensure_test_node(node, owner).await;
+        let principal = crate::ensure_node(node, owner).await.unwrap();
+        if let Some(did) = principal.default_agent_did {
+            let agent = crate::load_agent(node, &did)
+                .await
+                .unwrap()
+                .expect("fixture default agent exists");
+            return gents_protocol::agent_identity::AgentIdentityBinding {
+                agent_did: agent.agent_did,
+                creation_nonce: agent.creation_nonce,
+            };
+        }
+        let binding = install_test_agent(node, owner, "Default fixture agent").await;
+        let access = crate::store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(owner).unwrap(),
+        );
+        set_test_default_agent_as(&access, owner, &binding.agent_did).await;
+        binding
+    }
+
+    pub(crate) async fn install_test_agent(
+        node: &std::sync::Arc<defra_node::Node>,
+        owner: &str,
+        display_name: &str,
+    ) -> gents_protocol::agent_identity::AgentIdentityBinding {
+        let node_did = node
+            .node_identity_did()
+            .expect("fixture node has an identity");
+        let root = held_runtime_identity(node_did);
+        let binding = crate::store::identity::provision_agent_identity(&root).unwrap();
+        install_test_agent_binding(node, owner, display_name, &binding).await;
+        binding
+    }
+
+    pub(crate) async fn install_test_agent_binding(
+        node: &std::sync::Arc<defra_node::Node>,
+        owner: &str,
+        display_name: &str,
+        binding: &gents_protocol::agent_identity::AgentIdentityBinding,
+    ) {
+        ensure_test_node(node, owner).await;
+        let actor = node
+            .node_identity_did()
+            .expect("fixture node has an identity");
+        let access = crate::store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(actor).unwrap(),
+        );
+        install_test_agent_binding_with_access(owner, display_name, binding, &access).await;
+    }
+
+    pub(crate) fn test_agent_documents(
+        owner: &str,
+        display_name: &str,
+        binding: &gents_protocol::agent_identity::AgentIdentityBinding,
+    ) -> Vec<(crate::Collection, serde_json::Value)> {
+        use crate::Collection;
+        use serde_json::json;
+        let agent_did = &binding.agent_did;
+        let context = format!("{agent_did}:context");
+        let tools = format!("{agent_did}:tools");
+        let profile = format!("{agent_did}:inference");
+        let backend = format!("{agent_did}:backend");
+        vec![
+            (
+                Collection::Agent,
+                json!({"node_did":owner,"agent_did":agent_did,"creation_nonce":binding.creation_nonce,"display_name":display_name,"context_id":context,"inference_profile_id":profile}),
+            ),
+            (
+                Collection::AgentContext,
+                json!({"node_did":owner,"context_id":context,"tools_id":tools}),
+            ),
+            (
+                Collection::Tools,
+                json!({"node_did":owner,"tools_id":tools}),
+            ),
+            (
+                Collection::InferenceProfile,
+                json!({"node_did":owner,"profile_id":profile,"backend_id":backend,"model_name":"test-model"}),
+            ),
+            (
+                Collection::InferenceBackend,
+                json!({"node_did":owner,"backend_id":backend,"name":"Test inference","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:1/v1","auth":{"kind":"unauthenticated"}}),
+            ),
+        ]
+    }
+
+    pub(crate) async fn install_test_agent_binding_with_access(
+        owner: &str,
+        display_name: &str,
+        binding: &gents_protocol::agent_identity::AgentIdentityBinding,
+        access: &crate::store::config_client::ConfigAccess,
+    ) {
+        use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+        let documents = test_agent_documents(owner, display_name, binding)
+            .into_iter()
+            .map(|(collection, value)| DesiredStateApplyDocument {
+                collection,
+                add: value.clone(),
+                update: value,
+            })
+            .collect();
+        let plan = DesiredStateApplyPlan::new(documents).unwrap();
+        access
+            .transact_write("test.install_agent", |txn| {
+                let plan = &plan;
+                Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+            })
+            .await
+            .unwrap();
+        let backend = format!("{}:backend", binding.agent_did);
+        crate::inference::backends::registry::set_backend_probe_status_as(
+            access, owner, &backend, "healthy",
+        )
+        .await
+        .unwrap();
     }
 
     pub(crate) fn fixture_pack_copy(
@@ -297,16 +550,71 @@ pub(crate) mod test_support {
         tempfile::TempDir,
         std::sync::Arc<crate::plugin::executor::PluginExecutor>,
     ) {
-        let (bytes, _) = crate::pack_archive::pack_dir(dir)
+        let (bytes, _) = crate::pack::archive::pack_dir(dir)
             .unwrap_or_else(|error| panic!("packing {}: {error:#}", dir.display()));
         let home = tempfile::tempdir().expect("home");
-        crate::pack_store::PackStore::new(home.path())
+        crate::pack::store::PackStore::new(home.path())
             .import(&bytes[..], None)
             .unwrap_or_else(|error| panic!("storing {}: {error:#}", dir.display()));
         let plugins = std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
             home.path().to_path_buf(),
         )));
         (home, plugins)
+    }
+
+    /// Create an Agent-owned session as that Agent and publish its Agent
+    /// relationships in the same transaction, so requests and Goals may bind it.
+    pub(crate) async fn create_agent_owned_session(
+        access: &crate::store::config_client::ConfigAccess,
+        node_did: &str,
+        session_id: &str,
+        requester_did: Option<&str>,
+    ) -> String {
+        let agent_did = access
+            .actor_did()
+            .expect("an Agent-owned session needs its Agent actor");
+        access
+            .transact_write("test.agent_owned_session", |txn| {
+                let agent_did = &agent_did;
+                Box::pin(async move {
+                    crate::session::ensure_session_in_txn(
+                        txn,
+                        session_id,
+                        node_did,
+                        agent_did,
+                        requester_did,
+                        None,
+                        None,
+                        "2020-01-01T00:00:00Z",
+                    )
+                    .await?;
+                    let session =
+                        crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                            txn, node_did, session_id,
+                        )
+                        .await?
+                        .ok_or_else(|| anyhow::anyhow!("created session is not visible"))?;
+                    let (agent_doc, _) =
+                        crate::store::config_client::read_desired_state_record_in_txn(
+                            txn,
+                            crate::Collection::Agent,
+                            node_did,
+                            agent_did,
+                        )
+                        .await?
+                        .ok_or_else(|| anyhow::anyhow!("session Agent is not visible"))?;
+                    crate::session::stage_created_session_relationships_in_txn(
+                        txn,
+                        &session.doc_id,
+                        &agent_doc,
+                        &identity::Did::new(agent_did)?,
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(session.doc_id)
+                })
+            })
+            .await
+            .unwrap()
     }
 
     pub(crate) fn first_content<T>(items: &[T]) -> &T {
@@ -318,70 +626,68 @@ pub(crate) mod test_support {
          <function=describe_tool>\", \"raw_schema\": false, \
          \"service_id\": \"observability-mcp\", \"tool_name\": \"list_hosts\"}";
 }
-pub mod lifecycle;
-pub mod llm;
-pub mod log_rate;
-pub mod mailbox;
-pub(crate) mod managed_exec;
-pub mod mcp_pool;
-pub mod meta_tools;
-pub mod migration;
-pub mod native_executor_status;
-pub mod oneshot;
-pub mod optimization;
-pub mod periodic_recovery;
-pub mod prompt;
-pub mod provider_context_reduction;
-pub mod registry;
-pub mod rendered_request;
-mod request_admission;
+pub mod request;
+pub use gents_protocol::request_admission::SIGNED_REQUEST_FIELDS;
 #[doc(hidden)]
-pub use request_admission::final_claim_admission_disposition;
-pub use request_admission::{
+pub use request::admission::final_claim_admission_disposition;
+pub use request::admission::{
     sign_agent_request_create, sign_agent_request_create_as_registered_target,
-    verify_request_receipt_signature, SIGNED_REQUEST_FIELDS,
 };
-pub(crate) mod request_binding;
-pub mod retry;
-pub mod run_timeline;
-pub mod run_timeline_fetch;
-pub mod runtime_service;
-pub(crate) mod runtime_snapshot;
-pub(crate) mod runtime_status;
-pub(crate) mod runtime_trace;
-pub mod schedule_cron;
-pub mod schema;
-pub mod schema_tool;
-pub mod self_config;
 pub mod session;
-pub mod session_message;
-pub mod session_origin;
-pub mod skills;
-pub mod streaming;
-pub(crate) mod task_hooks;
-pub mod template;
-pub mod tool_call_lifecycle;
-pub mod tool_control;
-pub mod tool_surface;
-pub mod toolset;
-pub mod trace_export;
-pub(crate) mod trigger_engine;
+pub mod tools;
+pub mod triggers;
 pub mod truncation;
-pub mod watcher;
-pub mod workspace;
+pub mod turn;
 
-pub use background_tools::load_caused_request_terminal;
-pub use background_tools::status_projection::OutputEvidence;
-pub use callback::reject_secret_bearing_callback_fields;
-pub use collection::{Collection, DESIRED_STATE_APPLY_ORDER};
-pub use eth::{
-    address_from_secret, attestation_payload, binding_storage_key, encode_attestation,
-    generate_secp256k1_secret, method_permitted, validate_eth_call_declarations,
-    validate_query_methods, ChainKeyMaterialStore, HttpEthRpc, KeyringChainKeyStore,
-    BUILTIN_QUERY_METHODS, ETH_USER_AGENT, KEYRING_SERVICE, KEY_BACKEND_KEYRING,
+pub use defra_node;
+pub use documents::automation::{
+    EventTriggerFireMode, ResolvedEventTrigger, ResolvedSchedule, ResolvedTask,
+    MAX_EVENT_TRIGGER_GROUP_DOCS,
 };
-
-pub use adapter_projection::{
+pub use documents::template::{
+    check_template_vocabulary, parse_template_for_validation, render_template, TemplateError,
+    TemplateScope, VariableRef,
+};
+pub use documents::{
+    default_inference_profile_id_for_agent, default_inference_profile_id_for_node,
+    deserialize_dual_shape, ensure_node, is_reserved_builtin_tool_name, list_agents,
+    list_datastore_tool_surfaces, list_inference_profile_records, load_agent,
+    load_inference_profile, load_node, merge_datastore_tool_surfaces, Agent as AgentDocument,
+    AgentTargetDocument, ConfigReferences, DatastoreToolSurfaceDocument, InferenceProfile,
+    MergedSurfaceTools, QueryToolDecl, SurfaceToolDecl, Tools, WriteToolDecl, WriteToolField,
+    WriteToolFieldFill, WriteToolOutputObligation, WriteToolOutputObligationScope,
+};
+pub use documents::{ConcurrencyMode, ScheduleCadence};
+pub use gents_protocol::client_protocol;
+pub use gents_protocol::request_lifecycle::{
+    next_request_hop, request_hop_within_bound, EnqueuedAgentRequest, RequestHopCapObservation,
+    RequestHopCause,
+};
+pub use gents_protocol::row::AgentRequest;
+pub use inference::admission::call_state_holds_backend_slot;
+pub use inference::admission::BackendAdmissionConfig;
+pub use inference::admission::{
+    document_configured_from_fields, InferenceCall, InferenceCallRecoveryReport,
+};
+pub use inference::backends::health::{
+    probe_backends_cycle, run_backend_probe_cycle, spawn_backend_prober, BackendHealthMap,
+    BackendHealthSnapshot, BackendHealthState, BackendProberOptions, ProbeCycleOutcome,
+};
+pub use inference::backends::provider::{
+    discover_models as discover_backend_models, BackendProviderKind,
+};
+pub use inference::backends::registry::{
+    record_discovered_catalog_on, record_model_catalog_in_txn, InferenceBackend,
+    HEALTHY_PROBE_STATUS, UNKNOWN_PROBE_STATUS,
+};
+pub use inference::compaction::CompactionStrategy;
+pub use inference::resolved::{
+    ReasoningEffort, ResolvedAgent, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD,
+    DEFAULT_CONTEXT_WINDOW, DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS,
+    DEFAULT_MAX_TURNS, DEFAULT_MODEL_NAME, DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
+    DEFAULT_STREAM_BATCH_MS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+};
+pub use observe::adapter_projection::{
     adapter_projection_eval_jsonl_record_schema, adapter_projection_eval_jsonl_records,
     adapter_projection_json_schema, adapter_projection_jsonl_record_schema,
     adapter_projection_jsonl_records, adapter_projection_native_json,
@@ -392,112 +698,60 @@ pub use adapter_projection::{
     AtifStep, AtifStepSource, AtifToolCall, AtifTrajectory, ProjectionContext,
     ProjectionRedactionMode, ATIF_SCHEMA_VERSION,
 };
-pub use admission::call_state_holds_backend_slot;
-pub use admission::BackendAdmissionConfig;
-pub use admission::{document_configured_from_fields, InferenceCall, InferenceCallRecoveryReport};
-pub use agent::{
-    AgentBuilder, DocumentRuntimeOptions, Gents, GentsBuilder, ProcessLifecycleObserver,
-    ProcessLifecycleState, RuntimeSnapshotObserver,
-};
-pub use backend_health::{
-    probe_backends_cycle, run_backend_probe_cycle, spawn_backend_prober, BackendHealthMap,
-    BackendHealthSnapshot, BackendHealthState, BackendProberOptions, ProbeCycleOutcome,
-};
-pub use backend_provider::{discover_models as discover_backend_models, BackendProviderKind};
-pub use backend_registry::{
-    record_discovered_catalog_on, record_model_catalog_in_txn, InferenceBackend,
-    HEALTHY_PROBE_STATUS, UNKNOWN_PROBE_STATUS,
-};
-pub(crate) use background_completion_diagnostics::load_background_completion_diagnostics_for_session;
-pub use background_completion_diagnostics::{
-    load_background_completion_diagnostics, BackgroundCompletionDiagnostics,
-    BackgroundCompletionEpochDiagnostic,
-};
-pub use compaction::CompactionStrategy;
-pub use config::{
-    ReasoningEffort, ResolvedAgent, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD,
-    DEFAULT_CONTEXT_WINDOW, DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS,
-    DEFAULT_MAX_TURNS, DEFAULT_MODEL_NAME, DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
-    DEFAULT_STREAM_BATCH_MS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
-};
-pub use config_client::ConfigAccess;
-pub use defra_node;
-#[cfg(test)]
-pub(crate) use document_config::upsert_node;
-pub use document_config::{
-    chain_key_binding_by_id_query, create_chain_key_binding_mutation, default_agent_id_for_node,
-    default_inference_profile_id_for_agent, default_inference_profile_id_for_node,
-    delete_chain_key_binding_mutation, deserialize_dual_shape, ensure_node, eth_tool_by_id_query,
-    is_reserved_builtin_tool_name, list_agents, list_chain_key_bindings_query,
-    list_datastore_tool_surfaces, list_eth_tools, list_inference_profile_records, load_agent,
-    load_inference_profile, load_node, merge_datastore_tool_surfaces, upsert_agent,
-    upsert_chain_key_binding, upsert_chain_key_binding_mutation, upsert_inference_profile,
-    Agent as AgentDocument, AgentTargetDocument, ChainKeyBindingDocument, ConfigReferences,
-    DatastoreToolSurfaceDocument, EthToolDocument, InferenceProfile, MergedSurfaceTools,
-    QueryToolDecl, SurfaceToolDecl, Tools, WriteToolDecl, WriteToolField, WriteToolFieldFill,
-    WriteToolOutputObligation, WriteToolOutputObligationScope,
-};
-pub use external_adapter_capture::{
+pub use observe::external_adapter_capture::{
     import_external_adapter_capture_to_derived_view, ExternalAdapterCapture, ExternalAdapterImport,
     ExternalAdapterMapping, ExternalAdapterSource,
 };
-pub use gents_protocol::client_protocol;
-pub use health_checker::{
-    run_health_check_cycle, spawn_health_checker, HealthCheckerOptions, HealthPersistenceContext,
-    HealthStatus, MCPServiceHealthSnapshot, McpHealthCheckService, ServiceHealth, ServiceHealthMap,
-};
-pub use hook::{
-    BackgroundExecutionRegistry, BackgroundToolRegistry, DefraSessionHook, FailurePolicy, HookStats,
-};
-pub use identity::{
-    load_macos_keychain_identity, load_macos_secure_enclave_identity,
-    load_or_create_macos_keychain_identity, load_or_create_macos_secure_enclave_identity,
-    KeyIdentity, NodeIdentity, RegisteredIdentity, RuntimeNode, ServiceAccount,
-};
-pub use interrupt::{
-    fetch_interrupt_requested_at, fetch_interrupt_requested_at_by_doc_id, interrupt_request,
-    interrupt_request_by_doc_id,
-};
-pub use lifecycle::{
-    background_wake_next_retry_at, background_wake_retry_delay,
-    build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title,
-    build_signed_request, enqueue_local_steering_request, next_request_hop,
-    request_hop_within_bound, task_session_title, write_manual_agent_request,
-    write_manual_agent_request_with_conversation_title, BackgroundWakeRedriveReport,
-    EnqueuedAgentRequest, ParentLink, RecoveryReport, RequestHopCause, RequestIdentity,
-    RequestLifecycle, RequestSigner, RequestSpec, RetryLink, TerminalRedriveReport,
-    TerminalRepairReport, TERMINAL_REDRIVE_BATCH_LIMIT, TERMINAL_REDRIVE_CAP,
-};
-pub use mcp_pool::McpPool;
-pub use meta_tools::build_meta_tools;
-pub use native_executor_status::{active_native_executors, NativeExecutorStatus};
-pub use oneshot::{run_openai_oneshot, run_openai_oneshot_with_tools, OneshotRunResult};
-pub use openai_wire::OpenAiWireApi;
-pub use p2p_observability::{
-    JsonP2pSyncStatusAdapter, P2pInboundClassSnapshot, P2pPeerBacklogSnapshot,
-    P2pPeerFetchSnapshot, P2pPeerSummarySnapshot, P2pPushBacklogSnapshot,
-    P2pPushRetryMarkerSnapshot, P2pRequestDispatchSnapshot, P2pSyncStatusAdapter,
-    P2pSyncStatusSnapshot,
-};
-pub use periodic_recovery::{
-    periodic_recovery_sweep_metadata, run_periodic_recovery_sweeps, PeriodicRecoverySweepMetadata,
-    PeriodicRecoverySweepOutcome, PeriodicRecoverySweepRun,
-};
-pub use prompt::{LayeredPromptBuilder, PromptBuilder};
-pub use run_timeline::{
+pub use observe::run_timeline::{
     build_run_timeline, RetrySummary, RunTimeline, RunTimelineEvent, RunTimelineRows,
     TimelineGoalParentState, TimelineGoalState, TimelineGoalTransitionEvent,
     TimelineGoalVersionRow, TimelineInferenceCallRow, TimelineMessageRow, TimelineRequestRow,
     TimelineSessionRow, TimelineToolCallRow,
 };
-pub use runtime_snapshot::{
-    ActiveRuntimeSnapshot, ConcurrencyMode, DispatcherMap, EventTriggerFireMode,
-    ResolvedEventTrigger, ResolvedSchedule, ResolvedTask, ScheduleCadence,
-    MAX_EVENT_TRIGGER_GROUP_DOCS,
+pub use openai_wire::OpenAiWireApi;
+pub use request::interrupt::{
+    fetch_interrupt_requested_at, fetch_interrupt_requested_at_by_doc_id, interrupt_request,
+    interrupt_request_by_doc_id,
 };
-#[cfg(feature = "agent-memory")]
-pub use schema::NODE_MEMORY_SCHEMA;
-pub use schema::{
+pub use request::lifecycle::{
+    background_wake_next_retry_at, background_wake_retry_delay,
+    build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title,
+    build_signed_request, enqueue_local_steering_request, task_session_title,
+    write_manual_agent_request, write_manual_agent_request_with_conversation_title,
+    BackgroundWakeRedriveReport, ParentLink, RecoveryReport, RequestIdentity, RequestLifecycle,
+    RequestSigner, RequestSpec, RetryLink, TerminalRepairReport,
+};
+pub use request::streaming::{DefraStreamWriter, StreamWriter, MAX_LIVE_REASONING_BYTES};
+pub use request::watcher::{DefraWatcher, Watcher};
+pub use runtime::agent::{
+    AgentBuilder, DocumentRuntimeOptions, Gents, GentsBuilder, ProcessLifecycleObserver,
+    ProcessLifecycleState, RuntimeSnapshotObserver,
+};
+pub use runtime::oneshot::{
+    run_openai_oneshot_admitted, run_openai_oneshot_with_tools_admitted, OneshotRunResult,
+};
+pub use runtime::p2p::observability::{
+    JsonP2pSyncStatusAdapter, P2pInboundClassSnapshot, P2pPeerBacklogSnapshot,
+    P2pPeerFetchSnapshot, P2pPeerSummarySnapshot, P2pPendingPeerOccupancySnapshot,
+    P2pPushBacklogSnapshot, P2pPushRetryMarkerSnapshot, P2pRequestDispatchSnapshot,
+    P2pSyncStatusAdapter, P2pSyncStatusSnapshot,
+};
+pub use runtime::periodic_recovery::{
+    periodic_recovery_sweep_metadata, run_periodic_recovery_sweeps_with_identities,
+    PeriodicRecoverySweepMetadata, PeriodicRecoverySweepOutcome, PeriodicRecoverySweepRun,
+};
+pub use runtime::snapshot::{ActiveRuntimeSnapshot, DispatcherMap};
+pub use session::load_history;
+pub use session::{ForkError, ForkOutcome, ForkParams};
+pub use store::collection::{Collection, DESIRED_STATE_APPLY_ORDER};
+pub use store::config_client::ConfigAccess;
+pub use store::identity::request_receipt::verify_request_receipt_signature;
+pub use store::identity::{
+    load_macos_keychain_identity, load_macos_secure_enclave_identity,
+    load_or_create_macos_keychain_identity, load_or_create_macos_secure_enclave_identity,
+    KeyIdentity, NodeIdentity, RegisteredIdentity, RuntimeNode, ServiceAccount,
+};
+pub use store::schema::{
     ensure_runtime_schemas, AGENT_MESSAGE_SCHEMA, AGENT_OUTPUT_SEGMENT_SCHEMA,
     AGENT_REQUEST_SCHEMA, AGENT_SCHEMA, AGENT_SESSION_SCHEMA, AGENT_TOOL_CALL_SCHEMA,
     COMPACTION_ENTRY_SCHEMA, GOAL_SCHEMA, INFERENCE_BACKEND_SCHEMA, INFERENCE_CALL_SCHEMA,
@@ -505,40 +759,56 @@ pub use schema::{
     OAUTH_CREDENTIAL_SCHEMA, SCHEDULE_SCHEMA, TASK_SCHEMA, TOOLS_SCHEMA,
     TOOL_SERVICE_HEALTH_STATE_SCHEMA, TOOL_SERVICE_REGISTRY_SCHEMA,
 };
-pub use session::load_history;
-pub use session::{fork, fork_via_http, ForkError, ForkOutcome, ForkParams};
-pub use streaming::{DefraStreamWriter, StreamWriter, MAX_LIVE_REASONING_BYTES};
-pub use template::{
-    check_template_vocabulary, parse_template_for_validation, render_template, TemplateError,
-    TemplateScope, VariableRef,
+pub(crate) use tools::background::diagnostics::load_background_completion_diagnostics_for_session;
+pub use tools::background::diagnostics::{
+    load_background_completion_diagnostics, BackgroundCompletionDiagnostics,
+    BackgroundCompletionEpochDiagnostic,
 };
-pub use tool_control::{cancel_background_tool_call, CancelBackgroundToolCallOutcome};
-pub use tool_surface::{
-    cli_tool, AgentToolSurfaceConfig, BashMode, CustomToolFactory, FileToolMode,
-    ResolvedToolSelection, ToolCeiling, ToolPolicyVersion, ToolRuntimeContext, ToolSurface,
-    TOOL_POLICY_V1,
+pub use tools::background::status::load_caused_request_terminal;
+pub use tools::background::status::status_projection::OutputEvidence;
+pub use tools::call::control::{cancel_background_tool_call, CancelBackgroundToolCallOutcome};
+pub use tools::call::hook::{
+    BackgroundExecutionRegistry, BackgroundToolRegistry, DefraSessionHook, FailurePolicy, HookStats,
 };
-pub use toolset::{
+pub use tools::exec::status::{active_native_executors, NativeExecutorStatus};
+pub use tools::mcp::health::{
+    run_health_check_cycle, run_health_check_cycle_for_actor, spawn_health_checker,
+    HealthCheckerOptions, HealthPersistenceContext, HealthStatus, MCPServiceHealthSnapshot,
+    McpHealthCheckService, ServiceHealth, ServiceHealthMap,
+};
+pub use tools::mcp::meta::build_meta_tools;
+pub use tools::mcp::pool::McpPool;
+pub use tools::native::{
     build_native_tools, enable_self_runner, CliToolConfig, CommandExecutionMode,
     CommandExecutionPolicy, CommandNetworkMode, FileToolLimits, NativeTool, ToolSet,
     ToolSetBuilder,
 };
-pub use trigger_engine::event_source::EventSource;
-pub use trigger_engine::goal_source::GoalSource;
-pub use trigger_engine::subscription_source::{
+pub use tools::surface::{
+    cli_tool, AgentToolSurfaceConfig, BashMode, CustomToolFactory, FileToolMode,
+    ResolvedToolSelection, ToolCeiling, ToolPolicyVersion, ToolRuntimeContext, ToolSurface,
+    TOOL_POLICY_V1,
+};
+pub use triggers::callback::reject_secret_bearing_callback_fields;
+pub use triggers::engine::event_source::EventSource;
+pub use triggers::engine::goal_source::GoalSource;
+pub use triggers::engine::subscription_source::{
     collection_ids, subscribe_collections, UpdateSubscriptionSource,
 };
-pub use trigger_engine::{FireIntent, FireResult, TriggerKind, TriggerSource};
+pub use triggers::engine::{
+    run_trigger_engine, FireIntent, FireResult, TriggerKind, TriggerSource,
+};
 pub use truncation::{TruncationLimits, TruncationMode};
-pub use watcher::{AgentRequest, DefraWatcher, Watcher};
+pub use turn::prompt::{LayeredPromptBuilder, PromptBuilder};
 
 #[doc(hidden)]
 pub mod __test_internals {
-    pub use crate::agent::principal_assembly::AgentBuildError;
-    pub use crate::lifecycle::activate_workspace_bound_request;
-    pub use crate::lifecycle::materialize::supersede_trigger_requests_in_txn;
-    pub use crate::lifecycle::materialize::EnqueuedAgentRequest;
-    pub use crate::lifecycle::queue::{reconcile_coalesced_pending_request, QueueSource};
+    pub use crate::request::lifecycle::materialize::activate_workspace_bound_request_with_identity;
+    pub use crate::request::lifecycle::materialize::supersede_trigger_requests_in_txn;
+    pub use crate::request::lifecycle::queue::{
+        reconcile_coalesced_pending_request, reconcile_coalesced_pending_request_for_with_access,
+        QueueSource,
+    };
+    pub use crate::runtime::agent::principal_assembly::AgentBuildError;
+    pub use crate::store::config_client::TXN_TRACING_TARGET;
+    pub use gents_protocol::request_lifecycle::EnqueuedAgentRequest;
 }
-
-pub(crate) mod tool_output;

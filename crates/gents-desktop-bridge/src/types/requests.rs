@@ -34,6 +34,14 @@ pub struct ManagedServerRootValidationRequest {
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+pub struct AgentWorkspaceRootSelectRequest {
+    pub node_did: String,
+    pub agent_did: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct ManagedServerRestartRequest {
     pub node_name: String,
     pub tool_ceiling: ManagedServerToolCeiling,
@@ -69,26 +77,22 @@ pub struct PeerStatusFetchRequest {
 #[serde(rename_all = "camelCase")]
 pub struct EnrollmentStatusRequest {
     pub server_address: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ChatSubmissionQuery {
-    pub client_did: String,
-    pub node_did: String,
-    pub request_id: String,
+    #[serde(default)]
+    #[ts(optional)]
+    pub candidate_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatSendRequest {
-    /// Allocated and retained by the caller before the first helper call.
+    /// The request identity the client picked when the person sent; a retry
+    /// sends the same identity (Lean `ClientOptimisticSend`).
     #[serde(default)]
     #[ts(optional = nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
-    /// Existing local client DID captured with the operation, so switching
-    /// history identities cannot reinterpret an unresolved caller operation.
+    /// The local client DID the message was authored under; a send under
+    /// another client identity is refused.
     #[serde(default)]
     #[ts(optional = nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -96,7 +100,7 @@ pub struct ChatSendRequest {
     pub node_did: String,
     #[ts(optional = nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     #[ts(optional = nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
@@ -125,12 +129,6 @@ pub struct ChatSendRequest {
     #[ts(optional = nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
-    /// Reconcile this earlier send whose delivery is unknown instead of sending
-    /// a new request; the original signed request is replayed or confirmed.
-    #[serde(default)]
-    #[ts(optional = nullable)]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub resolve_request_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
@@ -143,6 +141,7 @@ pub struct MailboxItemRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MailboxItemObservationRequest {
     pub client_did: String,
+    pub node_did: String,
     pub item_id: String,
 }
 
@@ -185,7 +184,7 @@ pub struct SessionArchiveRequest {
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 pub struct NodeConfigSaveRequest {
-    pub document: gents::document_config::Node,
+    pub document: gents::documents::Node,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
@@ -193,14 +192,14 @@ pub struct NodeConfigSaveRequest {
 #[serde(deny_unknown_fields)]
 pub struct DefaultAgentSetRequest {
     pub node_did: String,
-    pub agent_id: String,
+    pub agent_did: String,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 pub struct AgentSaveRequest {
-    pub document: gents::document_config::Agent,
+    pub document: gents::documents::Agent,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
@@ -262,7 +261,7 @@ pub struct ToolServiceDeleteRequest {
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentDeleteRequest {
-    pub agent_id: String,
+    pub agent_did: String,
     pub node_did: String,
 }
 
@@ -283,6 +282,15 @@ pub struct BackendSaveRequest {
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
+pub struct BackendRotationSetRequest {
+    pub node_did: String,
+    pub backend_id: String,
+    pub rotation: gents::inference::backends::rotation::BackendRotation,
+}
+
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct InferenceProfileSaveRequest {
     pub document: gents::InferenceProfile,
 }
@@ -298,7 +306,7 @@ pub struct ToolsSaveRequest {
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 pub struct ToolServiceSaveRequest {
-    pub document: gents::document_config::ToolServiceRegistry,
+    pub document: gents::documents::ToolServiceRegistry,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
@@ -321,14 +329,14 @@ pub struct ToolServiceTestRequest {
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 pub struct TaskSaveRequest {
-    pub document: gents::document_config::Task,
+    pub document: gents::documents::Task,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 pub struct SkillSaveRequest {
-    pub document: gents::document_config::SkillDocument,
+    pub document: gents::documents::SkillDocument,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
@@ -347,7 +355,7 @@ pub struct TaskRunRequest {
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 pub struct ScheduleSaveRequest {
-    pub document: gents::document_config::Schedule,
+    pub document: gents::documents::Schedule,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
@@ -363,7 +371,7 @@ pub struct ScheduleRunRequest {
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 pub struct TriggerSaveRequest {
-    pub document: gents::document_config::Trigger,
+    pub document: gents::documents::Trigger,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
@@ -426,7 +434,7 @@ pub struct DesktopProbeMcpServiceRequest {
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 pub struct EventSourceSaveRequest {
-    pub document: gents::document_config::EventSource,
+    pub document: gents::documents::EventSource,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
@@ -443,7 +451,7 @@ pub struct EventSourceDeleteRequest {
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 pub struct ConfigComponentsApplyRequest {
-    pub document: gents::document_config::PackConfig,
+    pub document: gents::documents::PackConfig,
 }
 
 /// Existing-document edits only; omitted values (including redacted
@@ -462,7 +470,9 @@ pub struct ConfigComponentsPatchRequest {
 pub enum ConfigComponentPatch {
     Agent {
         id: String,
-        #[ts(type = "Partial<Omit<import(\"./Agent.js\").Agent, \"node_did\" | \"agent_id\">>")]
+        #[ts(
+            type = "Partial<Omit<import(\"./Agent.js\").Agent, \"node_did\" | \"agent_did\" | \"creation_nonce\">>"
+        )]
         changes: serde_json::Map<String, serde_json::Value>,
     },
     AgentContext {
@@ -558,11 +568,11 @@ impl ConfigComponentPatch {
     pub(crate) fn into_patch(
         self,
     ) -> (
-        gents::config_client::patch::SelfConfigTarget,
+        gents::store::config_client::patch::SelfConfigTarget,
         String,
-        gents::config_client::patch::SelfConfigPatch,
+        gents::store::config_client::patch::SelfConfigPatch,
     ) {
-        use gents::config_client::patch::SelfConfigTarget;
+        use gents::store::config_client::patch::SelfConfigTarget;
         let (target, id, changes) = match self {
             Self::Agent { id, changes } => (SelfConfigTarget::Agent, id, changes),
             Self::AgentContext { id, changes } => (SelfConfigTarget::AgentContext, id, changes),
@@ -647,11 +657,11 @@ pub struct PendingQueueEditResult {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentModelSelectionRequest {
     pub node_did: String,
-    pub agent_id: String,
+    pub agent_did: String,
     pub backend_id: String,
     pub model_name: String,
-    pub reasoning_effort: Option<gents::config::ReasoningEffort>,
-    pub service_tier: Option<gents::config::ServiceTier>,
+    pub reasoning_effort: Option<gents::inference::resolved::ReasoningEffort>,
+    pub service_tier: Option<gents::inference::resolved::ServiceTier>,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]

@@ -230,13 +230,6 @@ macro_rules! retain_node_scope {
                 row_is_in_node_scope(Some(&row.node_did), source, node_did) == keep_target
             },
         );
-        retain_rows_and_sources(
-            &mut rows.chain_key_bindings,
-            &mut rows.chain_key_binding_source_node_dids,
-            |row, source| {
-                row_is_in_node_scope(Some(&row.node_did), source, node_did) == keep_target
-            },
-        );
     }};
 }
 
@@ -460,13 +453,6 @@ impl ClientStore {
             |row| row.node_did.as_str(),
         );
         replace_node_rows_with_sources(
-            &mut rows.chain_key_bindings,
-            &mut rows.chain_key_binding_source_node_dids,
-            remote.chain_key_bindings,
-            node_did,
-            |row| row.node_did.as_str(),
-        );
-        replace_node_rows_with_sources(
             &mut rows.sessions,
             &mut rows.session_source_node_dids,
             remote.sessions,
@@ -653,15 +639,16 @@ impl ClientStore {
             incoming.datastore_tool_surface_source_node_dids,
             datastore_tool_surface_merge_key,
         );
-        upsert_rows_with_sources_by_key(
-            &mut rows.chain_key_bindings,
-            &mut rows.chain_key_binding_source_node_dids,
-            incoming.chain_key_bindings,
-            incoming.chain_key_binding_source_node_dids,
-            chain_key_binding_merge_key,
-        );
 
         ClientStore::from_rows(rows)
+    }
+
+    /// `ClientDataPublication.publishedRows`: the rows of a snapshot that a
+    /// reload of `node_did` publishes. Rows the runtime returns for other
+    /// owners are dropped before the reload's footprint is computed.
+    pub(crate) fn node_rows(mut self, node_did: &str) -> Self {
+        retain_node_scope!(&mut self, node_did, true);
+        Self::from_rows(self.to_rows())
     }
 
     pub fn replace_node_scope(&self, node_did: &str, snapshot: ClientStore) -> Self {
@@ -769,7 +756,6 @@ impl ClientStore {
             event_sources: self.event_sources.clone(),
             agent_targets: self.agent_targets.clone(),
             datastore_tool_surfaces: self.datastore_tool_surfaces.clone(),
-            chain_key_bindings: self.chain_key_bindings.clone(),
             inference_backend_source_node_dids: self.inference_backend_source_node_dids.clone(),
             backend_observation_source_node_dids: self.backend_observation_source_node_dids.clone(),
             inference_profile_source_node_dids: self.inference_profile_source_node_dids.clone(),
@@ -783,7 +769,6 @@ impl ClientStore {
             datastore_tool_surface_source_node_dids: self
                 .datastore_tool_surface_source_node_dids
                 .clone(),
-            chain_key_binding_source_node_dids: self.chain_key_binding_source_node_dids.clone(),
             operator_config_authoritative_node_dids: self
                 .operator_config_authoritative_node_dids
                 .clone(),
@@ -794,9 +779,7 @@ impl ClientStore {
 #[cfg(test)]
 mod overlay_tests {
     use super::*;
-    use gents::document_config::{
-        Agent, InferenceBackend, InferenceBackendObservation, Node, Task,
-    };
+    use gents::documents::{Agent, InferenceBackend, InferenceBackendObservation, Node, Task};
     use gents_protocol::output::{
         MessagePublication, MessageRole, OutputOutcome, TranscriptMessage,
     };
@@ -808,7 +791,7 @@ mod overlay_tests {
         serde_json::from_value(serde_json::json!({
             "session_id": "shared-session",
             "node_did": node_did,
-            "agent_id": "agent",
+            "agent_did": "agent",
             "created_at": "2026-10-14T00:00:00Z",
             "title": {"text": title, "source": "user"}
         }))
@@ -819,6 +802,7 @@ mod overlay_tests {
         TranscriptMessageRow {
             doc_id: doc_id.to_owned(),
             message: TranscriptMessage {
+                native_request_id: None,
                 message_key: doc_id.to_owned(),
                 session_id: "shared-session".to_owned(),
                 node_did: node_did.to_owned(),
@@ -1224,7 +1208,8 @@ mod overlay_tests {
         Node {
             node_did: node_did.to_string(),
             display_name: Some(display_name.to_string()),
-            default_agent_id: None,
+            avatar: None,
+            default_agent_did: None,
             enabled: true,
             created_at: None,
             created_by: None,
@@ -1236,7 +1221,8 @@ mod overlay_tests {
     fn agent_config(node_did: &str, display_name: &str) -> Agent {
         serde_json::from_value(serde_json::json!({
             "node_did": node_did,
-            "agent_id": format!("{node_did}:default"),
+            "agent_did": format!("{node_did}:default"),
+            "creation_nonce": "a".repeat(64),
             "display_name": display_name,
             "enabled": true,
             "inference_profile_id": format!("{node_did}:profile"),
@@ -1248,7 +1234,7 @@ mod overlay_tests {
         serde_json::from_value(serde_json::json!({
             "node_did": node_did,
             "task_id": task_id,
-            "agent_id": "agent",
+            "agent_did": "agent",
             "prompt_template": "Do the thing",
             "enabled": enabled,
         }))
@@ -1293,6 +1279,7 @@ mod overlay_tests {
 
     fn backend_observation(probe_status: &str) -> InferenceBackendObservation {
         InferenceBackendObservation {
+            metadata_doc_id: None,
             backend_id: "backend".to_string(),
             catalogs: Vec::new(),
             probe_status: Some(probe_status.to_string()),

@@ -428,7 +428,7 @@ mod tests {
     fn running_agent_items_stay_tracked_for_the_after_turn_watcher() {
         let mut running = BTreeSet::new();
         let started = test_tool(
-            gents::toolset::AGENT_NEW_TOOL_NAME,
+            gents::tools::native::AGENT_NEW_TOOL_NAME,
             "running",
             r#"{"agent":"worker","prompt":"inspect"}"#,
         );
@@ -436,7 +436,7 @@ mod tests {
         assert!(running.contains(&started.tool_call_key));
 
         let completed = test_tool(
-            gents::toolset::AGENT_NEW_TOOL_NAME,
+            gents::tools::native::AGENT_NEW_TOOL_NAME,
             "completed",
             r#"{"agent":"worker","prompt":"inspect"}"#,
         )

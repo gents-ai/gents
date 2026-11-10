@@ -23,14 +23,15 @@ def message (blocks : List (MessageBlock PayloadSpec) := [.text text, call]) : M
       { id := 200, session := 1, request := some 10, origin := none
         refs := blocks.flatMap blockRefs, outcome := .complete, role := .assistant
         publication := .requestExecution 7 }
-    key := "turn", sequence := 0, nativeId := some "provider-message", blocks := blocks
+    key := "turn", sequence := 0, nativeId := some "provider-message"
+    nativeRequestId := some "request-1", blocks := blocks
     createdAt := 6 }
 
 def intent : ToolIntent := ⟨300, "call", "child", ⟨100, 1⟩⟩
 
 theorem native_structure_and_metadata_survive :
     agrees (reconstructMessage [segment] [] message)
-      (.ok ⟨.assistant, some "provider-message", [.text [65],
+      (.ok ⟨.assistant, some "provider-message", some "request-1", [.text [65],
         .toolCall 300 "call" none "child" [123, 125] (some "sig") none]⟩) = true := by
   native_decide
 
@@ -43,7 +44,7 @@ theorem provider_position_cannot_move_between_blocks :
     let moved := { moved with blocks := [.text text], header :=
       { moved.header with refs := [text.reference] } }
     agrees (reconstructMessage [segment] [] moved) (.ok
-      ⟨.assistant, some "provider-message", [.text [65]]⟩) = true := by native_decide
+      ⟨.assistant, some "provider-message", some "request-1", [.text [65]]⟩) = true := by native_decide
 
 def reasoningSegment : Segment :=
   { id := 120, coordinate := ⟨10, .provider 0 1 0⟩, writer := .request 7
@@ -72,7 +73,7 @@ theorem original_reasoning_block_boundaries_are_accepted :
     let exact := reasoningMessage
       [.reasoning none [.text reasoningA none], .reasoning none [.text reasoningB none]]
     agrees (reconstructMessage [reasoningSegment] [] exact)
-      (.ok ⟨.assistant, none,
+      (.ok ⟨.assistant, none, none,
         [.reasoning none [.text [97] none], .reasoning none [.text [98] none]]⟩) = true := by
   native_decide
 
@@ -85,9 +86,9 @@ theorem recovery_can_omit_incomplete_json :
     let recovered := message [.text text]
     let recoveredHeader := { recovered.header with
       outcome := .«partial», publication := .requestRecovery 8 }
-    let recovered := { recovered with header := recoveredHeader, nativeId := none }
+    let recovered := { recovered with header := recoveredHeader, nativeId := none, nativeRequestId := none }
     agrees (reconstructMessage [retained] [] recovered)
-      (.ok ⟨.assistant, none, [.text [65]]⟩) = true := by native_decide
+      (.ok ⟨.assistant, none, none, [.text [65]]⟩) = true := by native_decide
 
 theorem provider_id_mismatch_rejected :
     let wrong := .toolCall 300 "other" none "child" args (some "sig") none
@@ -145,6 +146,6 @@ theorem system_message_has_one_text_and_no_native_id :
 theorem payload_free_assistant_is_structurally_valid :
     let empty := message []
     agrees (reconstructMessage [] [] empty)
-      (.ok ⟨.assistant, some "provider-message", []⟩) = true := by native_decide
+      (.ok ⟨.assistant, some "provider-message", some "request-1", []⟩) = true := by native_decide
 
 end CanonicalOutput.MessageCases

@@ -1,27 +1,27 @@
 //! Shared node-scoped inference selection for protocol adapters.
 
 use anyhow::{anyhow, Result};
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::load_node;
 use std::sync::Arc;
 
 pub(crate) async fn load_bound_profile(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
-    agent_id: &str,
-) -> Result<gents::document_config::InferenceProfile> {
-    use gents::config_client::{read_desired_state_record_in_txn as read, ConfigAccess};
+    agent_did: &str,
+) -> Result<gents::documents::InferenceProfile> {
+    use gents::store::config_client::{read_desired_state_record_in_txn as read, ConfigAccess};
     use gents::Collection;
     ConfigAccess::transact_local_write(node, None, "codex.bound_profile", |txn| {
         Box::pin(async move {
-            let agent: gents::document_config::Agent = serde_json::from_value(
-                read(txn, Collection::Agent, node_did, agent_id)
+            let agent: gents::documents::Agent = serde_json::from_value(
+                read(txn, Collection::Agent, node_did, agent_did)
                     .await?
                     .map(|(_, value)| value)
-                    .ok_or_else(|| anyhow!("agent {agent_id:?} missing for {node_did:?}"))?,
+                    .ok_or_else(|| anyhow!("agent {agent_did:?} missing for {node_did:?}"))?,
             )?;
             anyhow::ensure!(agent.enabled, "bound agent is disabled");
-            let profile: gents::document_config::InferenceProfile = serde_json::from_value(
+            let profile: gents::documents::InferenceProfile = serde_json::from_value(
                 read(
                     txn,
                     Collection::InferenceProfile,
@@ -33,7 +33,7 @@ pub(crate) async fn load_bound_profile(
                 .ok_or_else(|| anyhow!("bound inference profile missing"))?,
             )?;
             profile.validate()?;
-            let backend: gents::document_config::InferenceBackend = serde_json::from_value(
+            let backend: gents::documents::InferenceBackend = serde_json::from_value(
                 read(
                     txn,
                     Collection::InferenceBackend,
@@ -52,23 +52,45 @@ pub(crate) async fn load_bound_profile(
     .await
 }
 
+/// The bound Agent document's identity binding, read as the node that owns it.
+pub(crate) async fn load_bound_agent_binding(
+    node: &Arc<EmbeddedNode>,
+    node_did: &str,
+    agent_did: &str,
+) -> Result<gents_protocol::agent_identity::AgentIdentityBinding> {
+    use gents::store::config_client::{read_desired_state_record_in_txn as read, ConfigAccess};
+    use gents::Collection;
+    ConfigAccess::transact_local_write(node, None, "codex.bound_agent", |txn| {
+        Box::pin(async move {
+            let agent: gents::documents::Agent = serde_json::from_value(
+                read(txn, Collection::Agent, node_did, agent_did)
+                    .await?
+                    .map(|(_, value)| value)
+                    .ok_or_else(|| anyhow!("agent {agent_did:?} missing for {node_did:?}"))?,
+            )?;
+            Ok(agent.identity_binding())
+        })
+    })
+    .await
+}
+
 pub(crate) async fn load_bound_context_window(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
 ) -> Result<i64> {
-    let profile = load_bound_profile(node, node_did, agent_id).await?;
-    let backend = gents::backend_registry::lookup_backend(node, node_did, &profile.backend_id)
-        .await?
-        .ok_or_else(|| anyhow!("bound backend disappeared"))?;
-    let observation =
-        gents::backend_registry::lookup_backend_observation(node, node_did, &profile.backend_id)
-            .await?;
-    let credential_scope = matches!(
-        backend.auth,
-        gents::document_config::BackendAuth::NodeOAuth { .. }
+    let profile = load_bound_profile(node, node_did, agent_did).await?;
+    let backend =
+        gents::inference::backends::registry::lookup_backend(node, node_did, &profile.backend_id)
+            .await?
+            .ok_or_else(|| anyhow!("bound backend disappeared"))?;
+    let observation = gents::inference::backends::registry::lookup_backend_observation(
+        node,
+        node_did,
+        &profile.backend_id,
     )
-    .then_some(node_did);
+    .await?;
+    let credential_scope = backend.auth.uses_node_oauth().then_some(node_did);
     let catalog = observation
         .as_ref()
         .map(|observation| observation.catalog_for(credential_scope))
@@ -95,19 +117,19 @@ pub(crate) async fn load_bound_context_window(
     Ok(value)
 }
 
-pub(crate) async fn resolve_bound_agent_id(
+pub(crate) async fn resolve_bound_agent_did(
     node: &EmbeddedNode,
-    override_agent_id: Option<&str>,
+    override_agent_did: Option<&str>,
     node_did: &str,
 ) -> Result<String> {
-    if let Some(value) = explicit_agent_override(override_agent_id) {
+    if let Some(value) = explicit_agent_override(override_agent_did) {
         return Ok(value);
     }
     let principal = load_node(node, node_did)
         .await?
         .ok_or_else(|| anyhow!("node {node_did:?} is not configured"))?;
     principal
-        .default_agent_id
+        .default_agent_did
         .map(|id| id.trim().to_string())
         .filter(|id| !id.is_empty())
         .ok_or_else(|| anyhow!("node {node_did:?} has no default agent binding"))
@@ -118,4 +140,21 @@ pub(crate) fn explicit_agent_override(value: Option<&str>) -> Option<String> {
         .map(str::trim)
         .filter(|id| !id.is_empty())
         .map(str::to_owned)
+}
+
+/// Derives the bound Agent's own signer from the runtime root. Shim writes to
+/// the Agent's documents sign as the Agent, so the node identity never stands
+/// in for it.
+pub(crate) async fn load_bound_agent_signer(
+    runtime: &dyn gents::NodeIdentity,
+    node: &Arc<EmbeddedNode>,
+    node_did: &str,
+    agent_did: &str,
+) -> Result<gents::store::identity::ManagedAgentSigner> {
+    use anyhow::Context as _;
+    let binding = load_bound_agent_binding(node, node_did, agent_did).await?;
+    let identity = gents::store::identity::resolve_agent_identity(runtime, &binding)?;
+    identity
+        .managed_agent_signer()
+        .context("bound Agent identity has no managed signer")
 }

@@ -28,6 +28,7 @@ pub(crate) struct LeanCompactionProjectionJoinCase {
     pub(crate) rebuilt_projection_input: Option<LeanRebuiltProjectionInput>,
     pub(crate) result: String,
     pub(crate) output_tokens: Option<usize>,
+    pub(crate) committed_reductions: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,6 +52,7 @@ pub(crate) struct CompactionProjectionJoinObservation {
     pub(crate) rebuilt_projection_input: Option<LeanRebuiltProjectionInput>,
     pub(crate) result: String,
     pub(crate) output_tokens: Option<usize>,
+    pub(crate) committed_reductions: usize,
 }
 
 pub(crate) trait CompactionProjectionJoinAdapter {
@@ -91,6 +93,7 @@ where
             rebuilt_projection_input: case.rebuilt_projection_input.clone(),
             result: case.result.clone(),
             output_tokens: case.output_tokens,
+            committed_reductions: case.committed_reductions,
         };
         if actual != expected {
             return Err(format!(

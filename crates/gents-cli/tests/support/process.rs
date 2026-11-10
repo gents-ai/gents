@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -9,6 +10,8 @@ use serde_json::Value;
 
 use super::fs::read_captured_log;
 use super::ports;
+
+mod desktop_binary;
 
 const MAX_STOLEN_PORT_ATTEMPTS: u32 = 3;
 
@@ -87,31 +90,46 @@ pub fn cli_bin() -> &'static str {
 }
 
 pub fn desktop_bin() -> Result<PathBuf> {
-    let cli_path = Path::new(cli_bin());
-    let binary_name = format!("gents-desktop{}", std::env::consts::EXE_SUFFIX);
-    let desktop_path = cli_path
-        .parent()
-        .ok_or_else(|| anyhow!("unable to resolve gents binary directory"))?
-        .join(binary_name);
-
+    let build = desktop_binary::DesktopBuild::for_cli(
+        Path::new(cli_bin()),
+        env!("GENTS_BUILD_TARGET"),
+        std::env::consts::EXE_SUFFIX,
+    )
+    .context("resolving desktop build from the invoking CLI artifact")?;
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)
         .ok_or_else(|| anyhow!("unable to resolve workspace root from CARGO_MANIFEST_DIR"))?;
-    let status = Command::new("cargo")
-        .current_dir(workspace_root)
-        .args(["build", "-p", "gents-desktop", "--bin", "gents-desktop"])
-        .status()
+    let output = build
+        .cargo_command(workspace_root)
+        .stderr(Stdio::inherit())
+        .output()
         .context("building gents-desktop binary for e2e")?;
-    if !status.success() {
-        bail!("cargo build -p gents-desktop --bin gents-desktop failed");
+    let messages = desktop_binary::parse_artifact_messages(&output.stdout)
+        .context("decoding Cargo artifact messages")?;
+    for rendered in &messages.rendered {
+        std::io::stderr().write_all(rendered.as_bytes())?;
     }
-    Ok(desktop_path)
+    anyhow::ensure!(
+        output.status.success(),
+        "gents-desktop build failed: {}",
+        output.status
+    );
+    build
+        .reported_binary(messages.executable.as_deref())
+        .with_context(|| {
+            format!(
+                "checking Cargo's desktop artifact against {}",
+                build.binary.display()
+            )
+        })
 }
 
 pub fn run_desktop_init_json(node_home: &Path, desktop_home: &Path, label: &str) -> Result<Value> {
     let output = Command::new(desktop_bin()?)
         .env("RUST_LOG", "error")
+        .env("GENTS_HOME", node_home)
+        .env("GENTS_DESKTOP_HOME", desktop_home)
         .arg("init")
         .arg("--node-home")
         .arg(node_home)
@@ -151,7 +169,7 @@ fn codex_shim_opt_out(extra_args: &[&str]) -> &'static [&'static str] {
     }
 }
 
-/// Spawn a `gents server` and wait for its readiness JSON. Never replaces a
+/// Spawn a `gents runtime server` and wait for its readiness JSON. Never replaces a
 /// raced-away port: a caller holding this signature cannot observe a port
 /// change, so moving the server would strand it on a dead port.
 pub fn spawn_server_with_ready_json(
@@ -213,14 +231,16 @@ fn spawn_server_with_ready_json_inner(
             .stdout(Stdio::from(stdout))
             .stderr(Stdio::from(stderr));
         configure_foreground_server_env(&mut command, envs);
-        let child = command.spawn().context("spawning gents server")?;
+        let child = command.spawn().context("spawning gents runtime server")?;
         let mut serve = ServeProcess::with_logs(child, stdout_log, stderr_log);
 
         loop {
             let stdout_so_far = read_captured_log(serve.stdout_log.as_ref())?;
             if let Some(value) = server_readiness_json(&stdout_so_far) {
                 super::graphql::register_served_home(
+                    home_dir,
                     &served_home_dir(home_dir, extra_args, envs),
+                    envs,
                     port,
                 )?;
                 return Ok((serve, port, value));
@@ -298,8 +318,13 @@ pub fn spawn_server_with_env(
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
     configure_foreground_server_env(&mut command, envs);
-    let child = command.spawn().context("spawning gents server")?;
-    super::graphql::register_served_home(&served_home_dir(home_dir, extra_args, envs), port)?;
+    let child = command.spawn().context("spawning gents runtime server")?;
+    super::graphql::register_served_home(
+        home_dir,
+        &served_home_dir(home_dir, extra_args, envs),
+        envs,
+        port,
+    )?;
     Ok(ServeProcess::with_logs(child, stdout_log, stderr_log))
 }
 

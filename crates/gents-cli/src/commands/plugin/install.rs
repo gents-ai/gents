@@ -22,23 +22,78 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
     let manifest = pack.archive.manifest();
     anyhow::ensure!(
         !manifest.metadata.plugins.is_empty(),
-        "{namespace}/{name} carries no plugins; install the whole pack with gents pack install"
+        "{namespace}/{name} carries no plugins; install the whole pack with gents config pack install"
     );
+    let source = gents::pack::PackSource::Registry {
+        namespace: pack.namespace.clone(),
+        name: pack.name.clone(),
+        version: pack.version.clone(),
+        artifact_digest: pack.artifact_digest.clone(),
+    };
     let notification_scope = crate::commands::pack::plugin_notification_scope(&home).await?;
+    if let Some((gents::ConfigAccess::Graphql(endpoint), owner)) = &notification_scope {
+        use futures_util::StreamExt;
+        let source = crate::commands::pack::PackSource::received(pack.archive, source)?;
+        let dependencies =
+            futures_util::stream::iter(source.manifest().metadata.dependencies.iter())
+                .map(|coordinate| {
+                    crate::commands::pack::resolve_pack_source(
+                        coordinate,
+                        args.registry.as_deref(),
+                        &home,
+                    )
+                })
+                .buffered(4)
+                .collect::<Vec<_>>()
+                .await
+                .into_iter()
+                .collect::<Result<Vec<_>>>()?;
+        let pack_args = crate::cli::PackInstallArgs {
+            package: args.name.clone(),
+            inference_slots: Vec::new(),
+            dependency_variables: Vec::new(),
+            preview: false,
+            scope: crate::cli::ScopeArgs {
+                home: Some(home.clone()),
+                graphql: None,
+                node_did: None,
+            },
+            output: crate::cli::output_format::OutputFormat::Json,
+            force_rebind_concrete_did: false,
+            registry: args.registry.clone(),
+            drift: Default::default(),
+            grant_authority: args.grant_authority,
+            wire: Vec::new(),
+            expect_digest: None,
+            explicit: true,
+        };
+        let result = crate::http::pack_install_client::install_remote(
+            endpoint,
+            owner,
+            &source,
+            &dependencies,
+            &pack_args,
+            true,
+        )
+        .await?;
+        return crate::print_json(&result);
+    }
     let notify_scope = notification_scope.clone();
     let notify_home = home.clone();
     let result = gents::pack::plugin_lifecycle::install_plugin(
         &home,
         &pack.archive,
         args.grant_authority,
-        move |identity| async move {
+        source,
+        move |identity, changes| async move {
             if let Some((access, owner)) = notify_scope {
-                gents::pack::record_plugin_store_change(
+                gents::pack::record_staged_plugin_store_change(
                     &access,
                     &owner,
                     &notify_home,
                     &identity.coordinate,
                     Some(&identity),
+                    &changes,
                 )
                 .await
             } else {
@@ -49,7 +104,9 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
     .await;
     if let Some((access, _)) = &notification_scope {
         if let Some(node) = access.local_node() {
-            node.shutdown().await;
+            if let Err(error) = node.shutdown().await {
+                tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
+            }
         }
     }
     let (record, installed) = result?;
@@ -98,7 +155,7 @@ mod tests {
     #[tokio::test]
     async fn a_published_plugin_installs_from_its_pack_and_runs_by_name() {
         let (bytes, digest) = echo_pack();
-        let archive = gents::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
+        let archive = gents::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
         let (namespace, version) = (
             archive.manifest().metadata.namespace.clone(),
             archive.manifest().version.clone(),
@@ -123,7 +180,7 @@ mod tests {
     async fn install_and_remove_record_the_plugin_store_change_in_the_node() {
         use clap::Parser;
         let (bytes, digest) = echo_pack();
-        let archive = gents::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
+        let archive = gents::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
         let (namespace, version) = (
             archive.manifest().metadata.namespace.clone(),
             archive.manifest().version.clone(),
@@ -141,7 +198,7 @@ mod tests {
             home.path().to_str().unwrap(),
         ])
         .unwrap();
-        let crate::cli::Command::Init(init_args) = cli.command else {
+        let Some(crate::cli::Command::Init(init_args)) = cli.command else {
             panic!("expected init")
         };
         crate::commands::init::init(init_args).await.unwrap();
@@ -150,7 +207,12 @@ mod tests {
                 .await
                 .unwrap();
             let records = access.execute("{ PackInstallation { coordinate } }").await;
-            access.local_node().unwrap().shutdown().await;
+            access
+                .local_node()
+                .unwrap()
+                .shutdown()
+                .await
+                .expect("node shutdown");
             records.unwrap()["data"]["PackInstallation"].clone()
         };
 
@@ -161,19 +223,30 @@ mod tests {
             records().await,
             serde_json::json!([{ "coordinate": format!("{namespace}/echo") }])
         );
-        super::super::remove(crate::cli::args::PluginRemoveArgs {
+        // Retiring a plugin needs a complete reference inventory, which no
+        // document reader can prove under ACP: the removal refuses and leaves
+        // both the store and the Node's record in place.
+        let error = super::super::remove(crate::cli::args::PluginRemoveArgs {
             name: format!("{namespace}/echo"),
             home: Some(home.path().to_owned()),
         })
         .await
-        .unwrap();
-        assert_eq!(records().await, serde_json::json!([]));
+        .unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<gents::pack::PackRemovalError>(),
+            Some(gents::pack::PackRemovalError::ReferenceInventoryUnavailable)
+        ));
+        assert!(store::read_record(home.path(), &namespace, "echo").is_ok());
+        assert_eq!(
+            records().await,
+            serde_json::json!([{ "coordinate": format!("{namespace}/echo") }])
+        );
     }
 
     #[tokio::test]
     async fn plugin_install_writes_an_operator_home_record() {
         let (bytes, digest) = echo_pack();
-        let archive = gents::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
+        let archive = gents::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
         let (namespace, version) = (
             archive.manifest().metadata.namespace.clone(),
             archive.manifest().version.clone(),
@@ -200,7 +273,7 @@ mod tests {
     #[tokio::test]
     async fn a_digest_mismatch_is_refused_and_nothing_is_installed() {
         let (bytes, _) = echo_pack();
-        let archive = gents::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
+        let archive = gents::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
         let namespace = archive.manifest().metadata.namespace.clone();
         let version = archive.manifest().version.clone();
         let (base_url, _) = serve_fake_pack("echo", &version, bytes, "0".repeat(64)).await;
@@ -216,7 +289,7 @@ mod tests {
     #[tokio::test]
     async fn a_pack_from_another_namespace_is_refused() {
         let (bytes, digest) = echo_pack();
-        let version = gents::pack_archive::PackArchive::from_bytes(&bytes)
+        let version = gents::pack::archive::PackArchive::from_bytes(&bytes)
             .unwrap()
             .manifest()
             .version
@@ -237,7 +310,7 @@ mod tests {
     #[test]
     fn a_plugin_is_published_as_a_single_plugin_pack() {
         let (bytes, _) = echo_pack();
-        let archive = gents::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
+        let archive = gents::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
         let manifest = archive.manifest();
         assert_eq!(manifest.name, "echo");
         assert_eq!(manifest.metadata.kind, gents::pack::PackKind::Plugins);
@@ -284,8 +357,8 @@ mod instruction_tests {
             .unwrap(),
         )
         .unwrap();
-        let (bytes, _) = gents::pack_archive::pack_dir(&root).unwrap();
-        let archive = gents::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
+        let (bytes, _) = gents::pack::archive::pack_dir(&root).unwrap();
+        let archive = gents::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
         let home = tempfile::tempdir().unwrap();
 
         gents::plugin::install::install_pack_plugins(
@@ -304,7 +377,7 @@ mod instruction_tests {
         )));
         let tool = gents::plugin::tool::PluginTool::resolve(
             executor,
-            &gents::document_config::PluginToolRef {
+            &gents::documents::PluginToolRef {
                 tool_calls: false,
                 plugin: "team/echo".into(),
                 digest: None,
@@ -314,7 +387,8 @@ mod instruction_tests {
             None,
         )
         .unwrap();
-        let definition = gents::llm::tool::ToolDyn::definition(&tool, String::new()).await;
+        let definition =
+            gents::inference::llm::tool::ToolDyn::definition(&tool, String::new()).await;
         assert_eq!(definition.description, markdown);
     }
 }

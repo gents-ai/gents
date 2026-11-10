@@ -7,10 +7,11 @@ abbrev NodeDid := Nat
 structure SessionObservation where
   sessionId             : SessionId
   nodeDid               : NodeDid
-  agentId               : Option AgentId
+  agentDid               : Option AgentDid
   latestObservedRequest : Option RequestId
   latestTurn            : Option ClientTurnState
   queuedRequests        : List RequestId := []
+  pendingQueueRequests  : List RequestId := []
   foldedRequests        : List RequestId := []
   deriving DecidableEq, Repr
 
@@ -42,7 +43,7 @@ structure Selection where
 
 inductive BlockedReason where
   | clientOffline
-  | agentMismatch (requested existing : AgentId)
+  | agentMismatch (requested existing : AgentDid)
   | mutationRejected
   deriving DecidableEq, Repr
 

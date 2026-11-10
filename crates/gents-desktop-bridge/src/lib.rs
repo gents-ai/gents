@@ -1,6 +1,7 @@
 pub mod accounts;
 #[cfg(feature = "tauri-host")]
 mod app_exit;
+#[cfg(feature = "tauri-host")]
 pub mod approvals_watch;
 pub mod cause_derivation;
 pub mod commands;
@@ -31,13 +32,15 @@ pub mod state;
 #[cfg(feature = "tauri-host")]
 pub mod tauri_commands;
 pub mod types;
+#[cfg(feature = "tauri-host")]
+mod ux_watch;
 
 pub use config::{
     AppMeta, BootstrapPolicy, BridgeConfig, HomePolicy, ManagedServerPolicy, NodeHomePolicy,
     TracingConfig,
 };
 pub use error::{BridgeError, BridgeErrorCode};
-pub use gents::store_key::StoreKeyCustodyChoice;
+pub use gents::store::local::store_key::StoreKeyCustodyChoice;
 pub use gents_server::enrollment;
 pub use package_tools::{prefer_host_tools, prepare_host_command};
 #[cfg(feature = "tauri-host")]

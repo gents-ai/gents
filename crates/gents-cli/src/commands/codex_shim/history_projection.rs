@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 use gents_codex_protocol as codex;
 use gents_codex_protocol::MessagePhase;
 use gents_protocol::client_protocol::{derive_persisted_attempt, RequestLifecycleState};
@@ -69,7 +69,8 @@ pub(super) async fn load_thread_turns(
         .as_ref()
         .map(|link| (link.node_did.as_str(), link.requester_did.as_deref()))
         .unwrap_or((state.node_did.as_ref(), Some(state.local_requester_did())));
-    let session_scope = gents::session::session_scope_filter(owner, &record.session_id, requester);
+    let session_scope =
+        gents_protocol::session::session_scope_filter(owner, &record.session_id, requester);
     let request_scope = gents::session::public_request_filter(&session_scope);
     let query = format!(
         r#"{{
@@ -119,9 +120,9 @@ pub(super) async fn load_thread_turns(
                 {}
             }}
         }}"#,
-        gents::session::canonical_rows::AGENT_MESSAGE_FIELDS,
+        gents_protocol::output::rows::AGENT_MESSAGE_FIELDS,
     );
-    let response = query_node_json(&state.node, &query).await?;
+    let response = query_node_json(&state.reader, &query).await?;
 
     let requests = decode_rows::<AgentRequestRow>(&response, "AgentRequest")
         .context("decoding AgentRequest history rows")?;
@@ -247,7 +248,7 @@ async fn load_completed_compactions(
             }}
         }}"#
     );
-    let response = query_node_json(&state.node, &query).await?;
+    let response = query_node_json(&state.reader, &query).await?;
     decode_rows::<CompactionRow>(&response, "InferenceCall")
         .context("decoding completed InferenceCall compaction history rows")
 }
@@ -494,9 +495,9 @@ fn project_turn_group(
         request: &'a AgentRequestRow,
         requests: &[AgentRequestRow],
     ) -> Option<&'a str> {
-        gents::lifecycle::folded_into(request).filter(|head| {
+        gents::request::lifecycle::folded_into(request).filter(|head| {
             requests.iter().any(|other| {
-                other.request_id == *head && gents::lifecycle::folded_into(other).is_none()
+                other.request_id == *head && gents::request::lifecycle::folded_into(other).is_none()
             })
         })
     }
@@ -737,11 +738,11 @@ async fn decode_canonical_message_rows(
     state: &ShimState,
     response: &Value,
 ) -> Result<Vec<MessageRow>> {
-    let access = gents::config_client::ConfigAccess::local(state.node.clone());
+    let access = state.reader.clone();
     let mut messages = Vec::new();
     let mut physical_ids = BTreeSet::new();
     for raw in raw_rows(response, "AgentMessage") {
-        let observed = gents::session::canonical_rows::decode_transcript_message_row(&raw)
+        let observed = gents_protocol::output::rows::decode_transcript_message_row(&raw)
             .context("decoding canonical AgentMessage header")?;
         anyhow::ensure!(
             physical_ids.insert(observed.doc_id.clone()),
@@ -776,7 +777,7 @@ async fn decode_tool_rows(
     session_id: &str,
     requester: Option<&str>,
 ) -> Result<Vec<ToolRow>> {
-    let access = gents::config_client::ConfigAccess::local(state.node.clone());
+    let access = state.reader.clone();
     let mut tools = Vec::new();
     for row in raw_rows(response, "AgentToolCall") {
         if row.get("request_doc_id").is_none_or(Value::is_null) {
@@ -946,7 +947,7 @@ mod tests {
         };
         let request = request_row(json!({
             "request_id": "wake-1",
-            "content": gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
+            "content": gents::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
             "lifecycle_state": "completed",
             "input": {"queue":{"source":"background_completion","policy":"coalesce","key":"background_completion:thread-1"}},
             "execution_origin": "scheduled"
@@ -1002,7 +1003,7 @@ mod tests {
             "content": "we should move faster",
             "lifecycle_state": "superseded",
             "superseded_by_request": "head",
-            "failure_reason": gents::lifecycle::FOLDED_REASON,
+            "failure_reason": gents::request::lifecycle::FOLDED_REASON,
             "input": queued,
             "execution_origin": "interactive"
         }));
@@ -1180,6 +1181,7 @@ mod tests {
                 None,
                 2,
                 gents_protocol::message::Message::Assistant {
+                    request_id: None,
                     id: None,
                     content: vec![gents_protocol::message::AssistantContent::Reasoning(
                         gents_protocol::message::Reasoning {
@@ -1212,6 +1214,7 @@ mod tests {
                 None,
                 4,
                 gents_protocol::message::Message::Assistant {
+                    request_id: None,
                     id: None,
                     content: vec![
                         gents_protocol::message::AssistantContent::Reasoning(

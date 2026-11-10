@@ -11,7 +11,13 @@ import {
   ManagedRuntimeAuthorityPicker,
   ManagedRuntimeAuthorityReview,
 } from "@/components/ManagedRuntimeAuthority";
-import { authoritiesEqual, authorityForSelection } from "@/lib/managedRuntimeAuthority";
+import {
+  authoritiesEqual,
+  authorityForSelection,
+  authorityRefusalText,
+  authorityRestartPlan,
+  type AuthorityRestartPlan,
+} from "@/lib/managedRuntimeAuthority";
 import {
   LOGIN_ITEMS_PATH,
   describeManagedServerWait,
@@ -19,9 +25,71 @@ import {
 } from "../../../lib/managedServerStartup";
 import { Fact, Group, PathFact, Row, StackedRow } from "./rows";
 import { useApp } from "@/app/AppContext";
+import { useFleet } from "@/hooks/useFleet";
+import { nodeOf } from "../../../hooks/fleetStore";
+import { engineerAgentOf } from "@/lib/engineer";
 import { ManagedRuntimeUnavailableError } from "../../../lib/managedRuntimeReadiness";
 import { useStartup } from "@/hooks/useClient";
 import { errorText } from "../../../lib/errorText";
+
+/** Starting and stopping the local node, for the node page's header. */
+export function useLocalServerRun() {
+  const { stores, actions } = useApp();
+  const { incompatibleHome } = useStartup();
+  const status = stores.localServer.use.status();
+  const operating = stores.localServer.use.operation() !== null;
+  const [acting, setActing] = useState(false);
+  const run = async (label: string, op: () => Promise<unknown>) => {
+    setActing(true);
+    try {
+      await op();
+      await actions.refreshSnapshot();
+      toast(label);
+    } catch (e) {
+      if (!(await incompatibleHome?.adopt(e))) toast(`${label} failed: ${String(e)}`);
+    } finally {
+      setActing(false);
+    }
+  };
+  return {
+    offered: actions.localServerOffers.status,
+    /** whether the node's state has been read yet */
+    known: status != null,
+    running: status?.state === "running" || status?.state === "external",
+    external: status?.state === "external",
+    starting: status?.state === "starting",
+    busy: acting || operating,
+    start: () =>
+      void run("Node started", () =>
+        actions.startLocalServer(status?.nodeName ?? "gents"),
+      ),
+    stop: () => void run("Node stopped", () => actions.stopLocalServer()),
+  };
+}
+
+export function RunNodeButton() {
+  const node = useLocalServerRun();
+  if (!node.offered) return null;
+  return node.running ? (
+    <Button
+      size="sm"
+      variant="outline"
+      disabled={node.busy || node.external}
+      onClick={node.stop}
+    >
+      {node.busy ? <Spinner /> : null} Stop node
+    </Button>
+  ) : (
+    <Button
+      size="sm"
+      variant="brand"
+      disabled={node.busy || node.starting}
+      onClick={node.start}
+    >
+      {node.busy || node.starting ? <Spinner /> : null} Start node
+    </Button>
+  );
+}
 
 export function LocalServer() {
   const { stores, actions } = useApp();
@@ -31,6 +99,7 @@ export function LocalServer() {
   const status = stores.localServer.use.status();
   const readFailure = stores.localServer.use.readFailure();
   const wait = stores.localServer.use.wait();
+  const localNode = useFleet((fleet) => nodeOf(fleet, status?.nodeDid));
   const operating = stores.localServer.use.operation() !== null;
   const statusError = readFailure
     ? `Could not check the background node: ${readFailure}`
@@ -42,6 +111,10 @@ export function LocalServer() {
     useState<ManagedServerAuthorityInput["toolCeiling"]>("readwrite");
   const [selectedDirectory, setSelectedDirectory] = useState<string | null>(null);
   const [authorityError, setAuthorityError] = useState<string | null>(null);
+  const [refusal, setRefusal] = useState<Extract<
+    AuthorityRestartPlan,
+    { kind: "refused" }
+  > | null>(null);
   useEffect(() => actions.watchLocalServer(), [actions]);
   if (!actions.localServerOffers.status) return null;
   const act = async (label: string, run: () => Promise<unknown>) => {
@@ -72,13 +145,41 @@ export function LocalServer() {
     setToolCeiling(status.effectiveToolCeiling ?? "readwrite");
     setSelectedDirectory(status.effectiveToolRoot ?? home);
     setAuthorityError(null);
+    setRefusal(null);
     setEditingAuthority(true);
+  };
+  const keepCurrentFolder = () => {
+    const current = status?.effectiveToolRoot ?? null;
+    if (current) setSelectedDirectory(current);
+    else setToolCeiling("meta-only");
+    setAuthorityError(null);
+    setRefusal(null);
   };
   const restartWithAuthority = async () => {
     if (!authority || !actions.localServerOffers.restart) return;
+    const engineer = localNode ? engineerAgentOf(localNode) : undefined;
+    const plan = authorityRestartPlan({
+      rootChanged:
+        !!authority.toolRoot && authority.toolRoot !== status?.effectiveToolRoot,
+      nodeObserved: !!status?.nodeDid && !!localNode,
+      agentPresent: !!engineer,
+    });
+    if (plan.kind === "refused") {
+      setRefusal(plan);
+      setAuthorityError(authorityRefusalText(plan));
+      return;
+    }
     setBusy(true);
     setAuthorityError(null);
+    setRefusal(null);
     try {
+      if (plan.kind === "publishThenRestart") {
+        await actions.selectAgentWorkspaceRoot(
+          status!.nodeDid!,
+          engineer!.agentDid,
+          authority.toolRoot!,
+        );
+      }
       let next = await actions.restartLocalServer(name, authority);
       if (!next.pairingReady) {
         const paired = await actions
@@ -112,32 +213,7 @@ export function LocalServer() {
     }
   };
   return (
-    <Group
-      title="Local server"
-      action={
-        running ? (
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={busy || status?.state === "external"}
-            onClick={() => void act("Node stopped", () => actions.stopLocalServer())}
-          >
-            {busy ? <Spinner /> : null} Stop node
-          </Button>
-        ) : (
-          <Button
-            size="sm"
-            variant="brand"
-            disabled={busy || status?.state === "starting"}
-            onClick={() =>
-              void act("Node started", () => actions.startLocalServer(name))
-            }
-          >
-            {busy || status?.state === "starting" ? <Spinner /> : null} Start node
-          </Button>
-        )
-      }
-    >
+    <Group title="Local server">
       <Row
         label="State"
         description={
@@ -179,6 +255,22 @@ export function LocalServer() {
           </Badge>
         </span>
       </Row>
+      {running && !status?.pairingReady && (
+        <Row
+          label="Desktop connection"
+          description="Connect this desktop to the local node with the node owner's approval."
+        >
+          <Button
+            variant="outline"
+            disabled={busy}
+            onClick={() =>
+              void act("Desktop connected", () => actions.enrollLocalServer())
+            }
+          >
+            Connect this desktop
+          </Button>
+        </Row>
+      )}
       <Row
         label="Desktop app"
         description="Closing the window keeps controls in the menu bar. Quitting stops the local node unless background running is enabled."
@@ -233,8 +325,14 @@ export function LocalServer() {
             home={home}
             toolCeiling={toolCeiling}
             toolRoot={selectedDirectory}
-            onCeilingChange={setToolCeiling}
-            onRootChange={setSelectedDirectory}
+            onCeilingChange={(ceiling) => {
+              setRefusal(null);
+              setToolCeiling(ceiling);
+            }}
+            onRootChange={(root) => {
+              setRefusal(null);
+              setSelectedDirectory(root);
+            }}
             validateRoot={actions.validateLocalServerRoot}
             error={authorityError}
             onError={setAuthorityError}
@@ -248,6 +346,11 @@ export function LocalServer() {
             >
               Cancel
             </Button>
+            {refusal?.nextActions.includes("keepCurrentFolder") ? (
+              <Button variant="outline" disabled={busy} onClick={keepCurrentFolder}>
+                Keep current folder
+              </Button>
+            ) : null}
             <Button
               variant="brand"
               disabled={busy || !authority}

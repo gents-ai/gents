@@ -18,6 +18,7 @@ import {
   Lock,
   MessageSquare,
   Pin,
+  PinOff,
   Play,
   Plus,
   Search,
@@ -51,10 +52,12 @@ import { Age } from "./time";
 import { defaultScope, sessionsInScope, type Scope } from "@/lib/scope";
 import { useInScope, useSelectedNodeDid } from "@/hooks/useClient";
 import { sessionKeyOf } from "../../hooks/fleetStore";
+import { Hint } from "./Hint";
+import { pinSession } from "./SessionMenu";
 import { nodeOfSession } from "@/lib/nodes";
 import { NodeAgentStack } from "./NodeBehaviorStack";
 import { ListedSessionStatus } from "./SessionStatus";
-import { StartedCount } from "./StartedCount";
+import { StartedCount, startedCount } from "./StartedCount";
 import { SessionFilters, matchesView } from "./SessionFilters";
 import { emptyFilter, hasFilter } from "@/lib/session-filter";
 import { sessionRows, type SessionRow as Row } from "@/lib/session-rows";
@@ -70,6 +73,7 @@ import { useApp } from "@/app/AppContext";
 import { usePinnedSessions } from "@/preferences";
 import { useFleet } from "../hooks/useFleet";
 import { RenameField } from "./SessionHeader";
+import { SEARCH_FIELD } from "@/lib/textAssist";
 
 /* a session, and after an open group that leaves some out, the way to all
    of them */
@@ -263,6 +267,7 @@ export function SessionsScreen({
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={(e) => e.key === "Escape" && setQuery(null)}
+                {...SEARCH_FIELD}
                 placeholder={
                   level ? `Search under ${titleOf(level)}` : "Search sessions"
                 }
@@ -598,6 +603,25 @@ function SessionList({
   );
 }
 
+/* the pin a pinned row shows, which unpins it; the row's link covers the
+   rest of the row */
+function UnpinButton({ sessionKey }: { sessionKey: string }) {
+  const pinned = usePinnedSessions();
+  return (
+    <Hint label="Unpin">
+      <button
+        type="button"
+        aria-label="Unpin"
+        onClick={() => pinSession(sessionKey, false, pinned)}
+        className="group/unpin relative z-10 grid size-5 shrink-0 cursor-pointer place-items-center rounded-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <Pin className="size-3.5 group-hover/unpin:hidden group-focus-visible/unpin:hidden" />
+        <PinOff className="hidden size-3.5 group-hover/unpin:block group-focus-visible/unpin:block" />
+      </button>
+    </Hint>
+  );
+}
+
 const SessionRow = memo(function SessionRow({
   row,
   parent,
@@ -616,14 +640,12 @@ const SessionRow = memo(function SessionRow({
   /** its place in a group just opened, for a short staggered entrance */
   enter: number | null;
 }) {
-  const { session, path, depth, started, running, open } = row;
+  const { session, path, depth, started, running, failed, stopped, open } = row;
   const { actions } = useApp();
   const [renaming, setRenaming] = useState(false);
   const startRename = useCallback(() => setRenaming(true), []);
   const condensed = depth > 0;
-  const count =
-    `${started} started session${started === 1 ? "" : "s"}` +
-    (running > 0 ? ` · ${running} running` : "");
+  const count = startedCount({ started, running, failed, stopped });
   return (
     <li
       {...attributes}
@@ -659,14 +681,15 @@ const SessionRow = memo(function SessionRow({
         <ListedSessionStatus session={session} />
         <div className="min-w-0">
           <div className="flex min-w-0 items-center gap-1.5 text-sm">
-            {!parent && session.taskId && (
+            {(session.taskOrigin || session.taskId) && (
               <Play
                 className="relative z-10 size-3.5 shrink-0 text-muted-foreground"
                 role="img"
-                aria-label={`Started by ${session.taskName ?? "a task"}`}
+                aria-label={`${parent ? "From task" : "Started by"} ${session.taskOrigin?.taskName ?? session.taskName ?? "a task"}`}
               >
                 <title>
-                  Started by {session.taskName ?? "a task"}
+                  {parent ? "From task" : "Started by"}{" "}
+                  {session.taskOrigin?.taskName ?? session.taskName ?? "a task"}
                   {session.triggerKind ? ` · ${session.triggerKind}` : ""}
                 </title>
               </Play>
@@ -722,13 +745,7 @@ const SessionRow = memo(function SessionRow({
               </a>
             )}
             {row.pinned && !renaming && (
-              <Pin
-                className="relative z-10 size-3.5 shrink-0 text-muted-foreground"
-                role="img"
-                aria-label="Pinned"
-              >
-                <title>Pinned</title>
-              </Pin>
+              <UnpinButton sessionKey={sessionKeyOf(session)} />
             )}
           </div>
           {path && path.length > 0 && (
@@ -739,14 +756,20 @@ const SessionRow = memo(function SessionRow({
         </div>
         {/* a column of its own, so counts line up down the list */}
         <span className="flex w-16 justify-end">
-          <StartedCount session={session} started={started} running={running} />
+          <StartedCount
+            session={session}
+            started={started}
+            running={running}
+            failed={failed}
+            stopped={stopped}
+          />
         </span>
         {/* a slot that fits the agent and its node, so the counts before it
             line up down the list */}
         <span className="relative z-10 flex min-w-12 justify-end">
           <NodeAgentStack
             nodeDid={nodeOfSession(session)}
-            agentId={session.agentId}
+            agentDid={session.agentDid}
             size={condensed ? "sm" : "md"}
           />
         </span>

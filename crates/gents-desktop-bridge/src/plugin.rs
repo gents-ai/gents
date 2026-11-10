@@ -51,7 +51,7 @@ where
             tauri::async_runtime::spawn(async move {
                 let refresh_handle = handle.clone();
                 let refreshed = tauri::async_runtime::spawn_blocking(move || {
-                    tauri_commands::managed_server::refresh_packaged_install(
+                    tauri_commands::managed_server::native::refresh_packaged_install(
                         &refresh_handle,
                         &refresh_handle.state::<DesktopAppState>(),
                     )
@@ -70,8 +70,10 @@ where
                 }
                 let state = handle.state::<DesktopAppState>();
                 if let Err(error) =
-                    tauri_commands::managed_server::restart_outdated_managed_job(&handle, &state)
-                        .await
+                    tauri_commands::managed_server::native::restart_outdated_managed_job(
+                        &handle, &state,
+                    )
+                    .await
                 {
                     tracing::warn!(
                         error = %error.message,
@@ -125,6 +127,8 @@ where
             tauri_commands::ux_plugins::desktop_plugin_call,
             tauri_commands::ux_plugins::desktop_ux_data_call,
             tauri_commands::ux_plugins::desktop_ux_data_surfaces,
+            tauri_commands::ux_plugins::desktop_ux_data_watch,
+            tauri_commands::ux_plugins::desktop_ux_data_unwatch,
             tauri_commands::packs::desktop_pack_wire,
             tauri_commands::packs::desktop_pack_wire_sources,
             tauri_commands::packs::desktop_workflows_dynamic,
@@ -137,7 +141,6 @@ where
             tauri_commands::allowed_dirs::desktop_plugin_approval_decide,
             tauri_commands::allowed_dirs::desktop_plugin_approval_subscribe,
             tauri_commands::allowed_dirs::desktop_plugin_approval_unsubscribe,
-            tauri_commands::lifecycle::desktop_bootstrap_summary,
             tauri_commands::e2e::desktop_native_e2e_config,
             tauri_commands::e2e::desktop_native_e2e_status,
             tauri_commands::lifecycle::desktop_init_local_standard,
@@ -146,34 +149,36 @@ where
             tauri_commands::lifecycle::desktop_app_quit,
             tauri_commands::managed_server::desktop_managed_server_status,
             tauri_commands::managed_server::desktop_managed_server_start,
+            tauri_commands::managed_server::desktop_managed_server_enroll,
             tauri_commands::managed_server::desktop_managed_server_stop,
             tauri_commands::managed_server::desktop_managed_server_set_auto_start,
             tauri_commands::managed_server::desktop_managed_server_restart,
             tauri_commands::managed_server::desktop_managed_server_reset,
             tauri_commands::managed_server::desktop_managed_server_validate_root,
+            tauri_commands::managed_server::desktop_agent_workspace_root_select,
             tauri_commands::managed_server::desktop_managed_server_open_login_items,
+            tauri_commands::join_requests::desktop_join_requests_list,
+            tauri_commands::join_requests::desktop_join_request_decide,
+            tauri_commands::join_requests::desktop_join_members_list,
+            tauri_commands::join_requests::desktop_join_history_read,
             tauri_commands::db_explorer::desktop_open_db_explorer,
             tauri_commands::peers::desktop_peer_remove,
             tauri_commands::peers::desktop_peer_rename,
+            tauri_commands::peers::desktop_ended_access_dismiss,
             tauri_commands::peers::desktop_peer_status_fetch,
             tauri_commands::peers::desktop_peer_enroll_status,
-            tauri_commands::peers::desktop_p2p_repair,
             tauri_commands::workspace::desktop_workspace_list,
-            tauri_commands::peers::desktop_network_status,
             tauri_commands::lifecycle::desktop_client_snapshot,
             tauri_commands::lifecycle::desktop_set_selected_node,
             tauri_commands::lifecycle::desktop_observer_metrics,
             tauri_commands::chat::desktop_session_snapshot,
             tauri_commands::chat::desktop_session_context_details,
-            tauri_commands::chat::desktop_session_hydration_retry,
+            tauri_commands::chat::desktop_session_reload,
             tauri_commands::chat::desktop_session_live_delta,
             tauri_commands::chat::desktop_session_rows,
             tauri_commands::chat::desktop_tool_file_changes,
             tauri_commands::chat::desktop_request_timeline,
-            tauri_commands::tools_explain::desktop_tool_surface_explain,
             tauri_commands::chat::desktop_chat_send,
-            tauri_commands::chat::desktop_chat_submission_recover,
-            tauri_commands::chat::desktop_chat_submission_acknowledge,
             tauri_commands::attachments::desktop_attachment_read,
             tauri_commands::attachments::desktop_request_attachments,
             tauri_commands::chat::desktop_pending_queue_edit,
@@ -186,10 +191,7 @@ where
             tauri_commands::chat::desktop_session_fork_before_message,
             tauri_commands::chat::desktop_session_rename,
             tauri_commands::chat::desktop_session_archive,
-            tauri_commands::chat::desktop_session_history,
-            tauri_commands::chat::desktop_request_resend,
             tauri_commands::chat::desktop_request_retry,
-            tauri_commands::mailbox::desktop_mailbox_list,
             tauri_commands::mailbox::desktop_mailbox_observe,
             tauri_commands::mailbox::desktop_mailbox_start_request,
             tauri_commands::mailbox::desktop_mailbox_dismiss,
@@ -198,6 +200,7 @@ where
             tauri_commands::config::desktop_config_components_apply,
             tauri_commands::config::desktop_config_components_patch,
             tauri_commands::config::desktop_agent_save,
+            tauri_commands::config::desktop_agent_identity_provision,
             tauri_commands::config::desktop_skill_save,
             tauri_commands::config::desktop_skill_delete,
             tauri_commands::config::desktop_task_delete,
@@ -210,6 +213,7 @@ where
             tauri_commands::config::desktop_agent_delete,
             tauri_commands::config::desktop_context_delete,
             tauri_commands::config::desktop_backend_save,
+            tauri_commands::config::desktop_backend_rotation_set,
             tauri_commands::config::desktop_inference_profile_save,
             tauri_commands::config::desktop_tools_save,
             tauri_commands::config::desktop_tool_service_save,

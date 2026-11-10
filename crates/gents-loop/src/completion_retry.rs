@@ -20,6 +20,9 @@ pub enum FailureClass {
     ParseBadRequest,
     ReasoningRejected,
     ContextOverflow,
+    /// The provider refused this account's quota while another account of the
+    /// pool can serve the request (Lean: `FailureClass.accountLimited`).
+    AccountLimited,
     Permanent,
 }
 
@@ -30,6 +33,10 @@ pub fn failure_class(failure: &ClassifiedFailure) -> FailureClass {
     }
     if report.reasoning_rejected && !matches!(error, InferenceError::UsageLimited(_)) {
         return FailureClass::ReasoningRejected;
+    }
+
+    if report.account_limited {
+        return FailureClass::AccountLimited;
     }
 
     match error {
@@ -49,6 +56,8 @@ pub struct CompletionRetryPolicy {
     pub transport_backoff: Vec<Duration>,
     pub max_resample: u32,
     pub allow_repair: bool,
+    /// Other eligible accounts of the pool: one immediate reissue each.
+    pub account_hops: u32,
 }
 
 impl CompletionRetryPolicy {
@@ -83,6 +92,7 @@ impl CompletionRetryPolicy {
                 .and_then(nonnegative_u32)
                 .unwrap_or(default.max_resample),
             allow_repair: fields.retry_allow_repair.unwrap_or(default.allow_repair),
+            account_hops: 0,
         }
     }
 
@@ -102,6 +112,7 @@ impl CompletionRetryPolicy {
             ],
             max_resample: 1,
             allow_repair: true,
+            account_hops: 0,
         }
     }
 
@@ -110,6 +121,7 @@ impl CompletionRetryPolicy {
             transport_backoff: vec![Duration::from_secs(2)],
             max_resample: 0,
             allow_repair: true,
+            account_hops: 0,
         }
     }
 
@@ -118,6 +130,7 @@ impl CompletionRetryPolicy {
             transport_backoff: Vec::new(),
             max_resample: 0,
             allow_repair: false,
+            account_hops: 0,
         }
     }
 
@@ -130,6 +143,7 @@ impl CompletionRetryPolicy {
             ],
             max_resample: 0,
             allow_repair: false,
+            account_hops: 0,
         }
     }
 }
@@ -175,6 +189,8 @@ fn nonnegative_u32(value: i64) -> Option<u32> {
 pub enum RetryKind {
     Transport,
     Resample,
+    /// An immediate reissue on the pool's next account.
+    Account,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -208,6 +224,7 @@ pub struct CompletionRetryState {
     resample_used: u32,
     repair_used: bool,
     compaction_used: bool,
+    account_used: u32,
     last_parse_error: Option<String>,
 }
 
@@ -219,6 +236,7 @@ impl CompletionRetryState {
             resample_used: 0,
             repair_used: false,
             compaction_used: false,
+            account_used: 0,
             last_parse_error: None,
         }
     }
@@ -286,6 +304,22 @@ impl CompletionRetryState {
                     }
                 }
             }
+            FailureClass::AccountLimited if self.account_used < self.policy.account_hops => {
+                self.account_used += 1;
+                PreStreamDirective::RetryAfter {
+                    delay: Duration::ZERO,
+                    kind: RetryKind::Account,
+                }
+            }
+            FailureClass::AccountLimited => PreStreamDirective::Fail {
+                reason: match error {
+                    InferenceError::UsageLimited(limit) => limit.to_string(),
+                    _ => format!(
+                        "every account of the pool reached its limit after {} account hop(s): {error}",
+                        self.account_used
+                    ),
+                },
+            },
             FailureClass::ReasoningRejected => {
                 if self.policy.allow_repair && !self.repair_used {
                     self.last_parse_error = Some(error_text.to_string());

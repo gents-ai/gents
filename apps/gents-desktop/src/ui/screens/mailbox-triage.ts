@@ -54,3 +54,25 @@ export function groupItems(items: MailboxItemView[]): TriageGroup[] {
 }
 
 export const KIND_ORDER = ["ask", "gate", "failed", "flag", "finished"];
+
+/** The mailbox page's greeting, by the hour. Late at night it is a plain
+    hello: "Good night" reads as a goodbye. */
+export function greeting(hour: number): string {
+  if (hour >= 5 && hour < 12) return "Good morning";
+  if (hour >= 12 && hour < 18) return "Good afternoon";
+  if (hour >= 18 && hour < 23) return "Good evening";
+  return "Hello";
+}
+
+/** What is waiting, worst first, in a few words: "1 went wrong · 5 to
+    decide · 2 worth a look", or "All caught up" when nothing is. */
+export function waiting(groups: readonly TriageGroup[]): string {
+  const count = (key: Triage) => groups.find((g) => g.key === key)?.items.length ?? 0;
+  const parts = [
+    [count("wrong"), "went wrong"],
+    [count("decide"), "to decide"],
+    [count("look"), "worth a look"],
+  ] as const;
+  const said = parts.filter(([n]) => n > 0).map(([n, what]) => `${n} ${what}`);
+  return said.length ? said.join(" · ") : "All caught up";
+}

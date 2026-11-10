@@ -4,9 +4,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::agent::p2p_reconcile::{EmbeddedRemoteP2pAdmin, RemoteP2pAdmin};
-use gents::config_client::ConfigAccess;
-use gents::defra_node::{EmbeddedNode, HttpConfig, StorageBackend};
+use gents::defra_node::{HttpConfig, Node as EmbeddedNode, StorageBackend};
+use gents::runtime::agent::p2p_reconcile::{EmbeddedRemoteP2pAdmin, RemoteP2pAdmin};
+use gents::store::config_client::ConfigAccess;
 use gents::{KeyIdentity, NodeIdentity};
 
 const SCHEMA: &str = "type NodeAccessProbe { name: String }";
@@ -55,7 +55,7 @@ async fn served_home(data_dir: &Path, principal: &str, address: SocketAddr) -> A
 fn insert(name: &str) -> String {
     format!(
         r#"mutation {{ create_NodeAccessProbe(input: {{ name: "{}" }}) {{ _docID }} }}"#,
-        gents::graphql::escape_graphql_string(name)
+        gents::store::graphql::escape_graphql_string(name)
     )
 }
 
@@ -76,7 +76,7 @@ async fn names(access: &ConfigAccess) -> Result<Vec<String>> {
 
 async fn assert_access_control(
     node: &Arc<EmbeddedNode>,
-    principal: &str,
+    identity: &KeyIdentity,
     address: SocketAddr,
     phase: &str,
 ) {
@@ -99,7 +99,11 @@ async fn assert_access_control(
         "unexpected schema refusal: {refused_schema:#}"
     );
 
-    let signed = ConfigAccess::graphql_as(endpoint, principal);
+    let signed = ConfigAccess::Graphql(
+        gents::store::config_client::GraphqlEndpoint::as_principal(endpoint, identity.did())
+            .with_client_signing_capability(identity.client_signing_capability().unwrap())
+            .unwrap(),
+    );
     signed
         .write("test.nac.signed", &insert(&format!("signed-{phase}")))
         .await
@@ -112,16 +116,32 @@ async fn assert_access_control(
         .expect("the home principal may write in an HTTP transaction");
 
     let admin = EmbeddedRemoteP2pAdmin::new(Arc::clone(node));
-    admin
-        .add_p2p_collections(&["NodeAccessProbe".to_string()])
+    assert!(
+        matches!(
+            admin
+                .add_replicator(
+                    &[],
+                    &["NodeAccessProbe".to_string()],
+                    &gents::runtime::agent::p2p_reconcile::PairingFilters::default(),
+                )
+                .await,
+            Err(gents::runtime::agent::p2p_reconcile::RemoteP2pAdminError::RuntimeLocalCollection(
+                ref name
+            )) if name == "NodeAccessProbe"
+        ),
+        "P2P carries only discovery and enrollment documents"
+    );
+    let replicated = gents::store::identity::node_p2p(node)
+        .expect("P2P transport")
+        .get_collections()
         .await
-        .expect("in-process P2P administration acts as the node");
-    assert!(admin
-        .list_p2p_collections()
-        .await
-        .expect("in-process P2P listing acts as the node")
-        .iter()
-        .any(|collection| !collection.is_empty()));
+        .expect("in-process P2P listing acts as the node");
+    assert!(
+        !replicated
+            .iter()
+            .any(|collection| collection == "NodeAccessProbe"),
+        "a refused runtime-local collection is never replicated: {replicated:?}"
+    );
 }
 
 /// Stopping the phase runtime releases the node's detached HTTP/P2P tasks for the next opener.
@@ -142,7 +162,7 @@ fn serve_phase(
         let address = free_address();
         let node = served_home(data_dir, principal, address).await;
         let result = phase(&node, address).await;
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
         result
     });
     drop(runtime);
@@ -152,24 +172,32 @@ fn serve_phase(
 #[test]
 fn served_home_admits_only_its_principal_across_restart() -> Result<()> {
     let home = tempfile::tempdir()?;
-    let identity = KeyIdentity::load_or_create(home.path().join("principal.key"), None)?;
+    let identity = Arc::new(KeyIdentity::load_or_create(
+        home.path().join("principal.key"),
+        None,
+    )?);
     let principal = identity.did().to_string();
     let data_dir = home.path().join("data");
 
     serve_phase(&data_dir, &principal, |node, address| {
-        let principal = principal.clone();
+        let identity = identity.clone();
         Box::pin(async move {
             node.add_collection(SCHEMA).await?;
-            assert_access_control(node, &principal, address, "first").await;
+            assert_access_control(node, identity.as_ref(), address, "first").await;
             Ok(())
         })
     })?;
     serve_phase(&data_dir, &principal, |node, address| {
-        let principal = principal.clone();
+        let identity = identity.clone();
         Box::pin(async move {
-            assert_access_control(node, &principal, address, "restarted").await;
-            let signed =
-                ConfigAccess::graphql_as(format!("http://{address}/api/v0/graphql"), &principal);
+            assert_access_control(node, identity.as_ref(), address, "restarted").await;
+            let signed = ConfigAccess::Graphql(
+                gents::store::config_client::GraphqlEndpoint::as_principal(
+                    format!("http://{address}/api/v0/graphql"),
+                    identity.did(),
+                )
+                .with_client_signing_capability(identity.client_signing_capability()?)?,
+            );
             assert_eq!(
                 names(&signed).await?,
                 [

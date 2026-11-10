@@ -1,4 +1,8 @@
 import type { ClientUpdateEvent as GeneratedClientUpdateEvent } from "./generated/ClientUpdateEvent.js";
+import type { UxDataWatchEvent } from "./generated/UxDataWatchEvent.js";
+import type { UxDataCallRequest } from "./types/uxPlugins.js";
+
+export type { UxDataWatchEvent } from "./generated/UxDataWatchEvent.js";
 
 export type ClientUpdateEvent = Partial<GeneratedClientUpdateEvent>;
 
@@ -21,6 +25,10 @@ export interface DesktopTransport {
     provider: OauthProvider,
     handler: (url: string) => void,
   ): Promise<Unlisten>;
+  watchUxData?(
+    request: UxDataCallRequest,
+    listener: (event: UxDataWatchEvent) => void,
+  ): Promise<Unlisten>;
 }
 
 const BRIDGE_PLUGIN = "gents-desktop-bridge";
@@ -34,6 +42,24 @@ export function bridgeCommand(command: string): string {
 
 export function tauriTransport(): DesktopTransport {
   return {
+    async watchUxData(request, listener) {
+      const { Channel, invoke } = await import("@tauri-apps/api/core");
+      const channel = new Channel<UxDataWatchEvent>();
+      channel.onmessage = listener;
+      const id = await invoke<string>(bridgeCommand("desktop_ux_data_watch"), {
+        request,
+        channel,
+      });
+      let active = true;
+      return () => {
+        if (!active) return;
+        active = false;
+        channel.onmessage = () => {};
+        void invoke(bridgeCommand("desktop_ux_data_unwatch"), { id }).catch(
+          () => {},
+        );
+      };
+    },
     async invoke<T>(command: string, args?: unknown): Promise<T> {
       const { invoke } = await import("@tauri-apps/api/core");
       return invoke<T>(

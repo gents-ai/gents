@@ -1,12 +1,12 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents::goal::{GoalDocument, GoalStatus};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
 use super::projection::{ProjectionEngine, UpdateTimestamps};
-use super::turn::{PromptSender, PromptSenderLine};
+use super::turn::sender::{PromptSender, PromptSenderLine};
 
 #[derive(Debug, PartialEq)]
 pub(super) enum GoalCommand {
@@ -61,7 +61,7 @@ impl GoalCommand {
         Ok(Some(command))
     }
 
-    pub(super) fn from_prompt(request: &super::turn::PromptRequest) -> Result<Option<Self>> {
+    pub(super) fn from_prompt(request: &super::turn::wire::PromptRequest) -> Result<Option<Self>> {
         if let [block] = request.prompt.as_slice() {
             if block.kind == "text"
                 && block
@@ -78,15 +78,27 @@ impl GoalCommand {
     pub(super) async fn execute(
         &self,
         node: &Arc<EmbeddedNode>,
+        actor: &identity::Did,
+        access: &gents::ConfigAccess,
         principal: &str,
         session: &str,
     ) -> Result<String> {
+        anyhow::ensure!(
+            actor.as_str() != principal,
+            "Grok goal access requires a client identity, not the node identity"
+        );
         anyhow::ensure!(
             !matches!(self, Self::Create { .. }),
             "goal creation must use atomic request admission"
         );
         if *self == Self::Clear {
-            let count = gents::goal::delete_goals_for_session(node, principal, session).await?;
+            anyhow::ensure!(
+                access.actor_did().as_deref() == Some(actor.as_str()),
+                "goal clear requires the authenticated client capability"
+            );
+            let count =
+                gents::goal::delete_goals_for_session_from_access(access, principal, session)
+                    .await?;
             return Ok(if count == 0 {
                 "No goal is set."
             } else {
@@ -100,7 +112,7 @@ impl GoalCommand {
         };
         if *self == Self::Resume {
             return Ok(format!(
-                "Goal remains {}. Resume it with `gents goal resume-request --session SESSION --from REQUEST_ID`.",
+                "Goal remains {}. Resume it with `gents automation goal resume-request --session SESSION --from REQUEST_ID`.",
                 goal.status
             ));
         }
@@ -116,10 +128,23 @@ impl GoalCommand {
                     goal.status
                 ));
             }
-            goal =
-                gents::goal::set_goal(node, principal, session, None, Some(status), None).await?;
+            anyhow::ensure!(
+                access.actor_did().as_deref() == Some(actor.as_str()),
+                "goal control requires the authenticated client capability"
+            );
+            goal = gents::goal::set_goal_from_access(
+                access,
+                principal,
+                session,
+                None,
+                Some(status),
+                None,
+                None,
+            )
+            .await?;
         }
-        goal.tokens_used = Some(gents::goal::session_token_usage(node, principal, session).await?);
+        goal.tokens_used =
+            Some(gents::goal::session_token_usage(node, actor, principal, session).await?);
         Ok(format!(
             "Goal: {}\nStatus: {}\nTokens used: {}{}",
             goal.objective,
@@ -141,15 +166,20 @@ impl GoalCursor {
     pub(super) async fn refresh(
         &mut self,
         node: &Arc<EmbeddedNode>,
+        actor: &identity::Did,
         principal: &str,
         session: &str,
         sender: &PromptSender,
         projections: &ProjectionEngine,
     ) -> Result<()> {
+        anyhow::ensure!(
+            actor.as_str() != principal,
+            "Grok goal access requires a client identity, not the node identity"
+        );
         let mut goal = gents::goal::load_canonical_goal(node, principal, session).await?;
         if let Some(goal) = goal.as_mut() {
             goal.tokens_used =
-                Some(gents::goal::session_token_usage(node, principal, session).await?);
+                Some(gents::goal::session_token_usage(node, actor, principal, session).await?);
         }
         let observed = goal
             .as_ref()
@@ -297,9 +327,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "grok shim is being removed"]
     async fn goal_observation_is_scoped_read_only_and_retries_failed_delivery() {
         use super::super::projection::BoundModelContext;
-        use gents::graphql::ensure_no_errors;
+        use gents::store::graphql::ensure_no_errors;
         use std::sync::Arc;
         let directory = tempfile::tempdir().unwrap();
         let node = Arc::new(
@@ -310,8 +341,10 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        gents::schema::ensure_runtime_schemas(&node).await.unwrap();
-        let projections = ProjectionEngine::new(
+        gents::store::schema::ensure_runtime_schemas(&node)
+            .await
+            .unwrap();
+        let projections = ProjectionEngine::new_for_test(
             node.clone(),
             BoundModelContext::new("model".into(), "Model".into(), 1000),
         );
@@ -320,6 +353,7 @@ mod tests {
             buffer: buffer.clone(),
         };
         let mut cursor = GoalCursor::default();
+        let actor = identity::Did::new("did:key:goal-test").unwrap();
         for (id, agent, session) in [
             ("owned", "principal", "session"),
             ("foreign-agent", "other", "session"),
@@ -341,16 +375,16 @@ mod tests {
             outbound: super::super::server::AcpOutbound::for_frames(tx),
         };
         assert!(cursor
-            .refresh(&node, "principal", "session", &failed, &projections)
+            .refresh(&node, &actor, "principal", "session", &failed, &projections)
             .await
             .is_err());
         assert!(cursor.delivered.is_none());
         cursor
-            .refresh(&node, "principal", "session", &sender, &projections)
+            .refresh(&node, &actor, "principal", "session", &sender, &projections)
             .await
             .unwrap();
         cursor
-            .refresh(&node, "principal", "session", &sender, &projections)
+            .refresh(&node, &actor, "principal", "session", &sender, &projections)
             .await
             .unwrap();
         assert_eq!(buffer.lock().await.len(), 1);
@@ -370,7 +404,13 @@ mod tests {
         let blocked = node.execute(r#"mutation {update_Goal(filter:{goal_id:{_eq:"owned"}}, input:{status:"blocked"}) {_docID}}"#).await;
         ensure_no_errors(&blocked, "blocked fixture").unwrap();
         let reply = GoalCommand::Pause
-            .execute(&node, "principal", "session")
+            .execute(
+                &node,
+                &actor,
+                &gents::ConfigAccess::local_as(node.clone(), actor.clone()),
+                "principal",
+                "session",
+            )
             .await
             .unwrap();
         assert!(reply.contains("Goal remains blocked"), "{reply}");
@@ -387,11 +427,11 @@ mod tests {
             .await;
         ensure_no_errors(&removed, "remove goal fixture").unwrap();
         cursor
-            .refresh(&node, "principal", "session", &sender, &projections)
+            .refresh(&node, &actor, "principal", "session", &sender, &projections)
             .await
             .unwrap();
         cursor
-            .refresh(&node, "principal", "session", &sender, &projections)
+            .refresh(&node, &actor, "principal", "session", &sender, &projections)
             .await
             .unwrap();
         let lines = buffer.lock().await;
@@ -406,7 +446,7 @@ mod tests {
         }) {_docID}}"#).await;
         ensure_no_errors(&recreated, "recreate same logical goal").unwrap();
         cursor
-            .refresh(&node, "principal", "session", &sender, &projections)
+            .refresh(&node, &actor, "principal", "session", &sender, &projections)
             .await
             .unwrap();
         let lines = buffer.lock().await;
@@ -416,7 +456,7 @@ mod tests {
         assert_eq!(next["params"]["update"]["_meta"]["gents/goalId"], "owned");
         drop(lines);
 
-        let access = gents::config_client::ConfigAccess::local(node.clone());
+        let access = gents::store::config_client::ConfigAccess::local(node.clone());
         access.write(
             "grok.goal.fixture.complete",
             r#"mutation {update_Goal(filter:{goal_id:{_eq:"owned"}}, input:{status:"complete",tokens_used:12}) {_docID}}"#,
@@ -425,7 +465,7 @@ mod tests {
             "grok.goal.fixture.request",
             r#"mutation {create_AgentRequest(input:{purpose: "normal", request_id:"usage-request",node_did:"principal",session_id:"session"}) {_docID}}"#,
         ).await.unwrap();
-        let request_doc = gents::graphql::escape_graphql_string(
+        let request_doc = gents::store::graphql::escape_graphql_string(
             &gents_protocol::graphql::extract_mutation_doc_id(&request, "AgentRequest").unwrap(),
         );
         access
@@ -442,7 +482,7 @@ mod tests {
             .await
             .unwrap();
         cursor
-            .refresh(&node, "principal", "session", &sender, &projections)
+            .refresh(&node, &actor, "principal", "session", &sender, &projections)
             .await
             .unwrap();
         let snapshot = node
@@ -452,7 +492,7 @@ mod tests {
         let updated = node.execute(r#"mutation {update_InferenceCall(filter:{call_id:{_eq:"usage-call"}},input:{completion_tokens:8}) {_docID}}"#).await;
         ensure_no_errors(&updated, "late completion usage").unwrap();
         cursor
-            .refresh(&node, "principal", "session", &sender, &projections)
+            .refresh(&node, &actor, "principal", "session", &sender, &projections)
             .await
             .unwrap();
         let lines = buffer.lock().await;
@@ -464,7 +504,13 @@ mod tests {
         assert_eq!(late["params"]["update"]["status"], "complete");
         drop(lines);
         let reply = GoalCommand::Status
-            .execute(&node, "principal", "session")
+            .execute(
+                &node,
+                &actor,
+                &gents::ConfigAccess::local_as(node.clone(), actor.clone()),
+                "principal",
+                "session",
+            )
             .await
             .unwrap();
         assert!(reply.contains("Tokens used: 28"), "{reply}");

@@ -1,5 +1,5 @@
 use crate::lean_vocab_test::{lean_callback_cases, lean_callback_retry_cases};
-use gents::workspace::{action_journal_prefix_legal, retry_allowed, ActionJournalEntry};
+use gents::tools::workspace::{action_journal_prefix_legal, retry_allowed, ActionJournalEntry};
 
 fn journal(states: &[String]) -> Vec<ActionJournalEntry> {
     states
@@ -40,6 +40,10 @@ fn generated_callback_journals_match_runtime_owner() {
     let cases = lean_callback_cases();
     assert!(!cases.is_empty(), "Lean must emit callback journal cases");
     for case in cases {
+        assert_ne!(
+            case.agent_did, case.owner_node_did,
+            "modeled callback actor is not its routing node"
+        );
         let journal = case
             .journal
             .iter()

@@ -11,28 +11,30 @@ export class JsonHttpClient {
     return this.decodeJson<T>(response);
   }
 
-  async postJson<T = unknown>(path: string, body: unknown) {
-    const response = await this.fetchWithTimeout(`${this.baseUrl}${path}`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
+  async postJson<T = unknown>(path: string, body: unknown, timeoutMs = this.timeoutMs) {
+    const response = await this.fetchWithTimeout(
+      `${this.baseUrl}${path}`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(body),
       },
-      body: JSON.stringify(body),
-    });
+      timeoutMs,
+    );
     return this.decodeJson<T>(response);
   }
 
-  async fetchWithTimeout(input: string, init: RequestInit) {
+  async fetchWithTimeout(input: string, init: RequestInit, timeoutMs = this.timeoutMs) {
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
     try {
       return await Promise.race([
         fetch(input, init),
         new Promise<Response>((_, reject) => {
           timeoutId = setTimeout(() => {
-            reject(
-              new Error(`timed out after ${this.timeoutMs}ms waiting for ${input}`),
-            );
-          }, this.timeoutMs);
+            reject(new Error(`timed out after ${timeoutMs}ms waiting for ${input}`));
+          }, timeoutMs);
         }),
       ]);
     } finally {

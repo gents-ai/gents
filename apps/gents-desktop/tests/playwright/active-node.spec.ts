@@ -26,7 +26,7 @@ test("keeps the selected node visible and reviews a draft before changing destin
     page.getByRole("heading", { name: "Start a new chat with Amy" }),
   ).toBeVisible();
   await expect(composer(page)).toHaveText("");
-  await expect(page.getByTitle("Choose a node")).toHaveCount(0);
+  await expect(page.getByTitle("Choose a node")).toContainText("Amy");
   await page.getByRole("button", { name: "Agent", exact: true }).click();
   await expect(page.getByRole("option", { name: /Remote worker/ })).toBeVisible();
   await expect(page.getByRole("option", { name: /^Default/ })).toHaveCount(0);
@@ -34,9 +34,10 @@ test("keeps the selected node visible and reviews a draft before changing destin
   await page.keyboard.press("Escape");
   await page.getByLabel("Active node", { exact: true }).click();
   await expect(
-    page.getByRole("status").filter({ hasText: "Remote configuration is read-only" }),
+    page.getByRole("status").filter({ hasText: "Read-only here" }),
   ).toBeVisible();
-  await expect(page.getByRole("textbox", { name: "Display name" })).toBeDisabled();
+  await expect(page.getByLabel("Maximum request hop")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Edit" })).toHaveCount(0);
   await testInfo.attach("remote-settings.png", {
     body: await page.screenshot(),
     contentType: "image/png",

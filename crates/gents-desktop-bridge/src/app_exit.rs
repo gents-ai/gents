@@ -146,7 +146,7 @@ mod tests {
         let config = crate::config::BridgeConfig {
             home: crate::config::HomePolicy::FixedRoot(temp.path().join("desktop")),
             bootstrap: crate::config::BootstrapPolicy::PairedRemoteOnly,
-            store_key_custody: gents::store_key::StoreKeyCustodyChoice::File,
+            store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice::File,
             ..Default::default()
         };
         let policy = crate::state::resolve_policy(&config, None).expect("policy");
@@ -154,7 +154,7 @@ mod tests {
 
         let preparation = state.app_exit.clone().begin().expect("begin exit");
         assert!(matches!(
-            crate::tauri_commands::lifecycle::register_client_start(&state),
+            crate::tauri_commands::lifecycle::single_flight::register_client_start(&state),
             Err(error) if error.code == crate::error::BridgeErrorCode::ClientStartFailed
         ));
         assert!(state
@@ -170,9 +170,10 @@ mod tests {
             .is_err());
         drop(preparation);
         assert!(!state.app_exit.is_quitting());
-        let registration = crate::tauri_commands::lifecycle::register_client_start(&state)
-            .expect("failed exit permits client start retry");
-        let crate::tauri_commands::lifecycle::ClientStartRegistration::Claimed {
+        let registration =
+            crate::tauri_commands::lifecycle::single_flight::register_client_start(&state)
+                .expect("failed exit permits client start retry");
+        let crate::tauri_commands::lifecycle::single_flight::ClientStartRegistration::Claimed {
             progress_tx,
             progress_rx: _,
         } = registration
@@ -191,7 +192,7 @@ mod tests {
         assert!(state.app_exit.ready.load(Ordering::Acquire));
         assert!(state.app_exit.is_quitting());
         assert!(matches!(
-            crate::tauri_commands::lifecycle::register_client_start(&state),
+            crate::tauri_commands::lifecycle::single_flight::register_client_start(&state),
             Err(error) if error.code == crate::error::BridgeErrorCode::ClientStartFailed
         ));
     }

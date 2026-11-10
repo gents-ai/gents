@@ -1,4 +1,5 @@
 import Proofs.ConfigDefaults
+import Proofs.Configuration.PackIdentity
 import Mathlib.Data.Rat.Defs
 
 /-!
@@ -181,7 +182,7 @@ structure Backend where
   deriving DecidableEq, Repr
 
 structure Task where
-  agentId : String
+  agentDid : String
   enabled : Bool
   deriving DecidableEq, Repr
 
@@ -242,9 +243,9 @@ def resolveContext (reg : Registry) (scope : String) : Option String → Except 
       | some key => reg.contexts scope key = some ⟨scope, context⟩ := by
   cases id <;> simp [resolveContext, eq_comm]
 
-def resolveAgent (reg : Registry) (scope agentId : String) :
+def resolveAgent (reg : Registry) (scope agentDid : String) :
     Except ResolveError ResolvedSessionConfig := do
-  let agent ← lookupOwned reg.agents scope agentId .missingAgent .foreignAgent
+  let agent ← lookupOwned reg.agents scope agentDid .missingAgent .foreignAgent
   if !agent.enabled then .error .disabledAgent else do
     let context ← resolveContext reg scope agent.contextId
     let inference ← lookupOwned reg.profiles scope agent.profileId .missingProfile .foreignProfile
@@ -258,12 +259,12 @@ def resolveTask (reg : Registry) (scope taskId : String) :
     Except ResolveError ResolvedSessionConfig := do
   let task ← lookupOwned reg.tasks scope taskId .missingTask .foreignTask
   if !task.enabled then .error .disabledTask
-  else resolveAgent reg scope task.agentId
+  else resolveAgent reg scope task.agentDid
 
-theorem resolveAgent_ok_iff (reg : Registry) (scope agentId : String)
+theorem resolveAgent_ok_iff (reg : Registry) (scope agentDid : String)
     (session : ResolvedSessionConfig) :
-    resolveAgent reg scope agentId = .ok session ↔
-      ∃ agent backend, reg.agents scope agentId = some ⟨scope, agent⟩ ∧
+    resolveAgent reg scope agentDid = .ok session ↔
+      ∃ agent backend, reg.agents scope agentDid = some ⟨scope, agent⟩ ∧
         agent.enabled = true ∧
         resolveContext reg scope agent.contextId = .ok session.context ∧
         reg.profiles scope agent.profileId = some ⟨scope, session.inference⟩ ∧
@@ -278,7 +279,7 @@ theorem resolveTask_ok_iff (reg : Registry) (scope taskId : String)
     (session : ResolvedSessionConfig) :
     resolveTask reg scope taskId = .ok session ↔
       ∃ task, reg.tasks scope taskId = some ⟨scope, task⟩ ∧ task.enabled = true ∧
-        resolveAgent reg scope task.agentId = .ok session := by
+        resolveAgent reg scope task.agentDid = .ok session := by
   simp [resolveTask, bind, resolution_bind_ok_iff, ite_eq_iff]
 
 /-- Omission removes capabilities rather than inheriting another agent's
@@ -294,7 +295,7 @@ theorem omitted_agent_context_is_empty (reg : Registry) (scope id : String)
 
 theorem resolveTask_owned_delegates (reg : Registry) (scope id : String) (task : Task)
     (ht : reg.tasks scope id = some ⟨scope, task⟩) (he : task.enabled = true) :
-    resolveTask reg scope id = resolveAgent reg scope task.agentId := by
+    resolveTask reg scope id = resolveAgent reg scope task.agentDid := by
   simp [resolveTask, lookupOwned, ht, he, bind, Except.bind]
 
 theorem resolveTask_missing_rejected (reg : Registry) (scope id : String)
@@ -316,7 +317,7 @@ theorem disabled_agent_rejected (reg : Registry) (scope id : String) (agent : Ag
     resolveAgent reg scope id = .error .disabledAgent := by
   simp [resolveAgent, lookupOwned, hb, he, bind, Except.bind]
 
-/-- A node's `default_agent_id` selects the agent for requests that
+/-- A node's `default_agent_did` selects the agent for requests that
 name none, so a default must be an owned, enabled agent. A disabled default
 would leave every such request to fail with `disabledAgent`; publication
 (`ConfigReferences`) rejects the candidate instead, whichever write disables the
@@ -422,20 +423,43 @@ theorem omitted_context_capabilities_empty :
 /-- Auth is explicit. OAuth lookup uses the executing node and existing
 credential owner; the backend contains no copied OAuth tokens or host identity.
 A node-OAuth `account` is an opaque, DID-free reference minted when an
-account is first stored; `none` is the provider's original account. -/
+account is first stored; `none` is the provider's original account.
+`nodeOAuthPool` rotates every call over all enabled accounts of the backend's
+provider on the executing node (`AccountRotation`); drawing paid extra usage
+when every account is past its limit is the operator's choice, off by default.
+The raw credential constructors below also represent transient authoring
+inputs and legacy records. They must not be stored in Agent-readable backend
+metadata. `BackendMetadataAuth` is the storage selection for fresh metadata. -/
 inductive BackendAuth where
   | unauthenticated
   | apiKey (key : String)
+  | credential (id version : String)
   | environment (name : String)
   | nodeOAuth (account : Option String)
+  | nodeOAuthPool (allowOverage : Bool)
+  | awsCredentials (accessKeyId secretAccessKey : String) (sessionToken : Option String)
+  | googleCredentials (credentialsJson : String)
+  deriving DecidableEq, Repr
+
+/-- User-managed metadata selects a private credential by opaque id and
+rotation version; the native secret resource owns its contents. -/
+inductive BackendMetadataAuth where
+  | unauthenticated
+  | credential (id version : String)
+  | environment (name : String)
+  | nodeOAuth (account : Option String)
+  | nodeOAuthPool (allowOverage : Bool)
   deriving DecidableEq, Repr
 
 def oauthLookupOwner (scope : String) : BackendAuth → Option String
-  | .nodeOAuth _ => some scope
+  | .nodeOAuth _ | .nodeOAuthPool _ => some scope
   | _ => none
 
 theorem oauth_uses_execution_scope (scope : String) (account : Option String) :
     oauthLookupOwner scope (.nodeOAuth account) = some scope := rfl
+
+theorem oauth_pool_uses_execution_scope (scope : String) (allowOverage : Bool) :
+    oauthLookupOwner scope (.nodeOAuthPool allowOverage) = some scope := rfl
 
 structure OAuthAccountRow where
   owner : String
@@ -447,7 +471,7 @@ structure OAuthAccountRow where
 /-- The executing node's enabled row of `kind` with exactly the requested
 account reference: a reference never falls back to another account, and another
 node's row never resolves. Order among equal matches is the Rust resolver's
-(earliest-connected enabled first, `oauth_credential.rs`); it is not modeled,
+(earliest-connected enabled first, `inference/auth/credential.rs`); it is not modeled,
 because it only matters once a node holds several accounts. -/
 def oauthResolve (scope kind : String) (account : Option String)
     (rows : List OAuthAccountRow) : Option OAuthAccountRow :=
@@ -460,6 +484,25 @@ theorem oauth_resolve_sound {scope kind : String} {account : Option String}
   have hp := List.find?_some h
   simp only [Bool.and_eq_true, beq_iff_eq] at hp
   exact ⟨List.mem_of_find?_eq_some h, hp.1.1.1, hp.1.1.2, hp.1.2, hp.2⟩
+
+/-- A pool backend's accounts: every enabled row of `kind` the executing node
+owns. Another node's row never joins the pool. Rotation order is the Rust
+resolver's (earliest-connected first, `oauth_credential.rs`) and is not modeled,
+as for `oauthResolve`. -/
+def oauthPool (scope kind : String) (rows : List OAuthAccountRow) : List OAuthAccountRow :=
+  rows.filter fun r => r.owner == scope && r.kind == kind && r.enabled
+
+theorem oauth_pool_sound {scope kind : String} {rows : List OAuthAccountRow}
+    {r : OAuthAccountRow} (h : r ∈ oauthPool scope kind rows) :
+    r ∈ rows ∧ r.owner = scope ∧ r.kind = kind ∧ r.enabled = true := by
+  simp only [oauthPool, List.mem_filter, Bool.and_eq_true, beq_iff_eq] at h
+  exact ⟨h.1, h.2.1.1, h.2.1.2, h.2.2⟩
+
+theorem oauth_pool_holds_every_enabled_row {scope kind : String}
+    {rows : List OAuthAccountRow} {r : OAuthAccountRow} (hr : r ∈ rows)
+    (ho : r.owner = scope) (hk : r.kind = kind) (he : r.enabled = true) :
+    r ∈ oauthPool scope kind rows := by
+  simp [oauthPool, List.mem_filter, hr, ho, hk, he]
 
 structure BackendControls where
   connectionTimeoutSecs : Nat
@@ -517,6 +560,78 @@ theorem backend_negative_queue_rejected (queue : Int) (h : queue < 0) :
   have hn : ¬ (0 : Int) ≤ queue := by omega
   simp [resolveBackendControls, defaultBackendControls, ConfigDefaults.resolveNat, hn]
 
+/-- An existing dependency retains its own install variable, including an
+explicitly unset value. Only a per-pack override may replace that value;
+ambient variables are consulted for a root install or a first installation. -/
+def resolvePackInstallVariable (dependency installed : Bool)
+    (previous override : Option (Option String)) (ambient : Option String) : Option (Option String) :=
+  match override with
+  | some value => some value
+  | none => if dependency && installed then previous else some ambient
+
+theorem dependency_variable_preserved (previous ambient : Option String) :
+    resolvePackInstallVariable true true (some previous) none ambient = some previous := by
+  rfl
+
+theorem explicit_pack_variable_wins (dependency installed : Bool) (previous : Option (Option String))
+    (override ambient : Option String) :
+    resolvePackInstallVariable dependency installed previous (some override) ambient = some override := by
+  rfl
+
+theorem first_dependency_uses_ambient (ambient : Option String) :
+    resolvePackInstallVariable true false none none ambient = some ambient := by
+  rfl
+
+theorem root_uses_current_environment (installed : Bool) (previous : Option (Option String)) (ambient : Option String) :
+    resolvePackInstallVariable false installed previous none ambient = some ambient := by
+  rfl
+
+/-- Older records without an observed binding do not authorize substituting
+the current caller's environment for an installed dependency. -/
+theorem unknown_dependency_binding_fails_closed (ambient : Option String) :
+    resolvePackInstallVariable true true none none ambient = none := by
+  rfl
+
+/-- Upgrades render the current template using an explicitly supplied value,
+    or the installed binding when no replacement is supplied. -/
+def resolvePackUpgradeVariable (previous supplied : Option String) : Option String :=
+  supplied.orElse fun _ => previous
+
+theorem omitted_upgrade_value_preserved (previous : Option String) :
+    resolvePackUpgradeVariable previous none = previous := by rfl
+
+theorem supplied_upgrade_value_wins (previous : Option String) (supplied : String) :
+    resolvePackUpgradeVariable previous (some supplied) = some supplied := by rfl
+
+/-- Node identity comes from the installation scope, not from pack variables. -/
+def packVariableOverrideAllowed (name : String) : Bool :=
+  name != "GENTS_PACK_NODE_DID"
+
+theorem node_identity_override_refused :
+    packVariableOverrideAllowed "GENTS_PACK_NODE_DID" = false := by decide
+
+/-- An installed dependency can be reused without recovering its original
+environment only when the same artifact is requested and the caller has not
+explicitly selected replacement bindings. The snapshot is authoritative only
+if the installation record and every recorded document still match at commit. -/
+def reuseInstalledDependency (installed sameArtifact explicitOverride : Bool) : Bool :=
+  installed && sameArtifact && !explicitOverride
+
+def commitDependencySnapshot (sameRecord sameDocuments : Bool) : Bool :=
+  sameRecord && sameDocuments
+
+theorem replacement_binding_disallows_reuse (installed sameArtifact : Bool) :
+    reuseInstalledDependency installed sameArtifact true = false := by
+  simp [reuseInstalledDependency]
+
+theorem changed_dependency_snapshot_refused (sameRecord : Bool) :
+    commitDependencySnapshot sameRecord false = false := by
+  simp [commitDependencySnapshot]
+
+theorem changed_dependency_record_refused (sameDocuments : Bool) :
+    commitDependencySnapshot false sameDocuments = false := by
+  simp [commitDependencySnapshot]
+
 /-- Local pack preparation has the root and declared dependency manifests and
 an installed-plugin inventory. Every declared reference must resolve through
 those existing resources before configuration writes begin. -/
@@ -573,6 +688,57 @@ def retainPluginPublication : PackDocumentOutcome → Bool
 theorem rejected_document_restores_plugin : retainPluginPublication .callbackRejected = false := rfl
 theorem unknown_commit_keeps_plugin : retainPluginPublication .unconfirmed = true := rfl
 
+/-- A hosted document effect is admitted only for the authenticated client,
+after verifying its signed graph against this transaction's snapshot and the
+client-approved pack plan. Native document ACP remains authoritative. -/
+def hostedPackEffectAllowed (actorMatches graphVerified planApproved nativeAuthorized : Bool) : Bool :=
+  actorMatches && graphVerified && planApproved && nativeAuthorized
+
+theorem hosted_effect_requires_verified_graph (actor plan native : Bool) :
+    hostedPackEffectAllowed actor false plan native = false := by
+  simp [hostedPackEffectAllowed]
+
+theorem hosted_effect_requires_approved_plan (actor graph native : Bool) :
+    hostedPackEffectAllowed actor graph false native = false := by
+  simp [hostedPackEffectAllowed]
+
+/-- Plugin-only hosted installation preserves existing pack documents. Its
+  installed plugin records are staged by the host from the reviewed archive;
+  the client independently replays the same native-authorized pack record. -/
+def hostedPluginInstallAllowed (reviewedDigest clientPlan nativeAuthorized : Bool) : Bool :=
+  reviewedDigest && clientPlan && nativeAuthorized
+
+theorem unreviewed_hosted_plugin_is_denied (plan native : Bool) :
+    hostedPluginInstallAllowed false plan native = false := by
+  simp [hostedPluginInstallAllowed]
+
+theorem hosted_plugin_needs_native_authority (reviewed plan : Bool) :
+    hostedPluginInstallAllowed reviewed plan false = false := by
+  simp [hostedPluginInstallAllowed]
+
+/-- A hosted graph reaches native commit only after the User's independent
+replay matches every proposed effect and signals that its plan is complete. -/
+def hostedPackCommitAllowed (effectsMatched clientFinished : Bool) : Bool :=
+  effectsMatched && clientFinished
+
+/-- A hosted install reports success only after its required host record has
+been written. A failed host write cannot undo a committed document graph. -/
+def hostedPackReportedSuccess (committed homeRequired homeWritten : Bool) : Bool :=
+  committed && (!homeRequired || homeWritten)
+
+theorem hosted_pack_missing_home_record_is_not_success :
+    hostedPackReportedSuccess true true false = false := by decide
+
+def hostedPackHomeCases : List Bool := [false, true]
+
+theorem hosted_pack_disconnect_before_finish_cannot_commit (effectsMatched : Bool) :
+    hostedPackCommitAllowed effectsMatched false = false := by
+  simp [hostedPackCommitAllowed]
+
+def hostedPackEffectCases : List (Bool × Bool × Bool) :=
+  [(false, false, true), (false, true, true), (true, false, true),
+    (true, true, false), (true, true, true)]
+
 /-- Once a commit request may have succeeded, later failed attempts cannot
 prove that the earlier attempt did not commit. A successful receipt resolves
 the operation; otherwise only histories with no uncertain commit may restore. -/
@@ -590,15 +756,15 @@ def packFinalityCases : List (List PackAttemptEvidence) :=
 theorem later_begin_failure_cannot_clear_unknown_commit :
     packCommitUnconfirmed [.unknownCommit, .noCommit] = true := by decide
 
-/-- An installed pin is rechecked while holding the store lock through the
-document commit, so a concurrent publisher cannot change its artifact between
-the check and the corresponding configuration write. -/
-def installedPinCommitAllowed (pin : Option String) (underLock : String) : Bool :=
-  pluginPinMatches pin underLock
-
 /-- Wiring holds the shared plugin store lock from reading the digest through
 configuration publication. Competing store mutation cannot publish in that interval. -/
 def wireAndPluginPublishAllowed (wireHoldsLock : Bool) : Bool := !wireHoldsLock
+
+/-- A staged replacement is not available to plugin execution until the
+publisher releases the store lock after native transaction finality. -/
+def stagedPluginResolutionAllowed (publisherHoldsLock : Bool) : Bool := !publisherHoldsLock
+
+theorem staged_plugin_cannot_be_resolved : stagedPluginResolutionAllowed true = false := by decide
 
 theorem plugin_publish_blocked_during_wire :
     wireAndPluginPublishAllowed true = false := by decide
@@ -609,6 +775,26 @@ def wireTargetAllowed (localTarget preview remove : Bool) : Bool :=
   localTarget || preview || remove
 
 theorem graphql_wire_cannot_publish_pin : wireTargetAllowed false false false = false := by decide
+
+/-- Untagged documents retain the existing adoption behavior. A tagged document
+can be written only by the same full pack coordinate; an old unqualified tag
+does not establish a publisher identity. -/
+def packDocumentWriteAllowed (coordinate : String) (origin : Option String) : Bool :=
+  match origin with
+  | none => true
+  | some existing => existing == coordinate
+
+def packDocumentRemovalAllowed (coordinate : String) (origin : Option String) : Bool :=
+  packDocumentWriteAllowed coordinate origin
+
+theorem pack_document_other_publisher_refused :
+    packDocumentWriteAllowed "other/demo" (some "acme/demo") = false := by decide
+
+theorem pack_document_unqualified_origin_refused :
+    packDocumentWriteAllowed "acme/demo" (some "demo") = false := by decide
+
+theorem pack_document_untagged_adoptable :
+    packDocumentWriteAllowed "acme/demo" none = true := by decide
 
 /-- Only a node-local installer can inspect or publish plugin bytes. A remote
 GraphQL install may write plugin-free documents, but recorded pack metadata is
@@ -627,6 +813,23 @@ References are collected after the same transaction's document deletions, so an
 agent removed with its pack does not prevent that pack's removal. -/
 def pluginRemovalSafe (references removed : List String) : Bool :=
   references.all fun reference => decide (reference ∉ removed)
+
+/-- ACP-filtered rows establish non-use only if a native inventory owner
+confirms the observation is complete in the same removal transaction. An
+empty retirement needs no inventory. -/
+def pluginRemovalObservedSafe (references removed : List String) (complete : Bool) : Bool :=
+  removed.isEmpty || (complete && pluginRemovalSafe references removed)
+
+theorem incomplete_plugin_inventory_refuses (references removed : List String)
+    (nonempty : removed.isEmpty = false) :
+    pluginRemovalObservedSafe references removed false = false := by
+  simp [pluginRemovalObservedSafe, nonempty]
+
+/-- A disappearance notice must keep the durable installation evidence when
+the plugin inventory cannot establish safe retirement. The notice may still
+refresh the record so watchers can observe externally removed files. -/
+def retainPluginStoreRecord (plugins : List String) (complete : Bool) : Bool :=
+  !plugins.isEmpty && !complete
 
 theorem pluginRemovalSafe_iff (references removed : List String) :
     pluginRemovalSafe references removed = true ↔

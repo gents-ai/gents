@@ -25,15 +25,17 @@ import type { ShellActions } from "@/../hooks/shellActions";
 import { listNames, newAgentView } from "./behaviorDraft";
 import { AgentEditor } from "./BehaviorEditor";
 import { NEW_ITEM } from "./draftItems";
+import { useHidden } from "@/lib/hidden";
+import { preferences } from "@/preferences";
 
 export async function saveDefault(
   changeConfig: ShellActions["changeConfig"],
   deployment: NodeView,
-  agentId: string,
+  agentDid: string,
 ) {
   await changeConfig("setDefaultAgent", {
     nodeDid: deployment.nodeDid,
-    agentId,
+    agentDid,
   });
 }
 
@@ -50,12 +52,13 @@ function RowControls({
   inEditor?: boolean;
 }) {
   const { changeConfig } = useApp().actions;
+  const hidden = useHidden().agent(deployment.nodeDid, agent.agentDid);
   const [busy, setBusy] = useState(false);
   const keptOn = agent.enabled && agent.isDefault;
   const toggle = async (next: boolean) => {
     setBusy(true);
     try {
-      await setEnabled(changeConfig, deployment.nodeDid, "Agent", agent.agentId, next);
+      await setEnabled(changeConfig, deployment.nodeDid, "Agent", agent.agentDid, next);
       toast(`${agent.displayName} is ${next ? "enabled" : "disabled"}`);
     } catch (e) {
       toastFailure(`turn it ${next ? "on" : "off"}`, e);
@@ -65,7 +68,7 @@ function RowControls({
   };
   const makeDefault = async () => {
     try {
-      await saveDefault(changeConfig, deployment, agent.agentId);
+      await saveDefault(changeConfig, deployment, agent.agentDid);
       toast(
         agent.enabled
           ? "Default agent set"
@@ -80,6 +83,18 @@ function RowControls({
       className="flex items-center gap-1"
       data-testid={inEditor ? "agent-status" : "agent-row-controls"}
     >
+      {hidden && !inEditor && (
+        <Button
+          variant="outline"
+          size="sm"
+          aria-label={`Show ${agent.displayName}`}
+          onClick={() =>
+            preferences.setAgentHidden(deployment.nodeDid, agent.agentDid, false)
+          }
+        >
+          Show
+        </Button>
+      )}
       <span
         className="flex items-center gap-2.5 px-1 text-sm"
         title={keptOn ? DEFAULT_STAYS_ENABLED : undefined}
@@ -134,7 +149,7 @@ function RowControls({
                       name: "agent",
                       nodeDid: deployment.nodeDid,
                       section: "agents",
-                      item: agent.agentId,
+                      item: agent.agentDid,
                     })}
                   />
                 }
@@ -142,6 +157,14 @@ function RowControls({
                 Edit
               </DropdownMenuItem>
             )}
+            <DropdownMenuItem
+              className="whitespace-nowrap"
+              onClick={() =>
+                preferences.setAgentHidden(deployment.nodeDid, agent.agentDid, !hidden)
+              }
+            >
+              {hidden ? "Show in menus" : "Hide from menus"}
+            </DropdownMenuItem>
           </DropdownMenuGroup>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -151,16 +174,17 @@ function RowControls({
 
 export function AgentsPanel({
   deployment,
-  agentId,
+  agentDid,
 }: {
   deployment: NodeView;
-  agentId?: string;
+  agentDid?: string;
 }) {
   const base = {
     name: "agent" as const,
     nodeDid: deployment.nodeDid,
     section: "agents",
   };
+  const hidden = useHidden();
   const inUse = new Set(deployment.agents.map((b) => b.contextId));
   const unusedContexts = deployment.contexts.filter(
     (c) => !inUse.has(c.context_id),
@@ -174,11 +198,11 @@ export function AgentsPanel({
   }
   const contextIds = new Set(deployment.contexts.map((c) => c.context_id));
   const line = (b: AgentView) => {
-    const readiness = agentReadiness(deployment, b.agentId);
+    const readiness = agentReadiness(deployment, b.agentDid);
     if (!readiness.ready) return `unavailable: ${readiness.reason}`;
-    const e = deployment.agentEnvironments.find((x) => x.agentId === b.agentId);
+    const e = deployment.agentEnvironments.find((x) => x.agentDid === b.agentDid);
     const sharing = (b.contextId ? (byContext.get(b.contextId) ?? []) : []).filter(
-      (x) => x.agentId !== b.agentId,
+      (x) => x.agentDid !== b.agentDid,
     );
     return [
       e?.modelName ?? "no backend",
@@ -192,13 +216,13 @@ export function AgentsPanel({
   };
   /* a saved agent's id is not expected to be the draft's item, but nothing
      stops another writer from using it; the saved one wins */
-  if (agentId === NEW_ITEM && !agentOf(deployment, NEW_ITEM))
+  if (agentDid === NEW_ITEM && !agentOf(deployment, NEW_ITEM))
     return (
       <NewAgentPage key={deployment.nodeDid} deployment={deployment} base={base} />
     );
   return (
     <>
-      {!agentId && (
+      {!agentDid && (
         <p
           data-testid="agents-intro"
           className="mb-6 max-w-prose text-sm text-muted-foreground"
@@ -215,7 +239,7 @@ export function AgentsPanel({
       )}
       <ListDetail
         base={base}
-        item={agentId}
+        item={agentDid}
         toolbar={(id) => {
           const b = agentOf(deployment, id);
           return b ? <RowControls deployment={deployment} agent={b} inEditor /> : null;
@@ -224,9 +248,11 @@ export function AgentsPanel({
           .sort((a, b) => Number(b.isDefault) - Number(a.isDefault))
           .map((b) => ({
             tags: b.tags,
-            id: b.agentId,
+            id: b.agentDid,
             title: b.displayName,
             titleNote: b.isDefault ? "Default" : undefined,
+            /* left out of the agent picker and search on this device */
+            hidden: hidden.agent(deployment.nodeDid, b.agentDid),
             meta: line(b),
             metaMono: true,
             trailing: <RowControls deployment={deployment} agent={b} />,
@@ -243,11 +269,11 @@ export function AgentsPanel({
         detail={(id) => {
           const agent = agentOf(deployment, id)!;
           return (
-            <AgentEditor key={agent.agentId} deployment={deployment} agent={agent} />
+            <AgentEditor key={agent.agentDid} deployment={deployment} agent={agent} />
           );
         }}
       />
-      {!agentId && unusedContexts > 0 && (
+      {!agentDid && unusedContexts > 0 && (
         <p data-testid="unused-contexts" className="mt-3 text-sm text-muted-foreground">
           {unusedContexts === 1
             ? "1 context isn’t used by any agent"
@@ -287,7 +313,7 @@ function NewAgentPage({
         </button>
       </div>
       <AgentEditor
-        key={draft.agentId}
+        key={draft.agentDid}
         deployment={deployment}
         agent={draft}
         draft={{

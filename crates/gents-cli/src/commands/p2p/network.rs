@@ -2,11 +2,11 @@ use std::io::{self, Write};
 
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
-use gents::agent::p2p_reconcile::registry::{
+use gents::runtime::agent::p2p_reconcile::registry::{
     registry_upsert_mutation, validate_offered_templates, RegistryEntry, UpsertKind,
 };
-use gents::agent::p2p_reconcile::{heartbeat_is_fresh, REGISTRY_STALE_AFTER};
-use gents::graphql::escape_graphql_string;
+use gents::runtime::agent::p2p_reconcile::{heartbeat_is_fresh, REGISTRY_STALE_AFTER};
+use gents::store::graphql::escape_graphql_string;
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -147,7 +147,7 @@ pub(super) async fn p2p_network_list(args: P2pNetworkListArgs) -> Result<()> {
     let count = peers.len();
 
     match args.output.ensure_supported(
-        "p2p network list",
+        "runtime p2p network list",
         &[OutputFormat::Json, OutputFormat::Table],
     )? {
         OutputFormat::Json => print_json(&json!({

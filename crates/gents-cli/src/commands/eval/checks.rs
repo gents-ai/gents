@@ -1,7 +1,7 @@
 use std::io::Write;
 
 use anyhow::{Context, Result};
-use gents::document_config::EvalCase;
+use gents::documents::EvalCase;
 use gents::eval::checks::CheckRegistry;
 
 use super::init::validate::case_catalog_conformance;

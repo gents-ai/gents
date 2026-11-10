@@ -161,6 +161,7 @@ fn segment(value: &LeanCanonicalSegment) -> Result<OutputSegment> {
                                 LeanPayloadKind::Text => StreamPayload::Text,
                                 LeanPayloadKind::Reasoning => StreamPayload::Reasoning,
                                 LeanPayloadKind::Signature => StreamPayload::ReasoningSignature,
+                                LeanPayloadKind::ReasoningStop => StreamPayload::ReasoningStop,
                                 LeanPayloadKind::Summary => StreamPayload::ReasoningSummary,
                                 LeanPayloadKind::Encrypted => StreamPayload::ReasoningEncrypted,
                                 LeanPayloadKind::Redacted => StreamPayload::ReasoningRedacted,
@@ -424,6 +425,7 @@ fn message(value: &LeanCanonicalMessage<LeanPayloadSpec>) -> Result<TranscriptMe
             LeanMessageRole::Assistant => MessageRole::Assistant,
         },
         native_id: value.native_id.clone(),
+        native_request_id: value.native_request_id.clone(),
         blocks,
         created_at: fixture_time(value.created_at)?,
     };

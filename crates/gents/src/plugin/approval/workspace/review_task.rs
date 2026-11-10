@@ -1,7 +1,7 @@
 use anyhow::Result;
 use sha2::{Digest, Sha256};
 
-use crate::document_config::Task;
+use crate::documents::Task;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -35,11 +35,12 @@ pub fn review_task_is_eligible(task: &Task, node: &str, task_id: &str, agent: &s
     let Task {
         node_did,
         task_id: configured_id,
-        agent_id,
+        agent_did,
         prompt_template,
         enabled,
         hooks,
         emit_outcome,
+        outcome_readers: _,
         goal_objective_template,
         goal_token_budget,
         output_schema_ref,
@@ -51,7 +52,7 @@ pub fn review_task_is_eligible(task: &Task, node: &str, task_id: &str, agent: &s
     } = task;
     node_did == node
         && configured_id == task_id
-        && agent_id == agent
+        && agent_did == agent
         && !prompt_template.trim().is_empty()
         && *enabled
         && hooks.is_empty()
@@ -72,7 +73,7 @@ pub fn review_task_policy(
         review_task_is_eligible(task, node, task_id, agent),
         "access review requires an enabled policy Task for this agent without execution side effects"
     );
-    let rendered = crate::session_message::render_task_body(task, node, agent, session, None)
+    let rendered = crate::session::message::render_task_body(task, node, agent, session, None)
         .map_err(anyhow::Error::msg)?;
     anyhow::ensure!(
         rendered.goal.is_none() && !rendered.content.trim().is_empty(),
@@ -89,9 +90,10 @@ pub fn default_review_task(node: &str, agent: &str) -> Task {
         task_id: format!("workspace-access-review:{agent}"),
         display_name: Some("Access review".to_owned()),
         description: None,
-        agent_id: agent.to_owned(),
+        agent_did: agent.to_owned(),
         prompt_template: include_str!("access_review.md").to_owned(),
         emit_outcome: false,
+        outcome_readers: Vec::new(),
         goal_objective_template: None,
         goal_token_budget: None,
         hooks: Vec::new(),

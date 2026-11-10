@@ -18,6 +18,12 @@ def pluginEnabled (development : Bool) (manifest choice : Option Bool) : Bool :=
 def send (gesture confirmed sameTarget : Bool) : Bool :=
   gesture && confirmed && sameTarget
 
+/-- A plugin page opening a URL outside the app follows the person's own
+    gesture, as sending does: a page from someone else's pack could otherwise
+    carry data out in a URL on a timer, unasked. -/
+def openExternal (gesture : Bool) : Bool :=
+  gesture
+
 theorem developmentRequiresChoice (manifest : Option Bool) :
     pluginEnabled true manifest none = false := by rfl
 
@@ -26,6 +32,8 @@ theorem unconfirmedNeverSends (gesture sameTarget : Bool) :
 
 theorem changedTargetNeverSends (gesture confirmed : Bool) :
     send gesture confirmed false = false := by simp [send]
+
+theorem openingNeedsGesture : openExternal false = false := rfl
 
 theorem unrelatedOriginRefused (applicationWindow : Bool) :
     navigate applicationWindow false false false = false := by cases applicationWindow <;> rfl

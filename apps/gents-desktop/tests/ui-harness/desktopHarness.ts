@@ -1,3 +1,9 @@
+import type { SharingAdapter } from "../../src/hooks/sharing";
+import {
+  createHarnessSharing,
+  isSharingScenario,
+  type SharingScenario,
+} from "./sharingHarness";
 import type {
   ChatSendRequest,
   ChatSendResult,
@@ -9,6 +15,7 @@ import { deriveDisplayState } from "@source-inc/gents-desktop-operations";
 import type {
   AllowedFolder,
   DesktopApiAdapter,
+  EndedAccessView,
 } from "@source-inc/gents-desktop-client";
 import type {
   DesktopClientUpdatedHandler,
@@ -49,9 +56,23 @@ import type { SessionContextView } from "@source-inc/gents-desktop-client/genera
 import type { Task } from "@source-inc/gents-desktop-client/generated/Task";
 import type { Trigger } from "@source-inc/gents-desktop-client/generated/Trigger";
 import type { RenderedTimelineItem } from "@source-inc/gents-desktop-client/generated/RenderedTimelineItem";
+import type { RenderedToolCallView } from "@source-inc/gents-desktop-client/generated/RenderedToolCallView";
 
 const NODE_DID = "did:key:z6MkBombadilAgent";
-const DEFAULT_AGENT_ID = "default";
+
+/** A chat whose Agent verified it holds no Goal (Lean `SessionObservation`). */
+const verifiedNoGoal = (sessionId: string): DesktopSessionSnapshot["goal"] => ({
+  kind: "observed",
+  next: "start_goal",
+  observation: {
+    nodeDid: NODE_DID,
+    sessionId,
+    sessionDocId: `${sessionId}-doc`,
+    observedAt: "2026-11-08T00:00:00Z",
+    goal: null,
+  },
+});
+const DEFAULT_AGENT_DID = "default";
 const STARTED_AT = "2026-06-17T00:00:00.000Z";
 const THIRTY_DAYS_AGO = new Date(Date.now() - 30 * 86_400_000).toISOString();
 const TWO_HOURS_AGO = new Date(Date.now() - 2 * 3_600_000).toISOString();
@@ -92,7 +113,7 @@ function harnessRequestOutcome(
   };
 }
 
-/* a conversation that runs from yesterday into today */
+/* a conversation that runs from yesterday into today, compacted between */
 function dayItems(): RenderedTimelineItem[] {
   const at = (daysAgo: number, hour: number) => {
     const date = new Date();
@@ -119,7 +140,383 @@ function dayItems(): RenderedTimelineItem[] {
       reasoning: null,
       timestamp: at(1, 16),
     }),
-    user(4, "Good morning. Let's fix it and add a test.", at(0, 9)),
+    {
+      kind: "sessionCompaction" as const,
+      itemKey: "day-compaction",
+      sequence: 4,
+      messagesCompacted: 128,
+      originalTokens: 182_400,
+      compactedTokens: 11_900,
+      /* made this morning, as today's first request started: a compaction
+         is drawn by the message it follows, so it opens no day */
+      timestamp: at(0, 8),
+      summary: [
+        "# Continuation checkpoint",
+        "",
+        "## Goal",
+        "",
+        "Fix the flaky parser test and add a regression test.",
+        "",
+        "## Progress",
+        "",
+        "### Done",
+        "",
+        "- Found the race: `parse_header` reads the buffer before the length is set.",
+        "- Moved the length check ahead of the read; the test passes 50 times in a row.",
+        "",
+        "## Next actions",
+        "",
+        "1. Add a regression test for an empty header.",
+        "",
+        "## Files read",
+        "",
+        "- src/parser.rs",
+        "- tests/parser.rs",
+      ].join("\n"),
+      filesRead: ["src/parser.rs", "tests/parser.rs"],
+      filesModified: ["src/parser.rs"],
+    },
+    user(5, "Good morning. Let's fix it and add a test.", at(0, 9)),
+  ];
+}
+
+/* turns the person did not type: a message from another session, a run
+   of finished background calls and a scheduled run */
+function automatedInputItems(): RenderedTimelineItem[] {
+  const durable = (itemKey: string, sequence: number, timestamp: string) => ({
+    kind: "automatedInput" as const,
+    itemKey,
+    requestId: `request-${itemKey}`,
+    sequence,
+    timestamp,
+    reconstruction: HARNESS_READY_RECONSTRUCTION,
+  });
+  const completion = (id: string, tool: string, status: string, result: string) =>
+    `<tool-completion tool_call_id="${id}" tool_name="${tool}" status="${status}">\n  <result>${result}</result>\n</tool-completion>`;
+  const command = (itemKey: string, toolCallId: string, text: string) => ({
+    itemKey,
+    toolName: "bash",
+    toolCallId,
+    statusKind: "success",
+    awaitMode: "background",
+    reconstruction: HARNESS_READY_RECONSTRUCTION,
+    presentation: {
+      kind: "command" as const,
+      command: text,
+      exitCode: 0,
+      timedOut: false,
+      failed: false,
+      durationMs: null,
+      cwd: null,
+      executionMode: "read_only",
+      networkMode: "disabled",
+      stdout: "",
+      stderr: "",
+      fallbackOutput: null,
+    },
+  });
+  return [
+    {
+      kind: "userMessage" as const,
+      itemKey: "auto-user",
+      requestId: "request-auto-user",
+      ownsTurn: true,
+      sequence: 2,
+      content: "Run the tests and the lints in the background, and ask the reviewer.",
+      timestamp: "2026-06-03T14:06:00Z",
+      reconstruction: HARNESS_READY_RECONSTRUCTION,
+    },
+    {
+      kind: "toolGroup" as const,
+      itemKey: "auto-tools",
+      messageSequence: 3,
+      tools: [
+        command("auto-test", "call-auto-test", "cargo test -p gents"),
+        command("auto-lint", "call-auto-lint", "make lint"),
+        {
+          itemKey: "auto-worker",
+          toolName: "agent_new",
+          toolCallId: "call-auto-worker",
+          requestId: "request-auto-user",
+          statusKind: "success",
+          awaitMode: "background",
+          reconstruction: HARNESS_READY_RECONSTRUCTION,
+          presentation: {
+            kind: "agent" as const,
+            action: "start",
+            name: "ops",
+            sessionId: "session-worker",
+            description: "Profile the slow parser path.",
+            output: "Session started.",
+          },
+        },
+      ],
+    },
+    harnessAssistantItem({
+      itemKey: "auto-reply",
+      sequence: 4,
+      content: "Both are running in the background; I asked the reviewer too.",
+      reasoning: null,
+      timestamp: "2026-06-03T14:06:30Z",
+    }),
+    {
+      ...durable("auto-message", 5, "2026-06-03T14:08:00Z"),
+      origin: {
+        kind: "sessionMessage" as const,
+        senderNodeDid: NODE_DID,
+        senderSessionId: "session-reviewer",
+        senderRequestId: "request-reviewer",
+        displayBody:
+          "The parser change looks right. One nit: `parse_trailing` should **return early** on an empty input.",
+      },
+      content:
+        "[message agent:default session:session-reviewer node:did:key:z6MkHarness · at:2026-06-03T14:08:00Z · cause:request-reviewer]\n\nThe parser change looks right. One nit: `parse_trailing` should **return early** on an empty input.",
+    },
+    harnessAssistantItem({
+      itemKey: "auto-message-reply",
+      sequence: 6,
+      content: "Thanks — added the early return.",
+      reasoning: null,
+      timestamp: "2026-06-03T14:08:30Z",
+    }),
+    {
+      ...durable("auto-bg-test", 7, "2026-06-03T14:10:00Z"),
+      origin: { kind: "backgroundCompletion" as const, notification: true },
+      content: completion(
+        "call-auto-test",
+        "bash",
+        "completed",
+        "test result: ok. 412 passed; 0 failed",
+      ),
+    },
+    {
+      ...durable("auto-bg-lint", 8, "2026-06-03T14:10:00Z"),
+      origin: { kind: "backgroundCompletion" as const, notification: true },
+      content: completion(
+        "call-auto-lint",
+        "bash",
+        "failed",
+        "error: unused import: `HashMap`",
+      ),
+    },
+    {
+      ...durable("auto-bg-worker", 9, "2026-06-03T14:10:00Z"),
+      origin: { kind: "backgroundCompletion" as const, notification: true },
+      content: completion(
+        "call-auto-worker",
+        "agent_new",
+        "completed",
+        "The slow path was a quadratic scan; profile attached.",
+      ),
+    },
+    {
+      ...durable("auto-bg-wake", 10, "2026-06-03T14:10:01Z"),
+      origin: { kind: "backgroundCompletion" as const, notification: false },
+      content:
+        "Review the new background completion results and continue the task if needed.",
+    },
+    harnessAssistantItem({
+      itemKey: "auto-bg-reply",
+      sequence: 11,
+      content: "Tests pass; lint flagged an unused import, which I removed.",
+      reasoning: null,
+      timestamp: "2026-06-03T14:10:30Z",
+    }),
+    {
+      ...durable("auto-bg-single", 12, "2026-06-03T14:11:00Z"),
+      origin: { kind: "backgroundCompletion" as const, notification: true },
+      content: completion("call-auto-other", "spawn_process", "completed", "done"),
+    },
+    harnessAssistantItem({
+      itemKey: "auto-bg-single-reply",
+      sequence: 13,
+      content: "The validation suite finished too.",
+      reasoning: null,
+      timestamp: "2026-06-03T14:11:30Z",
+    }),
+    {
+      ...durable("auto-routed", 14, "2026-06-03T14:12:00Z"),
+      origin: {
+        kind: "sessionMessage" as const,
+        senderNodeDid: NODE_DID,
+        senderSessionId: null,
+        senderRequestId: "request-worker-note",
+      },
+      content: `[message agent:ops session:session-worker node:${
+        NODE_DID.length > 20
+          ? `${NODE_DID.slice(0, 16)}..${NODE_DID.slice(-4)}`
+          : NODE_DID
+      } · at:2026-06-03T14:12:00Z · cause:request-worker-note]\n\nI also left a flame graph in \`target/profile.svg\`.`,
+    },
+    {
+      ...durable("auto-remote", 15, "2026-06-03T14:13:00Z"),
+      origin: {
+        kind: "sessionMessage" as const,
+        senderNodeDid: "did:key:z6MkSomeOtherNodeEntirely",
+        senderSessionId: null,
+        senderRequestId: null,
+      },
+      content: "A build on the release node is waiting for review.",
+    },
+    harnessAssistantItem({
+      itemKey: "auto-routed-reply",
+      sequence: 16,
+      content: "Noted both.",
+      reasoning: null,
+      timestamp: "2026-06-03T14:13:30Z",
+    }),
+    {
+      ...durable("auto-alone-wake", 17, "2026-06-03T14:20:00Z"),
+      origin: { kind: "backgroundCompletion" as const, notification: false },
+      content:
+        "Review the new background completion results and continue the task if needed.",
+    },
+    {
+      ...durable("auto-bg-note", 18, "2026-06-03T14:20:00Z"),
+      origin: { kind: "backgroundCompletion" as const, notification: true },
+      content:
+        "\nThe preview deploy is ready at https://preview.example.test/parser-fix and will stay up for the next twenty-four hours.\n\nNothing else changed.",
+    },
+    harnessAssistantItem({
+      itemKey: "auto-bg-note-reply",
+      sequence: 19,
+      content: "Checked the preview.",
+      reasoning: null,
+      timestamp: "2026-06-03T14:20:30Z",
+    }),
+    {
+      ...durable("auto-schedule", 20, "2026-06-04T07:00:00Z"),
+      origin: {
+        kind: "trigger" as const,
+        triggerId: "nightly-report",
+        triggerKind: "schedule",
+      },
+      content: "Write the nightly report: what changed, what failed, what is next.",
+    },
+    harnessAssistantItem({
+      itemKey: "auto-schedule-reply",
+      sequence: 21,
+      content: "Nightly report: the parser fix landed and every check passes.",
+      reasoning: null,
+      timestamp: "2026-06-04T07:01:00Z",
+    }),
+    {
+      ...durable("auto-goal", 22, "2026-06-04T07:02:00Z"),
+      origin: { kind: "goalContinuation" as const, goalId: "goal-1", sequence: 2 },
+      content: "You are running under the durable goal controller. Continue the goal.",
+    },
+  ];
+}
+
+/* commands left running in the background, and ones that have ended each way */
+function backgroundItems(): RenderedTimelineItem[] {
+  const ago = (secs: number) => new Date(Date.now() - secs * 1000).toISOString();
+  const run = (
+    id: string,
+    command: string,
+    statusKind: string,
+    times: { started: number; ended?: number },
+    result: Partial<
+      Extract<RenderedToolCallView["presentation"], { kind: "command" }>
+    > = {},
+    tail: string | null = null,
+  ): RenderedToolCallView => ({
+    itemKey: `background-${id}`,
+    toolName: "bash",
+    statusKind,
+    requestId: "request-background",
+    toolCallId: `call-background-${id}`,
+    toolCallDocId: `doc-background-${id}`,
+    awaitMode: "background",
+    startedAt: ago(times.started),
+    completedAt: times.ended === undefined ? null : ago(times.ended),
+    partialOutputTail: tail,
+    reconstruction: HARNESS_READY_RECONSTRUCTION,
+    presentation: {
+      kind: "command",
+      command,
+      exitCode: null,
+      timedOut: false,
+      failed: false,
+      durationMs: null,
+      cwd: "~/src/gents",
+      executionMode: null,
+      networkMode: null,
+      stdout: "",
+      stderr: "",
+      fallbackOutput: null,
+      ...result,
+    },
+  });
+  return [
+    {
+      kind: "userMessage" as const,
+      itemKey: "background-user",
+      requestId: "request-background",
+      ownsTurn: true,
+      sequence: 2,
+      content: "Start the dev server and run the checks in the background.",
+      timestamp: ago(4_000),
+      reconstruction: HARNESS_READY_RECONSTRUCTION,
+    },
+    {
+      kind: "toolGroup" as const,
+      itemKey: "background-tools",
+      messageSequence: 3,
+      tools: [
+        run(
+          "build",
+          "cargo build --release",
+          "success",
+          { started: 4_000, ended: 3_748 },
+          { durationMs: 252_000, exitCode: 0, stdout: "Finished release" },
+        ),
+        run(
+          "e2e",
+          "npm run e2e",
+          "failed",
+          { started: 4_000, ended: 3_700 },
+          { durationMs: 300_000, timedOut: true },
+        ),
+        run(
+          "lint",
+          "pnpm lint --max-warnings 0",
+          "failed",
+          { started: 330, ended: 300 },
+          { durationMs: 30_000, failed: true },
+        ),
+        run(
+          "test",
+          "cargo test -p gents --lib",
+          "error",
+          { started: 158, ended: 120 },
+          {
+            durationMs: 38_000,
+            exitCode: 1,
+            failed: true,
+            stdout: "running 412 tests\ntest lifecycle::claims ... ok",
+            stderr: "test lifecycle::persistence ... FAILED",
+          },
+        ),
+        run("tail", "tail -f logs/dev.log", "cancelled", { started: 32, ended: 20 }),
+        run(
+          "watch",
+          "cargo watch -x check",
+          "running",
+          { started: 372 },
+          {},
+          "[Running 'cargo check']\n    Checking gents v0.7.0\n    Finished dev",
+        ),
+        run(
+          "dev",
+          "npm run dev -- --host 127.0.0.1 --port 5173",
+          "running",
+          { started: 42 },
+          {},
+          "VITE ready in 412 ms\n\n  ➜  Local:   http://127.0.0.1:5173/",
+        ),
+      ],
+    },
   ];
 }
 
@@ -136,9 +533,13 @@ function harnessAssistantItem(
   };
 }
 
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+
 export type DesktopUiHarnessScenario =
   | "default"
   | "active-nodes"
+  | "joined-access"
   | "empty-fleet"
   | "loading"
   | "bridge-unavailable"
@@ -147,19 +548,27 @@ export type DesktopUiHarnessScenario =
   | "backend-unavailable"
   | "mailbox-overflow"
   | "mailbox-question"
+  | "mailbox-many"
   | "long-content"
   | "active-turn"
   | "coding"
   | "mobile-performance"
-  | "session-hydration"
   | "sync-offline"
   | "storage-recovery"
-  | "sync-failed"
-  | "days";
+  | "days"
+  | "automated-inputs"
+  | "background"
+  | "notices"
+  | "startup-port-in-use"
+  | SharingScenario;
 
 export type DesktopUiHarnessOptions = {
   scenario?: string | null;
   sessionIndexCount?: number;
+  /* the large session's message a compaction is marked after */
+  compactionAt?: number;
+  /* list that compaction in the meter but draw no marker for it */
+  compactionUnmarked?: boolean;
 };
 
 export type MobilePerformanceBridgeCall = {
@@ -220,20 +629,14 @@ export type MobilePerformanceHarnessController = {
   liveTool(state: "running" | "done"): void;
 };
 
-export type SessionSyncHarnessController = {
-  progress(mergedCount: number, servedCount: number): void;
-  complete(): void;
-  fail(): void;
-  observe(): void;
-  retryCount(): number;
-};
-
 type DesktopUiHarness = {
   adapter: DesktopApiAdapter;
   listenerFactory: DesktopClientUpdatedListenerFactory;
   scenario: DesktopUiHarnessScenario;
   performance: MobilePerformanceHarnessController | null;
-  sessionSync: SessionSyncHarnessController;
+  /* the sharing scenarios' stand-in; absent elsewhere, so the app's own
+     default applies */
+  sharing?: SharingAdapter;
 };
 
 const LARGE_SENT_REQUEST_ID = "6f1c2a7e-large-request-sent";
@@ -269,7 +672,11 @@ function harnessSequenceOf(item: RenderedTimelineItem): number | null {
     ? (item.messageSequence ?? null)
     : item.kind === "userMessage" ||
         item.kind === "assistantMessage" ||
-        item.kind === "automatedInput"
+        item.kind === "automatedInput" ||
+        /* a rows read carries the context events anchored to its messages,
+           as the bridge attaches them */
+        item.kind === "sessionCompaction" ||
+        item.kind === "requestContextReductionSummary"
       ? (item.sequence ?? null)
       : null;
 }
@@ -349,6 +756,7 @@ export function createDesktopUiHarness(
     ["session-intro", { createdAt: THIRTY_DAYS_AGO, updatedAt: TWO_HOURS_AGO }],
   ]);
   let requestSeq = 1;
+  let agentSequence = 2;
   let sessionSeq = 1;
   let rowCount = 42;
   let deployment = createDeployment();
@@ -367,7 +775,7 @@ export function createDesktopUiHarness(
         ...deployment.nodeReadiness,
         agents: deployment.nodeReadiness.agents.map((agent) => ({
           state: "unavailable" as const,
-          agentId: agent.agentId,
+          agentDid: agent.agentDid,
           reason: "backend_disabled" as const,
         })),
       },
@@ -407,11 +815,115 @@ export function createDesktopUiHarness(
           requestId: null,
           causeDocId: null,
           targetNodeDid: NODE_DID,
-          targetAgentId: DEFAULT_AGENT_ID,
+          targetAgentDid: DEFAULT_AGENT_DID,
           expectedCollection: null,
           parentItemId: null,
           deadlineAt: null,
           createdAt: STARTED_AT,
+        },
+      ],
+    };
+  }
+  if (scenario === "mailbox-many") {
+    const base = {
+      requesterDid: "did:key:desktop-harness",
+      nodeDid: NODE_DID,
+      status: "open",
+      sourceKind: "session",
+      sourceId: "session-intro",
+      sessionId: "session-intro",
+      requestId: null,
+      causeDocId: null,
+      targetNodeDid: NODE_DID,
+      targetAgentDid: DEFAULT_AGENT_DID,
+      expectedCollection: null,
+      parentItemId: null,
+      deadlineAt: null,
+    };
+    const at = (minutesAgo: number) =>
+      new Date(Date.now() - minutesAgo * 60_000).toISOString();
+    deployment = {
+      ...deployment,
+      mailboxItems: [
+        {
+          ...base,
+          itemId: "many-colour",
+          itemKey: "many-colour",
+          kind: "ask",
+          action: "start_request",
+          title: "Button colour",
+          summary:
+            "The settings page has a primary **Save** button that is the same grey as the secondary actions, so people miss it. I can restyle it now; the colour is the one choice I can't make for you.",
+          payload: JSON.stringify({
+            version: 1,
+            prompt: "Which colour should the button be?",
+            options: [
+              { id: "red", label: "Red" },
+              { id: "blue", label: "Blue" },
+              { id: "green", label: "Green" },
+            ],
+            multi_select: false,
+            allow_free_text: true,
+          }),
+          createdAt: at(4),
+        },
+        {
+          ...base,
+          itemId: "many-workspace",
+          itemKey: "many-workspace",
+          kind: "ask",
+          action: "start_request",
+          title: "Choose a workspace",
+          summary: null,
+          payload: JSON.stringify({
+            version: 1,
+            prompt: "Where should this run?",
+            options: [
+              {
+                id: "local",
+                label: "This computer",
+                description: "Uses the folder you picked",
+              },
+              { id: "remote", label: "Remote host" },
+            ],
+            multi_select: true,
+            allow_free_text: true,
+          }),
+          createdAt: at(9),
+        },
+        {
+          ...base,
+          itemId: "many-failed",
+          itemKey: "many-failed",
+          kind: "failed",
+          action: "ack",
+          title: "Nightly build failed",
+          summary:
+            "The build stopped at the test step.\n\n`cargo test -p gents` exited with 101 after 14 minutes.",
+          payload: null,
+          createdAt: at(22),
+        },
+        {
+          ...base,
+          itemId: "many-flag",
+          itemKey: "many-flag",
+          kind: "flag",
+          action: "ack",
+          title: "Disk is nearly full",
+          summary: "The node's data folder has 2 GB left.",
+          payload: null,
+          createdAt: at(41),
+        },
+        {
+          ...base,
+          itemId: "many-finished",
+          itemKey: "many-finished",
+          kind: "finished",
+          action: "ack",
+          title: "Refactor landed",
+          summary: "Split the mailbox card into a row and a dialog.",
+          payload: null,
+          createdAt: at(65),
         },
       ],
     };
@@ -440,7 +952,7 @@ export function createDesktopUiHarness(
           requestId: "request-intro",
           causeDocId: null,
           targetNodeDid: NODE_DID,
-          targetAgentId: DEFAULT_AGENT_ID,
+          targetAgentDid: DEFAULT_AGENT_DID,
           expectedCollection: "AgentResponse",
           parentItemId: null,
           deadlineAt: null,
@@ -450,8 +962,21 @@ export function createDesktopUiHarness(
     };
   }
   let removed = false;
+  let endedAccess: EndedAccessView[] =
+    scenario === "joined-access"
+      ? [
+          {
+            nodeDid: "did:key:harness-harbor",
+            label: "Harbor",
+            reason: "revoked",
+            endedAt: new Date(Date.now() - HOUR_MS).toISOString(),
+            leaseExpiresAt: new Date(Date.now() + 6 * DAY_MS).toISOString(),
+          },
+        ]
+      : [];
   let provisioned = scenario !== "empty-fleet";
   let pairingStatusReads = 0;
+  let pairingAuthorized = scenario === "storage-recovery";
   let managedServer: ManagedServerStatus = {
     state: "disabled",
     autoStart: false,
@@ -466,6 +991,16 @@ export function createDesktopUiHarness(
     runtimeBooting: false,
     error: null,
   };
+  if (scenario === "startup-port-in-use") {
+    managedServer = {
+      ...managedServer,
+      state: "failed",
+      autoStart: true,
+      nodeName: deployment.label,
+      error:
+        "Port 9191 is in use by a program that does not advertise a Gents identity, and the local Node needs that port. Quit that program, then start the Node again.",
+    };
+  }
   if (scenario === "storage-recovery") {
     managedServer = {
       ...managedServer,
@@ -481,7 +1016,6 @@ export function createDesktopUiHarness(
     scenario === "sync-offline" ? "wedged" : "healthy";
   let syncHealth: SyncHealthView = initialSyncHealth(scenario);
   let enrollmentRequests: EnrollmentRequestView[] = [];
-  let hydrationRetryCalls = 0;
   let updateEvents = 0;
   let storeVersion = 1;
   let liveSourceEpoch = 1;
@@ -510,13 +1044,13 @@ export function createDesktopUiHarness(
   sessions.set("session-intro", {
     sessionId: "session-intro",
     nodeDid: NODE_DID,
-    agentId: DEFAULT_AGENT_ID,
+    agentDid: DEFAULT_AGENT_DID,
     title: "introduction-and-greetings",
     previewText: greeting,
     status: "active",
     turnState: activeTurn ? "running" : "completed",
     latestRequestId: "request-intro",
-    goal: null,
+    goal: verifiedNoGoal("session-intro"),
     retryEligibility: { eligible: false, denialReason: null },
     latestRequestOutcome: harnessRequestOutcome(),
     pendingTurn: null,
@@ -585,6 +1119,8 @@ export function createDesktopUiHarness(
           ]
         : []),
       ...(scenario === "days" ? dayItems() : []),
+      ...(scenario === "automated-inputs" ? automatedInputItems() : []),
+      ...(scenario === "background" ? backgroundItems() : []),
       ...(scenario === "coding"
         ? [
             {
@@ -736,58 +1272,382 @@ export function createDesktopUiHarness(
       inferenceProfiles: [],
     };
   }
-  if (scenario === "session-hydration") {
-    sessions.set("session-remote", {
-      sessionId: "session-remote",
+  if (scenario === "automated-inputs") {
+    sessions.set("session-worker", {
+      sessionId: "session-worker",
       nodeDid: NODE_DID,
-      agentId: DEFAULT_AGENT_ID,
-      title: "Desktop-started session",
-      previewText: "hello from desktop",
+      agentDid: "ops",
+      title: "slow worker (ops)",
+      previewText: "The slow path was a quadratic scan.",
       status: "active",
       turnState: "completed",
-      latestRequestId: "request-remote",
-      goal: null,
+      latestRequestId: "request-worker",
+      goal: verifiedNoGoal("session-worker"),
       retryEligibility: { eligible: false, denialReason: null },
       latestRequestOutcome: null,
       pendingTurn: null,
       queuedTurns: [],
       foldedInputs: [],
       context: harnessSessionContext(),
-      timelineItems: [
-        {
-          kind: "userMessage",
-          itemKey: "remote-user",
-          ownsTurn: true,
-          sequence: 1,
-          content: "hello from desktop",
-          timestamp: THIRTY_DAYS_AGO,
-          reconstruction: HARNESS_READY_RECONSTRUCTION,
-        },
-      ],
-      hydration: {
-        sessionId: "session-remote",
-        nodeDid: NODE_DID,
-        phase: "requested",
-        mergedCount: 1,
-        coveredCount: 1,
-        servedCount: null,
-      },
+      timelineItems: [],
+    });
+    sessions.set("session-reviewer", {
+      sessionId: "session-reviewer",
+      nodeDid: NODE_DID,
+      agentDid: DEFAULT_AGENT_DID,
+      title: "Review the parser change",
+      previewText: "The parser change looks right.",
+      status: "active",
+      turnState: "completed",
+      latestRequestId: "request-reviewer",
+      goal: verifiedNoGoal("session-reviewer"),
+      retryEligibility: { eligible: false, denialReason: null },
+      latestRequestOutcome: null,
+      pendingTurn: null,
+      queuedTurns: [],
+      foldedInputs: [],
+      context: harnessSessionContext(),
+      timelineItems: [],
     });
   }
+  if (scenario === "notices") {
+    /* sessions holding each notice the app draws: a failed turn, one that
+       failed earlier and carried on, a usage limit, a goal stopped at its
+       limit, and tool calls that were refused or stopped */
+    const ago = (minutes: number) =>
+      new Date(Date.now() - minutes * 60_000).toISOString();
+    const base = {
+      nodeDid: NODE_DID,
+      agentDid: DEFAULT_AGENT_DID,
+      status: "active",
+      goal: verifiedNoGoal("session-notices"),
+      retryEligibility: { eligible: false, denialReason: null },
+      pendingTurn: null,
+      queuedTurns: [],
+      foldedInputs: [],
+      context: harnessSessionContext(),
+    };
+    const user = (id: string, content: string, minutes: number) => ({
+      kind: "userMessage" as const,
+      itemKey: `${id}-user`,
+      requestId: `request-${id}`,
+      ownsTurn: true,
+      sequence: 1,
+      content,
+      timestamp: ago(minutes),
+      reconstruction: HARNESS_READY_RECONSTRUCTION,
+    });
+    const overloaded =
+      'provider error: 529 overloaded_error {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_011CVx9"}';
+    sessions.set("session-notices-failed", {
+      ...base,
+      sessionId: "session-notices-failed",
+      title: "Fix the flaky upload test",
+      previewText: "Fix the flaky upload test",
+      turnState: "failed",
+      latestRequestId: "request-notices-failed",
+      latestRequestOutcome: harnessRequestOutcome({ failureReason: overloaded }),
+      timelineItems: [
+        user("notices-failed", "Fix the flaky upload test in uploads.spec.ts.", 6),
+        {
+          kind: "requestContextReductionSummary",
+          itemKey: "request-context-reduction:notices",
+          sequence: 2,
+          requestDocId: "doc-notices-failed",
+          latestTimestamp: ago(5),
+          reductionCount: 3,
+          compactedCount: 0,
+          repairedCount: 1,
+          latestEstimatedInputTokens: 84_210,
+        } as unknown as RenderedTimelineItem,
+      ],
+    });
+    sessions.set("session-notices-continued", {
+      ...base,
+      sessionId: "session-notices-continued",
+      title: "Summarize the release notes",
+      previewText: "Summarize the release notes",
+      turnState: "processing",
+      latestRequestId: "request-notices-continued",
+      latestRequestOutcome: harnessRequestOutcome({ failureReason: overloaded }),
+      timelineItems: [
+        user("notices-continued", "Summarize the release notes for 1.4.", 3),
+      ],
+    });
+    sessions.set("session-notices-limit", {
+      ...base,
+      sessionId: "session-notices-limit",
+      title: "Port the parser to the new grammar",
+      previewText: "Port the parser to the new grammar",
+      turnState: "failed",
+      latestRequestId: "request-notices-limit",
+      latestRequestOutcome: harnessRequestOutcome({
+        failureReason: "every Claude account on this node has reached its usage limit",
+      }),
+      timelineItems: [user("notices-limit", "Port the parser to the new grammar.", 9)],
+    });
+    sessions.set("session-notices-move", {
+      ...base,
+      sessionId: "session-notices-move",
+      title: "Review the sync changes",
+      previewText: "Review the sync changes",
+      turnState: "failed",
+      latestRequestId: "request-notices-move",
+      latestRequestOutcome: harnessRequestOutcome({
+        failureReason: "every Claude account on this node has reached its usage limit",
+      }),
+      timelineItems: [user("notices-move", "Review the sync changes.", 12)],
+    });
+    sessions.set("session-notices-goal", {
+      ...base,
+      sessionId: "session-notices-goal",
+      title: "Make the import job resumable",
+      previewText: "Make the import job resumable",
+      turnState: "completed",
+      latestRequestId: "request-notices-goal",
+      latestRequestOutcome: null,
+      goal: {
+        kind: "observed",
+        next: "control_goal",
+        observation: {
+          nodeDid: NODE_DID,
+          sessionId: "session-notices-goal",
+          sessionDocId: "session-notices-goal-doc",
+          observedAt: "2026-11-08T00:00:00Z",
+          goal: {
+            goalId: "goal-notices",
+            revision: { document: "goal-notices-doc", composite: "goal-notices-cid" },
+            objective: "Make the import job resumable after a crash",
+            status: "usage_limited",
+            tokenBudget: "400000",
+            tokensUsed: "312400",
+            activeTimeSeconds: "2460",
+            continuationSequence: "4",
+            wrapupRequested: false,
+            wrapupCompleted: false,
+            lastBlockedReason:
+              "verification_failed: the resume test still fails on the second run",
+            lastFailure:
+              "usage_limited: every Claude account on this node has reached its usage limit",
+            completionEvidence: null,
+          },
+        },
+      },
+      timelineItems: [
+        user("notices-goal", "Make the import job resumable after a crash.", 40),
+      ],
+    });
+    const denied: RenderedToolCallView = {
+      itemKey: "notices-tool-denied",
+      toolName: "bash",
+      statusKind: "error",
+      requestId: "request-notices-tools",
+      toolCallId: "call-notices-denied",
+      toolCallDocId: "doc-notices-denied",
+      startedAt: ago(3),
+      completedAt: ago(3),
+      reconstruction: HARNESS_READY_RECONSTRUCTION,
+      denial: {
+        category: "network",
+        categoryLabel: "Network",
+        ruleId: "bash.network.deny_outbound",
+        reasonLine: "Outbound network access is turned off for this agent's commands.",
+        deniedCommand: "curl",
+        deniedArgument: "https://example.com/install.sh",
+        deniedSubcommand: null,
+        diagnostic:
+          "policy=tools-default rule=bash.network.deny_outbound mode=disabled",
+      },
+      presentation: {
+        kind: "command",
+        command: "curl -fsSL https://example.com/install.sh | sh",
+        exitCode: null,
+        timedOut: false,
+        failed: true,
+        durationMs: null,
+        cwd: "~/src/gents",
+        executionMode: null,
+        networkMode: null,
+        stdout: "",
+        stderr: "",
+        fallbackOutput: null,
+      },
+    };
+    const canceled: RenderedToolCallView = {
+      itemKey: "notices-tool-canceled",
+      toolName: "bash",
+      statusKind: "canceled",
+      requestId: "request-notices-tools",
+      toolCallId: "call-notices-canceled",
+      toolCallDocId: "doc-notices-canceled",
+      startedAt: ago(2),
+      completedAt: ago(1),
+      reconstruction: HARNESS_READY_RECONSTRUCTION,
+      cancelCause: {
+        cause: "userCancelled",
+        source: "requestInterrupt",
+        confidence: "authentic",
+        at: ago(1),
+        evidence: ["interrupt request req-7f3a from did:key:desktop-harness"],
+      },
+      presentation: {
+        kind: "command",
+        command: "npm run test:ui:e2e",
+        exitCode: null,
+        timedOut: false,
+        failed: false,
+        durationMs: 61_000,
+        cwd: "~/src/gents",
+        executionMode: null,
+        networkMode: null,
+        stdout: "Running 580 tests using 6 workers",
+        stderr: "",
+        fallbackOutput: null,
+      },
+    };
+    sessions.set("session-notices-tools", {
+      ...base,
+      sessionId: "session-notices-tools",
+      title: "Install the linter",
+      previewText: "Install the linter",
+      turnState: "completed",
+      latestRequestId: "request-notices-tools",
+      latestRequestOutcome: null,
+      timelineItems: [
+        user("notices-tools", "Install the linter and run the browser tests.", 4),
+        {
+          kind: "toolGroup" as const,
+          itemKey: "notices-tools-group",
+          messageSequence: 1,
+          tools: [denied, canceled],
+        } as unknown as RenderedTimelineItem,
+        harnessAssistantItem({
+          itemKey: "notices-tools-reply",
+          sequence: 3,
+          content: "The install was refused, and you stopped the test run.",
+          reasoning: null,
+          timestamp: ago(1),
+        }),
+      ],
+    });
+    /* a command that wrote to both streams and failed */
+    sessions.set("session-notices-stderr", {
+      ...base,
+      sessionId: "session-notices-stderr",
+      title: "Build the docs",
+      previewText: "Build the docs",
+      turnState: "completed",
+      latestRequestId: "request-notices-stderr",
+      latestRequestOutcome: null,
+      timelineItems: [
+        user("notices-stderr", "Build the docs site.", 2),
+        {
+          kind: "toolGroup" as const,
+          itemKey: "notices-stderr-group",
+          messageSequence: 1,
+          tools: [
+            {
+              itemKey: "notices-stderr-tool",
+              toolName: "bash",
+              statusKind: "error",
+              requestId: "request-notices-stderr",
+              toolCallId: "call-notices-stderr",
+              toolCallDocId: "doc-notices-stderr",
+              startedAt: ago(2),
+              completedAt: ago(2),
+              reconstruction: HARNESS_READY_RECONSTRUCTION,
+              presentation: {
+                kind: "command",
+                command: "npm run docs:build",
+                exitCode: 1,
+                timedOut: false,
+                failed: true,
+                durationMs: 4_200,
+                cwd: "~/src/gents",
+                executionMode: null,
+                networkMode: null,
+                stdout:
+                  "> docs:build\n> vitepress build docs\n\nbuilding client + server bundles...",
+                stderr:
+                  'x Build failed in 3.81s\n[vitepress] docs/guide/nodes.md: Unknown custom container "warn"',
+                fallbackOutput: null,
+              },
+            } satisfies RenderedToolCallView,
+          ],
+        } as unknown as RenderedTimelineItem,
+        harnessAssistantItem({
+          itemKey: "notices-stderr-reply",
+          sequence: 3,
+          content: "The docs build failed on an unknown container in nodes.md.",
+          reasoning: null,
+          timestamp: ago(1),
+        }),
+      ],
+    });
+    deployment = {
+      ...deployment,
+      inferenceBackends: [
+        ...deployment.inferenceBackends,
+        {
+          ...deployment.inferenceBackends[0]!,
+          backendId: "backend-claude",
+          name: "Claude",
+          providerKind: "ClaudeCliSubscription",
+          endpoint: null,
+          apiKeyConfigured: false,
+          apiKeyEnvVar: null,
+          authKind: "node_oauth",
+          models: ["claude-sonnet-5-5"],
+          advertisedModels: [
+            {
+              model_name: "claude-sonnet-5-5",
+              display_name: "Claude Sonnet 5.5",
+              context_window: 200_000,
+              max_context_window: 1_000_000,
+              max_output_tokens: 64_000,
+              reasoning_efforts: null,
+            },
+          ],
+          accountRef: "account-work",
+        },
+      ],
+      inferenceProfiles: [
+        ...deployment.inferenceProfiles,
+        {
+          node_did: NODE_DID,
+          profile_id: "profile-claude",
+          display_name: "Claude Sonnet",
+          backend_id: "backend-claude",
+          model_name: "claude-sonnet-5-5",
+          context_window: 200_000,
+          max_output_tokens: 8192,
+          sampling_id: null,
+          execution_id: null,
+        },
+      ],
+    };
+  }
   if (scenario === "mobile-performance") {
-    sessions.set("session-large", createLargePerformanceSession());
+    sessions.set(
+      "session-large",
+      createLargePerformanceSession(
+        undefined,
+        options.compactionAt,
+        options.compactionUnmarked,
+      ),
+    );
     for (let index = 2; index < performanceFixture.sessionIndexCount; index += 1) {
       const sessionId = `session-index-${String(index).padStart(3, "0")}`;
       sessions.set(sessionId, {
         sessionId,
         nodeDid: NODE_DID,
-        agentId: DEFAULT_AGENT_ID,
+        agentDid: DEFAULT_AGENT_DID,
         title: `Comparable session ${String(index).padStart(3, "0")}`,
         previewText: `Durable session-index fixture row ${index}`,
         status: "active",
         turnState: "completed",
         latestRequestId: `request-index-${index}`,
-        goal: null,
+        goal: verifiedNoGoal(sessionId),
         retryEligibility: { eligible: false, denialReason: null },
         latestRequestOutcome: null,
         pendingTurn: null,
@@ -819,6 +1679,29 @@ export function createDesktopUiHarness(
       }
     }, 0);
   }
+
+  /* an item filed after the app started, so it reads as new */
+  if (scenario === "mailbox-many")
+    window.setTimeout(() => {
+      deployment = {
+        ...deployment,
+        mailboxItems: [
+          {
+            ...deployment.mailboxItems[0]!,
+            itemId: "many-deploy",
+            itemKey: "many-deploy",
+            kind: "finished",
+            action: "ack",
+            title: "Deploy to staging finished",
+            summary: "All 412 checks passed; staging runs the new build.",
+            payload: null,
+            createdAt: new Date().toISOString(),
+          },
+          ...deployment.mailboxItems,
+        ],
+      };
+      notify("store");
+    }, 2500);
 
   function notifyBurst(reason: string, count: number, responseOnly = false) {
     updateEvents += count;
@@ -869,7 +1752,10 @@ export function createDesktopUiHarness(
       chatSafe: p2pStatus === "healthy",
     };
     const deployments = !provisioned || removed ? [] : [visibleDeployment];
-    if (scenario === "active-nodes" && deployments.length) {
+    if (
+      (scenario === "active-nodes" || scenario === "joined-access") &&
+      deployments.length
+    ) {
       const remoteDid = "did:key:harness-remote";
       deployments.push({
         ...visibleDeployment,
@@ -878,34 +1764,39 @@ export function createDesktopUiHarness(
         source: "enrollment",
         label: "studio-1",
         graphql: null,
+        operatorAccess: false,
+        leaseExpiresAt:
+          scenario === "joined-access"
+            ? new Date(Date.now() + 2 * DAY_MS + HOUR_MS).toISOString()
+            : null,
         node: {
           ...visibleDeployment.node,
           nodeDid: remoteDid,
           displayName: "Amy",
-          defaultAgentId: "remote-agent",
+          defaultAgentDid: "remote-agent",
         },
         nodeConfig: {
           ...visibleDeployment.nodeConfig,
           node_did: remoteDid,
           display_name: "Amy",
-          default_agent_id: "remote-agent",
+          default_agent_did: "remote-agent",
         },
         nodeReadiness: {
           ...visibleDeployment.nodeReadiness,
-          agents: [{ state: "ready", agentId: "remote-agent" }],
+          agents: [{ state: "ready", agentDid: "remote-agent" }],
         },
         agents: [
           {
             ...visibleDeployment.agents[0]!,
             nodeDid: remoteDid,
-            agentId: "remote-agent",
+            agentDid: "remote-agent",
             displayName: "Remote worker",
           },
         ],
         agentEnvironments: [
           {
             ...visibleDeployment.agentEnvironments[0]!,
-            agentId: "remote-agent",
+            agentDid: "remote-agent",
             displayName: "Remote worker",
           },
         ],
@@ -916,7 +1807,6 @@ export function createDesktopUiHarness(
     const health = {
       status: p2pStatus,
       connectedPeerCount: p2pStatus === "healthy" ? 1 : 0,
-      replicatorCount: p2pStatus === "healthy" ? 1 : 0,
       consecutiveFailures: p2pStatus === "healthy" ? 0 : 3,
       lastOkAt: p2pStatus === "healthy" ? STARTED_AT : null,
       lastError: p2pStatus === "healthy" ? null : "fixture transport unavailable",
@@ -932,12 +1822,11 @@ export function createDesktopUiHarness(
         initToolCeiling: freshHome ? null : "ReadWrite",
         initToolRoot: freshHome ? null : "/tmp/gents-bombadil/workspace",
         desktopHome: "/tmp/gents-bombadil/desktop",
-        peerDirectoryPath: "/tmp/gents-bombadil/peers.json",
-        nodeDataDir: "/tmp/gents-bombadil/node",
-        diagnosticsHint: "native logging",
+        diagnosticsHint:
+          scenario === "startup-port-in-use"
+            ? "journalctl --user --since '1 hour ago' SYSLOG_IDENTIFIER=gents-desktop SYSLOG_IDENTIFIER=gents-runtime. Runtime startup errors: /home/me/.local/share/gents/desktop/logs/runtime-errors.log"
+            : "native logging",
         nodeHomeExists: !freshHome,
-        desktopHomeExists: true,
-        peerDirectoryExists: true,
         clientStateExists: true,
         savedPeers: !provisioned
           ? []
@@ -954,21 +1843,14 @@ export function createDesktopUiHarness(
       },
       client: {
         clientDid: "did:key:desktop-harness",
-        localPeerId: "peer-bombadil-local",
-        listenAddresses: ["/ip4/127.0.0.1/tcp/9292"],
         p2pHealth: health,
         syncHealth,
         enrollmentRequests,
-        bootstrapErrors: [],
-        lastMutationError: null,
-        focusedRequestId: null,
-        configuredPeerCount: deployments.length,
-        dialedPeerCount: deployments.length,
-        peerIssueCount: 0,
         rowCount,
         approxSerializedBytes: rowCount * 512,
         operatorConfigAuthoritativeNodeDids: freshHome ? [] : [NODE_DID],
         deployments,
+        endedAccess,
       },
     };
     return clone(next);
@@ -1000,7 +1882,7 @@ export function createDesktopUiHarness(
           title: session.title,
           previewText: session.previewText,
           status: session.status,
-          agentId: session.agentId,
+          agentDid: session.agentDid,
           latestRequestId: session.latestRequestId,
           taskId: lineage?.taskId ?? null,
           taskName: lineage?.taskName ?? null,
@@ -1023,7 +1905,7 @@ export function createDesktopUiHarness(
 
   function createSessionFromPrompt(
     prompt: string,
-    agentId?: string | null,
+    agentDid?: string | null,
     lineage?: {
       taskId?: string | null;
       taskName?: string | null;
@@ -1040,13 +1922,13 @@ export function createDesktopUiHarness(
     const session: DesktopSessionSnapshot = {
       sessionId,
       nodeDid: deployment.nodeDid,
-      agentId: agentId || deployment.node.defaultAgentId,
+      agentDid: agentDid || deployment.node.defaultAgentDid,
       title,
       previewText: response,
       status: "active",
       turnState: "completed",
       latestRequestId: requestId,
-      goal: null,
+      goal: verifiedNoGoal(sessionId),
       retryEligibility: { eligible: false, denialReason: null },
       latestRequestOutcome: harnessRequestOutcome(),
       pendingTurn: null,
@@ -1139,13 +2021,6 @@ export function createDesktopUiHarness(
         "Goal submission acknowledgement is unavailable in this fixture.",
       );
     },
-    async recoverChatSubmission(query) {
-      const result = chatReplies.get(query.requestId);
-      return result
-        ? { kind: "prepared", result }
-        : { kind: "unconfirmed", nodeDid: query.nodeDid, requestId: query.requestId };
-    },
-    async acknowledgeChatSubmission() {},
     async steerPendingMessage() {
       throw new Error("Steering is unavailable in this fixture.");
     },
@@ -1154,9 +2029,6 @@ export function createDesktopUiHarness(
     },
     async setSessionArchived() {
       throw new Error("Archive controls are unavailable in this fixture.");
-    },
-    async sessionHistory() {
-      throw new Error("Archive history is unavailable in this fixture.");
     },
     async forkSessionBeforeMessage() {
       throw new Error("Message editing is unavailable in this fixture.");
@@ -1219,7 +2091,20 @@ export function createDesktopUiHarness(
     async searchPacks() {
       return { packs: [], has_more: false };
     },
-    async installPack() {},
+    async packInfo(pack: string) {
+      const [namespace, name] = pack.split("/");
+      return { namespace, name, versions: [] };
+    },
+    async installPack(request) {
+      const [pack, version] = request.package.split("@");
+      return {
+        pack: pack!,
+        coordinate: pack!,
+        version: version ?? null,
+        digest: "sha256:harness",
+        source: "registry",
+      };
+    },
     async updatePack() {},
     async removePack() {},
     async bindPackPlugin() {},
@@ -1283,10 +2168,16 @@ export function createDesktopUiHarness(
     async listUxDataSurfaces() {
       return { surfaces: [] };
     },
-    ...(scenario === "empty-fleet" || scenario === "storage-recovery"
+    ...(scenario === "empty-fleet" ||
+    scenario === "storage-recovery" ||
+    scenario === "startup-port-in-use"
       ? ({
           async managedServerStatus() {
-            if (managedServer.state === "running" && !managedServer.pairingReady) {
+            if (
+              pairingAuthorized &&
+              managedServer.state === "running" &&
+              !managedServer.pairingReady
+            ) {
               pairingStatusReads += 1;
               if (pairingStatusReads >= 2) {
                 managedServer = { ...managedServer, pairingReady: true };
@@ -1315,6 +2206,10 @@ export function createDesktopUiHarness(
               error: null,
             };
             return clone(managedServer);
+          },
+          async enrollManagedServer() {
+            pairingAuthorized = true;
+            managedServer = { ...managedServer, pairingReady: true };
           },
           async commitManagedServerAutoStart(nodeName) {
             managedServer = { ...managedServer, autoStart: true, nodeName };
@@ -1370,6 +2265,11 @@ export function createDesktopUiHarness(
       notify("peers");
       return snapshot();
     },
+    async dismissEndedAccess(nodeDid) {
+      endedAccess = endedAccess.filter((ended) => ended.nodeDid !== nodeDid);
+      notify("peers");
+      return snapshot();
+    },
     async renamePeer(peerId, label) {
       if (peerId !== deployment.peerId) {
         throw new Error(`peer ${peerId} not found`);
@@ -1408,15 +2308,12 @@ export function createDesktopUiHarness(
         truncated: false,
       };
     },
-    async resendRequest(requestId) {
-      return { requestId: `${requestId}-resend`, sessionId: "session-intro" };
-    },
     async retryRequest(requestId) {
       return {
         requestId: `${requestId}-retry`,
         sessionId: "session-intro",
         nodeDid: NODE_DID,
-        agentId: DEFAULT_AGENT_ID,
+        agentDid: DEFAULT_AGENT_DID,
       };
     },
     async fetchRequestTimeline(nodeDid, requestId) {
@@ -1427,7 +2324,7 @@ export function createDesktopUiHarness(
         request_id: requestId,
         session_id: "session-intro",
         node_did: nodeDid,
-        agent_id: DEFAULT_AGENT_ID,
+        agent_did: DEFAULT_AGENT_DID,
         child_request_ids: [],
         events: [
           {
@@ -1464,79 +2361,6 @@ export function createDesktopUiHarness(
         ],
       };
     },
-    async explainToolSurface(nodeDid, agentId) {
-      if (nodeDid !== NODE_DID) {
-        throw new Error(
-          "tool-surface explanation for remote agents is not yet supported",
-        );
-      }
-      const agent = deployment.agents.find(
-        (candidate) => candidate.agentId === agentId,
-      );
-      const context = deployment.contexts.find(
-        (candidate) => candidate.context_id === agent?.contextId,
-      );
-      return {
-        agentId,
-        enabled: agent?.enabled ?? true,
-        contextId: context?.context_id ?? null,
-        toolsId: context?.tools_id ?? null,
-        toolsSource: "context",
-        ceilingSource: "init_json",
-        mcpServicesOnline: true,
-        surface: {
-          tool_names: ["read_file", "list_files", "gents_exec"],
-          policy: {
-            requested: {
-              file_tools: ["read_file", "list_files", "write_file"],
-              meta: ["gents_exec"],
-            },
-            ceiling: { file_tools: ["read_file", "list_files"], meta: ["gents_exec"] },
-            runtime: {
-              file_tools: ["read_file", "list_files", "write_file"],
-              meta: ["gents_exec"],
-            },
-            effective: {
-              file_tools: ["read_file", "list_files"],
-              meta: ["gents_exec"],
-            },
-          },
-          included: { read_file: ["ceiling allows readonly file tools"] },
-          excluded: { write_file: ["ceiling is readonly"] },
-          unavailable: {},
-          warnings: [],
-        },
-      };
-    },
-    async fetchNetworkStatus() {
-      return {
-        localPeerId: "12D3KooWBombadilLocalPeer",
-        localPeerIdError: null,
-        listenAddresses: ["/ip4/127.0.0.1/tcp/9292/p2p/12D3KooWBombadilLocalPeer"],
-        listenAddressesError: null,
-        connectedPeers: [deployment.peerId],
-        connectedPeersError: null,
-        replicators: [
-          {
-            peerId: deployment.peerId,
-            address: deployment.addr,
-            collections: ["AgentRequest", "AgentResponse", "AgentMessage"],
-            status: 0,
-            lastStatusChange: TWO_HOURS_AGO,
-          },
-        ],
-        replicatorsError: null,
-        savedPeers: [
-          {
-            peerId: deployment.peerId,
-            label: deployment.label,
-            addr: deployment.addr,
-            nodeDid: deployment.nodeDid,
-            source: deployment.source,
-          },
-        ],
-      };
-    },
     async fetchPeerStatus() {
       return {
         label: "Bombadil UI Agent",
@@ -1564,7 +2388,6 @@ export function createDesktopUiHarness(
       const sessionId = _sessionId;
       const session = sessions.get(sessionId);
       if (!session) return null;
-      if (timelinePage?.beforeItemKey) await waitForOlderPage();
       const snapshot = clone(session);
       snapshot.projectionRevision = {
         storeVersion,
@@ -1579,50 +2402,20 @@ export function createDesktopUiHarness(
 
       const totalItems = snapshot.timelineItems.length;
       const limit = Math.max(1, Math.min(80, timelinePage.limit ?? 40));
-      const end = timelinePage.beforeItemKey
-        ? snapshot.timelineItems.findIndex(
-            (item) => item.itemKey === timelinePage.beforeItemKey,
-          )
-        : totalItems;
-      if (end < 0) {
-        throw new Error(
-          `session timeline cursor is no longer present: ${timelinePage.beforeItemKey}`,
-        );
-      }
-      const start = Math.max(0, end - limit);
-      snapshot.timelineItems = snapshot.timelineItems.slice(start, end);
+      const start = Math.max(0, totalItems - limit);
+      snapshot.timelineItems = snapshot.timelineItems.slice(start);
       snapshot.timelinePage = {
         totalItems,
         pageItems: snapshot.timelineItems.length,
         hasOlder: start > 0,
-        hasNewer: end < totalItems,
+        hasNewer: false,
         oldestItemKey: snapshot.timelineItems[0]?.itemKey ?? null,
         newestItemKey:
           snapshot.timelineItems[snapshot.timelineItems.length - 1]?.itemKey ?? null,
       };
       return snapshot;
     },
-    async retrySessionHydration(sessionId, nodeDid) {
-      hydrationRetryCalls += 1;
-      const session = sessions.get(sessionId);
-      const resolvedNodeDid = nodeDid ?? session?.nodeDid;
-      if (
-        !session ||
-        session.nodeDid !== resolvedNodeDid ||
-        session.hydration?.phase !== "failed"
-      ) {
-        throw new Error(
-          "session hydration retry requires a failed attempt for the selected session",
-        );
-      }
-      const hydration = {
-        ...session.hydration,
-        phase: "requested" as const,
-        mergedCount: session.timelineItems.length,
-        coveredCount: session.timelineItems.length,
-        servedCount: null,
-      };
-      sessions.set(sessionId, { ...session, hydration });
+    async reloadSession() {
       notify("store");
     },
     /* each message number stands for one message, as in the runtime: a
@@ -1738,7 +2531,7 @@ export function createDesktopUiHarness(
           sessionId: request.sessionId,
           requestId: heldRequestId,
           nodeDid: request.nodeDid,
-          agentId: request.agentId ?? null,
+          agentDid: request.agentDid ?? null,
         };
       }
       if (request.sessionId && sessions.has(request.sessionId)) {
@@ -1773,7 +2566,7 @@ export function createDesktopUiHarness(
             sessionId: request.sessionId,
             requestId,
             nodeDid: request.nodeDid,
-            agentId: request.agentId ?? null,
+            agentDid: request.agentDid ?? null,
           };
         }
         const response = `Bombadil harness response ${requestSeq}: received "${content.slice(
@@ -1817,13 +2610,13 @@ export function createDesktopUiHarness(
           sessionId: request.sessionId,
           requestId,
           nodeDid: request.nodeDid,
-          agentId: request.agentId ?? null,
+          agentDid: request.agentDid ?? null,
         };
       }
 
       const { session, requestId } = createSessionFromPrompt(
         content,
-        request.agentId,
+        request.agentDid,
         undefined,
         request,
       );
@@ -1838,7 +2631,7 @@ export function createDesktopUiHarness(
         requestId,
         sessionId: session.sessionId,
         nodeDid: request.nodeDid,
-        agentId: request.agentId || DEFAULT_AGENT_ID,
+        agentDid: request.agentDid || DEFAULT_AGENT_DID,
         lifecycleState: "completed",
       };
       return result;
@@ -1857,9 +2650,6 @@ export function createDesktopUiHarness(
     async observeMailboxItem() {
       throw new Error("Native mailbox observation is unavailable in this harness");
     },
-    async listMailbox() {
-      return deployment.mailboxItems;
-    },
     async startMailboxRequest(itemId) {
       const item = deployment.mailboxItems.find((entry) => entry.itemId === itemId);
       if (!item) {
@@ -1867,7 +2657,14 @@ export function createDesktopUiHarness(
       }
       return item;
     },
-    async dismissMailboxItem() {
+    async dismissMailboxItem(itemId) {
+      deployment = {
+        ...deployment,
+        mailboxItems: deployment.mailboxItems.map((item) =>
+          item.itemId === itemId ? { ...item, status: "dismissed" } : item,
+        ),
+      };
+      notify("store");
       return undefined;
     },
     async applyConfigComponents(request) {
@@ -1880,7 +2677,7 @@ export function createDesktopUiHarness(
           ...deployment.agentConfigs.filter(
             (agent) =>
               !request.document.agents?.some(
-                (candidate) => candidate.agent_id === agent.agent_id,
+                (candidate) => candidate.agent_did === agent.agent_did,
               ),
           ),
           ...(request.document.agents ?? []),
@@ -1979,6 +2776,10 @@ export function createDesktopUiHarness(
             advertisedModels: [],
             probeStatus: "healthy",
             accountRef: null,
+            allowOverage:
+              backend.auth.kind === "node_oauth_pool"
+                ? backend.auth.allow_overage
+                : null,
           })),
         ],
         inferenceSampling: [
@@ -2019,7 +2820,7 @@ export function createDesktopUiHarness(
             taskId: document.task_id,
             name: document.display_name ?? null,
             description: document.description ?? null,
-            agentId: document.agent_id,
+            agentDid: document.agent_did,
             promptTemplate: document.prompt_template,
             emitOutcome: document.emit_outcome,
             goalObjectiveTemplate: document.goal_objective_template ?? null,
@@ -2102,65 +2903,74 @@ export function createDesktopUiHarness(
         node: {
           ...deployment.node,
           displayName: document.display_name?.trim() || deployment.label,
-          defaultAgentId: document.default_agent_id ?? null,
+          defaultAgentDid: document.default_agent_did ?? null,
           enabled: document.enabled ?? deployment.node.enabled,
         },
         nodeConfig: {
           ...document,
           display_name: document.display_name ?? deployment.label,
-          default_agent_id: document.default_agent_id ?? deployment.node.defaultAgentId,
+          default_agent_did:
+            document.default_agent_did ?? deployment.node.defaultAgentDid,
           enabled: document.enabled ?? deployment.node.enabled,
         },
       };
       return snapshot();
     },
     async setDefaultAgent(request) {
-      if (!deployment.agents.some((b) => b.agentId === request.agentId)) {
-        throw new Error(`Agent "${request.agentId}" does not exist`);
+      if (!deployment.agents.some((b) => b.agentDid === request.agentDid)) {
+        throw new Error(`Agent "${request.agentDid}" does not exist`);
       }
       deployment = {
         ...deployment,
         agents: deployment.agents.map((b) => ({
           ...b,
-          enabled: b.agentId === request.agentId ? true : b.enabled,
-          isDefault: b.agentId === request.agentId,
+          enabled: b.agentDid === request.agentDid ? true : b.enabled,
+          isDefault: b.agentDid === request.agentDid,
         })),
         node: {
           ...deployment.node,
-          defaultAgentId: request.agentId,
+          defaultAgentDid: request.agentDid,
         },
         nodeConfig: deployment.nodeConfig
-          ? { ...deployment.nodeConfig, default_agent_id: request.agentId }
+          ? { ...deployment.nodeConfig, default_agent_did: request.agentDid }
           : deployment.nodeConfig,
       };
       notify("config");
       return snapshot();
+    },
+    async provisionAgentIdentity() {
+      agentSequence += 1;
+      return {
+        agent_did: `did:test:agent:${agentSequence}`,
+        creation_nonce: agentSequence.toString(16).padStart(64, "0"),
+      };
     },
     async saveAgentConfig(request) {
       if (scenario === "save-error") {
         throw new Error("Harness rejected agent save for sad-path coverage.");
       }
       const document: Agent = request.document;
-      const agentId = document.agent_id.trim() || `agent-${requestSeq}`;
+      const agentDid = document.agent_did.trim() || `agent-${requestSeq}`;
       const nextAgent: AgentView = {
-        agentId,
+        agentDid,
+        creationNonce: document.creation_nonce,
         nodeDid: document.node_did,
-        displayName: document.display_name?.trim() || agentId,
+        displayName: document.display_name?.trim() || agentDid,
         description: document.description ?? null,
         contextId: document.context_id ?? null,
         inferenceProfileId: document.inference_profile_id,
         enabled: document.enabled ?? true,
-        isDefault: agentId === deployment.node.defaultAgentId,
+        isDefault: agentDid === deployment.node.defaultAgentDid,
         tags: document.tags ?? [],
         createdAt: null,
       };
       deployment = {
         ...deployment,
-        agents: upsertBy(deployment.agents, "agentId", agentId, nextAgent),
-        agentConfigs: upsertBy(deployment.agentConfigs, "agent_id", agentId, {
+        agents: upsertBy(deployment.agents, "agentDid", agentDid, nextAgent),
+        agentConfigs: upsertBy(deployment.agentConfigs, "agent_did", agentDid, {
           ...document,
-          agent_id: agentId,
-          display_name: document.display_name?.trim() || agentId,
+          agent_did: agentDid,
+          display_name: document.display_name?.trim() || agentDid,
         }),
       };
       return snapshot();
@@ -2257,7 +3067,7 @@ export function createDesktopUiHarness(
         );
         return profile?.backend_id === request.backendId;
       });
-      const referencing = referencingAgents.map((agent) => agent.agentId);
+      const referencing = referencingAgents.map((agent) => agent.agentDid);
       if (referencing.length) {
         throw new Error(
           `backend "${request.backendId}" is referenced by inference profile(s) used by agent(s) ${referencing.join(", ")}; point them elsewhere first`,
@@ -2275,7 +3085,7 @@ export function createDesktopUiHarness(
     async deleteInferenceProfileConfig(request) {
       const referencing = deployment.agents
         .filter((agent) => agent.inferenceProfileId === request.profileId)
-        .map((agent) => agent.agentId);
+        .map((agent) => agent.agentDid);
       if (referencing.length) {
         throw new Error(
           `profile "${request.profileId}" is referenced by agent(s) ${referencing.join(", ")}; point them elsewhere first`,
@@ -2298,7 +3108,7 @@ export function createDesktopUiHarness(
           );
           return context?.tools_id === request.toolsId;
         })
-        .map((agent) => agent.agentId);
+        .map((agent) => agent.agentDid);
       if (referencing.length) {
         throw new Error(
           `tools document "${request.toolsId}" is referenced by agent(s) ${referencing.join(", ")}; point them elsewhere first`,
@@ -2335,18 +3145,20 @@ export function createDesktopUiHarness(
     },
     async deleteAgentConfig(request) {
       const isDefault =
-        deployment.agents.find((agent) => agent.agentId === request.agentId)
-          ?.isDefault ?? deployment.node.defaultAgentId === request.agentId;
+        deployment.agents.find((agent) => agent.agentDid === request.agentDid)
+          ?.isDefault ?? deployment.node.defaultAgentDid === request.agentDid;
       if (isDefault) {
         throw new Error(
-          `agent "${request.agentId}" is the node's default agent; make another agent the default first`,
+          `agent "${request.agentDid}" is the node's default agent; make another agent the default first`,
         );
       }
       deployment = {
         ...deployment,
-        agents: deployment.agents.filter((agent) => agent.agentId !== request.agentId),
+        agents: deployment.agents.filter(
+          (agent) => agent.agentDid !== request.agentDid,
+        ),
         agentConfigs: deployment.agentConfigs.filter(
-          (agent) => agent.agent_id !== request.agentId,
+          (agent) => agent.agent_did !== request.agentDid,
         ),
       };
       notify("config");
@@ -2361,6 +3173,23 @@ export function createDesktopUiHarness(
           ...context,
           skill_ids: (context.skill_ids ?? []).filter((id) => id !== skillId),
         })),
+      };
+      return snapshot();
+    },
+    async setBackendRotation({ backendId, rotation }) {
+      deployment = {
+        ...deployment,
+        inferenceBackends: deployment.inferenceBackends.map((backend) =>
+          backend.backendId !== backendId
+            ? backend
+            : rotation.kind === "single"
+              ? { ...backend, authKind: "node_oauth", allowOverage: null }
+              : {
+                  ...backend,
+                  authKind: "node_oauth_pool",
+                  allowOverage: rotation.allow_overage ?? backend.allowOverage ?? false,
+                },
+        ),
       };
       return snapshot();
     },
@@ -2394,6 +3223,10 @@ export function createDesktopUiHarness(
             advertisedModels: [],
             probeStatus: "healthy",
             accountRef: null,
+            allowOverage:
+              document.auth.kind === "node_oauth_pool"
+                ? document.auth.allow_overage
+                : null,
           },
         ),
       };
@@ -2473,7 +3306,7 @@ export function createDesktopUiHarness(
           taskId,
           name: document.display_name?.trim() || taskId,
           description: document.description ?? null,
-          agentId: document.agent_id,
+          agentDid: document.agent_did,
           promptTemplate: document.prompt_template,
           emitOutcome: document.emit_outcome,
           goalObjectiveTemplate: document.goal_objective_template ?? null,
@@ -2874,7 +3707,23 @@ export function createDesktopUiHarness(
         sent: [],
         received: [],
         senders: [],
-        calls: [],
+        calls:
+          scenario === "automated-inputs" && request.sessionId === "session-intro"
+            ? [
+                {
+                  requestId: "request-auto-user",
+                  toolCallId: "call-auto-worker",
+                  caused: {
+                    requestId: "request-worker",
+                    nodeDid: NODE_DID,
+                    sessionId: "session-worker",
+                    requesterDid: null,
+                    lifecycleState: "completed",
+                    createdAt: null,
+                  },
+                },
+              ]
+            : [],
       };
       return view;
     },
@@ -2984,18 +3833,9 @@ export function createDesktopUiHarness(
   adapter.sendChatMessage = async (request) => {
     if (request.requestId && chatReplies.has(request.requestId))
       return chatReplies.get(request.requestId)!;
-    const result = await sendChatMessage(request);
-    const reply: ChatSendResult = {
-      ...result,
-      submissionReceipt: {
-        nodeDid: result.nodeDid,
-        requestId: result.requestId,
-        sessionId: result.sessionId,
-        agentId: result.agentId,
-        envelopeHash: "sha256:" + "a".repeat(64),
-        signedPayloadHash: "sha256:" + "b".repeat(64),
-      },
-    };
+    // The runtime's create is idempotent on the request identity: a retry of
+    // one identity is the same request.
+    const reply: ChatSendResult = await sendChatMessage(request);
     chatReplies.set(reply.requestId, reply);
     return reply;
   };
@@ -3009,13 +3849,13 @@ export function createDesktopUiHarness(
 
   function runHarnessTask(taskId: string): TaskRunResult {
     const task = deployment.tasks.find((row) => row.taskId === taskId);
-    const agentId = deployment.node.defaultAgentId;
-    if (!agentId) {
+    const agentDid = deployment.node.defaultAgentDid;
+    if (!agentDid) {
       throw new Error("runtime readiness did not assign a default agent");
     }
     const { session, requestId } = createSessionFromPrompt(
       `Run task ${taskId}`,
-      agentId,
+      agentDid,
       {
         taskId,
         taskName: task?.name ?? taskId,
@@ -3026,7 +3866,7 @@ export function createDesktopUiHarness(
       requestId,
       sessionId: session.sessionId,
       nodeDid: deployment.nodeDid,
-      agentId,
+      agentDid,
       lifecycleState: "completed",
     };
   }
@@ -3193,7 +4033,7 @@ export function createDesktopUiHarness(
                     requestId,
                     content: "again",
                     selectedSkillIds: [],
-                    lifecycleState: "pending",
+                    lifecycleState: "pending" as const,
                     foldedIntoRequestId: null,
                     origin: null,
                     createdAt: STARTED_AT,
@@ -3353,93 +4193,19 @@ export function createDesktopUiHarness(
       })
     : adapter;
 
-  function remoteHydration(
-    phase: NonNullable<DesktopSessionSnapshot["hydration"]>["phase"],
-    mergedCount: number,
-    servedCount: number | null,
-  ) {
-    return {
-      sessionId: "session-remote",
-      nodeDid: NODE_DID,
-      phase,
-      mergedCount,
-      coveredCount:
-        servedCount == null ? mergedCount : Math.min(mergedCount, servedCount),
-      servedCount,
-    };
-  }
-
-  const sessionSync: SessionSyncHarnessController = {
-    observe() {
-      notify("store");
-    },
-    retryCount() {
-      return hydrationRetryCalls;
-    },
-    progress(mergedCount, servedCount) {
-      const session = sessions.get("session-remote");
-      if (!session) return;
-      const timelineItems = [...session.timelineItems];
-      if (
-        mergedCount >= 2 &&
-        !timelineItems.some((item) => item.itemKey === "remote-assistant")
-      ) {
-        timelineItems.push(
-          harnessAssistantItem({
-            itemKey: "remote-assistant",
-            sequence: 2,
-            content: "history arrived from the desktop",
-            reasoning: null,
-            timestamp: TWO_HOURS_AGO,
-          }),
-        );
-      }
-      const lastItem = timelineItems.at(-1);
-      sessions.set("session-remote", {
-        ...session,
-        previewText:
-          lastItem && "content" in lastItem
-            ? (lastItem.content ?? session.previewText)
-            : session.previewText,
-        timelineItems,
-        hydration: remoteHydration("serving", mergedCount, servedCount),
-      });
-      syncSessions();
-      notify("store");
-    },
-    complete() {
-      const session = sessions.get("session-remote");
-      if (!session) return;
-      const servedCount =
-        session.hydration?.servedCount ?? Math.max(session.timelineItems.length, 2);
-      const hydration = remoteHydration("complete", servedCount, servedCount);
-      sessions.set("session-remote", { ...session, hydration });
-      notify("store");
-    },
-    fail() {
-      const session = sessions.get("session-remote");
-      if (!session) return;
-      const hydration = remoteHydration(
-        "failed",
-        session.timelineItems.length,
-        session.hydration?.servedCount ?? null,
-      );
-      sessions.set("session-remote", { ...session, hydration });
-      notify("store");
-    },
-  };
-
   return {
     adapter: measuredAdapter,
     listenerFactory,
     scenario,
     performance,
-    sessionSync,
+    sharing: isSharingScenario(scenario) ? createHarnessSharing(scenario) : undefined,
   };
 }
 
 function createLargePerformanceSession(
   items: number = MOBILE_PERFORMANCE_FIXTURE.largeSessionTimelineItems,
+  compactionAt?: number,
+  compactionUnmarked = false,
 ): DesktopSessionSnapshot {
   const filler =
     "bounded durable transcript fixture with markdown `code`, stable prose, and comparable byte shape";
@@ -3476,20 +4242,58 @@ function createLargePerformanceSession(
   return {
     sessionId: "session-large",
     nodeDid: NODE_DID,
-    agentId: DEFAULT_AGENT_ID,
+    agentDid: DEFAULT_AGENT_DID,
     title: "Large local transcript — 600 timeline items",
     previewText: "stream-start",
     status: "active",
     turnState: "running",
     latestRequestId: "large-request-live",
-    goal: null,
+    goal: verifiedNoGoal("session-large"),
     retryEligibility: { eligible: false, denialReason: null },
     latestRequestOutcome: null,
     pendingTurn: null,
     queuedTurns: [],
     foldedInputs: [],
-    context: harnessSessionContext(),
-    timelineItems,
+    context:
+      compactionAt === undefined
+        ? harnessSessionContext()
+        : harnessSessionContext({
+            sessionCompactionCount: 1,
+            compactions: [
+              {
+                compactionKey: "large-compaction",
+                sequence: 1,
+                messagesCompacted: compactionAt + 1,
+                originalTokens: 90_000,
+                compactedTokens: 3_000,
+                createdAt: STARTED_AT,
+                itemKey: "large-compaction",
+                messageSequence: compactionAt,
+              },
+            ],
+          }),
+    timelineItems:
+      compactionAt === undefined || compactionUnmarked
+        ? timelineItems
+        : timelineItems.flatMap<DesktopSessionSnapshot["timelineItems"][number]>(
+            (item) =>
+              "sequence" in item && item.sequence === compactionAt
+                ? [
+                    item,
+                    {
+                      kind: "sessionCompaction" as const,
+                      itemKey: "large-compaction",
+                      sequence: compactionAt,
+                      messagesCompacted: compactionAt + 1,
+                      originalTokens: 90_000,
+                      compactedTokens: 3_000,
+                      timestamp: STARTED_AT,
+                      summary:
+                        "# Continuation checkpoint\n\n## Goal\n\nKeep the large fixture going.",
+                    },
+                  ]
+                : [item],
+          ),
   };
 }
 
@@ -3551,24 +4355,26 @@ function createDeployment(): DeploymentView {
     source: "bombadil-harness",
     graphql: "http://127.0.0.1:9181/api/v0/graphql",
     dialSucceeded: true,
+    runtimeConnection: "connected",
     chatSafe: true,
+    chatRefusal: null,
+    leaseExpiresAt: null,
+    operatorAccess: true,
     nodeReadiness: {
       source: { state: "current" },
       activeGeneration: 1,
       routerGeneration: 1,
       updatedAt: STARTED_AT,
       agents: [
-        { state: "ready", agentId: DEFAULT_AGENT_ID },
-        { state: "ready", agentId: "ops" },
+        { state: "ready", agentDid: DEFAULT_AGENT_DID },
+        { state: "ready", agentDid: "ops" },
       ],
     },
-    routes: [],
-    pairing: [],
     lastError: null,
     node: {
       nodeDid: NODE_DID,
       displayName: "Bombadil UI Agent",
-      defaultAgentId: DEFAULT_AGENT_ID,
+      defaultAgentDid: DEFAULT_AGENT_DID,
       enabled: true,
       createdAt: STARTED_AT,
       createdBy: "bombadil",
@@ -3584,14 +4390,15 @@ function createDeployment(): DeploymentView {
     nodeConfig: {
       node_did: NODE_DID,
       display_name: "Bombadil UI Agent",
-      default_agent_id: DEFAULT_AGENT_ID,
+      default_agent_did: DEFAULT_AGENT_DID,
       enabled: true,
       created_at: STARTED_AT,
       created_by: "bombadil",
     },
     agentConfigs: [
       {
-        agent_id: DEFAULT_AGENT_ID,
+        agent_did: DEFAULT_AGENT_DID,
+        creation_nonce: "01".repeat(32),
         node_did: NODE_DID,
         display_name: "Default",
         context_id: "context-default",
@@ -3601,7 +4408,8 @@ function createDeployment(): DeploymentView {
         created_at: STARTED_AT,
       },
       {
-        agent_id: "ops",
+        agent_did: "ops",
+        creation_nonce: "02".repeat(32),
         node_did: NODE_DID,
         display_name: "Ops",
         context_id: "context-ops",
@@ -3634,7 +4442,8 @@ function createDeployment(): DeploymentView {
     compactions: [],
     agents: [
       {
-        agentId: DEFAULT_AGENT_ID,
+        agentDid: DEFAULT_AGENT_DID,
+        creationNonce: "01".repeat(32),
         nodeDid: NODE_DID,
         displayName: "Default",
         description: null,
@@ -3646,7 +4455,8 @@ function createDeployment(): DeploymentView {
         createdAt: STARTED_AT,
       },
       {
-        agentId: "ops",
+        agentDid: "ops",
+        creationNonce: "02".repeat(32),
         nodeDid: NODE_DID,
         displayName: "Ops",
         description: null,
@@ -3660,7 +4470,7 @@ function createDeployment(): DeploymentView {
     ],
     agentEnvironments: [
       {
-        agentId: DEFAULT_AGENT_ID,
+        agentDid: DEFAULT_AGENT_DID,
         displayName: "Default",
         enabled: true,
         isDefault: true,
@@ -3675,7 +4485,7 @@ function createDeployment(): DeploymentView {
         activeSessionCount: 0,
       },
       {
-        agentId: "ops",
+        agentDid: "ops",
         displayName: "Ops",
         enabled: true,
         isDefault: false,
@@ -3710,6 +4520,7 @@ function createDeployment(): DeploymentView {
         advertisedModels: [],
         probeStatus: "healthy",
         accountRef: null,
+        allowOverage: null,
       },
     ],
     inferenceProfiles: [
@@ -3801,7 +4612,7 @@ function createDeployment(): DeploymentView {
         taskId: "host-check",
         name: "Host check",
         description: "Inspect host health and summarize findings.",
-        agentId: DEFAULT_AGENT_ID,
+        agentDid: DEFAULT_AGENT_DID,
         promptTemplate: "Inspect this host and report health.",
         goalObjectiveTemplate: null,
         goalTokenBudget: null,
@@ -3836,7 +4647,6 @@ function createDeployment(): DeploymentView {
     inferenceExecution: [],
     agentTargets: [],
     datastoreToolSurfaces: [],
-    chainKeyBindings: [],
     mailboxItems: [],
     sessions: [],
   };
@@ -3858,49 +4668,22 @@ function upsertBy<T extends Record<K, string>, K extends keyof T>(
 function initialSyncHealth(scenario: DesktopUiHarnessScenario): SyncHealthView {
   if (scenario === "sync-offline") {
     return {
-      state: "offline",
+      state: "blocked",
       lastError: "fixture transport unavailable",
       connectedPeerCount: 0,
-      pendingDagCount: 0,
-      persistedPendingDagCount: 0,
-      pushRetryMarkerCount: 0,
-      exhaustedFetchCount: 0,
-      quarantinedDagCount: 0,
+      activationErrorCount: 0,
+      cause: "discovery_offline",
+      nextAction: "check_network",
     };
   }
-  if (scenario === "sync-failed") {
-    return {
-      state: "failed",
-      lastError: "database DAG quarantined",
-      connectedPeerCount: 1,
-      pendingDagCount: 1,
-      persistedPendingDagCount: 1,
-      pushRetryMarkerCount: 0,
-      exhaustedFetchCount: 1,
-      quarantinedDagCount: 1,
-    };
-  }
-  if (scenario === "session-hydration") {
-    return {
-      state: "healthy",
-      lastError: null,
-      connectedPeerCount: 1,
-      pendingDagCount: 0,
-      persistedPendingDagCount: 0,
-      pushRetryMarkerCount: 0,
-      exhaustedFetchCount: 0,
-      quarantinedDagCount: 0,
-    };
-  }
+
   return {
     state: "healthy",
     lastError: null,
     connectedPeerCount: 1,
-    pendingDagCount: 0,
-    persistedPendingDagCount: 0,
-    pushRetryMarkerCount: 0,
-    exhaustedFetchCount: 0,
-    quarantinedDagCount: 0,
+    activationErrorCount: 0,
+    cause: null,
+    nextAction: null,
   };
 }
 
@@ -3911,6 +4694,7 @@ function clone<T>(value: T): T {
 function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
   switch (value) {
     case "active-nodes":
+    case "joined-access":
     case "empty-fleet":
     case "loading":
     case "bridge-unavailable":
@@ -3919,18 +4703,21 @@ function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
     case "backend-unavailable":
     case "mailbox-overflow":
     case "mailbox-question":
+    case "mailbox-many":
     case "long-content":
     case "active-turn":
     case "coding":
     case "mobile-performance":
-    case "session-hydration":
     case "sync-offline":
     case "storage-recovery":
-    case "sync-failed":
+    case "startup-port-in-use":
     case "days":
+    case "automated-inputs":
+    case "background":
+    case "notices":
       return value;
     default:
-      return "default";
+      return isSharingScenario(value) ? value : "default";
   }
 }
 

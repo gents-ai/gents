@@ -97,11 +97,11 @@ structure RequestInput where
   goalAssignment : Option GoalAssignmentInput := none
   deriving DecidableEq, Repr
 
-/-- User submission and queue replacement may contain only typed captures.
+/-- User submission and queue replacement may contain only selected skills or typed captures.
 This is content presence, not admission authority or a requirement on internal
 runtime requests. -/
 def hasAuthoredInput (input : RequestInput) (prose : String) : Bool :=
-  !prose.trim.isEmpty || !input.capturedContext.isEmpty || !input.attachments.isEmpty
+  !prose.trim.isEmpty || !input.selectedSkillIds.isEmpty || !input.capturedContext.isEmpty || !input.attachments.isEmpty
 
 /-- This observation prevents sending typed captures to a process that cannot
 decode them. It grants no authority; the selected runtime's identity, readiness
@@ -198,6 +198,17 @@ def continuationInput (parent : RequestInput) (queue : RequestQueue)
 theorem continuation_preserves_directory (parent : RequestInput) (queue : RequestQueue)
     (goal : Option GoalContinuationInput) (parentDocId : String) :
     (continuationInput parent queue goal parentDocId).cwd = parent.cwd := rfl
+
+/-- A directory is a host-local observation. The destination still validates
+an inherited same-node directory through its existing admission policy. -/
+def agentNewCwd (parent : RequestInput) (sameNode : Bool) : Option String :=
+  if sameNode then parent.cwd else none
+
+theorem agent_new_local_inherits_cwd (parent : RequestInput) :
+    agentNewCwd parent true = parent.cwd := rfl
+
+theorem agent_new_remote_does_not_carry_cwd (parent : RequestInput) :
+    agentNewCwd parent false = none := rfl
 
 theorem continuation_does_not_replay_creation (parent : RequestInput) (queue : RequestQueue)
     (goal : Option GoalContinuationInput) (parentDocId : String) :

@@ -81,9 +81,6 @@
             "node_did": {
               "_eq": "$trial"
             },
-            "requester_did": {
-              "_eq": "$trial"
-            },
             "sequence": {
               "_eq": 1
             },

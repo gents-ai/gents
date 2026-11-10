@@ -9,11 +9,15 @@ import type {
 } from "@source-inc/gents-desktop-client";
 
 import { createDesktopApp, type DesktopApp } from "../src/hooks/desktopApp";
+import type { SharingAdapter } from "../src/hooks/sharing";
 import { applyFleetSnapshot } from "../src/hooks/fleetStore";
 import type { SelectionState } from "../src/hooks/selectionStore";
-import { writeSession } from "../src/hooks/sessionStore";
+import { sessionGoalReadOf } from "@source-inc/gents-desktop-client";
+import { writeSession, writeSessionGoalRead } from "../src/hooks/sessionStore";
 import { AppProvider } from "../src/ui/app/AppContext";
+import type { FlagId } from "../src/ui/lib/flags";
 import { bindNav, type Route } from "../src/ui/lib/router";
+import { resetPreferences } from "../src/ui/preferences";
 import { deployment } from "./config-panel-wiring/fixtures";
 
 export function node(overrides: Record<string, unknown> = {}) {
@@ -40,8 +44,10 @@ export function testApp({
   selection,
   reportFailure,
   supportsManagedServer,
+  sharing,
 }: {
   api?: object;
+  sharing?: SharingAdapter;
   supportsManagedServer?: boolean;
   snapshot?: unknown;
   reportFailure?: (message: string) => void;
@@ -53,6 +59,7 @@ export function testApp({
     api: api as DesktopApiAdapter,
     reportFailure,
     supportsManagedServer,
+    sharing,
   });
   if (snapshot) publishSnapshot(app, snapshot as DesktopClientSnapshot);
   if (deployments) publish(app, deployments);
@@ -62,8 +69,21 @@ export function testApp({
       : {}),
     ...selection,
   });
-  if (session) writeSession(app.stores.session, session);
+  if (session) {
+    writeSession(app.stores.session, session);
+    writeSessionGoalRead(app.stores.session, sessionGoalReadOf(session));
+  }
   return app;
+}
+
+/** Starts the test as if the app launched with these experimental features
+    switched; the rest keep their defaults. */
+export function withFlags(flags: Partial<Record<FlagId, boolean>>) {
+  resetPreferences(
+    Object.fromEntries(
+      Object.entries(flags).map(([id, on]) => [id, on ? "on" : "off"]),
+    ) as Partial<Record<FlagId, "on" | "off">>,
+  );
 }
 
 export function withApp(app: DesktopApp) {

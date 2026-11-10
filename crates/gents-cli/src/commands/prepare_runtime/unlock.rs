@@ -22,10 +22,10 @@ pub async fn prepare_runtime_after_unlock(
         std::ffi::OsStr::new("--home"),
         home.as_os_str(),
     ])?;
-    let crate::cli::Command::PrepareRuntime(mut args) = cli.command else {
+    let Some(crate::cli::Command::PrepareRuntime(mut args)) = cli.command else {
         unreachable!("the explicit entry point selects runtime preparation");
     };
-    args.keychain_startup_approval = true;
+    args.serve.keychain_startup_approval = true;
     let telemetry = crate::telemetry::init(crate::DEFAULT_LOG_FILTER)?;
     let result = super::prepare(args, runtime).await;
     telemetry.shutdown();
@@ -48,8 +48,8 @@ pub async fn unlock_runtime_keys(home: &Path) -> Result<()> {
     let (config, _) = super::read_home(&home)?;
     if let Some(encryption) = config.store_encryption.as_ref() {
         drop(encryption.load(
-            &gents::store_key::home_key_file(&home),
-            &gents::home::default_data_dir(&home),
+            &gents::store::local::store_key::home_key_file(&home),
+            &gents::store::local::home::default_data_dir(&home),
         )?);
     }
     let identity = crate::home_state::load_initialized_home_identity(&home, &config)?;

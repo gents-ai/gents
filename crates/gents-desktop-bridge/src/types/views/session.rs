@@ -3,6 +3,15 @@ use ts_rs::TS;
 
 use super::operations::DerivedCancelCauseView;
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct QuestionReplyView {
+    pub source_doc_id: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub answer: Option<gents_protocol::mailbox_question::MailboxQuestionAnswer>,
+}
+
 /// Observed physical request ownership; absent lifecycle facts remain unknown.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -15,6 +24,9 @@ pub struct RequestTurnView {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageView {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub question_reply: Option<QuestionReplyView>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub started_goal_id: Option<String>,
@@ -87,8 +99,12 @@ pub enum RequestOriginView {
     GoalContinuation {
         goal_id: Option<String>,
         sequence: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        wrapup: Option<bool>,
     },
-    BackgroundCompletion,
+    #[serde(rename_all = "camelCase")]
+    BackgroundCompletion { notification: bool },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
@@ -369,6 +385,9 @@ pub struct PendingQueueEntryView {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PendingTurnView {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub question_reply: Option<QuestionReplyView>,
     pub request_id: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
@@ -384,7 +403,7 @@ pub struct PendingTurnView {
     #[ts(optional = nullable)]
     pub attachments: Option<Vec<gents_protocol::request_input::AttachmentView>>,
     pub selected_skill_ids: Vec<String>,
-    pub lifecycle_state: Option<String>,
+    pub lifecycle_state: Option<gents_protocol::request_lifecycle::RequestLifecycleState>,
     /// The request whose transcript published this as a folded entry; it is
     /// that turn's input, not a turn.
     pub folded_into_request_id: Option<String>,
@@ -418,6 +437,9 @@ pub struct RequestOutcomeView {
 pub enum RenderedTimelineItem {
     #[serde(rename_all = "camelCase")]
     UserMessage {
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        #[ts(optional = nullable)]
+        question_reply: Option<QuestionReplyView>,
         #[serde(skip_serializing_if = "Option::is_none", default)]
         #[ts(optional = nullable)]
         started_goal_id: Option<String>,
@@ -487,9 +509,25 @@ pub enum RenderedTimelineItem {
         original_tokens: Option<i64>,
         compacted_tokens: Option<i64>,
         timestamp: Option<String>,
+        /// What the model reads in place of the compacted messages, so the
+        /// person can see what the agent still knows of them.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        #[ts(optional = nullable)]
+        summary: Option<String>,
+        /// The files the compacted messages read and modified, as the
+        /// compaction kept them for the model.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        #[ts(optional = nullable)]
+        files_read: Option<Vec<String>>,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        #[ts(optional = nullable)]
+        files_modified: Option<Vec<String>>,
     },
     #[serde(rename_all = "camelCase")]
     PendingUserTurn {
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        #[ts(optional = nullable)]
+        question_reply: Option<QuestionReplyView>,
         item_key: String,
         request_id: String,
         #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -503,7 +541,7 @@ pub enum RenderedTimelineItem {
         #[ts(optional = nullable)]
         attachments: Option<Vec<gents_protocol::request_input::AttachmentView>>,
         selected_skill_ids: Vec<String>,
-        lifecycle_state: Option<String>,
+        lifecycle_state: Option<gents_protocol::request_lifecycle::RequestLifecycleState>,
         folded_into_request_id: Option<String>,
         origin: Option<RequestOriginView>,
         created_at: Option<String>,
@@ -533,24 +571,6 @@ pub enum RenderedTimelineItem {
 
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct GoalView {
-    pub goal_id: String,
-    pub objective: Option<String>,
-    pub status: Option<String>,
-    pub token_budget: Option<i64>,
-    pub tokens_used: i64,
-    pub active_time_seconds: i64,
-    pub consecutive_blocked_audits: i64,
-    pub continuation_sequence: i64,
-    pub wrapup_requested: bool,
-    pub wrapup_completed: bool,
-    pub last_blocked_reason: Option<String>,
-    pub last_failure: Option<String>,
-    pub completion_evidence: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
 pub struct RetryEligibilityView {
     pub eligible: bool,
     pub denial_reason: Option<String>,
@@ -565,6 +585,14 @@ pub struct SessionCompactionView {
     pub original_tokens: Option<i64>,
     pub compacted_tokens: Option<i64>,
     pub created_at: Option<String>,
+    /// The transcript row that marks this compaction, and the message it is
+    /// drawn after, so a list of compactions can open the session there.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub item_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub message_sequence: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -717,21 +745,6 @@ pub struct SessionLiveDeltaView {
     pub reasoning: Option<SessionLiveTextPatchView>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionHydrationView {
-    pub session_id: String,
-    pub node_did: String,
-    pub phase: String,
-    pub merged_count: usize,
-    pub covered_count: usize,
-    pub served_count: Option<usize>,
-    /// The signed rejection detail, or why this client cannot read it.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    #[ts(optional = nullable)]
-    pub detail: Option<String>,
-}
-
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopSessionSnapshot {
@@ -740,11 +753,17 @@ pub struct DesktopSessionSnapshot {
     pub live_cursor: Option<String>,
     pub session_id: String,
     pub node_did: Option<String>,
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     pub title: Option<String>,
     pub preview_text: Option<String>,
     pub status: Option<String>,
-    pub goal: Option<GoalView>,
+    /// The session's Goal state from the one owner `desktop_session_goal`
+    /// also returns (Lean `SessionObservation.State`): only `observed`
+    /// carries a Goal or its verified absence. `None` means this snapshot's
+    /// read of it did not complete (Lean `ReadOutcome.incomplete`): a reader
+    /// folds it as such (`SessionObservation.step`), so it never shows a Goal
+    /// or its absence as current.
+    pub goal: Option<crate::types::SessionGoalState>,
     pub turn_state: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
@@ -760,9 +779,6 @@ pub struct DesktopSessionSnapshot {
     pub folded_inputs: Vec<FoldedInputView>,
     pub context: SessionContextView,
     pub timeline_items: Vec<RenderedTimelineItem>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    #[ts(optional = nullable)]
-    pub hydration: Option<SessionHydrationView>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub timeline_page: Option<SessionTimelinePageView>,

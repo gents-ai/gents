@@ -1,14 +1,17 @@
-use crate::error::{BridgeError, BridgeErrorCode};
-use gents::oauth_credential::{list_oauth_credentials_on, OAuthCredential, SignIn, SignInResult};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
+#[cfg(feature = "tauri-host")]
 pub(crate) mod login;
+#[cfg(feature = "tauri-host")]
+mod provider;
+#[cfg(feature = "tauri-host")]
+pub(crate) use provider::*;
 pub mod usage;
 #[derive(Debug, Clone, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProviderSignInRequest {
     pub node_did: String,
-    pub method: gents::inference_setup::InferenceAuthMethod,
+    pub method: gents::inference::backends::setup::InferenceAuthMethod,
     pub label: Option<String>,
 }
 
@@ -25,7 +28,7 @@ pub struct BackendAuthenticationSaveRequest {
     pub node_did: String,
     pub backend_id: String,
     pub revision: gents_desktop_core::client::ConfigEditorRevision,
-    pub auth: gents::document_config::BackendAuth,
+    pub auth: gents::documents::BackendAuth,
 }
 
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]
@@ -36,6 +39,7 @@ pub struct BackendAuthenticationView {
     pub auth_kind: String,
     pub environment_variable: Option<String>,
     pub account_ref: Option<String>,
+    pub allow_overage: Option<bool>,
     pub oauth_provider: Option<String>,
 }
 
@@ -44,13 +48,17 @@ impl BackendAuthenticationView {
         revision: gents_desktop_core::client::ConfigEditorRevision,
         backend: &gents::InferenceBackend,
     ) -> Self {
-        use gents::backend_provider::BackendProviderOauthExt;
-        use gents::document_config::BackendAuth;
+        use gents::documents::BackendAuth;
+        use gents::inference::backends::provider::BackendProviderOauthExt;
         let (kind, variable, account_ref) = match &backend.auth {
             BackendAuth::Unauthenticated => ("unauthenticated", None, None),
             BackendAuth::ApiKey { .. } => ("api_key", None, None),
+            BackendAuth::Credential { .. } => ("credential", None, None),
             BackendAuth::Environment { variable } => ("environment", Some(variable.clone()), None),
             BackendAuth::NodeOAuth { account_ref } => ("node_oauth", None, account_ref.clone()),
+            BackendAuth::NodeOAuthPool { .. } => ("node_oauth_pool", None, None),
+            BackendAuth::AwsCredentials { .. } => ("aws_credentials", None, None),
+            BackendAuth::GoogleCredentials { .. } => ("google_credentials", None, None),
         };
         Self {
             revision,
@@ -58,6 +66,7 @@ impl BackendAuthenticationView {
             auth_kind: kind.to_owned(),
             environment_variable: variable,
             account_ref,
+            allow_overage: backend.auth.pool_allow_overage(),
             oauth_provider: backend.provider_kind.oauth_provider().map(str::to_owned),
         }
     }
@@ -91,18 +100,73 @@ mod authentication_tests {
         };
         assert!(!format!("{command:?}").contains("private-authentication-fixture"));
     }
+
+    #[test]
+    fn authentication_metadata_reports_an_opaque_stored_credential() {
+        let backend: gents::InferenceBackend = serde_json::from_value(serde_json::json!({
+            "node_did":"did:test:backend", "backend_id":"backend", "name":"Backend",
+            "provider_kind":"ClaudeBedrock", "endpoint":"https://example.test",
+            "auth":{"kind":"credential", "id":"private-reference-fixture", "version":"private-version-fixture"}
+        }))
+        .unwrap();
+        let revision = gents_desktop_core::client::ConfigEditorRevision {
+            document_id: "physical".into(),
+            composite_cid: "revision".into(),
+        };
+        let view = BackendAuthenticationView::from_backend(revision, &backend);
+        let serialized = serde_json::to_value(&view).unwrap();
+        assert_eq!(serialized["authKind"], "credential");
+        assert!(serialized["environmentVariable"].is_null());
+        assert!(serialized["accountRef"].is_null());
+        assert!(serialized["allowOverage"].is_null());
+        assert!(serialized["oauthProvider"].is_null());
+        let serialized = serde_json::to_string(&view).unwrap();
+        assert!(!serialized.contains("private-reference-fixture"));
+        assert!(!serialized.contains("private-version-fixture"));
+    }
+
+    #[test]
+    fn rotation_requests_decode_the_operator_choice_and_reject_unknown_fields() {
+        use gents::inference::backends::rotation::BackendRotation;
+        let decode = |rotation: serde_json::Value| {
+            serde_json::from_value::<crate::types::BackendRotationSetRequest>(
+                serde_json::json!({"nodeDid":"did:test:backend","backendId":"claude","rotation":rotation}),
+            )
+        };
+        assert_eq!(
+            decode(serde_json::json!({"kind":"pool"})).unwrap().rotation,
+            BackendRotation::Pool {
+                allow_overage: None
+            }
+        );
+        assert_eq!(
+            decode(serde_json::json!({"kind":"pool","allow_overage":true}))
+                .unwrap()
+                .rotation,
+            BackendRotation::Pool {
+                allow_overage: Some(true)
+            }
+        );
+        assert_eq!(
+            decode(serde_json::json!({"kind":"single"}))
+                .unwrap()
+                .rotation,
+            BackendRotation::Single
+        );
+        assert!(decode(serde_json::json!({"kind":"pool","allowOverage":true})).is_err());
+        assert!(decode(serde_json::json!({"kind":"split"})).is_err());
+    }
 }
-const LOG_TARGET: &str = "gents_desktop_bridge::inference_setup";
 
 type CredentialKey = (String, String, String);
 
 pub struct IssuedOAuthCredential {
     sequence: u64,
-    credential: gents::oauth_credential::OAuthCredential,
+    credential: gents::inference::auth::credential::OAuthCredential,
 }
 
 impl IssuedOAuthCredential {
-    pub fn credential(&self) -> &gents::oauth_credential::OAuthCredential {
+    pub fn credential(&self) -> &gents::inference::auth::credential::OAuthCredential {
         &self.credential
     }
 
@@ -148,7 +212,7 @@ pub struct PendingOAuthCredentials {
 impl PendingOAuthCredentials {
     pub fn issue(
         &self,
-        credential: gents::oauth_credential::OAuthCredential,
+        credential: gents::inference::auth::credential::OAuthCredential,
     ) -> IssuedOAuthCredential {
         IssuedOAuthCredential {
             sequence: self
@@ -181,7 +245,7 @@ impl PendingOAuthCredentials {
         write: F,
     ) -> CredentialSave<T>
     where
-        F: FnOnce(gents::oauth_credential::OAuthCredential) -> Fut,
+        F: FnOnce(gents::inference::auth::credential::OAuthCredential) -> Fut,
         Fut: std::future::Future<Output = anyhow::Result<T>>,
     {
         let key = issued.key();
@@ -215,9 +279,12 @@ impl PendingOAuthCredentials {
         node_did: &str,
         provider: &str,
         write: F,
-    ) -> Option<(gents::oauth_credential::OAuthCredential, anyhow::Result<T>)>
+    ) -> Option<(
+        gents::inference::auth::credential::OAuthCredential,
+        anyhow::Result<T>,
+    )>
     where
-        F: FnOnce(gents::oauth_credential::OAuthCredential) -> Fut,
+        F: FnOnce(gents::inference::auth::credential::OAuthCredential) -> Fut,
         Fut: std::future::Future<Output = anyhow::Result<T>>,
     {
         let key = self
@@ -245,7 +312,10 @@ impl PendingOAuthCredentials {
         Some((credential, written))
     }
 
-    pub fn held_for(&self, node_did: &str) -> Vec<gents::oauth_credential::OAuthCredential> {
+    pub fn held_for(
+        &self,
+        node_did: &str,
+    ) -> Vec<gents::inference::auth::credential::OAuthCredential> {
         let mut held: Vec<_> = self
             .slots()
             .iter()
@@ -254,241 +324,6 @@ impl PendingOAuthCredentials {
             .collect();
         held.sort_by(|left, right| left.provider.cmp(&right.provider));
         held
-    }
-}
-
-pub(crate) fn provider_label(provider: &str) -> &'static str {
-    match provider {
-        gents::chatgpt_codex::CHATGPT_CODEX_PROVIDER => "ChatGPT",
-        gents::claude_oauth::CLAUDE_OAUTH_PROVIDER => "Claude",
-        gents::xai_grok_oauth::XAI_OAUTH_PROVIDER => "Grok",
-        _ => "provider",
-    }
-}
-
-pub(crate) async fn require_reachable_configuration(
-    access: anyhow::Result<gents::ConfigAccess>,
-    node_did: &str,
-    provider: &str,
-) -> Result<(), BridgeError> {
-    let probe = match access {
-        Ok(access) => list_oauth_credentials_on(&access, node_did)
-            .await
-            .map(|_| ()),
-        Err(error) => Err(error),
-    };
-    probe.map_err(|error| {
-        tracing::warn!(
-            target: LOG_TARGET,
-            node_did,
-            provider,
-            error = %format!("{error:#}"),
-            "node configuration is not reachable; not starting provider sign-in"
-        );
-        BridgeError::new(
-            BridgeErrorCode::EndpointUnreachable,
-            format!(
-                "The node is not running, so {} sign-in was not started. Start the node and try again.",
-                provider_label(provider)
-            ),
-        )
-    })
-}
-
-pub(crate) async fn upsert_through(
-    access: anyhow::Result<gents::ConfigAccess>,
-    credential: OAuthCredential,
-) -> anyhow::Result<SignIn> {
-    let access = access?;
-    let label = credential.label.clone();
-    let mut signed = gents::oauth_credential::store_sign_in(&access, credential, None).await?;
-    if let (SignInResult::Added, Some(label)) = (&signed.result, label) {
-        let stored = &signed.credential;
-        match gents::oauth_credential::set_account_label(
-            &access,
-            &stored.node_did,
-            &stored.credential_id,
-            &label,
-        )
-        .await
-        {
-            Ok(()) => signed.credential.label = Some(label),
-            Err(error) => tracing::warn!(
-                target: LOG_TARGET,
-                node_did = %stored.node_did,
-                provider = %stored.provider,
-                error = %format!("{error:#}"),
-                "labelling the added account failed; it keeps its default label"
-            ),
-        }
-    }
-    Ok(signed)
-}
-
-pub(crate) fn sign_in_label(label: Option<&str>) -> Result<Option<String>, BridgeError> {
-    label
-        .map(str::trim)
-        .filter(|label| !label.is_empty())
-        .map(gents::oauth_credential::validate_account_label)
-        .transpose()
-        .map_err(|error| BridgeError::new(BridgeErrorCode::InvalidArgument, error.to_string()))
-}
-
-fn credential_not_saved(credential: &OAuthCredential) -> BridgeError {
-    tracing::warn!(
-        target: LOG_TARGET,
-        node_did = %credential.node_did,
-        provider = %credential.provider,
-        "saving the issued provider credential failed; holding it for retry"
-    );
-    BridgeError::new(
-        BridgeErrorCode::CredentialNotSaved,
-        format!(
-            "You are signed in to {}, but Gents could not save the sign-in to the node. Make sure the node is running, then retry saving.",
-            provider_label(&credential.provider)
-        ),
-    )
-}
-
-pub(crate) async fn save_issued_credential(
-    pending: &PendingOAuthCredentials,
-    access: anyhow::Result<gents::ConfigAccess>,
-    issued: IssuedOAuthCredential,
-) -> Result<SignIn, BridgeError> {
-    let credential = issued.credential().clone();
-    match pending
-        .save(issued, |credential| upsert_through(access, credential))
-        .await
-    {
-        CredentialSave::Saved(signed) => Ok(signed),
-        CredentialSave::Superseded => Err(BridgeError::untyped(format!(
-            "A newer {} sign-in for this node replaced this one.",
-            provider_label(&credential.provider)
-        ))),
-        CredentialSave::Failed(_) => Err(credential_not_saved(&credential)),
-    }
-}
-
-pub(crate) async fn retry_pending_credential(
-    pending: &PendingOAuthCredentials,
-    access: anyhow::Result<gents::ConfigAccess>,
-    node_did: &str,
-    provider: &str,
-) -> Result<OAuthCredential, BridgeError> {
-    let (credential, saved) = pending
-        .retry(node_did, provider, |credential| {
-            upsert_through(access, credential)
-        })
-        .await
-        .ok_or_else(|| {
-            BridgeError::new(
-                BridgeErrorCode::NotFound,
-                "There is no unsaved sign-in to retry. Sign in again.",
-            )
-        })?;
-    match saved {
-        Ok(signed) => Ok(signed.credential),
-        Err(_) => Err(credential_not_saved(&credential)),
-    }
-}
-
-pub(crate) async fn observe_provider_accounts(
-    pending: &PendingOAuthCredentials,
-    access: anyhow::Result<gents::ConfigAccess>,
-    node_did: &str,
-) -> Result<Vec<ProviderAccountView>, BridgeError> {
-    let held: Vec<ProviderAccountView> = pending
-        .held_for(node_did)
-        .iter()
-        .map(ProviderAccountView::pending_save)
-        .collect();
-    let stored = match access {
-        Ok(access) => list_oauth_credentials_on(&access, node_did).await,
-        Err(error) => Err(error),
-    };
-    match stored {
-        Ok(stored) => Ok(stored
-            .iter()
-            .map(ProviderAccountView::from)
-            .chain(held)
-            .collect()),
-        Err(error) if !held.is_empty() => {
-            tracing::warn!(
-                target: LOG_TARGET,
-                node_did,
-                error = %format!("{error:#}"),
-                "reading stored provider accounts failed; reporting held sign-ins only"
-            );
-            Ok(held)
-        }
-        Err(error) => Err(BridgeError::untyped(error.to_string())),
-    }
-}
-
-#[derive(Debug, Clone, Serialize, ts_rs::TS)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ProviderAccountView {
-    pub credential_id: String,
-    pub node_did: String,
-    pub provider: String,
-    pub account_id: Option<String>,
-    pub plan_type: Option<String>,
-    pub access_token_expires_at: String,
-    pub last_refresh: Option<String>,
-    pub enabled: bool,
-    pub pending_save: bool,
-    pub account_ref: Option<String>,
-    pub label: String,
-}
-
-impl ProviderAccountView {
-    pub(crate) fn pending_save(credential: &OAuthCredential) -> Self {
-        Self {
-            pending_save: true,
-            ..Self::from(credential)
-        }
-    }
-}
-
-impl From<&OAuthCredential> for ProviderAccountView {
-    fn from(credential: &OAuthCredential) -> Self {
-        Self {
-            credential_id: credential.credential_id.clone(),
-            node_did: credential.node_did.clone(),
-            provider: credential.provider.clone(),
-            account_id: gents::oauth_credential::account_display_label(credential),
-            plan_type: credential.chatgpt_plan_type.clone(),
-            access_token_expires_at: credential.access_token_expires_at.to_rfc3339(),
-            last_refresh: credential.last_refresh.map(|value| value.to_rfc3339()),
-            enabled: credential.enabled,
-            pending_save: false,
-            account_ref: credential.account_ref.clone(),
-            label: gents::oauth_credential::effective_account_label(credential),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, ts_rs::TS)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct SignInView {
-    pub result: String,
-    pub label: String,
-    pub account_ref: Option<String>,
-    pub hint: Option<String>,
-}
-
-impl From<&SignIn> for SignInView {
-    fn from(signed: &SignIn) -> Self {
-        Self {
-            result: match signed.result {
-                SignInResult::Added => "added",
-                SignInResult::Refreshed => "refreshed",
-            }
-            .to_string(),
-            label: gents::oauth_credential::effective_account_label(&signed.credential),
-            account_ref: signed.credential.account_ref.clone(),
-            hint: signed.account_chooser_hint(),
-        }
     }
 }
 

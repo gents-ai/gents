@@ -1,13 +1,12 @@
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::Duration;
 
-use crate::document_config::TaskHookPhase;
+use crate::documents::TaskHookPhase;
 use crate::lean_vocab_test::{
     lean_task_hook_run_cases, LeanCommandResult, LeanHookAttempt, LeanHookInvocation,
     LeanTaskHookRunCase, LeanTaskOutcome, LeanTaskPrimaryError,
 };
-use crate::task_hooks::{
+use crate::request::task_hooks::{
     effective_timeout_secs, run_task_hooks, HookAttempt, HookPrimaryError, ManagedTaskHookExec,
     TaskAgentResult, TaskHookCancellation, TaskHookExec, TaskHookOutcome,
 };
@@ -116,23 +115,29 @@ fn assert_attempts(case: &str, phase: &str, actual: &[HookAttempt], expected: &[
 
 struct RevokingExec<'a> {
     managed: ManagedTaskHookExec,
-    node: &'a Arc<defra_node::EmbeddedNode>,
+    access: crate::ConfigAccess,
     request_doc_id: &'a str,
     revoked: &'a [String],
 }
 
 #[async_trait::async_trait]
 impl TaskHookExec for RevokingExec<'_> {
-    async fn attempt(&self, hook: &crate::document_config::TaskHook) -> HookAttempt {
+    async fn attempt(&self, hook: &crate::documents::TaskHook) -> HookAttempt {
         if self.revoked.contains(&hook.hook_id) {
-            crate::config_client::ConfigAccess::write_local(
-                self.node,
+            let response = self.access.write(
                 "test.task_hook_launch_revocation",
                 &format!(
                     r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_generation: "revoked-generation" }}) {{ _docID }} }}"#,
-                    crate::graphql::escape_graphql_string(self.request_doc_id),
+                    crate::store::graphql::escape_graphql_string(self.request_doc_id),
                 ),
             ).await.unwrap();
+            assert_eq!(
+                response["data"]["update_AgentRequest"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                1
+            );
         }
         self.managed.attempt(hook).await
     }
@@ -187,11 +192,12 @@ async fn generated_task_hook_run_cases_drive_real_host_commands() {
                 .with_execution_lease(
                     fixture.node.clone(),
                     lifecycle.request().doc_id.clone(),
-                    crate::lifecycle::RequestExecutionLease::new(
+                    crate::request::lifecycle::RequestExecutionLease::new(
                         lifecycle.execution_generation().unwrap().to_owned(),
+                        lifecycle.actor_did().unwrap(),
                     ),
                 ),
-            node: &fixture.node,
+            access: fixture.agent_access(),
             request_doc_id: &lifecycle.request().doc_id,
             revoked: &case.revoked,
         };

@@ -28,9 +28,11 @@ describe("lists of what uses a document", () => {
       testApp({ deployments: [view] }),
       <BackendEditor deployment={view} backend={backend} accounts={[]} />,
     );
+    /* the row that names them; the page's card only counts them */
     const row = screen
-      .getByText("Used by")
-      .closest("[data-slot=field-row]") as HTMLElement;
+      .getAllByText("Used by")
+      .map((label) => label.closest("[data-slot=field-row]"))
+      .find(Boolean) as HTMLElement;
     expect(row).toHaveTextContent("Delete is blocked while a profile uses it.");
     const links = within(row).getAllByRole("link");
     expect(links).toHaveLength(3);

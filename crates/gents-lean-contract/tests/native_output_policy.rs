@@ -1,9 +1,3 @@
-#[path = "../../gents/src/session/canonical_rows.rs"]
-#[expect(
-    dead_code,
-    reason = "This target imports the production row owner to check lease policy, not every row projection."
-)]
-mod canonical_rows;
 #[path = "../../gents-loop/src/execution_policy.rs"]
 #[expect(
     dead_code,
@@ -16,7 +10,7 @@ mod execution_policy;
     reason = "The shared decoder also serves trace and provider cases in other conformance targets."
 )]
 mod runtime_contract;
-#[path = "../../gents/src/lifecycle/terminal_binding.rs"]
+#[path = "../../gents/src/request/lifecycle/terminal_binding.rs"]
 mod terminal_binding;
 
 #[test]

@@ -345,9 +345,9 @@ def codexShimThreadStatusCasesJson : String :=
 structure CodexShimAgentSelectionCase where
   witness : String
   leanTheorems : List String
-  rootAgentId : String
-  threadAgentId : Option String
-  projectedAgentId : String
+  rootAgentDid : String
+  threadAgentDid : Option String
+  projectedAgentDid : String
   selectedOwner : String
   actualOwner : String
   actualAgent : String
@@ -356,13 +356,13 @@ structure CodexShimAgentSelectionCase where
 
 def codexShimAgentSelectionCase
     (witness : String) (leanTheorems : List String)
-    (rootAgentId : String) (threadAgentId : Option String)
+    (rootAgentDid : String) (threadAgentDid : Option String)
     (selectedOwner actualOwner actualAgent : String)
     (resolvedModel : Option String) : CodexShimAgentSelectionCase :=
-  let projectedAgentId := CodexShim.projectionAgentId rootAgentId threadAgentId
-  { witness, leanTheorems, rootAgentId, threadAgentId, projectedAgentId
+  let projectedAgentDid := CodexShim.projectionAgentDid rootAgentDid threadAgentDid
+  { witness, leanTheorems, rootAgentDid, threadAgentDid, projectedAgentDid
   , selectedOwner, actualOwner, actualAgent, resolvedModel
-  , projectedModel := CodexShim.projectedThreadModel selectedOwner projectedAgentId
+  , projectedModel := CodexShim.projectedThreadModel selectedOwner projectedAgentDid
       actualOwner actualAgent resolvedModel
   }
 
@@ -371,9 +371,9 @@ def codexShimAgentSelectionCaseJson
   "{"
     ++ "\"witness\":" ++ jsonString witness.witness ++ ","
     ++ "\"lean_theorems\":" ++ jsonStringArray witness.leanTheorems ++ ","
-    ++ "\"root_agent_id\":" ++ jsonString witness.rootAgentId ++ ","
-    ++ "\"thread_agent_id\":" ++ jsonOptionalString witness.threadAgentId ++ ","
-    ++ "\"projected_agent_id\":" ++ jsonString witness.projectedAgentId ++ ","
+    ++ "\"root_agent_did\":" ++ jsonString witness.rootAgentDid ++ ","
+    ++ "\"thread_agent_did\":" ++ jsonOptionalString witness.threadAgentDid ++ ","
+    ++ "\"projected_agent_did\":" ++ jsonString witness.projectedAgentDid ++ ","
     ++ "\"selected_owner\":" ++ jsonString witness.selectedOwner ++ ","
     ++ "\"actual_owner\":" ++ jsonString witness.actualOwner ++ ","
     ++ "\"actual_agent\":" ++ jsonString witness.actualAgent ++ ","
@@ -853,5 +853,55 @@ def codexShimBindingCases : List CodexShimBindingCase :=
 
 def codexShimBindingCasesJson : String :=
   jsonArray (codexShimBindingCases.map codexShimBindingCaseJson)
+
+structure CodexShimConnectionAdmissionCase where
+  witness : String
+  leanTheorems : List String
+  agent : AgentDid
+  runnable : List AgentDid
+
+def codexShimAdmissionSnapshot (runnable : List AgentDid) : ActiveRuntimeSnapshot :=
+  let published := runnable.foldr insert ∅
+  { generation := 1
+  , defaultAgent := 0
+  , runnable := published
+  , unavailable := ∅
+  , dependenciesSatisfied := published
+  , dispatchers := published
+  }
+
+def codexShimConnectionAdmissionCaseJson
+    (c : CodexShimConnectionAdmissionCase) : String :=
+  "{"
+    ++ "\"witness\":" ++ jsonString c.witness ++ ","
+    ++ "\"lean_theorems\":" ++ jsonStringArray c.leanTheorems ++ ","
+    ++ "\"agent\":" ++ toString c.agent ++ ","
+    ++ "\"runnable\":" ++ jsonArray (c.runnable.map toString) ++ ","
+    ++ "\"admitted\":"
+      ++ boolString
+        (CodexShim.Binding.admitConnection c.agent (codexShimAdmissionSnapshot c.runnable))
+    ++ "}"
+
+def codexShimConnectionAdmissionCases : List CodexShimConnectionAdmissionCase :=
+  [ { witness := "codex_shim.admission.runnable_agent"
+    , leanTheorems := [ "CodexShim.Binding.admitConnection_iff_runnable" ]
+    , agent := 1
+    , runnable := [1, 2]
+    }
+  , { witness := "codex_shim.admission.unknown_agent"
+    , leanTheorems := [ "CodexShim.Binding.never_admits_unrunnable" ]
+    , agent := 3
+    , runnable := [1, 2]
+    }
+  , { witness := "codex_shim.admission.before_first_publish"
+    , leanTheorems := [ "CodexShim.Binding.never_admits_unrunnable" ]
+    , agent := 1
+    , runnable := []
+    }
+  ]
+
+def codexShimConnectionAdmissionCasesJson : String :=
+  jsonArray
+    (codexShimConnectionAdmissionCases.map codexShimConnectionAdmissionCaseJson)
 
 end Conformance.Contracts

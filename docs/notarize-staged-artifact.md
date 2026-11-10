@@ -46,7 +46,7 @@ The workflow runs as one job with these steps, in order:
      level, the app is a real directory, and every symlink's real path stays
      inside the app.
    - Checks the signature: strict deep `codesign`, TeamIdentifier
-     `NXJ753WW5X`, bundle id `com.source-inc.gents`, the hardened runtime, and
+     `4LPKFKCXDA`, bundle id `com.source-inc.gents`, the hardened runtime, and
      the pinned leaf certificate SHA-256.
    - In submit mode, the app must not already be stapled.
    - Every Mach-O file in the artifact must be thin `arm64` (`lipo -archs`).
@@ -112,18 +112,19 @@ The default is `app`. The app path is unchanged by this option.
   archive must contain exactly one entry, named `gents`.
 - **Archive checks.** The single entry must be a regular file named `gents`.
   Directories, symlinks, extra entries and nested paths are rejected.
-- **Signature checks.** Strict `codesign`, identifier `gents`,
-  TeamIdentifier `NXJ753WW5X`, the hardened runtime, the pinned leaf
+- **Signature checks.** Strict `codesign`, identifier `com.source-inc.gents.cli`,
+  TeamIdentifier `4LPKFKCXDA`, the hardened runtime, the pinned leaf
   certificate, and `Format=Mach-O thin (arm64)` confirmed with `lipo -archs`.
   A universal binary is rejected, because one CDHash would not cover every
   slice. The verify step records the executable's SHA-256 and its CDHash.
-- **Identifier.** The `039e2299` release candidate's CLI is signed with
-  `Identifier=gents`, as shown by `codesign -dv` on the authentic candidate.
-  `release-macos.yml` signs CLIs as `com.source-inc.gents.cli` instead.
-  This workflow pins the candidate's actual identifier and never re-signs an
-  artifact to satisfy a check. A future candidate signed by
-  `release-macos.yml` would need `EXPECTED_CLI_IDENTIFIER` changed in a
-  reviewed commit.
+- **Identifier.** The workflow pins `com.source-inc.gents.cli`, the exact
+  identifier emitted by `release-macos.yml` for current candidates. The
+  historical `039e2299` candidate below is signed with `Identifier=gents`.
+  Its recorded identifier remains immutable evidence, and the control tests
+  retain explicit historical verification metadata. The script still verifies
+  the one exact identifier supplied by reviewed metadata; it does not accept
+  both identifiers implicitly. Do not re-sign an artifact to satisfy the pin
+  or reuse historical notary runs for a new candidate.
 - **Stapling.** Bare executables cannot carry a stapled ticket. Instead,
   `complete` requires everything the app path requires (Accepted, Apple's log
   binding the job id and the full archive SHA-256), and in addition requires

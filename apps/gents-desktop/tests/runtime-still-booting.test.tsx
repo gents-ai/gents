@@ -23,7 +23,7 @@ import {
   MANAGED_SERVER_TRAY_RESTART_EVENT,
   MANAGED_SERVER_TRAY_START_EVENT,
 } from "../src/lib/managedServerTray";
-import { LocalServer } from "../src/ui/screens/agent/LocalServer";
+import { LocalServer, RunNodeButton } from "../src/ui/screens/agent/LocalServer";
 
 const base: ManagedServerStatus = {
   state: "running",
@@ -160,7 +160,13 @@ describe("runtimeStillBooting is a wait, not a failure", () => {
       }),
       stopManagedServer: vi.fn(),
     } as unknown as DesktopApiAdapter;
-    renderIn(testApp({ api }), <LocalServer />);
+    renderIn(
+      testApp({ api }),
+      <>
+        <RunNodeButton />
+        <LocalServer />
+      </>,
+    );
     await user.click(await screen.findByRole("button", { name: "Start node" }));
     expect(await screen.findByText("Updating data…")).toBeInTheDocument();
     await vi.waitFor(() => expect(toast).toHaveBeenCalledWith("Node started"), {
@@ -194,7 +200,13 @@ describe("the local server's status", () => {
       fetchDesktopSnapshot: vi.fn(async () => ({ bootstrap: {}, client: null })),
     } as unknown as DesktopApiAdapter;
     const app = testApp({ api, snapshot: { bootstrap: {}, client: null } });
-    renderIn(app, <LocalServer />);
+    renderIn(
+      app,
+      <>
+        <RunNodeButton />
+        <LocalServer />
+      </>,
+    );
     await screen.findByRole("button", { name: "Stop node" });
     act(() =>
       publishSnapshot(app, { bootstrap: { moved: true }, client: null } as never),

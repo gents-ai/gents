@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { within, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -12,10 +12,18 @@ describe("the viewer's preferences", () => {
   it("apply the theme to the document as the general settings change it", async () => {
     const user = userEvent.setup();
     renderIn(testApp(), <GeneralPanel />);
-    await user.click(screen.getByRole("combobox", { name: "Theme" }));
-    await user.click(await screen.findByRole("option", { name: "Dark" }));
+    const theme = screen.getByRole("group", { name: "Theme" });
+    await user.click(within(theme).getByRole("button", { name: "Dark" }));
     expect(document.documentElement.dataset.theme).toBe("dark");
-    expect(screen.getByRole("combobox", { name: "Theme" })).toHaveTextContent("Dark");
+    expect(within(theme).getByRole("button", { name: "Dark" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    /* the arrow keys move between the three */
+    await user.keyboard("{ArrowLeft}");
+    expect(within(theme).getByRole("button", { name: "Light" })).toHaveFocus();
+    await user.keyboard("{Enter}");
+    expect(document.documentElement.dataset.theme).toBeUndefined();
   });
 
   it("allows a saved opt-in to be turned off when telemetry is unconfigured", async () => {

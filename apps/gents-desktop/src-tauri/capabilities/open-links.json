@@ -1,0 +1,7 @@
+{
+  "identifier": "open-links",
+  "description": "The main view follows gents: links the system opens the app with.",
+  "windows": ["main"],
+  "platforms": ["macOS", "windows", "linux"],
+  "permissions": ["open-links"]
+}

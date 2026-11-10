@@ -6,6 +6,190 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Rendered request captures cut the stable request fields (model, tool
+  schemas, settings) apart from the message list, and close shared manifest
+  groups after four entries at every second content key instead of eight at
+  every sixteenth, choosing group boundaries from block content alone rather
+  than from manifest node bytes. A session no longer stores its tool schemas
+  again while its opening messages change, which previously depended on
+  where the rolling hash fired around the Agent DID in the system prompt; a
+  call rewrites a short manifest tail whose size no longer grows with the
+  calls since its group last closed; and a payload's manifest shape no
+  longer varies with its session's document IDs. Existing captures stay
+  readable; the first capture after upgrading stores its leading block and
+  manifests once more (#3605).
+- Breaking: P2P carries only discovery and enrollment, so the agent-facing
+  application-collection pairing and sync surface is removed. The `p2p` tool
+  drops `pairings_list`, `pairings_get`, `pairings_preview`, `pairings_apply`,
+  `pairings_revoke` and `sync_documents`; enrollment approval now suggests
+  `enrollment_history`. `Tools.built_ins.p2p_collections` is removed and now
+  rejected, and `gents pack wire` no longer writes it: delete it from stored
+  Tools documents before upgrading. `gents p2p admin collections` and
+  `gents p2p admin documents` are removed, `--profile` accepts only
+  `discovery`, and `gents p2p templates list` no longer reports `replicate`
+  delivery or peer-DID and unscoped scopes. Pairing reconciliation installs
+  replicators only; it no longer installs or tears down DefraDB collection
+  subscriptions, and `PeerPairingApplied.collections` is no longer written.
+- Breaking: P2P no longer hydrates sessions or delivers file images between
+  nodes. The `SessionHydrationRequest` collection leaves the schema baseline;
+  existing homes keep any stored rows untouched. The operator file-inventory
+  request (`DirectFileInventoryRequest`) drops `peer_id`, and a direct read's
+  admission carries an empty `peer_id`. The generated `HydrationRequest`
+  TypeScript type is now `FileInventoryRequest`.
+- Breaking: the dormant peer inventory path is removed. The
+  `FileImageHydrationRequest`, `FileImageHydrationReceipt`,
+  `FileInventoryImageRequest` and `FileInventoryPage` collections leave the
+  schema baseline; existing homes keep any stored rows untouched. A file
+  inventory admission's request no longer carries `peer_id`.
+- The CLI has seven top-level commands: `accounts`, `automation`, `config`,
+  `runtime`, `sessions`, `status` and `utils`, and `gents --help` lists them
+  with a description each. The old names stop working; there are no
+  aliases, so update scripts that call them.
+
+  | Old | New |
+  | --- | --- |
+  | `chat MESSAGE` | `gents -p MESSAGE`; interactive `chat` is gone |
+  | `chat --session-id`, `--message-file`, `--output json` | `utils debug request submit --session-id`, `--content-file` |
+  | `codex-login`, `grok-login`, `claude-login`, `claude-gateway-login` | `accounts login codex`, `grok`, `claude`, `claude-gateway` |
+  | `cloud login` | `accounts login cloud` |
+  | `codex-auth-probe`, `grok-auth-probe` | `accounts probe codex`, `grok` |
+  | `accounts list`, `label`, `disable`, `remove` | unchanged |
+  | `session ...` | `sessions ...` |
+  | `goal`, `task`, `job`, `mailbox` | `automation goal`, `automation task`, `automation job`, `automation mailbox` |
+  | `tools explain` | `config tools explain` |
+  | `mcp register`, `mcp probe` | `config mcp register`, `config mcp probe` |
+  | `pack ...`, `plugin ...`, `ux ...` | `config pack ...`, `config pack plugin ...`, `config pack ux ...` |
+  | `server`, `service`, `provision`, `reset`, `diagnose`, `p2p`, `desktop`, `version` | `runtime server`, `runtime service`, and so on |
+  | `query`, `write`, `export`, `document`, `schema` | `utils data query`, and so on |
+  | `request`, `response`, `trace`, `background`, `fleet` | `utils debug request`, and so on |
+  | `eval`, `optimization` | `utils eval`, `utils optimization` |
+  | `codex` | hidden, still works; bare `gents` opens it |
+  | `init`, `prepare-runtime` | hidden, still work |
+
+  `gents server` and `gents service` also still work, hidden: installed service
+  definitions run `gents server`, and an updater of another version runs
+  `gents service update-check`.
+- `gents -p MESSAGE` sends one message to the home's default agent, or to
+  `--agent DID`, prints only the reply and exits, as `claude -p` does. It brings
+  up the runtime as bare `gents` does, needs no terminal on a home that is set
+  up, and denies any approval the turn asks for.
+- `gents PROMPT` opens the configured interface, Codex or Grok, with PROMPT as
+  its first message, as `claude "query"` does. A PROMPT that is only a former
+  command's name, such as `reset`, is refused with the command's new name rather
+  than sent. Codex and Grok get the prompt after `--`, so one that names their
+  own subcommand, such as `update`, is sent instead of run; this also covers
+  `gents codex PROMPT`.
+- `gents --continue SESSION_ID` picks a session back up with the agent it had:
+  in Codex through `codex resume`, or for one more turn with `-p MESSAGE`, which
+  waits for a turn still running in that session. Grok cannot open a session at
+  launch, so a home set to Grok refuses it and names `-p` or Codex instead.
+  When Codex or Grok closes, `gents` prints the `--continue` command for the
+  session that window last gave a turn to.
+- `gents --yolo` opens the yolo agent, and `gents --yolo -p MESSAGE` messages it:
+  a general-purpose agent with a copy of the default agent's tools, The
+  Engineer's on a home `gents` set up. The first use makes it, later uses reuse
+  it.
+- `gents` with no command sets up a home on first run, brings up its runtime
+  through the native service without enabling it at login, and opens the
+  configured interface. Setup seeds The Engineer with the desktop's default
+  authority (the `yolo` tool package; commands run as you and the tool root is
+  not a sandbox) and asks for a provider, then its connection method, from the
+  desktop's catalog. After sign-in it lists the provider's models and asks each
+  value the desktop offers for the chosen model, showing its default. Without a terminal it prints help and exits 2, as a missing
+  subcommand did. `gents` refuses a Codex endpoint that does not identify
+  itself as this home's, and the shim answers that question at `GET /runtime`.
+- `gents --agent DID` and `gents codex --agent DID` open any runnable agent side by
+  side with no restart, with no saved agent setting. For Codex this needs a local
+  runtime with no pinned agent, and `--agent` is refused for any other endpoint.
+- When `gents` opens Codex from a directory inside the tool root, the thread starts
+  there. From outside it, `gents` prints the directory the thread will use, before
+  Codex opens and again after it exits. Threads default to the tool root.
+- First-run setup asks which folder agents should work in.
+  It refuses the filesystem root and anything above the person's home, as the desktop
+  does, and asks for confirmation before using the whole home.
+- `gents config client set codex|grok` chooses the interface a home opens, and
+  `config client show` reads it. A home set to Grok serves the Grok socket. `gents`
+  opens the socket the runtime reports and refuses one its runtime does not hold.
+- `gents` remembers the home setup chose. This also moves the desktop's default home.
+- The shim answers `config/read` for a directory inside the tool root as trusted, so
+  Codex does not ask about it on every open. Outside the tool root Codex still asks.
+- The shim refuses a WebSocket handshake carrying `Origin`. With a loopback bind and no
+  public URL, `GET /runtime` answers only a loopback `Host`.
+
+## 1.0.0-rc1 - 2026-11-03
+
+- P2P DAG fetches rank providers by measured health, rotate past a provider
+  that answers busy instead of waiting on it, cut a fetch's closure below the
+  missing frontier so held history is not sent again, and log why a selective
+  fetch made no progress (defradb.rs#2531, #2533, #2535, #2537). A node whose
+  CAR serving lane is full answers busy; an rc0 peer reads that as an empty
+  reply. Storage workers flush deferred reclamation before they idle
+  (defradb.rs#2542). `/metrics` adds the admission saturation lane, busy
+  rotations, provider demotions and cooldown skips, busy CAR answers, and each
+  peer's busy rate.
+- A session that a manual or automated Task delivery creates records the Task
+  from its fire receipt, so the session summary still names the Task after a
+  follow-up and task history includes the manual opening request. Existing
+  sessions keep their provenance; a mismatched or ambiguous receipt names no
+  Task.
+- Recover stalled conversation and file synchronization without resetting saved
+  history, including reconnects and duplicate enrollment route records.
+- Improve mobile keyboard layout, touch targets, composer history, question
+  focus, and mailbox navigation; preserve a session's selected folder when branching.
+- `/metrics` renders the remaining P2P sync diagnostics (request dispatch lanes
+  and saturation, pending-DAG registration and exhaustion, per-peer fetch health
+  and liveness, CAR serving, head hints, inbound budgets, retry markers), the
+  node's P2P identity, process memory (`process_resident_memory_bytes`, macOS
+  `gents_process_phys_footprint_bytes`, Linux anon/file/shmem RSS), uptime, and
+  the store directory size. `gents serve --metrics-addr ADDR:PORT` serves the
+  exposition alone on a dedicated listener that Prometheus can scrape without
+  runtime operator authorization: loopback serves it unauthenticated, a
+  specific interface requires `--metrics-auth-token-env`, and wildcard
+  addresses are refused. The runtime API's `/metrics` still requires the
+  operator.
+
+- Remove `gents chain` and the built-in Ethereum surface (`EthTool`,
+  `ChainKeyBinding`, `EthSubmission`, `PackConfig.eth_tools`,
+  `PackConfig.chain_key_bindings`, and `Tools.integrations.eth_tool_ids`).
+  Existing homes keep their stored collections; no data is deleted. The
+  extraction is tracked in [gents-ai/packs#50](https://github.com/gents-ai/packs/issues/50).
+
+- Claude platform backends. Seven provider kinds (`ClaudeBedrock`,
+  `ClaudeVertex`, `ClaudeFoundry`, `ClaudeAnthropicAws`, `ClaudeMantle`,
+  `ClaudeGoogleCloud`, `ClaudeGateway`) join the Messages wire, with a typed
+  `claude_platform` settings object on the backend (`region`, `project`,
+  `location`, `workspace_id`, `resource`, and Foundry's `bearer_token`) from
+  which each platform's default base URL derives. `ClaudeGateway`,
+  `ClaudeFoundry`, `ClaudeAnthropicAws` and `ClaudeMantle` send with a static
+  key or token (`api_key` or `environment` auth), the body, betas, model ids
+  and headers Claude Code sends on that platform. `ClaudeBedrock` sends the
+  Bedrock runtime request (the model in the path, the rewritten body, the
+  region-prefix and inference-profile model id, the event-stream answer) with a
+  bearer token or AWS credentials, and `ClaudeMantle` and `ClaudeAnthropicAws`
+  also sign with AWS credentials. `ClaudeVertex` sends the `streamRawPredict`
+  request (the model in the path, the rewritten body, the key file's quota
+  project) and `ClaudeGoogleCloud` the Messages request under its workspace,
+  both with access tokens minted from `google_credentials`. Backend auth gains
+  `aws_credentials` (static keys, signed with AWS Signature Version 4) and
+  `google_credentials` (a service account key or an authorized user file),
+  stored secrets an agent can keep but never set. AWS profiles, SSO and
+  instance credentials, and other Google credential types, are not read.
+- `gents claude-gateway-login <url>` signs in to a Claude Code cloud gateway
+  with its device authorization flow (the gateway's advertised same-origin
+  endpoints, else `/oauth/device_authorization` and `/oauth/token`) and stores
+  the account as a node OAuth credential of provider `claude-gateway`. A
+  `ClaudeGateway` backend with `node_oauth` auth sends that account's JWT,
+  refreshed with the gateway's refresh token five minutes before it expires,
+  and marks its attribution from the JWT it sends; the static-token gateway
+  backend is unchanged. Gateway certificate pinning and sign-out revocation
+  are not done.
+- `gents config backend pool <backend-id>` and the desktop backend editor
+  switch a Claude subscription backend between one account and an account pool,
+  and set whether the pool may use paid extra usage. Both call one operator
+  write that replaces only the backend's `auth`; an agent still cannot add a
+  pool or change its overage choice. Editing another field of a pool backend in
+  the desktop no longer turns it back into a single-account backend.
+
 ## 1.0.0-rc0 - 2026-10-29
 
 - A job plugin may declare `host_imports: ["run_script"]`. The host then
@@ -233,7 +417,7 @@ source consistency checks, not a separate runtime compatibility version.
 - A plugin job's spawns, its `job.agent_targets` and its
   `policy.dynamic_targets` now name AgentTargets by their `target_id`, as the
   protocol and `gents pack wire --targets-from` already did; a workflow whose
-  targets have a `target_id` different from their `agent_id` (such as
+  targets have a `target_id` different from their `agent_did` (such as
   code_review's) was refused `plugin_job_policy_denied` before any child
   started.
 - The plugin job recovery sweep no longer fails a healthy workflow run as
@@ -296,7 +480,7 @@ source consistency checks, not a separate runtime compatibility version.
   refuses.
 - Breaking: installations are Nodes and their configured behaviors are Agents.
   Collections, document fields, CLI commands and flags, and desktop preferences
-  use the new names (`gents config agent`, `--node-name`, `node_did`, `agent_id`).
+  use the new names (`gents config agent`, `--node-name`, `node_did`, `agent_did`).
   Persona requests are removed; Agent changes use authenticated configuration
   writes. Start with fresh stores and upgrade the desktop and all paired runtimes
   together; existing stores are not converted.

@@ -1,11 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import { Button } from "@gents/ui/components/button";
 import { Input } from "@gents/ui/components/input";
+import { Spinner } from "@gents/ui/components/spinner";
 import { toast } from "sonner";
 import type {
-  FoundPack,
   InstalledPack,
-  PackEditedChoice,
   PackPluginSlot,
   PackSlotProfile,
   PackWireSources,
@@ -16,13 +15,13 @@ import type { NodeView } from "../../../hooks/fleetStore";
 import { ChoiceRow } from "./editors";
 import { Group, Row } from "./rows";
 import { WirePackDialog, type WirePackDialogProps } from "./WirePackDialog";
+import { RegistryPack } from "./RegistryPack";
 import { errorText } from "../../../lib/errorText";
-
-/** An install or update that would replace documents someone edited stops and
- * names them; the person chooses keep or overwrite. */
-function editedChoice(error: unknown): boolean {
-  return errorText(error).includes("--overwrite");
-}
+import { href } from "@/lib/router";
+import { packContents } from "./packContents";
+import { usePackActions } from "./usePackActions";
+import { PackInstallReview } from "../packs/PackInstallReview";
+import { useRegistrySearch } from "./useRegistrySearch";
 
 const NO_SOURCES: PackWireSources = { plugins: [], target_packs: [] };
 
@@ -30,12 +29,9 @@ export function PacksPanel({ deployment }: { deployment: NodeView }) {
   const { actions } = useApp();
   const [installed, setInstalled] = useState<InstalledPack[] | null>(null);
   const [account, setAccount] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
-  const [found, setFound] = useState<FoundPack[]>([]);
-  const [page, setPage] = useState(1);
-  const [hasMore, setHasMore] = useState(false);
+  /* the registry pack whose page is open under its line */
+  const [opened, setOpened] = useState<string | null>(null);
   const [token, setToken] = useState("");
-  const [busy, setBusy] = useState<string | null>(null);
   const [slots, setSlots] = useState<PackPluginSlot[]>([]);
   const [profiles, setProfiles] = useState<PackSlotProfile[]>([]);
   const [sources, setSources] = useState<PackWireSources>(NO_SOURCES);
@@ -44,13 +40,16 @@ export function PacksPanel({ deployment }: { deployment: NodeView }) {
     "agents" | "agent" | "onClose"
   > | null>(null);
 
+  /* a failed read is not an empty one */
+  const [unread, setUnread] = useState<string | null>(null);
   const refresh = useCallback(async () => {
     try {
       const report = await actions.listInstalledPacks();
       setInstalled(report.packs);
+      setUnread(null);
     } catch (error) {
       setInstalled([]);
-      toast.error(errorText(error));
+      setUnread(errorText(error));
     }
     try {
       const report = await actions.listPackPluginSlots();
@@ -77,83 +76,18 @@ export function PacksPanel({ deployment }: { deployment: NodeView }) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
-
-  async function search(next: number) {
-    setBusy("search");
-    try {
-      const report = await actions.searchPacks(query, next);
-      setFound(report.packs);
-      setHasMore(report.has_more);
-      setPage(next);
-    } catch (error) {
-      toast.error(errorText(error));
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function install(
-    pack: string,
-    edited: PackEditedChoice = "refuse",
-    grantAuthority = false,
-  ) {
-    setBusy(pack);
-    try {
-      await actions.installPack({ package: pack, edited, grantAuthority });
-      toast.success(`Installed ${pack}`);
-      await refresh();
-    } catch (error) {
-      const text = errorText(error);
-      if (
-        text.includes("--grant-authority") &&
-        window.confirm(`${text}\n\nAllow it?`)
-      ) {
-        return install(pack, edited, true);
-      }
-      if (editedChoice(error)) {
-        const overwrite = window.confirm(
-          `${text}\n\nOK replaces them, Cancel keeps your edits.`,
-        );
-        return install(pack, overwrite ? "overwrite" : "keep", grantAuthority);
-      }
-      toast.error(text);
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function update(pack: string, edited: PackEditedChoice = "refuse") {
-    setBusy(pack);
-    try {
-      await actions.updatePack(pack, edited);
-      toast.success(`Updated ${pack}`);
-      await refresh();
-    } catch (error) {
-      if (editedChoice(error)) {
-        const overwrite = window.confirm(
-          `${errorText(error)}\n\nOK replaces them, Cancel keeps your edits.`,
-        );
-        return update(pack, overwrite ? "overwrite" : "keep");
-      }
-      toast.error(errorText(error));
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function remove(pack: string) {
-    if (!window.confirm(`Remove ${pack} and everything it installed?`)) return;
-    setBusy(pack);
-    try {
-      await actions.removePack(pack);
-      toast.success(`Removed ${pack}`);
-      await refresh();
-    } catch (error) {
-      toast.error(errorText(error));
-    } finally {
-      setBusy(null);
-    }
-  }
+  const {
+    busy,
+    setBusy,
+    install,
+    update,
+    remove,
+    review,
+    closeReview,
+    installReviewed,
+  } = usePackActions(refresh);
+  const { query, setQuery, found, page, hasMore, searched, search } =
+    useRegistrySearch();
 
   async function bindSlot(plugin: string, profile: string) {
     setBusy(plugin);
@@ -208,11 +142,18 @@ export function PacksPanel({ deployment }: { deployment: NodeView }) {
 
   return (
     <div>
+      <PackInstallReview
+        request={review}
+        node={deployment}
+        installed={installed}
+        onCancel={closeReview}
+        onInstall={installReviewed}
+      />
       {wiring && (
         <WirePackDialog
           {...wiring}
           agents={deployment.agents}
-          agent={defaultAgentOf(deployment)?.agentId}
+          agent={defaultAgentOf(deployment)?.agentDid}
           onClose={(wired) => {
             setWiring(null);
             if (wired) void refresh();
@@ -221,15 +162,29 @@ export function PacksPanel({ deployment }: { deployment: NodeView }) {
       )}
       <Group title="Installed">
         {installed === null && <Row label="Loading" />}
-        {installed?.length === 0 && <Row label="No packs installed" />}
+        {unread !== null && (
+          <Row label="Couldn't read the installed packs" description={unread} />
+        )}
+        {unread === null && installed?.length === 0 && (
+          <Row label="No packs installed" />
+        )}
         {installed?.map((pack) => (
           <Row
             key={pack.pack}
             label={pack.pack}
             description={
-              pack.outdated
-                ? `${pack.installed}, ${pack.latest} available`
-                : pack.installed
+              <>
+                {pack.outdated ? (
+                  `${pack.installed}, ${pack.latest} available`
+                ) : pack.error ? (
+                  <span title={pack.error}>
+                    {pack.installed} · couldn't check for updates
+                  </span>
+                ) : (
+                  pack.installed
+                )}
+                <PackAdds deployment={deployment} pack={pack.pack} />
+              </>
             }
           >
             <div className="flex gap-2">
@@ -247,7 +202,7 @@ export function PacksPanel({ deployment }: { deployment: NodeView }) {
                 size="sm"
                 variant="outline"
                 disabled={busy !== null}
-                onClick={() => remove(pack.pack)}
+                onClick={() => void remove(pack.pack)}
               >
                 Remove
               </Button>
@@ -287,37 +242,60 @@ export function PacksPanel({ deployment }: { deployment: NodeView }) {
             }}
           >
             <Input
+              type="search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Packs and plugins"
               aria-label="Search the registry"
             />
-            <Button type="submit" disabled={busy !== null}>
-              Search
-            </Button>
           </form>
         </Row>
-        {found.map((pack) => {
-          const name = `${pack.namespace}/${pack.name}`;
-          return (
-            <Row
-              key={name}
-              label={name}
-              description={pack.description ?? pack.latest ?? undefined}
-            >
-              <Button size="sm" disabled={busy !== null} onClick={() => install(name)}>
-                Install
-              </Button>
-            </Row>
-          );
-        })}
+        {searched === null && (
+          <Row label="Loading the registry…">
+            <Spinner />
+          </Row>
+        )}
+        {searched === false && found.length === 0 && (
+          <Row
+            label={query.trim() ? "No packs match" : "The registry has no packs yet"}
+          >
+            {null}
+          </Row>
+        )}
+        {found.length > 0 && (
+          /* one line a pack, in a box of its own height, so a long registry
+             scrolls inside it rather than stretching the page */
+          <ul
+            aria-label="Registry packs"
+            className="max-h-80 divide-y divide-border/40 overflow-y-auto"
+          >
+            {found.map((pack) => {
+              const name = `${pack.namespace}/${pack.name}`;
+              return (
+                <RegistryPack
+                  key={name}
+                  pack={pack}
+                  installed={installed?.some((p) => p.pack === name) ?? false}
+                  installing={busy !== null}
+                  onInstall={() => install(name)}
+                  onKeyword={(word) => {
+                    setOpened(null);
+                    setQuery(word);
+                  }}
+                  open={opened === name}
+                  onToggle={() => setOpened((was) => (was === name ? null : name))}
+                />
+              );
+            })}
+          </ul>
+        )}
         {(page > 1 || hasMore) && (
           <Row label={`Page ${page}`}>
             <div className="flex gap-2">
               <Button
                 size="sm"
                 variant="outline"
-                disabled={page === 1}
+                disabled={page === 1 || searched === true}
                 onClick={() => search(page - 1)}
               >
                 Previous
@@ -325,7 +303,7 @@ export function PacksPanel({ deployment }: { deployment: NodeView }) {
               <Button
                 size="sm"
                 variant="outline"
-                disabled={!hasMore}
+                disabled={!hasMore || searched === true}
                 onClick={() => search(page + 1)}
               >
                 Next
@@ -360,5 +338,31 @@ export function PacksPanel({ deployment }: { deployment: NodeView }) {
         )}
       </Group>
     </div>
+  );
+}
+
+/* what a pack installed, each kind linked to the section that lists it */
+function PackAdds({ deployment, pack }: { deployment: NodeView; pack: string }) {
+  const kinds = packContents(deployment, pack);
+  if (!kinds.length) return null;
+  return (
+    <span className="block">
+      Adds{" "}
+      {kinds.map((kind, i) => (
+        <Fragment key={kind.section}>
+          {i > 0 && " · "}
+          <a
+            href={href({
+              name: "agent",
+              nodeDid: deployment.nodeDid,
+              section: kind.section,
+            })}
+            className="text-foreground underline-offset-2 hover:underline"
+          >
+            {kind.count} {kind.count === 1 ? kind.one : kind.many}
+          </a>
+        </Fragment>
+      ))}
+    </span>
   );
 }

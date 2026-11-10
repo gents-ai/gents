@@ -16,14 +16,10 @@ structure SurfaceView where
   goalCreate : Bool
   defraQuery : Bool
   selfConfig : Bool
-  memory : Bool
   schemaManagement : Bool
   p2pRead : Bool
   p2pMutate : Bool
   p2pMutationAllowed : Bool
-  p2pOverlayBefore : List String
-  p2pOverlayAfter : List String
-  p2pOverlayAllowed : Bool
   sessionHistory : Bool
   contextBudget : Bool
   sessionMessages : Bool
@@ -45,8 +41,6 @@ structure SurfaceView where
   mcpPermits : Bool
   defraCollectionsScopeKind : String
   defraCollectionsKeys : List String
-  p2pCollectionsScopeKind : String
-  p2pCollectionsKeys : List String
   selfConfigCategoriesScopeKind : String
   selfConfigCategoriesKeys : List String
   agentTargetsScopeKind : String
@@ -61,10 +55,6 @@ structure SurfaceView where
   queryScopeKind : String
   queryGrants : List WriteGrantView
   queryFields : List String
-  ethQueryMethodsKind : String
-  ethQueryMethodsKeys : List String
-  ethCallToolsKind : String
-  ethCallToolsKeys : List String
   pluginToolsKind : String
   pluginToolsKeys : List String
   deriving Repr
@@ -103,9 +93,6 @@ def knownWriteKeys : List (String × String) :=
 def knownQueryKeys : List (String × String) :=
   [("qt", "coll")]
 
-def knownEthMethods : List String :=
-  ["eth_blockNumber", "eth_call", "eth_chainId"]
-
 def probeQuery : String × String := ("qt", "coll")
 
 def knownSelfConfigCategories : List String :=
@@ -122,11 +109,6 @@ def fieldList (fields : Finset String) : List String :=
 
 def toolScopeKeys {V : Type} : EndpointScope ToolId V → List String
   | .only keys _ => knownToolIds.filter (fun key => decide (key ∈ keys))
-  | .all => []
-  | .none => []
-
-def ethMethodKeys {V : Type} : EndpointScope String V → List String
-  | .only keys _ => knownEthMethods.filter (fun key => decide (key ∈ keys))
   | .all => []
   | .none => []
 
@@ -229,7 +211,6 @@ def surface (file : FileCap) (bash : BashPolicy)
   , goalCreate := ordinary
   , defraQuery := defraQuery
   , selfConfig := defraQuery
-  , memory := ordinary
   , schemaManagement := ordinary
   , p2pRead := ordinary
   , p2pMutate := ordinary
@@ -241,31 +222,23 @@ def surface (file : FileCap) (bash : BashPolicy)
   , cliTools := .all
   , mcpServices := mcp
   , defraCollections := .all
-  , p2pCollections := .all
   , selfConfigCategories := .all
   , agentTargets := .all
   , backgroundTools := .all
   , writeTools := write
   , queryTools := .all
-  , ethQueryMethods := .none
-  , ethCallTools := .none
   , pluginTools := .none }
 
-def view (s : Surface) (mcpProbe : String) (writeProbe : String × String)
-    (p2pBefore p2pAfter : List String) : SurfaceView :=
+def view (s : Surface) (mcpProbe : String) (writeProbe : String × String) : SurfaceView :=
   { fileRank := s.file.rank
   , goalTools := s.goalTools
   , goalCreate := s.goalCreate
   , defraQuery := s.defraQuery
   , selfConfig := s.selfConfig
-  , memory := s.memory
   , schemaManagement := s.schemaManagement
   , p2pRead := s.p2pRead
   , p2pMutate := s.p2pMutate
   , p2pMutationAllowed := permitsP2pMutation s
-  , p2pOverlayBefore := p2pBefore
-  , p2pOverlayAfter := p2pAfter
-  , p2pOverlayAllowed := permitsP2pOverlayMutation s p2pBefore p2pAfter
   , sessionHistory := s.sessionHistory
   , contextBudget := s.contextBudget
   , sessionMessages := s.sessionMessages
@@ -287,8 +260,6 @@ def view (s : Surface) (mcpProbe : String) (writeProbe : String × String)
   , mcpPermits := decide (s.mcpServices.permits mcpProbe)
   , defraCollectionsScopeKind := scopeKind s.defraCollections
   , defraCollectionsKeys := toolScopeKeys s.defraCollections
-  , p2pCollectionsScopeKind := scopeKind s.p2pCollections
-  , p2pCollectionsKeys := toolScopeKeys s.p2pCollections
   , selfConfigCategoriesScopeKind := scopeKind s.selfConfigCategories
   , selfConfigCategoriesKeys := selfConfigScopeKeys s.selfConfigCategories
   , agentTargetsScopeKind := scopeKind s.agentTargets
@@ -307,10 +278,6 @@ def view (s : Surface) (mcpProbe : String) (writeProbe : String × String)
   , queryFields := match s.queryTools.lookup probeQuery with
       | some fields => fieldList fields
       | none => []
-  , ethQueryMethodsKind := scopeKind s.ethQueryMethods
-  , ethQueryMethodsKeys := ethMethodKeys s.ethQueryMethods
-  , ethCallToolsKind := scopeKind s.ethCallTools
-  , ethCallToolsKeys := toolScopeKeys s.ethCallTools
   , pluginToolsKind := scopeKind s.pluginTools
   , pluginToolsKeys := toolScopeKeys s.pluginTools }
 
@@ -399,8 +366,7 @@ def agentEachCategory : Surface :=
 
 def ceilingClampsEachCategory : Surface :=
   { wideOpen with
-    memory := false
-  , lsp := false
+    lsp := false
   , schemaManagement := false
   , p2pRead := false
   , p2pMutate := false
@@ -464,21 +430,6 @@ def writeAllNoQuery : Surface :=
     writeTools := .all
     queryTools := .none }
 
-def ethMethodsA : EndpointScope String Unit :=
-  unitOnly ["eth_chainId", "eth_blockNumber"].toFinset
-
-def ethMethodsB : EndpointScope String Unit :=
-  unitOnly ["eth_blockNumber", "eth_call"].toFinset
-
-def agentEthA : Surface :=
-  { wideOpen with ethQueryMethods := ethMethodsA }
-
-def ceilingEthB : Surface :=
-  { wideOpen with ethQueryMethods := ethMethodsB }
-
-def runtimeEthAll : Surface :=
-  { wideOpen with ethQueryMethods := .all, ethCallTools := .all }
-
 def agentPluginsAX : Surface :=
   { wideOpen with pluginTools := toolsOnly ["svc-a", "svc-x"] }
 
@@ -501,13 +452,12 @@ def agentWithoutGoals : Surface :=
   { wideOpen with goalTools := false, goalCreate := false }
 
 def mkCase (name : String) (b c : Surface) (r : Avail)
-    (mcpProbe : String) (writeProbe : String × String)
-    (p2pBefore : List String := ["PrivateNote"]) (p2pAfter : List String := ["DeploymentNote"]) : Case :=
+    (mcpProbe : String) (writeProbe : String × String) : Case :=
   { name := name
-  , agent := view b mcpProbe writeProbe p2pBefore p2pAfter
-  , ceiling := view c mcpProbe writeProbe p2pBefore p2pAfter
-  , runtime := view r mcpProbe writeProbe p2pBefore p2pAfter
-  , expected := view (effective b c r) mcpProbe writeProbe p2pBefore p2pAfter }
+  , agent := view b mcpProbe writeProbe
+  , ceiling := view c mcpProbe writeProbe
+  , runtime := view r mcpProbe writeProbe
+  , expected := view (effective b c r) mcpProbe writeProbe }
 
 def cases : List Case :=
   [ mkCase "wide_open_clamped_by_secure_ceiling"
@@ -534,8 +484,6 @@ def cases : List Case :=
       agentQueryB ceilingQueryA wideOpen "svc-a" probeWrite
   , mkCase "write_all_does_not_grant_query"
       agentQueryA writeAllNoQuery wideOpen "svc-a" probeWrite
-  , mkCase "eth_query_methods_intersect"
-      agentEthA ceilingEthB runtimeEthAll "svc-a" probeWrite
   , mkCase "plugin_tools_intersect"
       agentPluginsAX ceilingPluginsXY runtimePluginsAll "svc-a" probeWrite
   , mkCase "plugin_tools_absent_from_runtime_are_denied"
@@ -562,15 +510,6 @@ def cases : List Case :=
       wideOpen { wideOpen with p2pRead := false } wideOpen "svc-a" probeWrite
   , mkCase "p2p_mutation_requires_authored_grant"
       { wideOpen with p2pMutate := false } wideOpen wideOpen "svc-a" probeWrite
-  , mkCase "p2p_collections_intersect"
-      { wideOpen with p2pCollections := toolsOnly ["DeploymentNote", "PrivateNote"] }
-      { wideOpen with p2pCollections := toolOnly "DeploymentNote" } wideOpen "svc-a" probeWrite
-  , mkCase "p2p_overlay_create_in_scope"
-      { wideOpen with p2pCollections := toolOnly "DeploymentNote" } wideOpen wideOpen "svc-a" probeWrite [] ["DeploymentNote"]
-  , mkCase "p2p_overlay_replace_requires_existing_scope"
-      { wideOpen with p2pCollections := toolOnly "DeploymentNote" } wideOpen wideOpen "svc-a" probeWrite ["PrivateNote"] ["DeploymentNote"]
-  , mkCase "p2p_overlay_revoke_requires_existing_scope"
-      { wideOpen with p2pCollections := toolOnly "DeploymentNote" } wideOpen wideOpen "svc-a" probeWrite ["DeploymentNote", "PrivateNote"] []
   , mkCase "application_write_exact_collection_grant"
       { secureMinimal with writeTools := writeOnly ("write", "Shipment") ["*"] }
       wideOpen wideOpen "svc-a" ("write", "Shipment")

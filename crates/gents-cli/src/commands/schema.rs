@@ -155,7 +155,7 @@ async fn apply_schema_inputs(
         .filter(|input| input.kind == SchemaInputKind::Sdl)
     {
         let sdl = fs::read_to_string(&input.path)?;
-        gents::config_client::preview_additive_schema_install(access, &sdl)
+        gents::store::config_client::preview_additive_schema_install(access, &sdl)
             .await?
             .require_satisfied()
             .with_context(|| format!("schema series did not satisfy {}", input.path.display()))?;
@@ -238,13 +238,16 @@ fn classify_schema_input(path: &Path) -> Option<SchemaInputKind> {
 async fn apply_sdl_file(access: &ConfigAccess, path: &Path) -> Result<SchemaApplyFileResult> {
     let sdl = fs::read_to_string(path)
         .with_context(|| format!("reading schema SDL {}", path.display()))?;
-    let plan = gents::config_client::preview_additive_schema_install(access, &sdl)
+    let plan = gents::store::config_client::preview_additive_schema_install(access, &sdl)
         .await
         .with_context(|| format!("preview schema SDL {}", path.display()))?;
-    let receipt =
-        gents::config_client::apply_additive_schema_install(access, &sdl, &plan.artifact_digest)
-            .await
-            .with_context(|| format!("publish schema SDL {}", path.display()))?;
+    let receipt = gents::store::config_client::apply_additive_schema_install(
+        access,
+        &sdl,
+        &plan.artifact_digest,
+    )
+    .await
+    .with_context(|| format!("publish schema SDL {}", path.display()))?;
     Ok(SchemaApplyFileResult {
         path: path.display().to_string(),
         status: if receipt.requires_publication {
@@ -422,12 +425,7 @@ mod pack_schema_tests {
     async fn cli_sdl_apply_checks_contracts_and_reports_reinstall_accurately() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("widget.graphql");
-        let node = std::sync::Arc::new(
-            gents::defra_node::EmbeddedNode::builder()
-                .build()
-                .await
-                .unwrap(),
-        );
+        let node = std::sync::Arc::new(gents::defra_node::Node::builder().build().await.unwrap());
         let access = ConfigAccess::local(node.clone());
         fs::write(&path, "type Widget { message: String }").unwrap();
         assert_eq!(

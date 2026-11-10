@@ -1,5 +1,6 @@
 use std::io::{self, Write};
 
+use gents::eval::optimization::Decision;
 use gents::eval::report::{
     CaseView, CheckDiff, Comparison, EvalReport, SideTrial, SlotClass, SlotCounts, SlotReport,
     SlotScore, StageDiff,
@@ -9,7 +10,6 @@ use gents::eval::runner::{
     STALE_WINDOW,
 };
 use gents::eval::TrialUsage;
-use gents::optimization::Decision;
 use serde::Serialize;
 
 use super::inspect::{ListRow, TrialView};

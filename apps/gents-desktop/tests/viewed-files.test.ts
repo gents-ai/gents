@@ -15,6 +15,7 @@ const file = (...edits: string[]): ChangedFile => ({
   added: 1,
   removed: 1,
   edits: edits.map(edit),
+  whole: true,
 });
 
 describe("viewed files", () => {

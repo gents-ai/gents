@@ -323,6 +323,15 @@ sys.stdout.write(json.dumps(strings.literals))
     serde_json::from_slice(&output.stdout).unwrap()
 }
 
+/// A module directory holds the body of its same-named file, so both follow one rule.
+fn scanned_stem(stem: &str) -> bool {
+    stem != "tests"
+        && !stem.starts_with("test_")
+        && !["_tests", "_test", ".test", ".spec", ".node-test"]
+            .iter()
+            .any(|suffix| stem.ends_with(suffix))
+}
+
 fn source_files(root: &Path, files: &mut Vec<PathBuf>) {
     if !root.exists() {
         return;
@@ -343,6 +352,9 @@ fn source_files(root: &Path, files: &mut Vec<PathBuf>) {
             ]
             .iter()
             .any(|name| path.file_name().is_some_and(|found| found == *name))
+                && path
+                    .file_name()
+                    .is_some_and(|name| scanned_stem(&name.to_string_lossy()))
             {
                 source_files(&path, files);
             }
@@ -354,14 +366,9 @@ fn source_files(root: &Path, files: &mut Vec<PathBuf>) {
                 .iter()
                 .any(|allowed| extension == *allowed)
             })
-            && path.file_stem().is_some_and(|stem| {
-                let stem = stem.to_string_lossy();
-                stem != "tests"
-                    && !stem.starts_with("test_")
-                    && !["_tests", "_test", ".test", ".spec", ".node-test"]
-                        .iter()
-                        .any(|suffix| stem.ends_with(suffix))
-            })
+            && path
+                .file_stem()
+                .is_some_and(|stem| scanned_stem(&stem.to_string_lossy()))
         {
             files.push(path);
         }
@@ -399,7 +406,8 @@ fn inventory(root: &Path) -> BTreeSet<Read> {
 }
 
 fn binding_value(value: &str) -> String {
-    let session = |requester| gents::session::session_scope_filter("probe", "probe", requester);
+    let session =
+        |requester| gents_protocol::session::session_scope_filter("probe", "probe", requester);
     match value {
         "@session" => session(Some("probe")),
         "@session-absent" => session(None),
@@ -578,7 +586,7 @@ async fn ordered_bounded_reads_keep_filtering_above_unbounded_scans() {
     );
     let dir = tempfile::tempdir().unwrap();
     let identity = gents::KeyIdentity::load_or_create(dir.path().join("node.key"), None).unwrap();
-    let node = gents::defra_node::EmbeddedNode::builder()
+    let node = gents::defra_node::Node::builder()
         .with_node_identity_did(gents::NodeIdentity::did(&identity))
         .data_path(dir.path().join("db"))
         .build()
@@ -586,7 +594,7 @@ async fn ordered_bounded_reads_keep_filtering_above_unbounded_scans() {
         .unwrap();
     gents::ensure_runtime_schemas(&node).await.unwrap();
     let unsafe_query = r#"query @explain { AgentRequest(filter: {request_id: {_eq: "probe"}, content: {_eq: "probe"}}, order: {request_id: ASC}, limit: 1) {_docID} }"#;
-    let unsafe_plan = gents::graphql::graphql_with_transaction_retry(
+    let unsafe_plan = gents::store::graphql::graphql_with_transaction_retry(
         &node,
         unsafe_query,
         "checking query screen discrimination",
@@ -642,7 +650,7 @@ async fn ordered_bounded_reads_keep_filtering_above_unbounded_scans() {
                 screen.read
             );
             let query = format!("query @explain {{ {collection}({arguments}) {{ _docID }} }}");
-            let response = gents::graphql::graphql_with_transaction_retry(
+            let response = gents::store::graphql::graphql_with_transaction_retry(
                 &node,
                 &query,
                 "screening ordered read plans",
@@ -676,7 +684,7 @@ async fn ordered_bounded_reads_keep_filtering_above_unbounded_scans() {
             }
         }
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     for exception in exceptions {
         if !used_exceptions.contains(&exception.read) {
             failures.push(format!(

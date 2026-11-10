@@ -1,6 +1,9 @@
 // The keys and mouse buttons a person already uses for history in a
-// browser, on the app's own history; a field being typed in keeps its keys.
+// browser, on the app's own history; a field being typed in keeps its keys,
+// and so does a control that moves with arrow keys (Alt+← on a tab or a
+// divider moves it, and must not also go back).
 import { useEffect, useRef } from "react";
+import { keyTaken } from "@/screens/shortcutKeys";
 import type { History } from "./router";
 
 const typing = (target: EventTarget | null) =>
@@ -15,7 +18,7 @@ export function useHistoryInputs(history: History) {
     const mac = navigator.platform.toUpperCase().includes("MAC");
     const onKey = (e: KeyboardEvent) => {
       const history = latest.current;
-      if (typing(e.target)) return;
+      if (typing(e.target) || keyTaken(e)) return;
       const chord = mac ? e.metaKey && !e.altKey : e.altKey && !e.metaKey;
       if (!chord || e.ctrlKey || e.shiftKey) return;
       const back = mac ? e.key === "[" : e.key === "ArrowLeft";

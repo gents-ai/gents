@@ -167,3 +167,164 @@ for (const rest of ["remembered", "widest"] as const) {
     expect(left).toEqual([]);
   });
 }
+
+test("Show panel with nothing open shows the panels to open, and opens the one picked", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1500, height: 900 });
+  await gotoHarness(page, "mobile-performance");
+  await page.locator('[data-testid="session-session-large"]').click();
+  await page.getByTestId("transcript-panel").getByText("stream-start").last().waitFor();
+  await page.getByRole("button", { name: "More" }).first().click();
+  await page.getByRole("menuitem", { name: "Show panel" }).click();
+
+  const dock = page.getByTestId("dock");
+  await expect(dock).toHaveAccessibleName("Panels");
+  await expect(dock.getByRole("button")).toHaveText([
+    "Started sessions",
+    "Background",
+    "Changes",
+  ]);
+  await dock.getByRole("button", { name: "Changes" }).click();
+  await expect(
+    page.getByRole("tablist", { name: "Panels" }).getByRole("tab", { name: "Changes" }),
+  ).toHaveAttribute("aria-selected", "true");
+
+  /* the last tab closed closes the dock, and the menu offers it again */
+  await page.getByRole("tab", { name: "Changes" }).press("Delete");
+  await expect(dock).toHaveCount(0);
+  await page.getByRole("button", { name: "More" }).first().click();
+  await expect(page.getByRole("menuitem", { name: "Show panel" })).toBeVisible();
+});
+
+test("the dock's + opens a panel that isn't open yet, and stays in view when tabs overflow", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1500, height: 900 });
+  await gotoHarness(page, "mobile-performance");
+  await page.locator('[data-testid="session-session-large"]').click();
+  await page.getByTestId("transcript-panel").getByText("stream-start").last().waitFor();
+  await page.getByRole("button", { name: "More" }).first().click();
+  await page.getByRole("menuitem", { name: "Started sessions" }).click();
+
+  const tabs = page.getByRole("tablist", { name: "Panels" });
+  const add = page.getByRole("button", { name: "Open a panel" });
+  await add.click();
+  /* only the panels not open yet */
+  await expect(page.getByRole("menuitem")).toHaveText(["Background", "Changes"]);
+  await page.getByRole("menuitem", { name: "Background" }).click();
+  await expect(tabs.getByRole("tab", { name: "Background" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+
+  /* squeezed, the tabs scroll and fade under the + rather than push it out */
+  await page
+    .getByTestId("dock-tabs")
+    .evaluate((el) => ((el as HTMLElement).style.maxWidth = "190px"));
+  await expect(tabs).toHaveAttribute("data-cut", "true");
+  await expect(add).toBeInViewport();
+  const addBox = (await add.boundingBox())!;
+  const stripBox = (await tabs.boundingBox())!;
+  expect(stripBox.x + stripBox.width).toBeLessThanOrEqual(addBox.x + 1);
+  await page
+    .getByTestId("dock-tabs")
+    .evaluate((el) => ((el as HTMLElement).style.maxWidth = ""));
+
+  /* with every panel open there is nothing to add */
+  await add.click();
+  await page.getByRole("menuitem", { name: "Changes" }).click();
+  await expect(add).toHaveCount(0);
+});
+
+test("renaming keeps field focus, then the menu resumes native focus return", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1500, height: 900 });
+  await gotoHarness(page, "mobile-performance");
+  await page.locator('[data-testid="session-session-large"]').click();
+  await page.getByTestId("transcript-panel").getByText("stream-start").last().waitFor();
+  const more = page.getByRole("button", { name: "More", exact: true }).first();
+  await more.click();
+  await page.getByRole("menuitem", { name: "Rename", exact: true }).click();
+  const name = page.getByRole("textbox", { name: /^Rename / }).first();
+  await expect(name).toBeFocused();
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  await expect(name).toBeFocused();
+  await page.keyboard.press("Escape");
+  await more.click();
+  await expect(page.getByRole("menu")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  await expect(more).toBeFocused();
+
+  // A close animation must not steal focus deliberately moved to the composer.
+  await page.addStyleTag({
+    content:
+      '[data-slot="dropdown-menu-content"][data-closed] { animation-duration: 300ms !important; }',
+  });
+  await more.click();
+  await expect(page.getByRole("menu")).toBeFocused();
+  await page.keyboard.press("Escape");
+  const composer = page.getByRole("textbox", { name: "Message" });
+  await composer.focus();
+  await expect(page.locator('[data-slot="dropdown-menu-content"]')).toHaveCount(0);
+  await expect(composer).toBeFocused();
+});
+
+test("the add-panel trigger stays fixed while its dock expands during a press", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1500, height: 900 });
+  await gotoHarness(page, "mobile-performance");
+  await page.locator('[data-testid="session-session-large"]').click();
+  await page.getByTestId("transcript-panel").getByText("stream-start").last().waitFor();
+  await page.getByRole("button", { name: "More", exact: true }).first().click();
+  await page.getByRole("menuitem", { name: "Started sessions" }).click();
+
+  // Hold the outer edge fixed while the divider advances, as during dock opening.
+  const layout = await page.addStyleTag({
+    content: ".app-titlebar { grid-template-columns: 56px 1044px 400px !important; }",
+  });
+  const add = page.getByRole("button", { name: "Open a panel" });
+  const before = (await add.boundingBox())!;
+  await page.mouse.move(before.x + before.width / 2, before.y + before.height / 2);
+  await page.mouse.down();
+  await layout.evaluate((el) => {
+    el.textContent =
+      ".app-titlebar { grid-template-columns: 56px 744px 700px !important; }";
+  });
+  const after = (await add.boundingBox())!;
+  expect(Math.abs(after.x - before.x)).toBeLessThanOrEqual(1);
+  await page.mouse.up();
+  await page.getByRole("menuitem", { name: "Background", exact: true }).click();
+  await expect(
+    page.getByRole("tab", { name: "Background", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
+});
+
+test("the dock's expand button fills the window with the panel and gives the session back", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "webkit-desktop", "one engine");
+  await page.setViewportSize({ width: 1500, height: 900 });
+  await gotoHarness(page, "mobile-performance");
+  await page.locator('[data-testid="session-session-large"]').click();
+  await page.getByTestId("transcript-panel").getByText("stream-start").last().waitFor();
+  await page.getByRole("button", { name: "More" }).first().click();
+  await page.getByRole("menuitem", { name: "Started sessions" }).click();
+
+  const dock = page.getByTestId("dock");
+  const narrow = (await dock.boundingBox())!.width;
+  await page.getByRole("button", { name: "Expand panel" }).click();
+  await expect(page.getByTitle("Show the session")).toBeVisible();
+  await expect
+    .poll(async () => (await dock.boundingBox())!.width)
+    .toBeGreaterThan(1500 - 56 - 40);
+
+  await page.getByRole("button", { name: "Restore panel" }).click();
+  await expect(page.getByRole("button", { name: "Expand panel" })).toBeVisible();
+  await expect
+    .poll(async () => Math.round((await dock.boundingBox())!.width))
+    .toBe(Math.round(narrow));
+});

@@ -82,8 +82,8 @@ fn load_root(root: &Path, owner: Option<&str>) -> Result<DesiredStateManifest> {
     if let Some(manifest) = pack_manifest(root)? {
         gents::pack::pin_pack_plugins(&manifest, &|path| read_pack_asset(root, path), &mut config)?;
     }
-    let plan = gents::config_client::DesiredStateApplyPlan::from_pack_config(&config)?;
-    gents::document_config::ConfigReferences::from_documents(
+    let plan = gents::store::config_client::DesiredStateApplyPlan::from_pack_config(&config)?;
+    gents::documents::ConfigReferences::from_documents(
         &config.node.node_did,
         plan.documents()
             .iter()
@@ -159,8 +159,8 @@ mod filesystem_tests {
             "contexts":[{"context_id":"context","system_prompt":"  literal ${NOT_EXPANDED} {{node.did}}\n"}],
             "inference_backends":[{"backend_id":"backend","name":"backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
             "inference_profiles":[{"profile_id":"profile","backend_id":"backend","model_name":"model"}],
-            "agents":[{"agent_id":"agent","context_id":"context","inference_profile_id":"profile"}],
-            "tasks":[{"task_id":"task","agent_id":"agent","prompt_template":"  {{args.name}}\n"}]
+            "agents":[{"agent_did":"agent","creation_nonce":"nonce","context_id":"context","inference_profile_id":"profile"}],
+            "tasks":[{"task_id":"task","agent_did":"agent","prompt_template":"  {{args.name}}\n"}]
         }),None,&|name|(name=="NOT_EXPANDED").then(||"${NOT_EXPANDED}".into()),&|_,_,_|unreachable!()).unwrap()
     }
 
@@ -221,7 +221,7 @@ mod retained_reference_tests {
     #[test]
     fn offline_load_and_export_allow_references_to_retained_documents() {
         let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("pack_config.json"),r#"{"node":{"node_did":"owner"},"agents":[{"agent_id":"agent","inference_profile_id":"retained-profile"}]}"#).unwrap();
+        fs::write(dir.path().join("pack_config.json"),r#"{"node":{"node_did":"owner"},"agents":[{"agent_did":"agent","creation_nonce":"nonce","inference_profile_id":"retained-profile"}]}"#).unwrap();
         let (config, report) = load_manifest_root(dir.path());
         assert!(report.ok, "{:?}", report.errors);
         let config = config.unwrap();

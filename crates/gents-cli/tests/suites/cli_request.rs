@@ -40,6 +40,8 @@ async fn request_submit_waits_for_response_by_default() -> Result<()> {
     let submit = spawn_cli(
         &home_dir,
         &[
+            "utils",
+            "debug",
             "request",
             "submit",
             "--graphql",
@@ -125,6 +127,8 @@ async fn request_submit_supports_content_file_and_output_file() -> Result<()> {
     let submit = spawn_cli(
         &home_dir,
         &[
+            "utils",
+            "debug",
             "request",
             "submit",
             "--graphql",
@@ -203,6 +207,8 @@ async fn request_interrupt_waits_until_running_request_is_terminal() -> Result<(
     let submitted = run_cli_json(
         &home_dir,
         &[
+            "utils",
+            "debug",
             "request",
             "submit",
             "--graphql",
@@ -245,6 +251,8 @@ async fn request_interrupt_waits_until_running_request_is_terminal() -> Result<(
     let interrupted = run_cli_json(
         &home_dir,
         &[
+            "utils",
+            "debug",
             "request",
             "interrupt",
             "--graphql",
@@ -331,6 +339,8 @@ async fn request_interrupt_does_not_latch_completed_request() -> Result<()> {
     let submitted = run_cli_json(
         &home_dir,
         &[
+            "utils",
+            "debug",
             "request",
             "submit",
             "--graphql",
@@ -368,6 +378,8 @@ async fn request_interrupt_does_not_latch_completed_request() -> Result<()> {
     let interrupted = run_cli_json(
         &home_dir,
         &[
+            "utils",
+            "debug",
             "request",
             "interrupt",
             "--graphql",
@@ -463,7 +475,7 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
                 create_AgentRequest(input: {{purpose: "normal", 
                     request_id: "{parent_request_id}",
                     node_did: "{node_did}",
-                    agent_id: "parent-agent",
+                    agent_did: "parent-agent",
                     session_id: "{session_id}",
                     content: "parent request that started a session",
                     lifecycle_state: "processing",
@@ -513,7 +525,7 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
                     request_id: "{child_request_id}",
                     node_did: "{node_did}",
                     requester_did: "{node_did}",
-                    agent_id: "child-agent",
+                    agent_did: "child-agent",
                     session_id: "{child_session_id}",
                     content: "request caused by the agent_new tool call",
                     lifecycle_state: "processing",
@@ -540,7 +552,7 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
             session_id: child_session_id.clone(),
             node_did: node_did.clone(),
             requester_did: Some(node_did.clone()),
-            agent_id: "child-agent".to_owned(),
+            agent_did: "child-agent".to_owned(),
             created_at: "2026-05-20T10:00:03Z".to_owned(),
             closed_at: None,
             archived_at: None,
@@ -565,6 +577,8 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
     let json_output = run_cli_json(
         &home_dir,
         &[
+            "utils",
+            "debug",
             "request",
             "show",
             "--graphql",
@@ -614,7 +628,7 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
     );
     assert_eq!(
         json_output
-            .pointer("/child_requests/0/agent_id")
+            .pointer("/child_requests/0/agent_did")
             .and_then(Value::as_str),
         Some("child-agent")
     );
@@ -633,7 +647,15 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
 
     let text_output = run_cli_text(
         &home_dir,
-        &["request", "show", "--graphql", &graphql, &parent_request_id],
+        &[
+            "utils",
+            "debug",
+            "request",
+            "show",
+            "--graphql",
+            &graphql,
+            &parent_request_id,
+        ],
     )?;
     assert!(text_output.contains("Transition history:"));
     assert!(text_output.contains("Backgrounded tools:"));
@@ -649,13 +671,13 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
             r#"mutation {{
                 create_AgentRequest(input: {{purpose: "normal",
                     request_id: "{limited_request_id}", node_did: "{node_did}",
-                    agent_id: "parent-agent", session_id: "{session_id}",
+                    agent_did: "parent-agent", session_id: "{session_id}",
                     content: "limited", lifecycle_state: "failed",
                     failure_reason: "{failure}", created_at: "2026-05-20T10:01:00Z"
                 }}) {{ _docID }}
                 create_InferenceCall(input: {{
                     call_id: "{limited_request_id}-call", request_id: "{limited_request_id}",
-                    call_seq: 1, backend_id: "studios-cluster", agent_id: "parent-agent",
+                    call_seq: 1, backend_id: "studios-cluster", agent_did: "parent-agent",
                     node_did: "{node_did}", call_kind: "inference", attempt: 1,
                     call_state: "failed", failure_reason: "{failure}",
                     queued_at: "2026-05-20T10:01:00Z", started_at: "2026-05-20T10:01:00Z",
@@ -668,6 +690,8 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
     let limited = run_cli_json(
         &home_dir,
         &[
+            "utils",
+            "debug",
             "request",
             "show",
             "--graphql",
@@ -799,6 +823,8 @@ async fn pending_message_commands_edit_reorder_and_remove_against_held_provider(
     let submitted = run_cli_json(
         &home,
         &[
+            "utils",
+            "debug",
             "request",
             "submit",
             "--graphql",
@@ -824,7 +850,12 @@ async fn pending_message_commands_edit_reorder_and_remove_against_held_provider(
         "--output",
         "json",
     ];
-    let pending = || run_cli_json(&home, &[&["request", "pending"][..], &scope[..]].concat());
+    let pending = || {
+        run_cli_json(
+            &home,
+            &[&["utils", "debug", "request", "pending"][..], &scope[..]].concat(),
+        )
+    };
     let wait_for_pending = |expected: Vec<&'static str>| {
         let pending = &pending;
         async move {
@@ -859,6 +890,8 @@ async fn pending_message_commands_edit_reorder_and_remove_against_held_provider(
         waiter.0 = Some(spawn_cli(
             &home,
             &[
+                "utils",
+                "debug",
                 "request",
                 "submit",
                 "--graphql",
@@ -878,6 +911,8 @@ async fn pending_message_commands_edit_reorder_and_remove_against_held_provider(
             run_cli_json(
                 &home,
                 &[
+                    "utils",
+                    "debug",
                     "request",
                     "submit",
                     "--graphql",
@@ -908,7 +943,7 @@ async fn pending_message_commands_edit_reorder_and_remove_against_held_provider(
         };
         let mutate = |command: &str, snapshot: &Value, extra: &[&str]| {
             let expected = expected_flags(snapshot);
-            let mut args = vec!["request", command];
+            let mut args = vec!["utils", "debug", "request", command];
             args.extend_from_slice(&scope);
             args.extend(expected.iter().map(String::as_str));
             args.extend_from_slice(extra);
@@ -1094,7 +1129,7 @@ async fn create_started_session(
         session_id: session.session_id,
         session_doc_id: session_doc_id.clone(),
         requester_did: session.requester_did,
-        agent_id: session.agent_id,
+        agent_did: session.agent_did,
         opening_request_doc_id: opening_doc_id.to_owned(),
         cause: SessionCreationCause::AgentNew,
         cause_binding: tool_call_doc_id.to_owned(),

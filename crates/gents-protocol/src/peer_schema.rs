@@ -1,10 +1,6 @@
-//! Live compatibility of the collection versions two running nodes replicate.
-//! DefraDB resolves every merged block by `schema_version_id` and rejects
-//! versions the receiver does not hold; a peer whose active versions differ can
-//! never merge the other side's writes and must be reported instead.
+//! The active collection versions a runtime publishes on its `/status`.
 
 use std::collections::BTreeMap;
-use std::fmt;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -53,65 +49,3 @@ impl ReplicatedCollectionIdentity {
 
 /// Active identities by collection name, as read from one node.
 pub type ReplicatedSchema = BTreeMap<String, ReplicatedCollectionIdentity>;
-
-/// A peer whose replicated collections differ from this node's.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReplicatedSchemaSkew {
-    /// Collections that are missing on either side or whose identities differ.
-    pub collections: Vec<String>,
-    /// `false` when the peer published no readable schema at all.
-    pub advertised: bool,
-}
-
-impl fmt::Display for ReplicatedSchemaSkew {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "this app and the agent runtime are different Gents versions, so their synced \
-             data is incompatible and writes would never reach the runtime; update the app \
-             and the runtime to the same version"
-        )?;
-        if self.advertised {
-            write!(
-                f,
-                " (collections that differ: {})",
-                self.collections.join(", ")
-            )
-        } else {
-            write!(f, " (the runtime does not advertise its replicated schema)")
-        }
-    }
-}
-
-impl std::error::Error for ReplicatedSchemaSkew {}
-
-pub fn compare_replicated_schema(
-    expected: &[&str],
-    local: &ReplicatedSchema,
-    remote: Option<&ReplicatedSchema>,
-) -> Result<(), ReplicatedSchemaSkew> {
-    let Some(remote) = remote else {
-        return Err(ReplicatedSchemaSkew {
-            collections: expected.iter().map(|name| (*name).to_string()).collect(),
-            advertised: false,
-        });
-    };
-    let mut collections = expected
-        .iter()
-        .filter(|name| match (local.get(**name), remote.get(**name)) {
-            (Some(local), Some(remote)) => local != remote,
-            _ => true,
-        })
-        .map(|name| (*name).to_string())
-        .collect::<Vec<_>>();
-    collections.sort();
-    collections.dedup();
-    if collections.is_empty() {
-        Ok(())
-    } else {
-        Err(ReplicatedSchemaSkew {
-            collections,
-            advertised: true,
-        })
-    }
-}

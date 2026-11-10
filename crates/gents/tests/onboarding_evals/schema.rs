@@ -1,4 +1,4 @@
-use gents::document_config::EvalCapture;
+use gents::documents::EvalCapture;
 use gents::eval::checks::CheckRegistry;
 use gents::eval::runner::{CaptureResult, ScriptedExecutor};
 use gents::eval::OutcomeKind;
@@ -76,10 +76,10 @@ fn schema_cases_use_valid_native_sdl_and_grade_saved_state() {
 
 #[tokio::test]
 async fn admiral_search_fixture_grades_native_writes_and_ranked_results() {
-    use gents::application_write::{WriteParams, WriteTool};
-    use gents::config_client::ConfigAccess;
-    use gents::defra_query::{execute_command, CollectionScope, QueryParams};
     use gents::eval::runner::embedded::observe::ToolCallEvidence;
+    use gents::plugin::application_write::{WriteParams, WriteTool};
+    use gents::store::config_client::ConfigAccess;
+    use gents::tools::builtin::defra_query::{execute_command, CollectionScope, QueryParams};
     use serde_json::{json, Value};
     use std::collections::BTreeSet;
     use std::sync::Arc;
@@ -89,12 +89,7 @@ async fn admiral_search_fixture_grades_native_writes_and_ranked_results() {
     ))
     .unwrap();
     let registry = CheckRegistry::builtin();
-    let node = Arc::new(
-        gents::defra_node::EmbeddedNode::builder()
-            .build()
-            .await
-            .unwrap(),
-    );
+    let node = Arc::new(gents::defra_node::Node::builder().build().await.unwrap());
     let access = ConfigAccess::local(node.clone());
     let configure = &case["stages"][0];
     let schema_params = &configure["checks"][0]["params"];
@@ -252,5 +247,5 @@ async fn admiral_search_fixture_grades_native_writes_and_ranked_results() {
     assert_eq!(grader.evaluate(params, &evidence).score_bp, Some(0));
     evidence.tool_calls.clear();
     assert_eq!(grader.evaluate(params, &evidence).score_bp, Some(0));
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }

@@ -61,7 +61,7 @@ fn display_replacement_request<'a>(
 ) -> &'a AgentRequestRow {
     let mut current = selected;
     let mut seen = RapidHashSet::new();
-    while gents::lifecycle::replaced_by(current).is_some() {
+    while gents::request::lifecycle::replaced_by(current).is_some() {
         let Some(doc_id) = current.doc_id.as_deref() else {
             break;
         };
@@ -171,7 +171,7 @@ fn resolve<'a>(
     if !seen.insert(identity) {
         return row;
     }
-    if gents::lifecycle::folded_into(row).is_some() {
+    if gents::request::lifecycle::folded_into(row).is_some() {
         let owner = clean_string(row.superseded_by_request_doc_id.as_deref()).and_then(|doc| {
             in_scope(requests, row, |candidate| {
                 candidate.doc_id.as_deref() == Some(doc.as_str())
@@ -245,7 +245,7 @@ pub fn folded_requests<'a>(
         .copied()
         .filter(|row| {
             row.requester_did.as_deref() == requester
-                && gents::lifecycle::folded_into(row).is_some()
+                && gents::request::lifecycle::folded_into(row).is_some()
         })
         .collect()
 }

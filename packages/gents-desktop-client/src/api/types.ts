@@ -1,3 +1,4 @@
+import type { AgentIdentityBinding } from "../generated/AgentIdentityBinding.js";
 import type { MailboxItemObservation } from "../generated/MailboxItemObservation.js";
 import type { MailboxItemObservationRequest } from "../generated/MailboxItemObservationRequest.js";
 import type { RequestAttachment } from "../generated/RequestAttachment.js";
@@ -19,7 +20,7 @@ import type { GoalControlResult } from "../generated/GoalControlResult.js";
 import type { GoalSubmissionQuery } from "../generated/GoalSubmissionQuery.js";
 import type { GoalSubmissionReceipt } from "../generated/GoalSubmissionReceipt.js";
 import type { GoalSubmissionRecovery } from "../generated/GoalSubmissionRecovery.js";
-import type { SessionGoalView } from "../generated/SessionGoalView.js";
+import type { SessionGoalState } from "../generated/SessionGoalState.js";
 import type { OauthProvider } from "../transport.js";
 import type { DesktopJobControlRequest } from "../generated/DesktopJobControlRequest.js";
 import type { JobControlOutcome } from "../generated/JobControlOutcome.js";
@@ -31,6 +32,12 @@ import type { EventSourceSaveRequest } from "../generated/EventSourceSaveRequest
 import type { EventSourceDeleteRequest } from "../generated/EventSourceDeleteRequest.js";
 import type { BackendHealth } from "../types/backendHealth.js";
 import type { ManagedServerStatus } from "../generated/ManagedServerStatus.js";
+import type { AgentWorkspaceRoot } from "../generated/AgentWorkspaceRoot.js";
+import type { JoinHistoryView } from "../generated/JoinHistoryView.js";
+import type { JoinMemberView } from "../generated/JoinMemberView.js";
+import type { JoinRequestDecideRequest } from "../generated/JoinRequestDecideRequest.js";
+import type { JoinRequestDecisionView } from "../generated/JoinRequestDecisionView.js";
+import type { JoinRequestView } from "../generated/JoinRequestView.js";
 import type { ManagedServerResetResult } from "../generated/ManagedServerResetResult.js";
 import type { HomeResetDisposition } from "../generated/HomeResetDisposition.js";
 import type { ManagedServerToolCeiling } from "../generated/ManagedServerToolCeiling.js";
@@ -47,14 +54,12 @@ import type {
   DefaultAgentSetRequest,
   BackendDeleteRequest,
   BackendSaveRequest,
+  BackendRotationSetRequest,
   AgentDeleteRequest,
   ContextDeleteRequest,
   AgentSaveRequest,
   ChatSendRequest,
   ChatSendResult,
-  ChatSubmissionReceipt,
-  ChatSubmissionRecovery,
-  ChatSubmissionQuery,
   CodexLoginResult,
   ClaudeLoginResult,
   GrokLoginResult,
@@ -66,8 +71,6 @@ import type {
   SessionRenameRequest,
   SessionArchiveRequest,
   SessionArchiveReceipt,
-  SessionHistoryRequest,
-  SessionHistoryPage,
   SessionLiveDeltaView,
   SessionRowsView,
   SessionRowsWindow,
@@ -81,8 +84,6 @@ import type {
   MailboxItemView,
   MCPServiceHealthView,
   McpServiceProbeResult,
-  NetworkStatusView,
-  RequestResendResult,
   RequestTimelineView,
   ScheduleDeleteRequest,
   ScheduleRunRequest,
@@ -100,7 +101,6 @@ import type {
   ToolServiceSaveRequest,
   ToolServiceTestRequest,
   ToolServiceTestResult,
-  ToolSurfaceExplanationView,
   WorkspaceListingView,
 } from "../types.js";
 import type {
@@ -110,8 +110,10 @@ import type {
 import type {
   FoundPack,
   InstalledPack,
+  PackInfo,
   PackEditedChoice,
   PackInstallRequest,
+  PackInstallReport,
   PackPluginSlot,
   PackSlotProfile,
   PackWireRequest,
@@ -154,7 +156,7 @@ export type DesktopApiAdapter = {
   fetchSessionGoal: (
     nodeDid: string,
     sessionId: string,
-  ) => Promise<SessionGoalView | null>;
+  ) => Promise<SessionGoalState | null>;
   controlGoal: (request: GoalControlRequest) => Promise<GoalControlResult>;
   recoverGoalSubmission: (
     query: GoalSubmissionQuery,
@@ -173,6 +175,7 @@ export type DesktopApiAdapter = {
   startDesktopClient: () => Promise<DesktopClientSnapshot>;
   shutdownDesktopClient: () => Promise<DesktopClientSnapshot>;
   managedServerStatus?: () => Promise<ManagedServerStatus>;
+  enrollManagedServer?: () => Promise<void>;
   startManagedServer?: (
     nodeName: string,
     authority?: ManagedServerAuthorityInput,
@@ -188,6 +191,11 @@ export type DesktopApiAdapter = {
   ) => Promise<ManagedServerResetResult>;
   quitDesktop?: () => Promise<void>;
   validateManagedServerRoot?: (path: string) => Promise<string>;
+  selectAgentWorkspaceRoot?: (
+    nodeDid: string,
+    agentDid: string,
+    path: string,
+  ) => Promise<AgentWorkspaceRoot>;
   openManagedServerLoginItems?: () => Promise<void>;
   commitManagedServerAutoStart?: (
     nodeName: string,
@@ -196,6 +204,16 @@ export type DesktopApiAdapter = {
     disableAutoStart: boolean,
   ) => Promise<ManagedServerStatus>;
   openDbExplorer?: () => Promise<string>;
+  /** requests to join the node this desktop runs; the bridge refuses any
+   *  other node with `unsupported` */
+  listJoinRequests?: (nodeDid: string) => Promise<JoinRequestView[]>;
+  decideJoinRequest?: (
+    request: JoinRequestDecideRequest,
+  ) => Promise<JoinRequestDecisionView>;
+  /** who has access to the node this desktop runs, and what was decided; the
+   *  bridge answers `unsupported` for any other node */
+  listJoinMembers?: (nodeDid: string) => Promise<JoinMemberView[]>;
+  readJoinHistory?: (nodeDid: string) => Promise<JoinHistoryView>;
   /** Opens a URL in the person's browser. The bridge strips the packaged
    *  build's own libraries and display backend from the environment the
    *  browser inherits, which the OS opener cannot. */
@@ -206,20 +224,17 @@ export type DesktopApiAdapter = {
   setSelectedNode: (nodeDid: string | null) => Promise<void>;
   removePeer: (peerId: string) => Promise<DesktopClientSnapshot>;
   renamePeer: (peerId: string, label: string) => Promise<DesktopClientSnapshot>;
+  dismissEndedAccess: (nodeDid: string) => Promise<DesktopClientSnapshot>;
   fetchPeerStatus: (peerId: string) => Promise<unknown>;
   requestStatusEnrollment: (
     serverAddress: string,
+    candidateName?: string,
   ) => Promise<EnrollmentRequestView>;
   listWorkspace: (subpath?: string | null) => Promise<WorkspaceListingView>;
   fetchRequestTimeline: (
     nodeDid: string,
     requestId: string,
   ) => Promise<RequestTimelineView>;
-  explainToolSurface: (
-    nodeDid: string,
-    agentId: string,
-  ) => Promise<ToolSurfaceExplanationView>;
-  fetchNetworkStatus: () => Promise<NetworkStatusView>;
   fetchSessionContextDetails?: (
     request: SessionContextDetailsRequest,
   ) => Promise<SessionContextDetails | null>;
@@ -229,10 +244,9 @@ export type DesktopApiAdapter = {
     requestId?: string | null,
     timelinePage?: {
       limit?: number;
-      beforeItemKey?: string | null;
     },
   ) => Promise<DesktopSessionSnapshot | null>;
-  retrySessionHydration: (
+  reloadSession: (
     sessionId: string,
     nodeDid?: string | null,
   ) => Promise<void>;
@@ -263,17 +277,12 @@ export type DesktopApiAdapter = {
     baseReasoningHash: string;
   }) => Promise<SessionLiveDeltaView | null>;
   sendChatMessage: (request: ChatSendRequest) => Promise<ChatSendResult>;
-  recoverChatSubmission: (
-    query: ChatSubmissionQuery,
-  ) => Promise<ChatSubmissionRecovery>;
-  acknowledgeChatSubmission: (receipt: ChatSubmissionReceipt) => Promise<void>;
   steerPendingMessage: (
     request: PendingMessageSteerRequest,
   ) => Promise<PendingQueueEditResult>;
   editPendingQueue: (
     request: PendingQueueEditRequest,
   ) => Promise<PendingQueueEditResult>;
-  listMailbox: () => Promise<MailboxItemView[]>;
   observeMailboxItem: (
     request: MailboxItemObservationRequest,
   ) => Promise<MailboxItemObservation | null>;
@@ -286,13 +295,6 @@ export type DesktopApiAdapter = {
   setSessionArchived: (
     request: SessionArchiveRequest,
   ) => Promise<SessionArchiveReceipt>;
-  sessionHistory: (
-    request: SessionHistoryRequest,
-  ) => Promise<SessionHistoryPage>;
-  resendRequest: (
-    requestId: string,
-    nodeDid?: string,
-  ) => Promise<RequestResendResult>;
   retryRequest: (
     requestId: string,
     nodeDid?: string,
@@ -309,6 +311,7 @@ export type DesktopApiAdapter = {
   setDefaultAgent: (
     request: DefaultAgentSetRequest,
   ) => Promise<DesktopClientSnapshot>;
+  provisionAgentIdentity: (nodeDid: string) => Promise<AgentIdentityBinding>;
   saveAgentConfig: (
     request: AgentSaveRequest,
   ) => Promise<DesktopClientSnapshot>;
@@ -353,6 +356,9 @@ export type DesktopApiAdapter = {
   ) => Promise<DesktopClientSnapshot>;
   saveBackendConfig: (
     request: BackendSaveRequest,
+  ) => Promise<DesktopClientSnapshot>;
+  setBackendRotation: (
+    request: BackendRotationSetRequest,
   ) => Promise<DesktopClientSnapshot>;
   probeInferenceEndpoint: (endpoint: string) => Promise<InferenceProbeResult>;
   getInferenceSetupCatalog: () => Promise<InferenceSetupCatalog>;
@@ -467,7 +473,10 @@ export type DesktopApiAdapter = {
     query: string,
     page: number,
   ) => Promise<{ packs: FoundPack[]; has_more: boolean }>;
-  installPack: (request: PackInstallRequest) => Promise<void>;
+  /** a registry pack's page: owner, homepage, plugins and versions */
+  packInfo: (pack: string) => Promise<PackInfo>;
+  /** installs a pack, or with `preview` reports what installing it would write */
+  installPack: (request: PackInstallRequest) => Promise<PackInstallReport>;
   updatePack: (pack: string, edited: PackEditedChoice) => Promise<void>;
   removePack: (pack: string) => Promise<void>;
   bindPackPlugin: (plugin: string, profile: string | null) => Promise<void>;
@@ -501,6 +510,10 @@ export type DesktopApiAdapter = {
     request: PackPluginCallRequest,
   ) => Promise<{ output: unknown }>;
   callUxData: (request: UxDataCallRequest) => Promise<UxDataCallResult>;
+  watchUxData?: (
+    request: UxDataCallRequest,
+    listener: (event: import("../transport.js").UxDataWatchEvent) => void,
+  ) => Promise<() => void>;
   listUxDataSurfaces: (
     request: UxDataSurfacesRequest,
   ) => Promise<{ surfaces: unknown[] }>;
@@ -511,6 +524,7 @@ export type PackCommand =
   | "listPackPluginSlots"
   | "readPackAccount"
   | "searchPacks"
+  | "packInfo"
   | "installPack"
   | "updatePack"
   | "removePack"
@@ -522,6 +536,12 @@ export type PackCommand =
   | "promoteWorkflow"
   | "signInToPackRegistry"
   | "signOutOfPackRegistry";
+
+export type JoinRequestCommand =
+  | "listJoinRequests"
+  | "decideJoinRequest"
+  | "listJoinMembers"
+  | "readJoinHistory";
 
 export type HostAccessCommand =
   | "listAllowedFolders"
@@ -541,6 +561,11 @@ export type UxPluginCommand =
 
 export type {
   HomeResetDisposition,
+  JoinHistoryView,
+  JoinMemberView,
+  JoinRequestDecideRequest,
+  JoinRequestDecisionView,
+  JoinRequestView,
   ManagedServerResetResult,
   ManagedServerStatus,
 };

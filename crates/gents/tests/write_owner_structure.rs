@@ -5,15 +5,17 @@ use syn::visit::{self, Visit};
 use syn::{Expr, ExprCall, ExprMethodCall, ItemConst, ItemFn, ItemImpl, ItemMod};
 
 const OWNER_FILES: &[&str] = &[
-    "crates/gents/src/config_client/graphql.rs",
-    "crates/gents/src/config_client/retry.rs",
-    "crates/gents/src/config_client/txn.rs",
-    "crates/gents-protocol/src/graphql.rs",
+    "crates/gents/src/store/config_client/graphql.rs",
+    "crates/gents/src/store/config_client/retry.rs",
+    "crates/gents/src/store/config_client/txn/auto_commit.rs",
+    "crates/gents/src/store/config_client/txn/execute.rs",
+    "crates/gents/src/store/config_client/txn/transact_entry.rs",
+    "crates/gents-protocol/src/graphql/transport.rs",
 ];
 
 const READ_OWNER_FILES: &[&str] = &[
-    "crates/gents/src/config_client/txn.rs",
-    "crates/gents/src/graphql.rs",
+    "crates/gents/src/store/config_client/txn/auto_commit.rs",
+    "crates/gents/src/store/graphql.rs",
 ];
 
 #[rustfmt::skip]
@@ -401,6 +403,15 @@ fn parse_production(root: &Path, sources: Vec<PathBuf>) -> Vec<(String, syn::Fil
 fn mentions_embedded_node(ty: &syn::Type) -> bool {
     struct Finder(bool);
     impl<'ast> Visit<'ast> for Finder {
+        fn visit_path(&mut self, path: &'ast syn::Path) {
+            self.0 |= path
+                .segments
+                .iter()
+                .zip(path.segments.iter().skip(1))
+                .any(|(module, ty)| module.ident == "defra_node" && ty.ident == "Node");
+            visit::visit_path(self, path);
+        }
+
         fn visit_path_segment(&mut self, segment: &'ast syn::PathSegment) {
             self.0 |= segment.ident == "EmbeddedNode";
             visit::visit_path_segment(self, segment);
@@ -575,9 +586,10 @@ impl<'ast> Visit<'ast> for ReadVisitor<'_> {
         if let Some(name) = path_name(call) {
             let mut segments = name.rsplit("::");
             let method = segments.next().unwrap_or_default();
-            if segments.next() == Some("EmbeddedNode")
-                && (method == "execute" || NODE_ONLY_METHODS.contains(&method))
-            {
+            let ty = segments.next();
+            let is_node = ty == Some("EmbeddedNode")
+                || (ty == Some("Node") && segments.next() == Some("defra_node"));
+            if is_node && (method == "execute" || NODE_ONLY_METHODS.contains(&method)) {
                 self.sites += 1;
             }
         }
@@ -680,13 +692,14 @@ fn read_fence_counts_direct_node_execution() {
     for source in [
         "fn f(node: &EmbeddedNode, q: &str) { node.execute(q); }",
         "fn f(db: &EmbeddedNode, q: &str) { db.execute(q); }",
-        "fn f(db: Arc<defra_node::EmbeddedNode>, q: &str) { db.as_ref().execute(q); }",
+        "fn f(db: Arc<defra_node::Node>, q: &str) { db.as_ref().execute(q); }",
         "impl S { fn f(&self, q: &str) { self.node.execute(q); } }",
         "struct S { store: Arc<EmbeddedNode> } impl S { fn f(&self, q: &str) { self.store.execute(q); } }",
         "fn f(node: &EmbeddedNode, q: &str) { node.clone().execute(q); }",
         "fn f(node: &EmbeddedNode, q: &str) { (&*node).execute(q); }",
         "fn f(core: &Core, q: &str) { core.node().execute(q); }",
         "fn f(node: &EmbeddedNode, q: &str) { EmbeddedNode::execute(&node, q); }",
+        "fn f(db: &defra_node::Node, q: &str) { defra_node::Node::execute(db, q); }",
         "fn f(node: &EmbeddedNode, q: &str) { let db = node.clone(); db.execute(q); }",
         "fn f(node: Arc<EmbeddedNode>, q: &str) { let db = Arc::clone(&node); db.execute(q); }",
         "impl S { fn f(&self, q: &str) { let db = &self.node; db.execute(q); } }",
@@ -703,6 +716,7 @@ fn read_fence_counts_direct_node_execution() {
 fn read_fence_ignores_owner_wrappers_and_tests() {
     for source in [
         "fn f(executor: &Executor, q: &str) { executor.execute(q); }",
+        "fn f(db: &domain::Node, q: &str) { db.execute(q); domain::Node::execute(db, q); }",
         "fn f(access: &ConfigAccess, q: &str) { access.execute(q); }",
         "fn f(access: &ConfigAccess, q: &str) { ConfigAccess::execute(access, q); }",
         "fn f(txn: &ConfigApplyTxn, q: &str) { txn.execute(q); }",
@@ -790,7 +804,7 @@ fn dependency_reachability_resolves_renamed_packages() {
     );
 }
 
-const OAUTH_CREDENTIAL_OWNER: &str = "crates/gents/src/oauth_credential.rs";
+const OAUTH_CREDENTIAL_OWNER: &str = "crates/gents/src/inference/auth/credential";
 
 const REMOVED_OAUTH_PICKERS: &[&str] = &[
     "lookup_oauth_credential",
@@ -806,15 +820,14 @@ const OAUTH_ROW_READERS: &[&str] = &[
     "oauth_credentials_for_node_query",
     "oauth_credential_by_id_query",
     "oauth_credential_by_doc_id_query",
-    "lookup_oauth_credential_by_id",
     "lookup_oauth_credential_by_doc_id",
 ];
 
 #[rustfmt::skip]
 const OAUTH_ROW_READ_ALLOWLIST: &[(&str, usize)] = &[
-    ("crates/gents-desktop-bridge/src/accounts.rs", 2),
-    ("crates/gents/src/agent/document_view/load.rs", 1),
-    ("crates/gents/src/agent/document_view/mod.rs", 1),
+    ("crates/gents-desktop-bridge/src/accounts/provider.rs", 2),
+    ("crates/gents/src/runtime/agent/document_view/load.rs", 1),
+    ("crates/gents/src/runtime/agent/document_view/mod.rs", 1),
 ];
 
 #[derive(Default)]
@@ -925,7 +938,7 @@ fn oauth_credential_picks_go_through_the_resolver() {
     let mut violations = Vec::new();
     let mut actual = BTreeMap::new();
     for (relative, syntax) in parse_production(&root, production_sources(&root)) {
-        if relative == OAUTH_CREDENTIAL_OWNER {
+        if owned_by(&relative, OAUTH_CREDENTIAL_OWNER) {
             continue;
         }
         let (found, reads) = oauth_pick_findings(&syntax);
@@ -947,7 +960,7 @@ fn oauth_credential_picks_go_through_the_resolver() {
         let limit = allowed.get(path).copied().unwrap_or_default();
         if found != limit {
             violations.push(format!(
-                "{path}: {found} OAuthCredential row read(s), allowlisted {limit}; pick through oauth_credential::resolve_oauth_credential"
+                "{path}: {found} OAuthCredential row read(s), allowlisted {limit}; pick through inference::auth::credential::resolve_oauth_credential"
             ));
         }
     }
@@ -962,13 +975,13 @@ fn oauth_credential_picks_go_through_the_resolver() {
 fn oauth_pick_fence_flags_pickers_raw_queries_and_reads() {
     for (source, violations, reads) in [
         ("fn f(n: &N) { lookup_oauth_credential(n, \"did\", \"p\"); }", 1, 0),
-        ("fn f(a: &A) { gents::oauth_credential::oauth_credential_query(\"d\", \"p\"); }", 1, 0),
+        ("fn f(a: &A) { gents::inference::auth::credential::oauth_credential_query(\"d\", \"p\"); }", 1, 0),
         ("async fn load_oauth_credential() {}", 1, 0),
         ("fn f(v: &V) { v.has_enabled_oauth_credential(\"p\"); }", 1, 0),
         (r#"fn f(d: &str) -> String { format!("query {{ OAuthCredential(filter: {{ node_did: {{ _eq: \"{d}\" }} }}) {{ _docID }} }}") }"#, 1, 0),
         ("fn f(a: &A) { list_oauth_credentials_on(a, \"d\"); }", 0, 1),
         ("fn f(v: &V) { v.oauth_credentials.values().find(|r| r.enabled); }", 0, 1),
-        ("fn f(n: &N) { lookup_oauth_credential_by_id(n, \"id\"); load_oauth_credential_for_discovery(); }", 0, 1),
+        ("fn f(n: &N) { lookup_oauth_credential_by_doc_id(n, \"id\"); load_oauth_credential_for_discovery(); }", 0, 1),
         ("#[cfg(test)] mod tests { fn f(n: &N) { lookup_oauth_credential(n); list_oauth_credentials(n); } }", 0, 0),
         (r#"const Q: &str = "query { OAuthCredential (filter: {}) { _docID } }";"#, 1, 0),
         (r#"fn f() -> String { format!("{{ OAuthCredential \n (filter: {{}}) {{ _docID }} }}") }"#, 1, 0),
@@ -986,9 +999,9 @@ const RIG_OWNER_MODULES: &[&str] = &[
     "crates/gents-loop/src/rig_compat.rs",
     "crates/gents-loop/src/provider_input",
     "crates/gents-loop/src/loop_stream",
-    "crates/gents/src/llm/rig_compat.rs",
-    "crates/gents/src/provider_input",
-    "crates/gents/src/agent/loop_stream",
+    "crates/gents/src/inference/llm/rig_compat.rs",
+    "crates/gents/src/turn/provider_input",
+    "crates/gents/src/runtime/agent/loop_stream",
 ];
 
 #[rustfmt::skip]
@@ -997,15 +1010,21 @@ const RIG_PATH_ALLOWLIST: &[&str] = &[
     "crates/gents-loop/src/provider_stream.rs",
     "crates/gents-loop/src/provider_usage.rs",
     "crates/gents-loop/src/rendered_request/transport.rs",
-    "crates/gents/src/chatgpt_codex.rs",
-    "crates/gents/src/claude_messages.rs",
-    "crates/gents/src/claude_subscription.rs",
-    "crates/gents/src/inference_http.rs",
-    "crates/gents/src/llm/backend_client.rs",
-    "crates/gents/src/oauth_http.rs",
-    "crates/gents/src/provider_http.rs",
-    "crates/gents/src/usage_observation.rs",
-    "crates/gents/src/xai_grok_oauth.rs",
+    "crates/gents/src/inference/clients/chatgpt_codex.rs",
+    "crates/gents/src/inference/clients/claude_messages/error.rs",
+    "crates/gents/src/inference/clients/claude_messages/mod.rs",
+    "crates/gents/src/inference/clients/claude_messages/send.rs",
+    "crates/gents/src/inference/clients/claude_messages/sse.rs",
+    "crates/gents/src/inference/clients/claude_messages/sse_body.rs",
+    "crates/gents/src/inference/clients/claude_messages/sse_state.rs",
+    "crates/gents/src/inference/clients/claude_messages/transport.rs",
+    "crates/gents/src/inference/clients/claude_subscription.rs",
+    "crates/gents/src/inference/clients/inference_http.rs",
+    "crates/gents/src/inference/llm/backend_client.rs",
+    "crates/gents/src/inference/auth/http.rs",
+    "crates/gents/src/inference/clients/provider_http.rs",
+    "crates/gents/src/inference/usage_observation.rs",
+    "crates/gents/src/inference/clients/xai_grok.rs",
 ];
 
 #[derive(Default)]
@@ -1210,8 +1229,8 @@ fn rig_fence_counts_paths_uses_and_macros_outside_tests() {
 #[rustfmt::skip]
 const STD_HASH_ALLOWLIST: &[&str] = &[
     "crates/gents-lenses/fixture_add_label/src/lib.rs",
-    "crates/gents/src/mcp_pool.rs",
-    "crates/gents/src/provider_input/tests.rs",
+    "crates/gents/src/tools/mcp/pool.rs",
+    "crates/gents/src/turn/provider_input/tests.rs",
 ];
 
 const STD_HASH_NAMES: &[&str] = &["HashMap", "HashSet", "DefaultHasher"];
@@ -1462,12 +1481,12 @@ const AMBIENT_CONTEXT_ALLOWLIST: &[(&str, usize, &str)] = &[
     ("crates/gents-loop/src/rendered_request/scope.rs", 1, "request context read inside Rig's HTTP client; thread through a per-call provider client"),
     ("crates/gents-loop/src/tool_call_lifecycle/runtime.rs", 2, "request context for tool calls; thread through a ToolDyn::call context argument"),
     ("crates/gents-loop/src/tool_effects.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
-    ("crates/gents/src/admission/client.rs", 1, "request context read inside Rig's CompletionModel and HTTP client; thread through a per-call provider client"),
-    ("crates/gents/src/config_client/txn.rs", 1, "re-entrant write fence inside a transaction callback; the handle itself is passed explicitly"),
-    ("crates/gents/src/managed_exec/ownership.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
+    ("crates/gents/src/inference/admission/client.rs", 1, "request context read inside Rig's CompletionModel and HTTP client; thread through a per-call provider client"),
+    ("crates/gents/src/store/config_client/txn/native.rs", 1, "re-entrant write fence inside a transaction callback; the handle itself is passed explicitly"),
+    ("crates/gents/src/tools/exec/ownership.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
     ("crates/gents/src/plugin/approval.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
     ("crates/gents/src/plugin/approval/workspace/context.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
-    ("crates/gents/src/tool_call_lifecycle/runtime.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
+    ("crates/gents/src/tools/call/lifecycle/runtime.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
 ];
 
 #[derive(Default)]
@@ -1572,26 +1591,27 @@ fn ambient_context_counts_statics_outside_test_items() {
 /// which failure occurred. They return module-owned `thiserror` enums and
 /// classifiers match those enums; application code may use `anyhow`.
 const OWNER_MODULES: &[&str] = &[
+    "crates/gents-claude/src",
     "crates/gents-protocol/src",
     "crates/gents-loop/src",
     "crates/gents-migration/src",
-    "crates/gents/src/config_client/common.rs",
-    "crates/gents/src/config_client/error.rs",
-    "crates/gents/src/config_client/graphql.rs",
-    "crates/gents/src/config_client/mod.rs",
-    "crates/gents/src/config_client/patch.rs",
-    "crates/gents/src/config_client/retry.rs",
-    "crates/gents/src/config_client/schema_contract.rs",
-    "crates/gents/src/config_client/schema_install.rs",
-    "crates/gents/src/config_client/schema_management.rs",
-    "crates/gents/src/config_client/txn",
-    "crates/gents/src/config_client/write_telemetry.rs",
-    "crates/gents/src/graphql",
-    "crates/gents/src/home",
-    "crates/gents/src/identity",
-    "crates/gents/src/migration",
-    "crates/gents/src/storage_backend",
-    "crates/gents/src/store_key",
+    "crates/gents/src/store/config_client/common.rs",
+    "crates/gents/src/store/config_client/error.rs",
+    "crates/gents/src/store/config_client/graphql.rs",
+    "crates/gents/src/store/config_client/mod.rs",
+    "crates/gents/src/store/config_client/patch.rs",
+    "crates/gents/src/store/config_client/retry.rs",
+    "crates/gents/src/store/config_client/schema_contract.rs",
+    "crates/gents/src/store/config_client/schema_install.rs",
+    "crates/gents/src/store/config_client/schema_management.rs",
+    "crates/gents/src/store/config_client/txn",
+    "crates/gents/src/store/config_client/write_telemetry.rs",
+    "crates/gents/src/store/graphql",
+    "crates/gents/src/store/local/home",
+    "crates/gents/src/store/identity",
+    "crates/gents/src/store/schema/migration",
+    "crates/gents/src/store/local/storage_backend",
+    "crates/gents/src/store/local/store_key",
 ];
 
 #[derive(Default)]
@@ -1750,88 +1770,85 @@ fn owner_interface_fence_counts_anyhow_names_outside_tests() {
 /// boundary, which then asks the owner enum it finds.
 #[rustfmt::skip]
 const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
-    ("crates/gents-cli/src/commands/config/backend.rs", 2),
     ("crates/gents-cli/src/commands/eval/manage.rs", 1),
-    ("crates/gents-cli/src/commands/grok_shim/acp.rs", 2),
+    ("crates/gents-cli/src/commands/grok_shim/acp/errors.rs", 2),
     ("crates/gents-cli/src/commands/grok_shim/job_runs.rs", 2),
     ("crates/gents-cli/src/commands/grok_shim/workflow_command.rs", 1),
     ("crates/gents-cli/src/commands/prepare_runtime.rs", 1),
-    ("crates/gents-cli/src/http/file_inventory.rs", 1),
     ("crates/gents-client-host/src/editor_store.rs", 1),
-    ("crates/gents-desktop-bridge/src/commands/chat_resolve.rs", 3),
-    ("crates/gents-desktop-bridge/src/commands/session.rs", 2),
     ("crates/gents-desktop-bridge/src/host/local/windows.rs", 1),
     ("crates/gents-desktop-bridge/src/inference_setup.rs", 2),
     ("crates/gents-desktop-bridge/src/local_pairing.rs", 1),
-    ("crates/gents-desktop-bridge/src/tauri_commands/managed_server.rs", 8),
+    ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/launch.rs", 4),
+    ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/native.rs", 1),
+    ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/readiness.rs", 3),
     ("crates/gents-desktop-core/src/client/core/route_manager.rs", 2),
-    ("crates/gents-desktop-core/src/client/core/sync_state.rs", 1),
-    ("crates/gents-desktop-core/src/client/core/writes/pending_submissions.rs", 2),
-    ("crates/gents-desktop-core/src/client/mutations/chat/request.rs", 1),
-    ("crates/gents-desktop-core/src/client/mutations/chat/request/receipt/delivery.rs", 1),
     ("crates/gents-desktop-core/src/error.rs", 1),
     ("crates/gents-loop/src/loop_stream/aggregate_budget.rs", 4),
     ("crates/gents-protocol/src/database_error.rs", 1),
     ("crates/gents-protocol/src/error_chain.rs", 1),
-    ("crates/gents-protocol/src/graphql.rs", 3),
-    ("crates/gents/src/agent/daemon.rs", 2),
-    ("crates/gents/src/agent/stream_processor.rs", 1),
-    ("crates/gents/src/agent/daemon/request.rs", 1),
-    ("crates/gents/src/agent/document_view/snapshot.rs", 1),
-    ("crates/gents/src/agent/p2p_reconcile/session_hydration_reconcile/inventory.rs", 1),
-    ("crates/gents/src/agent/reconcile.rs", 1),
-    ("crates/gents/src/application_write/mod.rs", 1),
-    ("crates/gents/src/background_tools/final_output.rs", 1),
-    ("crates/gents/src/config_client/desired_state.rs", 1),
-    ("crates/gents/src/config_client/retry.rs", 2),
-    ("crates/gents/src/config_client/schema_install.rs", 2),
-    ("crates/gents/src/defra_query/mod.rs", 1),
-    ("crates/gents/src/eth/call_tool.rs", 1),
-    ("crates/gents/src/eth/query.rs", 1),
+    ("crates/gents-protocol/src/graphql/transport.rs", 3),
+    ("crates/gents/src/runtime/agent/daemon.rs", 1),
+    ("crates/gents/src/runtime/agent/daemon/owned_work.rs", 1),
+    ("crates/gents/src/runtime/agent/stream_processor.rs", 1),
+    ("crates/gents/src/runtime/agent/daemon/request.rs", 1),
+    ("crates/gents/src/runtime/agent/document_view/snapshot.rs", 1),
+    ("crates/gents/src/runtime/agent/reconcile.rs", 1),
+    ("crates/gents/src/plugin/application_write/mod.rs", 1),
+    ("crates/gents/src/tools/background/status/final_output.rs", 1),
+    ("crates/gents/src/store/config_client/desired_state/plan.rs", 1),
+    ("crates/gents/src/store/config_client/retry.rs", 2),
+    ("crates/gents/src/store/config_client/schema_install.rs", 2),
+    ("crates/gents/src/tools/builtin/defra_query/mod.rs", 1),
     ("crates/gents/src/eval/documents.rs", 3),
     ("crates/gents/src/eval/report/mod.rs", 1),
     ("crates/gents/src/eval/report/store.rs", 1),
     ("crates/gents/src/eval/runner/freeze.rs", 1),
     ("crates/gents/src/eval/runner/mod.rs", 1),
-    ("crates/gents/src/file_inventory/operator.rs", 1),
-    ("crates/gents/src/goal.rs", 2),
-    ("crates/gents/src/graphql.rs", 1),
-    ("crates/gents/src/home.rs", 3),
-    ("crates/gents/src/hook/persistence/background_tools.rs", 1),
-    ("crates/gents/src/hook/persistence/session_message.rs", 1),
-    ("crates/gents/src/identity.rs", 1),
-    ("crates/gents/src/lifecycle.rs", 1),
-    ("crates/gents/src/lifecycle/canonical_recovery.rs", 2),
-    ("crates/gents/src/lifecycle/execution_lease.rs", 2),
-    ("crates/gents/src/lifecycle/execution_renewal.rs", 1),
-    ("crates/gents/src/lifecycle/queue/position.rs", 1),
-    ("crates/gents/src/node_readiness_publisher.rs", 1),
-    ("crates/gents/src/optimization/driver.rs", 2),
-    ("crates/gents/src/optimization/job.rs", 1),
-    ("crates/gents/src/optimization/promote.rs", 2),
-    ("crates/gents/src/p2p_tool.rs", 1),
-    ("crates/gents/src/pack_resolve.rs", 1),
+    ("crates/gents/src/goal/creation.rs", 2),
+    ("crates/gents/src/store/graphql.rs", 1),
+    ("crates/gents/src/store/local/home.rs", 3),
+    ("crates/gents/src/tools/call/hook/persistence/background_tools.rs", 1),
+    ("crates/gents/src/tools/call/hook/persistence/session_message.rs", 1),
+    ("crates/gents/src/store/identity/error.rs", 1),
+    ("crates/gents/src/request/lifecycle.rs", 1),
+    ("crates/gents/src/request/lifecycle/canonical_recovery.rs", 2),
+    ("crates/gents/src/request/lifecycle/execution_lease.rs", 2),
+    ("crates/gents/src/request/lifecycle/execution_renewal.rs", 1),
+    ("crates/gents/src/request/lifecycle/queue/position.rs", 1),
+    ("crates/gents/src/runtime/node_readiness_publisher.rs", 1),
+    ("crates/gents/src/eval/optimization/driver.rs", 2),
+    ("crates/gents/src/eval/optimization/job.rs", 1),
+    ("crates/gents/src/eval/optimization/promote.rs", 2),
+    ("crates/gents/src/tools/builtin/p2p.rs", 1),
+    ("crates/gents/src/pack/resolve.rs", 1),
     ("crates/gents/src/plugin/allowed.rs", 2),
     ("crates/gents/src/plugin/approval.rs", 2),
     ("crates/gents/src/plugin/executor.rs", 2),
     ("crates/gents/src/plugin/http_calls.rs", 1),
     ("crates/gents/src/plugin/install.rs", 1),
     ("crates/gents/src/plugin/store.rs", 1),
-    ("crates/gents/src/plugin_job/driver.rs", 2),
-    ("crates/gents/src/provider_input/replay.rs", 1),
-    ("crates/gents/src/rendered_request/mod.rs", 2),
-    ("crates/gents/src/request_admission.rs", 2),
-    ("crates/gents/src/schema_tool/mod.rs", 2),
-    ("crates/gents/src/self_config/command.rs", 5),
-    ("crates/gents/src/self_config/command/validate.rs", 1),
+    ("crates/gents/src/tools/background/job/driver.rs", 1),
+    ("crates/gents/src/tools/background/job/driver/step.rs", 1),
+    ("crates/gents/src/turn/provider_input/replay.rs", 1),
+    // rmcp erases transport errors behind DynamicTransportError; the pool's
+    // McpAuthRefusal is then asked for on its erased source chain
+    ("crates/gents/src/tools/mcp/pool/auth_refusal.rs", 2),
+    ("crates/gents/src/inference/rendered_request/mod.rs", 2),
+    ("crates/gents/src/request/admission.rs", 2),
+    ("crates/gents/src/tools/builtin/schema_help/mod.rs", 2),
+    ("crates/gents/src/tools/builtin/self_config/command/guidance.rs", 5),
+    ("crates/gents/src/tools/builtin/self_config/command/validate.rs", 1),
     ("crates/gents/src/session/fork.rs", 1),
-    ("crates/gents/src/session/output.rs", 3),
+    ("crates/gents/src/session/output/replay_candidates.rs", 1),
+    ("crates/gents/src/session/output/replay_capture.rs", 1),
+    ("crates/gents/src/session/output/replay_request.rs", 1),
     ("crates/gents/src/session/request_output.rs", 1),
-    ("crates/gents/src/storage_backend.rs", 9),
-    ("crates/gents/src/store_key.rs", 2),
-    ("crates/gents/src/streaming.rs", 1),
-    ("crates/gents/src/tool_call_lifecycle/delivery.rs", 1),
-    ("crates/gents/src/trigger_engine/mod.rs", 2),
+    ("crates/gents/src/store/local/storage_backend.rs", 9),
+    ("crates/gents/src/store/local/store_key.rs", 2),
+    ("crates/gents/src/request/streaming.rs", 1),
+    ("crates/gents/src/tools/call/lifecycle/delivery/terminalize.rs", 1),
+    ("crates/gents/src/triggers/engine/mod.rs", 2),
 ];
 
 #[derive(Default)]
@@ -1961,10 +1978,6 @@ const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-cli/src/commands/eval/watch.rs", 1),
     // launchctl print output
     ("crates/gents-cli/src/native_service.rs", 1),
-    // not yet typed: pairing closures flatten failures to strings
-    ("crates/gents-desktop-bridge/src/local_pairing.rs", 1),
-    // DefraDB duplicate-document rejection wording (no structured code)
-    ("crates/gents-desktop-core/src/client/mutations/chat/request/receipt.rs", 2),
     // provider text through Rig's ProviderError(String) (ProviderReport)
     ("crates/gents-loop/src/error.rs", 21),
     // serde_json schema-mismatch message prefixes
@@ -1974,31 +1987,30 @@ const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     // DefraDB schema validator messages
     ("crates/gents-migration/src/engine.rs", 1),
     // DefraDB missing-collection messages
-    ("crates/gents-protocol/src/graphql.rs", 4),
+    ("crates/gents-protocol/src/graphql/response.rs", 4),
     // replicated AgentRequest failure_reason
     ("crates/gents-protocol/src/node_readiness.rs", 1),
     // DefraDB HTTP 409 commit body
-    ("crates/gents/src/config_client/retry.rs", 3),
+    ("crates/gents/src/store/config_client/retry.rs", 3),
     // JSON-RPC node pruned-history wording
-    ("crates/gents/src/eth/rpc.rs", 8),
     // persisted AgentRequest failure_reason
-    ("crates/gents/src/eval/runner/embedded/executor.rs", 2),
+    ("crates/gents/src/eval/runner/embedded/executor/outcome.rs", 2),
     // MCP probe transport/OS error text (metric label)
-    ("crates/gents/src/health_checker.rs", 10),
+    ("crates/gents/src/tools/mcp/health.rs", 8),
     // display only: appends a next-call hint when absent
-    ("crates/gents/src/p2p_tool.rs", 1),
+    ("crates/gents/src/tools/builtin/p2p.rs", 1),
     // DefraDB SDL parser messages (help page choice)
-    ("crates/gents/src/schema_tool/mod.rs", 6),
+    ("crates/gents/src/tools/builtin/schema_help/mod.rs", 6),
     // serde `invalid type: string` message
-    ("crates/gents/src/self_config/command.rs", 1),
+    ("crates/gents/src/tools/builtin/self_config/command/patch.rs", 1),
     // display only: appends a next-call hint when absent
-    ("crates/gents/src/toolset/session_history.rs", 1),
+    ("crates/gents/src/tools/native/session_history.rs", 1),
     // persisted AgentRequest failure_reason
-    ("crates/gents/src/trace_export.rs", 6),
+    ("crates/gents/src/observe/trace_export.rs", 6),
     // serde `unknown variant` message
-    ("crates/gents/src/workspace/action_plan.rs", 1),
+    ("crates/gents/src/tools/workspace/action_plan.rs", 1),
     // git show stderr
-    ("crates/gents/src/workspace/adapter.rs", 2),
+    ("crates/gents/src/tools/workspace/adapter.rs", 2),
 ];
 
 const TEXT_TESTS: &[&str] = &["contains", "starts_with", "ends_with", "eq", "ne"];
@@ -2215,9 +2227,18 @@ impl<'ast> Visit<'ast> for ErrorTextVisitor {
     fn visit_expr_binary(&mut self, binary: &'ast syn::ExprBinary) {
         // Comparing two observed values is identity, not classification; a
         // decision compares error text with a fixed wording.
+        let text_literal = |literal: &syn::ExprLit| {
+            matches!(
+                literal.lit,
+                syn::Lit::Str(_) | syn::Lit::ByteStr(_) | syn::Lit::Char(_) | syn::Lit::Byte(_)
+            )
+        };
         let wording = |expression: &Expr| match expression {
-            Expr::Lit(_) | Expr::Macro(_) => true,
-            Expr::Reference(reference) => matches!(reference.expr.as_ref(), Expr::Lit(_)),
+            Expr::Lit(literal) => text_literal(literal),
+            Expr::Macro(_) => true,
+            Expr::Reference(reference) => {
+                matches!(reference.expr.as_ref(), Expr::Lit(literal) if text_literal(literal))
+            }
             Expr::Path(path) => path.path.segments.last().is_some_and(|segment| {
                 let name = segment.ident.to_string();
                 name.chars()
@@ -2333,6 +2354,15 @@ fn error_text_fence_counts_decisions_on_error_renderings() {
         (r#"fn f(e: &E) -> bool { e.path().to_string() == "." }"#, 0),
         (r#"fn f(e: &E) -> bool { matches!(e, E::Conflict) }"#, 0),
         (
+            r#"fn f(activation_error_count: usize) -> bool { activation_error_count == 0 }"#,
+            0,
+        ),
+        (r#"fn f(error: &str) -> bool { error == "unavailable" }"#, 1),
+        (
+            r#"fn f(error: &str) -> bool { error == &"unavailable" }"#,
+            1,
+        ),
+        (
             r#"fn f(a: &R, b: &R) -> bool { a.last_error != b.last_error }"#,
             0,
         ),
@@ -2348,4 +2378,256 @@ fn error_text_fence_counts_decisions_on_error_renderings() {
         let syntax = syn::parse_file(source).expect("parse snippet");
         assert_eq!(error_text_sites(&syntax).len(), sites, "{source}");
     }
+}
+
+/// Layers of `crates/gents/src`, bottom to top. A module may name its own
+/// layer and those below it; the peer tier names none of its siblings.
+/// Root-level modules outside these directories are not ranked.
+const LAYERS: &[&[&str]] = &[
+    &["store"],
+    &["documents"],
+    &["inference"],
+    &[
+        "request", "session", "goal", "triggers", "tools", "plugin", "pack",
+    ],
+    &["observe"],
+    &["turn"],
+    &["runtime"],
+    &["eval"],
+];
+
+const PEER_TIER: usize = 3;
+
+/// Upward and peer-crossing `crate::` edges as (from, to, references). The
+/// list only shrinks.
+#[rustfmt::skip]
+const LAYER_EDGE_ALLOWLIST: &[(&str, &str, usize)] = &[
+    ("documents", "goal", 4),
+    ("documents", "inference", 7),
+    ("documents", "observe", 1),
+    ("documents", "pack", 3),
+    ("documents", "plugin", 3),
+    ("documents", "session", 3),
+    ("documents", "tools", 26),
+    ("documents", "triggers", 4),
+    ("goal", "request", 18),
+    ("goal", "session", 6),
+    ("goal", "tools", 3),
+    ("goal", "triggers", 6),
+    ("inference", "observe", 3),
+    ("inference", "request", 2),
+    ("inference", "runtime", 1),
+    ("inference", "tools", 1),
+    ("inference", "turn", 1),
+    ("observe", "runtime", 1),
+    ("pack", "plugin", 31),
+    ("pack", "tools", 2),
+    ("plugin", "pack", 40),
+    ("plugin", "session", 1),
+    ("plugin", "tools", 29),
+    ("plugin", "triggers", 2),
+    ("request", "goal", 10),
+    ("request", "runtime", 3),
+    ("request", "session", 32),
+    ("request", "tools", 24),
+    ("request", "triggers", 32),
+    ("request", "turn", 1),
+    ("session", "goal", 8),
+    ("session", "observe", 1),
+    ("session", "request", 27),
+    ("session", "tools", 28),
+    ("session", "turn", 4),
+    ("store", "documents", 37),
+    ("store", "inference", 2),
+    ("tools", "goal", 35),
+    ("tools", "observe", 4),
+    ("tools", "pack", 85),
+    ("tools", "plugin", 77),
+    ("tools", "request", 44),
+    ("tools", "runtime", 17),
+    ("tools", "session", 93),
+    ("tools", "turn", 1),
+    ("triggers", "goal", 27),
+    ("triggers", "plugin", 16),
+    ("triggers", "request", 18),
+    ("triggers", "runtime", 11),
+    ("triggers", "session", 1),
+    ("triggers", "tools", 22),
+    ("turn", "runtime", 2),
+];
+
+fn layer_rank(top: &str) -> Option<usize> {
+    LAYERS.iter().position(|layer| layer.contains(&top))
+}
+
+fn layer_edge_violates(from: &str, to: &str) -> bool {
+    match (layer_rank(from), layer_rank(to)) {
+        (Some(lower), Some(higher)) if lower < higher => true,
+        (Some(PEER_TIER), Some(PEER_TIER)) => from != to,
+        _ => false,
+    }
+}
+
+fn source_top(relative: &str) -> Option<&str> {
+    let rest = relative.strip_prefix("crates/gents/src/")?;
+    let first = rest.split('/').next()?;
+    Some(first.strip_suffix(".rs").unwrap_or(first))
+}
+
+#[derive(Default)]
+struct CrateTopVisitor {
+    targets: Vec<String>,
+}
+
+impl CrateTopVisitor {
+    fn use_targets(&mut self, tree: &syn::UseTree, under_crate: bool) {
+        match tree {
+            syn::UseTree::Path(path) if under_crate => self.targets.push(path.ident.to_string()),
+            syn::UseTree::Path(path) if path.ident == "crate" => self.use_targets(&path.tree, true),
+            syn::UseTree::Name(name) if under_crate => self.targets.push(name.ident.to_string()),
+            syn::UseTree::Rename(rename) if under_crate => {
+                self.targets.push(rename.ident.to_string())
+            }
+            syn::UseTree::Group(group) => {
+                for item in &group.items {
+                    self.use_targets(item, under_crate);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn macro_targets(&mut self, stream: proc_macro2::TokenStream) {
+        let tokens = stream.into_iter().collect::<Vec<_>>();
+        for (index, token) in tokens.iter().enumerate() {
+            match token {
+                proc_macro2::TokenTree::Group(group) => self.macro_targets(group.stream()),
+                proc_macro2::TokenTree::Ident(ident) if ident == "crate" => {
+                    let colons = tokens.get(index + 1..index + 3).is_some_and(|pair| {
+                        pair.iter().all(|token| {
+                            matches!(token, proc_macro2::TokenTree::Punct(punct) if punct.as_char() == ':')
+                        })
+                    });
+                    if let (true, Some(proc_macro2::TokenTree::Ident(target))) =
+                        (colons, tokens.get(index + 3))
+                    {
+                        self.targets.push(target.to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for CrateTopVisitor {
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        if !item_cfg_test(item) {
+            visit::visit_item(self, item);
+        }
+    }
+
+    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
+        self.use_targets(&item.tree, false);
+        visit::visit_item_use(self, item);
+    }
+
+    fn visit_path(&mut self, path: &'ast syn::Path) {
+        if path.segments.len() > 1 && path.segments[0].ident == "crate" {
+            self.targets.push(path.segments[1].ident.to_string());
+        }
+        visit::visit_path(self, path);
+    }
+
+    fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
+        self.macro_targets(invocation.tokens.clone());
+        visit::visit_macro(self, invocation);
+    }
+}
+
+fn layer_edges(from: &str, syntax: &syn::File) -> BTreeMap<(String, String), usize> {
+    let mut visitor = CrateTopVisitor::default();
+    visitor.visit_file(syntax);
+    let mut edges = BTreeMap::new();
+    for to in visitor.targets {
+        if layer_edge_violates(from, &to) {
+            *edges.entry((from.to_string(), to)).or_default() += 1;
+        }
+    }
+    edges
+}
+
+#[test]
+fn layer_edges_only_shrink() {
+    let root = repo_root();
+    let mut actual = BTreeMap::<(String, String), usize>::new();
+    for (relative, syntax) in parse_production(&root, production_sources(&root)) {
+        let Some(from) = source_top(&relative) else {
+            continue;
+        };
+        for (edge, count) in layer_edges(from, &syntax) {
+            *actual.entry(edge).or_default() += count;
+        }
+    }
+    let allowed = LAYER_EDGE_ALLOWLIST
+        .iter()
+        .map(|(from, to, count)| ((from.to_string(), to.to_string()), *count))
+        .collect::<BTreeMap<_, _>>();
+    let mut violations = Vec::new();
+    for edge in allowed.keys().chain(actual.keys()).collect::<BTreeSet<_>>() {
+        let (from, to) = edge;
+        let found = actual.get(edge).copied().unwrap_or_default();
+        match allowed.get(edge).copied() {
+            None => violations.push(format!(
+                "{from} -> {to}: {found} new upward or peer reference(s); move the shared item down to a layer both may name"
+            )),
+            Some(limit) if found > limit => violations.push(format!(
+                "{from} -> {to}: {found} references exceed the allowlisted {limit}"
+            )),
+            Some(limit) if found < limit => violations.push(format!(
+                "{from} -> {to}: {found} references; lower the allowlist entry from {limit}"
+            )),
+            Some(_) => {}
+        }
+    }
+    let current = actual
+        .iter()
+        .map(|((from, to), count)| format!("    (\"{from}\", \"{to}\", {count}),"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        violations.is_empty(),
+        "layer edge ratchet failed:\n{}\n\ncurrent edges:\n{current}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn layer_edges_count_upward_and_peer_references_outside_tests() {
+    let syntax = syn::parse_file(
+        r#"
+        use crate::{inference::Model, store::Key, tools::{a, b}};
+        use crate::session as chat;
+        fn f() -> crate::eval::Score { crate::request::admit(); crate::store::read(); }
+        fn g() { tracing::info!(target: "x", "{}", crate::goal::NAME); }
+        #[cfg(test)]
+        mod tests { use crate::eval::Case; }
+        "#,
+    )
+    .expect("parse snippet");
+    let edges = layer_edges("request", &syntax)
+        .into_iter()
+        .map(|((_, to), count)| (to, count))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        edges,
+        [
+            ("eval".to_string(), 1),
+            ("goal".to_string(), 1),
+            ("session".to_string(), 1),
+            ("tools".to_string(), 1),
+        ]
+    );
+    assert!(!layer_edge_violates("eval", "store"));
+    assert!(!layer_edge_violates("request", "agent"));
 }

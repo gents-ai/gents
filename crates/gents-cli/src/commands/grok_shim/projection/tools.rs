@@ -2,10 +2,10 @@ use rapidhash::RapidHashMap;
 use std::{char::REPLACEMENT_CHARACTER, sync::Arc};
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
-use gents::config_client::ConfigAccess;
-use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
-use gents::tool_call_lifecycle::{load_tool_call_presentation, CanonicalToolCallPresentation};
+use defra_node::Node as EmbeddedNode;
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use gents::tools::call::lifecycle::{load_tool_call_presentation, CanonicalToolCallPresentation};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
@@ -55,7 +55,7 @@ impl ToolCallKind {
 
     pub(super) fn from_tool_name(tool_name: &str) -> Self {
         match tool_name {
-            "read_file" | gents::toolset::AGENT_SESSION_READ_TOOL_NAME => ToolCallKind::Read,
+            "read_file" | gents::tools::native::AGENT_SESSION_READ_TOOL_NAME => ToolCallKind::Read,
             "edit_file" | "write_file" | "apply_patch" | "create_file" => ToolCallKind::Edit,
             "delete_file" | "remove_file" => ToolCallKind::Delete,
             "move_file" | "rename_file" => ToolCallKind::Move,
@@ -63,7 +63,7 @@ impl ToolCallKind {
             | "glob"
             | "list_files"
             | "search"
-            | gents::toolset::AGENT_SESSION_LIST_TOOL_NAME => ToolCallKind::Search,
+            | gents::tools::native::AGENT_SESSION_LIST_TOOL_NAME => ToolCallKind::Search,
             "bash"
             | "bash_unrestricted"
             | "shell"
@@ -273,7 +273,7 @@ pub(super) fn suppressed_tool_family(tool_name: &str) -> Option<&'static str> {
 pub(super) fn is_task_family(tool_name: &str) -> bool {
     matches!(
         tool_name,
-        "task" | "Task" | gents::toolset::AGENT_NEW_TOOL_NAME
+        "task" | "Task" | gents::tools::native::AGENT_NEW_TOOL_NAME
     )
 }
 
@@ -411,7 +411,7 @@ pub(super) fn project_tool_rows(
         let kind = ToolCallKind::from_tool_name(tool_name);
         let title = tool_title(row, &kind, presentations);
         let content = tool_content(result_text);
-        let mut raw_input = if tool_name == gents::toolset::AGENT_MESSAGE_TOOL_NAME {
+        let mut raw_input = if tool_name == gents::tools::native::AGENT_MESSAGE_TOOL_NAME {
             agent_message_raw_input(args)
         } else {
             raw_input_value(args, meta.as_ref())
@@ -576,7 +576,7 @@ fn tool_title(
         )
         .as_ref(),
     ) || tool_name == SEND_ACTIVE_AGENT_MESSAGE_TITLE
-        || tool_name == gents::toolset::AGENT_MESSAGE_TOOL_NAME
+        || tool_name == gents::tools::native::AGENT_MESSAGE_TOOL_NAME
     {
         return SEND_ACTIVE_AGENT_MESSAGE_TITLE.to_string();
     }
@@ -747,7 +747,7 @@ pub(crate) fn handle_terminal_client_method(method: &str) -> std::result::Result
 }
 
 fn tool_calls_query(request: &gents_protocol::row::AgentRequestRow) -> Result<String> {
-    let scope = gents::session::session_scope_filter(
+    let scope = gents_protocol::session::session_scope_filter(
         request.node_did.as_deref().context("tool node missing")?,
         request
             .session_id
@@ -781,7 +781,7 @@ fn decode_tool_call_rows(response: &defra_node::QueryResponse) -> Result<Vec<Too
 
 #[cfg(test)]
 mod tests {
-    use gents::graphql::ensure_no_errors;
+    use gents::store::graphql::ensure_no_errors;
     fn request_fixture(
         id: &str,
         session: &str,
@@ -794,7 +794,7 @@ mod tests {
         id: &str,
         session: &str,
     ) -> gents_protocol::row::AgentRequestRow {
-        let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", request_id: "{}", session_id: "{}", node_did: "did:test:grok-shim", requester_did: "did:test:grok-shim", agent_id: "test", content: "test", lifecycle_state: "pending"}}) {{ _docID }} }}"#, escape_graphql_string(id), escape_graphql_string(session))).await;
+        let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", request_id: "{}", session_id: "{}", node_did: "did:test:grok-shim", requester_did: "did:test:grok-shim", agent_did: "test", content: "test", lifecycle_state: "pending"}}) {{ _docID }} }}"#, escape_graphql_string(id), escape_graphql_string(session))).await;
         ensure_no_errors(&response, "seed projection request").unwrap();
         let physical = gents_protocol::graphql::extract_mutation_doc_id(
             &json!({"data":response.data}),
@@ -1664,14 +1664,14 @@ mod tests {
                 .await
                 .expect("embedded node"),
         );
-        gents::schema::ensure_runtime_schemas(node.as_ref())
+        gents::store::schema::ensure_runtime_schemas(node.as_ref())
             .await
             .expect("runtime schemas");
         (dir, node)
     }
 
-    use gents::graphql::single_mutation_document;
-    use gents::session::canonical_rows::{
+    use gents::store::graphql::single_mutation_document;
+    use gents_protocol::output::rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
@@ -1772,6 +1772,7 @@ mod tests {
         insert_header(
             node,
             &TranscriptMessage {
+                native_request_id: None,
                 message_key: format!("delivery:{request_id}:{tool_call_id}"),
                 session_id: session_id.into(),
                 node_did: "did:test:grok-shim".into(),

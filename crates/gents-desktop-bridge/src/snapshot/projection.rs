@@ -78,8 +78,6 @@ pub fn project_bootstrap_summary(
         summary.default_node_home = String::new();
         summary.init_tool_root = None;
         summary.desktop_home = String::new();
-        summary.peer_directory_path = String::new();
-        summary.node_data_dir = String::new();
         summary.diagnostics_hint = String::new();
     }
     if !grants.fleet_read {
@@ -101,7 +99,6 @@ pub fn project_runtime_snapshot(
         runtime.operator_config_authoritative_node_dids = None;
     }
     if !grants.fleet_read {
-        runtime.listen_addresses.clear();
         runtime.enrollment_requests = None;
     }
     runtime.deployments = runtime
@@ -117,14 +114,10 @@ fn project_deployment(mut deployment: DeploymentView, grants: SnapshotGrants) ->
         deployment.addr = String::new();
         deployment.graphql = None;
         deployment.dial_succeeded = false;
+        // `runtime_connection` stays: it is this client's own observation and
+        // admission reads it (`RuntimeConnectionObservation.presentation`).
+        deployment.pairing_ready = None;
         deployment.last_error = None;
-        for route in &mut deployment.routes {
-            route.transport_peer_id = None;
-            route.address = None;
-            route.filter_summary.clear();
-            route.last_error = None;
-        }
-        deployment.pairing.clear();
     }
 
     if !grants.session_read {
@@ -161,7 +154,6 @@ fn project_deployment(mut deployment: DeploymentView, grants: SnapshotGrants) ->
     deployment.agent_configs.clear();
     deployment.agent_targets.clear();
     deployment.datastore_tool_surfaces.clear();
-    deployment.chain_key_bindings.clear();
     deployment.schedules.clear();
     deployment.event_sources.clear();
     deployment.triggers.clear();
@@ -222,10 +214,9 @@ fn project_backend_for_fleet(mut backend: InferenceBackendView) -> InferenceBack
 mod tests {
     use super::*;
     use crate::types::{
-        AgentEnvironmentView, AgentView, ClientRouteStatusView, DeploymentView,
-        DesktopBootstrapSummary, DesktopClientSnapshot, DesktopRuntimeSnapshot,
-        EnrollmentRequestView, MailboxItemView, NodeView, P2PHealthView,
-        PairingCollectionStatusView, SavedPeerView, SessionSummary, SkillView, SyncHealthView,
+        AgentEnvironmentView, AgentView, DeploymentView, DesktopBootstrapSummary,
+        DesktopClientSnapshot, DesktopRuntimeSnapshot, EnrollmentRequestView, MailboxItemView,
+        NodeView, P2PHealthView, SavedPeerView, SessionSummary, SkillView, SyncHealthView,
     };
 
     fn sample_snapshot() -> DesktopClientSnapshot {
@@ -238,12 +229,8 @@ mod tests {
                 init_tool_ceiling: Some("readonly".into()),
                 init_tool_root: Some("/secret/tools".into()),
                 desktop_home: "/secret/desktop".into(),
-                peer_directory_path: "/secret/peers.json".into(),
-                node_data_dir: "/secret/node".into(),
                 diagnostics_hint: "native logging".into(),
                 node_home_exists: true,
-                desktop_home_exists: true,
-                peer_directory_exists: true,
                 client_state_exists: true,
                 saved_peers: vec![SavedPeerView {
                     peer_id: "peer_1".into(),
@@ -256,27 +243,22 @@ mod tests {
             },
             client: Some(DesktopRuntimeSnapshot {
                 client_did: "did:fixture:client".into(),
-                local_peer_id: "local".into(),
-                listen_addresses: vec!["/ip4/0.0.0.0/tcp/1".into()],
                 p2p_health: P2PHealthView {
                     status: "ok".into(),
                     connected_peer_count: 1,
-                    replicator_count: 1,
                     consecutive_failures: 0,
                     last_error: None,
                     last_ok_at: None,
                     last_failure_at: None,
                 },
-                sync_health: Some(SyncHealthView {
+                sync_health: SyncHealthView {
                     state: "healthy".into(),
+                    cause: None,
+                    next_action: None,
                     last_error: None,
                     connected_peer_count: 1,
-                    pending_dag_count: Some(0),
-                    persisted_pending_dag_count: Some(0),
-                    push_retry_marker_count: Some(0),
-                    exhausted_fetch_count: Some(0),
-                    quarantined_dag_count: Some(0),
-                }),
+                    activation_error_count: 0,
+                },
                 enrollment_requests: Some(vec![EnrollmentRequestView {
                     request_id: "request_1".into(),
                     network_id: "network_1".into(),
@@ -288,12 +270,6 @@ mod tests {
                     expires_at: "2099-01-01T00:00:00Z".into(),
                     activation_error: None,
                 }]),
-                bootstrap_errors: vec![],
-                last_mutation_error: None,
-                focused_request_id: None,
-                configured_peer_count: 1,
-                dialed_peer_count: 1,
-                peer_issue_count: 0,
                 row_count: 10,
                 approx_serialized_bytes: 100,
                 operator_config_authoritative_node_dids: Some(vec!["did:test:local".into()]),
@@ -305,38 +281,17 @@ mod tests {
                     source: Some("local".into()),
                     graphql: Some("http://127.0.0.1/graphql".into()),
                     dial_succeeded: true,
+                    runtime_connection: Some("connected".to_owned()),
                     chat_safe: true,
-                    pairing: vec![PairingCollectionStatusView {
-                        collection_id: "AgentSession".into(),
-                        pairing_retry_count: 2,
-                        last_retry_at: Some("2026-08-25T12:00:00Z".into()),
-                        last_retry_error_class: Some("RpcTimeout".into()),
-                        stuck_since: None,
-                    }],
-                    routes: ["client-to-runtime", "runtime-to-client"]
-                        .into_iter()
-                        .map(|direction| ClientRouteStatusView {
-                            route_id: format!("peer_1:{direction}"),
-                            direction: direction.into(),
-                            directory_id: "peer_1".into(),
-                            transport_peer_id: Some("transport".into()),
-                            address: Some("ticket".into()),
-                            template: Some("client".into()),
-                            desired: true,
-                            applied: true,
-                            live_match: true,
-                            filter_summary: "2 collections; 2 scoped filters".into(),
-                            last_error: None,
-                            retry_count: 0,
-                            last_retry_at: None,
-                            last_retry_error_class: None,
-                        })
-                        .collect(),
+                    chat_refusal: None,
+                    pairing_ready: Some(true),
+                    lease_expires_at: None,
+                    operator_access: true,
                     last_error: None,
                     node: NodeView {
                         node_did: "did:test:local".into(),
                         display_name: Some("Local".into()),
-                        default_agent_id: Some("default".into()),
+                        default_agent_did: Some("default".into()),
                         enabled: Some(true),
                         created_at: None,
                         created_by: None,
@@ -345,13 +300,14 @@ mod tests {
                         "node_did":"did:test:agent","tags":["private-node"]
                     })).unwrap()),
                     agent_configs: vec![serde_json::from_value(serde_json::json!({
-                        "node_did":"did:test:agent","agent_id":"agent",
+                        "node_did":"did:test:agent","agent_did":"agent","creation_nonce":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                         "inference_profile_id":"profile","tags":["private-agent"]
                     })).unwrap()],
                     runtime: None,
                     node_readiness: Default::default(),
                     agents: vec![AgentView {
-                        agent_id: "default".into(),
+                        creation_nonce: "a".repeat(64),
+            agent_did: "default".into(),
                         node_did: "did:test:agent".into(),
                         display_name: "Default".into(),
                         description: Some("PRIVATE CONFIG DESCRIPTION".into()),
@@ -363,7 +319,7 @@ mod tests {
                         created_at: None,
                     }],
                     agent_environments: vec![AgentEnvironmentView {
-                        agent_id: "default".into(),
+                        agent_did: "default".into(),
                         display_name: "Default".into(),
                         enabled: true,
                         is_default: true,
@@ -386,7 +342,6 @@ mod tests {
                     tools: vec![serde_json::from_value(serde_json::json!({"node_did":"did:test:agent","tools_id":"tools","host":{"root":"/secret/tools"}})).unwrap()],
                     agent_targets: vec![],
                     datastore_tool_surfaces: vec![],
-                    chain_key_bindings: vec![],
                     tool_service_registries: vec![],
                     skills: vec![SkillView {
                         skill_id: "skill_a".into(),
@@ -415,18 +370,20 @@ mod tests {
                         session_id: "sess_1".into(),
                         title: Some("Chat".into()),
                         preview_text: Some("hi".into()),
+                        reply_preview: None,
                         status: None,
-                        agent_id: None,
+                        agent_did: None,
                         latest_request_id: None,
                         task_id: None,
                         task_name: None,
+            task_origin: None,
                         trigger_id: None,
                         trigger_kind: None,
                         created_at: None,
                         updated_at: None,
                         turn_state: None,
                         message_count: Some(1),
-                        tool_call_count: Some(0), unreadable_reason: None, unsendable_reason: None,
+                        tool_call_count: Some(0), unreadable_reason: None, unsendable_reason: None, cwd: None,
                     }],
                     mailbox_items: vec![MailboxItemView {
                         item_id: "mailbox-1".into(),
@@ -446,13 +403,14 @@ mod tests {
                         request_id: Some("request-1".into()),
                         cause_doc_id: None,
                         target_node_did: "did:test:local".into(),
-                        target_agent_id: "default".into(),
+                        target_agent_did: "default".into(),
                         expected_collection: None,
                         parent_item_id: None,
                         deadline_at: None,
                         created_at: "2026-08-25T12:00:00Z".into(),
                     }],
                 }],
+                ended_access: Vec::new(),
             }),
         }
     }
@@ -495,17 +453,14 @@ mod tests {
         assert!(projected.bootstrap.default_node_home.is_empty());
         assert!(projected.bootstrap.saved_peers.is_empty());
         let client = projected.client.expect("client");
-        assert!(client.listen_addresses.is_empty());
         let dep = &client.deployments[0];
+        assert_eq!(dep.runtime_connection.as_deref(), Some("connected"));
         assert!(dep.sessions.is_empty());
         assert!(dep.mailbox_items.is_empty());
         assert_eq!(dep.agent_environments[0].session_count, 0);
         assert!(dep.agent_environments[0].workspace_root.is_none());
         assert!(dep.agent_environments[0].inference_profile_name.is_none());
         assert!(dep.addr.is_empty());
-        assert!(dep.pairing.is_empty());
-        assert_eq!(dep.routes.len(), 2);
-        assert!(dep.routes.iter().all(|route| route.address.is_none()));
         assert!(dep.contexts.is_empty());
         assert!(dep.tools.is_empty());
         assert!(dep.compactions.is_empty());
@@ -533,10 +488,8 @@ mod tests {
         let projected = project_client_snapshot(sample_snapshot(), SnapshotGrants::chat_package());
         let client = projected.client.as_ref().unwrap();
         let dep = &client.deployments[0];
-        assert_eq!(dep.routes.len(), 2);
-        assert!(dep.routes.iter().all(|route| route.live_match));
+        assert_eq!(dep.runtime_connection.as_deref(), Some("connected"));
         assert_eq!(dep.sessions.len(), 1);
-        assert!(dep.pairing.is_empty());
         assert!(dep.mailbox_items.is_empty());
         assert_eq!(dep.agent_environments[0].session_count, 1);
         assert!(dep.agent_environments[0].workspace_root.is_none());
@@ -576,8 +529,6 @@ mod tests {
         assert!(projected.bootstrap.saved_peers[0].graphql.is_none());
         let dep = &projected.client.as_ref().unwrap().deployments[0];
         assert_eq!(dep.addr, "/ip4/127.0.0.1/tcp/1");
-        assert_eq!(dep.pairing.len(), 1);
-        assert_eq!(dep.pairing[0].pairing_retry_count, 2);
         assert!(dep.sessions.is_empty());
         assert_eq!(dep.agent_environments[0].session_count, 0);
         assert!(dep.agent_environments[0].workspace_root.is_none());

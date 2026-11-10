@@ -9,11 +9,6 @@ pub use attachments::request_attachments;
 
 #[path = "commands/chat.rs"]
 mod chat;
-#[path = "commands/chat_resolve.rs"]
-mod chat_resolve;
-#[path = "commands/chat_submission.rs"]
-mod chat_submission;
-pub use chat_submission::{acknowledge_chat_submission, recover_chat_submission};
 #[path = "commands/goal.rs"]
 mod goal;
 pub use goal::{control_goal, session_goal};
@@ -53,10 +48,11 @@ pub use config::{
     delete_inference_profile_config, delete_schedule_config, delete_skill_config,
     delete_task_config, delete_tool_service_config, delete_tools_config, delete_trigger_config,
     patch_config_components, save_agent_config, save_backend_config, save_inference_profile_config,
-    save_node_config, save_skill_config, save_tools_config, set_default_agent,
+    save_node_config, save_skill_config, save_tools_config, set_backend_rotation_config,
+    set_default_agent,
 };
-pub use mailbox::{dismiss_mailbox, list_mailbox, observe_mailbox_item, start_mailbox_request};
-pub use peer::{remove_peer, rename_peer, repair_p2p, request_status_enrollment};
+pub use mailbox::{dismiss_mailbox, observe_mailbox_item, start_mailbox_request};
+pub use peer::{remove_peer, rename_peer, request_status_enrollment};
 pub use task::{
     delete_event_source_config, run_schedule_config, run_task_config, save_event_source_config,
     save_schedule_config, save_task_config, save_trigger_config,

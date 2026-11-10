@@ -24,7 +24,11 @@ import type { LiveBridgeRunner } from "../live-bridge-runner";
 
 type BridgeHttpClient = {
   getJson: <T>(path: string) => Promise<T>;
-  postJson: <T = unknown>(path: string, body: unknown) => Promise<T>;
+  postJson: <T = unknown>(
+    path: string,
+    body: unknown,
+    timeoutMs?: number,
+  ) => Promise<T>;
 };
 
 type BridgeAdapterObservers = {
@@ -53,8 +57,10 @@ export function createBridgeHttpAdapter(
       throw new Error("Native picker is unavailable in the live browser bridge");
     },
     requestAttachments: unsupported("requestAttachments"),
+    provisionAgentIdentity: unsupported("provisionAgentIdentity"),
     removePeer: unsupported("removePeer"),
     renamePeer: unsupported("renamePeer"),
+    dismissEndedAccess: unsupported("dismissEndedAccess"),
     listWorkspace: unsupported("listWorkspace"),
     fetchRequestTimeline: unsupported("fetchRequestTimeline"),
     fetchSessionGoal: unsupported("fetchSessionGoal"),
@@ -63,18 +69,9 @@ export function createBridgeHttpAdapter(
     recoverGoalSubmission: unsupported("recoverGoalSubmission"),
     resumeGoalSubmission: unsupported("resumeGoalSubmission"),
     acknowledgeGoalSubmission: unsupported("acknowledgeGoalSubmission"),
-    recoverChatSubmission: async (query) =>
-      client.postJson("/desktop/chat/recover", query),
-    acknowledgeChatSubmission: async (receipt) => {
-      await client.postJson("/desktop/chat/acknowledge", receipt);
-    },
-    explainToolSurface: unsupported("explainToolSurface"),
-    fetchNetworkStatus: unsupported("fetchNetworkStatus"),
-    listMailbox: unsupported("listMailbox"),
     observeMailboxItem: unsupported("observeMailboxItem"),
     startMailboxRequest: unsupported("startMailboxRequest"),
     dismissMailboxItem: unsupported("dismissMailboxItem"),
-    resendRequest: unsupported("resendRequest"),
     retryRequest: unsupported("retryRequest"),
     forkSessionBeforeMessage: unsupported("forkSessionBeforeMessage"),
     saveSkillConfig: unsupported("saveSkillConfig"),
@@ -92,16 +89,19 @@ export function createBridgeHttpAdapter(
     cancelGrokLogin: unsupported("cancelGrokLogin"),
     claudeLogin: unsupported("claudeLogin"),
     cancelClaudeLogin: unsupported("cancelClaudeLogin"),
-    listInstalledPacks: unsupported("listInstalledPacks"),
-    listPackPluginSlots: unsupported("listPackPluginSlots"),
-    readPackAccount: unsupported("readPackAccount"),
-    searchPacks: unsupported("searchPacks"),
-    installPack: unsupported("installPack"),
+    listInstalledPacks: () => client.getJson("/desktop/packs/installed"),
+    listPackPluginSlots: () => client.getJson("/desktop/packs/plugin-slots"),
+    readPackAccount: () => client.getJson("/desktop/packs/account"),
+    searchPacks: (query, page) =>
+      client.postJson("/desktop/packs/search", { query, page }),
+    packInfo: (pack) => client.postJson("/desktop/packs/info", { package: pack }),
+    installPack: (request) =>
+      client.postJson("/desktop/packs/install", request, 300_000),
     updatePack: unsupported("updatePack"),
     removePack: unsupported("removePack"),
     bindPackPlugin: unsupported("bindPackPlugin"),
     wirePack: unsupported("wirePack"),
-    listPackWireSources: unsupported("listPackWireSources"),
+    listPackWireSources: () => client.getJson("/desktop/packs/wire-sources"),
     listDynamicWorkflows: unsupported("listDynamicWorkflows"),
     getDynamicWorkflow: unsupported("getDynamicWorkflow"),
     promoteWorkflow: unsupported("promoteWorkflow"),
@@ -114,11 +114,12 @@ export function createBridgeHttpAdapter(
     unsubscribePluginApprovals: unsupported("unsubscribePluginApprovals"),
     listPendingPluginApprovals: unsupported("listPendingPluginApprovals"),
     decidePluginApproval: unsupported("decidePluginApproval"),
-    listUxPlugins: async () => ({ plugins: [] }),
-    readUxPluginSource: unsupported("readUxPluginSource"),
-    callPackPlugin: unsupported("callPackPlugin"),
-    callUxData: unsupported("callUxData"),
-    listUxDataSurfaces: unsupported("listUxDataSurfaces"),
+    listUxPlugins: () => client.getJson("/desktop/ux/plugins"),
+    readUxPluginSource: (id) => client.postJson("/desktop/ux/source", { id }),
+    callPackPlugin: (request) => client.postJson("/desktop/ux/plugin-call", request),
+    callUxData: (request) =>
+      client.postJson("/desktop/ux/data", { ...request, args: request.args ?? {} }),
+    listUxDataSurfaces: (request) => client.postJson("/desktop/ux/surfaces", request),
 
     fetchDesktopSnapshot: async () =>
       client.getJson<DesktopClientSnapshot>("/desktop/client/snapshot"),
@@ -141,10 +142,9 @@ export function createBridgeHttpAdapter(
         nodeDid: nodeDid ?? null,
         requestId: requestId ?? null,
         timelineLimit: timelinePage?.limit,
-        timelineBeforeItemKey: timelinePage?.beforeItemKey ?? null,
       }),
-    retrySessionHydration: async (sessionId, nodeDid) => {
-      await client.postJson("/desktop/session/hydration/retry", {
+    reloadSession: async (sessionId, nodeDid) => {
+      await client.postJson("/desktop/session/reload", {
         sessionId,
         nodeDid,
       });
@@ -157,7 +157,7 @@ export function createBridgeHttpAdapter(
       const normalized: TauriDriverChatRequest = {
         ...request,
         nodeDid: request.nodeDid,
-        agentId: request.agentId ?? null,
+        agentDid: request.agentDid ?? null,
         sessionId: request.sessionId ?? null,
         content: request.content,
       };
@@ -173,8 +173,6 @@ export function createBridgeHttpAdapter(
       client.postJson("/desktop/queue/edit", request),
     setSessionArchived: async (request) =>
       client.postJson("/desktop/session/archive", request),
-    sessionHistory: async (request) =>
-      client.postJson("/desktop/session/history", request),
     renameSession: async (request) => {
       await client.postJson("/desktop/session/rename", request);
     },
@@ -186,6 +184,8 @@ export function createBridgeHttpAdapter(
       client.postJson<DesktopClientSnapshot>("/desktop/agent/save", request),
     saveBackendConfig: async (request) =>
       client.postJson<DesktopClientSnapshot>("/desktop/backend/save", request),
+    setBackendRotation: async (request) =>
+      client.postJson<DesktopClientSnapshot>("/desktop/backend/rotation", request),
     saveInferenceProfileConfig: async (request) =>
       client.postJson<DesktopClientSnapshot>(
         "/desktop/inference-profile/save",

@@ -17,7 +17,7 @@ async fn open(
     let (native, editor) = tokio::io::duplex(MAX_FRAME_BYTES);
     let provider = Arc::new(Provider::new(paths.root().to_owned(), interactive, native));
     let options = ClientCoreOptions {
-        store_key_custody: gents::store_key::StoreKeyCustodyChoice::Keychain,
+        store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice::Keychain,
         store_key_provider: Some(provider),
         ..ClientCoreOptions::local_only()
     };

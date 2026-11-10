@@ -39,7 +39,7 @@ async fn mailbox_list_scopes_to_caller_and_dismisses_owned_item() -> Result<()> 
             title: "CLI attention", summary: "check from the terminal", payload: null,
             source_kind: "runtime", source_id: "request-doc", session_id: null,
             request_id: null, cause_doc_id: null,
-            target_node_did: "{did}", target_agent_id: "default",
+            target_node_did: "{did}", target_agent_did: "default",
             expected_collection: null, parent_item_id: null, deadline_at: null,
             created_at: "2026-08-25T12:00:00Z", updated_at: "2026-08-25T12:00:00Z",
             resolved_at: null, resolved_doc_id: null
@@ -50,7 +50,10 @@ async fn mailbox_list_scopes_to_caller_and_dismisses_owned_item() -> Result<()> 
     let doc_id = gents_protocol::graphql::extract_mutation_doc_id(&created, "MailboxItem")
         .with_context(|| format!("created mailbox doc id: {created}"))?;
 
-    let listed = run_cli_json(&home_dir, &["mailbox", "list", "--graphql", &graphql])?;
+    let listed = run_cli_json(
+        &home_dir,
+        &["automation", "mailbox", "list", "--graphql", &graphql],
+    )?;
     let rows = listed.as_array().context("mailbox list array")?;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["title"], Value::String("CLI attention".into()));
@@ -58,10 +61,20 @@ async fn mailbox_list_scopes_to_caller_and_dismisses_owned_item() -> Result<()> 
 
     let dismissed = run_cli_json(
         &home_dir,
-        &["mailbox", "dismiss", &doc_id, "--graphql", &graphql],
+        &[
+            "automation",
+            "mailbox",
+            "dismiss",
+            &doc_id,
+            "--graphql",
+            &graphql,
+        ],
     )?;
     assert_eq!(dismissed["status"], "dismissed");
-    let open = run_cli_json(&home_dir, &["mailbox", "list", "--graphql", &graphql])?;
+    let open = run_cli_json(
+        &home_dir,
+        &["automation", "mailbox", "list", "--graphql", &graphql],
+    )?;
     assert_eq!(open.as_array().map(Vec::len), Some(0));
 
     serve.child.kill().ok();

@@ -3,6 +3,7 @@ use gents::plugin::{allowed, approval};
 use serde::Serialize;
 use ts_rs::TS;
 
+#[cfg(feature = "tauri-host")]
 use crate::error::{BridgeError, BridgeErrorCode};
 
 #[derive(Debug, Serialize, TS)]
@@ -42,9 +43,9 @@ pub enum ApprovalSubjectView {
         cwd: std::path::PathBuf,
         root: std::path::PathBuf,
         #[serde(rename = "executionMode")]
-        execution_mode: gents::toolset::CommandExecutionMode,
+        execution_mode: gents::tools::native::CommandExecutionMode,
         #[serde(rename = "networkMode")]
-        network_mode: gents::toolset::CommandNetworkMode,
+        network_mode: gents::tools::native::CommandNetworkMode,
     },
 }
 
@@ -66,7 +67,7 @@ impl From<&approval::Request> for PluginApprovalView {
                 cwd: command.cwd.to_owned(),
                 root: command.root.to_owned(),
                 execution_mode: command.policy.mode,
-                network_mode: command.policy.network_mode,
+                network_mode: command.policy.effective_network_mode(),
             }
         };
         Self {
@@ -80,6 +81,7 @@ impl From<&approval::Request> for PluginApprovalView {
     }
 }
 
+#[cfg(feature = "tauri-host")]
 pub(crate) fn answer(value: &str) -> Result<approval::Answer, BridgeError> {
     match value {
         "once" => Ok(approval::Answer::Once),

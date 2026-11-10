@@ -141,3 +141,32 @@ def deriveUnorderedTurn
     (observationScope : String)
     (attempts : List KeyedAttemptView) : Option ClientTurnState :=
   (resolveRetryTip observationScope attempts).map fun tip => deriveAttempt tip.attempt
+
+/-! ### Selected-session read
+
+A client that selects a session reads the node's canonical `AgentSession` row
+directly from the runtime. Only a row that breaks the node/session scope is an
+error. -/
+
+/-- The canonical `AgentSession` rows a selected-session read found for its
+    exact node/session scope. -/
+inductive SessionRowObservation where
+  | absent
+  | canonical
+  | duplicate
+  | outOfScope
+  deriving DecidableEq, Repr
+
+/-- A direct runtime read returns the rows visible to the authenticated
+client. An absent or hidden session is an ordinary empty result; neither
+pairing state nor local request observations can reveal why it is empty. -/
+inductive DirectSessionRead where
+  | empty | visible | integrityFault
+  deriving DecidableEq, Repr
+
+def directSessionRead : SessionRowObservation → DirectSessionRead
+  | .absent => .empty
+  | .canonical => .visible
+  | .duplicate | .outOfScope => .integrityFault
+
+theorem direct_missing_session_is_empty : directSessionRead .absent = .empty := rfl

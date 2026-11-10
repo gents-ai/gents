@@ -14,7 +14,8 @@ function controller(
     currentSessionId: () => "session-1",
     refreshSnapshot: vi.fn(async () => {}),
     refreshSession: vi.fn(async () => null),
-    refreshSessionLiveDelta: vi.fn(async () => true),
+    rereadSession: vi.fn(async () => null),
+    readSessionUpdate: vi.fn(async (): Promise<number | null> => null),
     ...overrides,
   });
 }
@@ -48,24 +49,24 @@ describe("createProjectionController", () => {
 
   it("coalesces a synchronous delta wave and serializes one trailing wave", async () => {
     const passes = [deferred(), deferred()];
-    const refreshSessionLiveDelta = vi.fn(async () => {
-      const pass = passes[refreshSessionLiveDelta.mock.calls.length - 1];
+    const readSessionUpdate = vi.fn(async () => {
+      const pass = passes[readSessionUpdate.mock.calls.length - 1];
       await pass.promise;
-      return true;
+      return null;
     });
-    const projection = controller({ refreshSessionLiveDelta });
+    const projection = controller({ readSessionUpdate });
 
     const first = projection.request("sessionDelta");
     void projection.request("sessionDelta");
-    expect(refreshSessionLiveDelta).toHaveBeenCalledTimes(0);
-    await vi.waitFor(() => expect(refreshSessionLiveDelta).toHaveBeenCalledTimes(1));
+    expect(readSessionUpdate).toHaveBeenCalledTimes(0);
+    await vi.waitFor(() => expect(readSessionUpdate).toHaveBeenCalledTimes(1));
     void projection.request("sessionDelta");
 
     passes[0].resolve();
-    await vi.waitFor(() => expect(refreshSessionLiveDelta).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(readSessionUpdate).toHaveBeenCalledTimes(2));
     passes[1].resolve();
     await first;
-    expect(refreshSessionLiveDelta).toHaveBeenCalledTimes(2);
+    expect(readSessionUpdate).toHaveBeenCalledTimes(2);
   });
 
   it("lets a full session projection supersede a queued live delta", async () => {
@@ -78,9 +79,9 @@ describe("createProjectionController", () => {
         calls.push("session");
         return null;
       }),
-      refreshSessionLiveDelta: vi.fn(async () => {
+      readSessionUpdate: vi.fn(async () => {
         calls.push("delta");
-        return true;
+        return null;
       }),
     });
 
@@ -156,13 +157,13 @@ describe("createProjectionController", () => {
   });
 
   it("promotes a rejected delta to one bounded session projection", async () => {
-    const refreshSessionLiveDelta = vi.fn(async () => false);
+    const readSessionUpdate = vi.fn(async () => 0);
     const refreshSession = vi.fn(async () => null);
-    const projection = controller({ refreshSessionLiveDelta, refreshSession });
+    const projection = controller({ readSessionUpdate, refreshSession });
 
     await projection.request("sessionDelta");
 
-    expect(refreshSessionLiveDelta).toHaveBeenCalledTimes(1);
+    expect(readSessionUpdate).toHaveBeenCalledTimes(1);
     expect(refreshSession).toHaveBeenCalledExactlyOnceWith("session-1");
   });
 
@@ -170,7 +171,7 @@ describe("createProjectionController", () => {
     const refreshSnapshot = vi.fn(async () => {});
     const projection = controller({
       refreshSnapshot,
-      refreshSessionLiveDelta: async () => false,
+      readSessionUpdate: async () => 0,
       refreshSession: async () =>
         ({ turnState: "completed" }) as DesktopSessionSnapshot,
     });
@@ -222,23 +223,96 @@ describe("createProjectionController", () => {
     expect(refreshSnapshot).not.toHaveBeenCalled();
   });
 
+  it("continues a waiting streak only for a re-read no other request joins", async () => {
+    const pass = deferred();
+    const refreshSession = vi.fn(async () => null);
+    const rereadSession = vi.fn(async () => null);
+    const readSessionUpdate = vi.fn(async () => {
+      await pass.promise;
+      return null;
+    });
+    const projection = controller({
+      refreshSession,
+      rereadSession,
+      readSessionUpdate,
+    });
+    void projection.request("sessionDelta");
+    await vi.waitFor(() => expect(readSessionUpdate).toHaveBeenCalledTimes(1));
+    void projection.request("reread");
+    const done = projection.request("session");
+    pass.resolve();
+    await done;
+    expect(refreshSession).toHaveBeenCalledTimes(1);
+    expect(rereadSession).not.toHaveBeenCalled();
+    await projection.request("reread");
+    expect(rereadSession).toHaveBeenCalledTimes(1);
+    expect(refreshSession).toHaveBeenCalledTimes(1);
+  });
+
   it("drops queued trailing work when disposed", async () => {
     const pass = deferred();
-    const refreshSessionLiveDelta = vi.fn(async () => {
+    const readSessionUpdate = vi.fn(async () => {
       await pass.promise;
-      return true;
+      return null;
     });
     const refreshSession = vi.fn(async () => null);
-    const projection = controller({ refreshSessionLiveDelta, refreshSession });
+    const projection = controller({ readSessionUpdate, refreshSession });
 
     const active = projection.request("sessionDelta");
-    await vi.waitFor(() => expect(refreshSessionLiveDelta).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(readSessionUpdate).toHaveBeenCalledTimes(1));
     void projection.request("session");
     projection.dispose();
     pass.resolve();
     await active;
 
     expect(refreshSession).not.toHaveBeenCalled();
+  });
+
+  it("reads an update it could not read yet in full once the gap ends, never dropping it", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const readSessionUpdate = vi.fn(async (): Promise<number | null> => 700);
+      const refreshSession = vi.fn(async () => null);
+      const projection = controller({ readSessionUpdate, refreshSession });
+
+      await projection.request("sessionDelta");
+      await projection.request("sessionDelta");
+      expect(readSessionUpdate).toHaveBeenCalledTimes(2);
+      expect(refreshSession).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(699);
+      expect(refreshSession).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(refreshSession).toHaveBeenCalledExactlyOnceWith("session-1");
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(refreshSession).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets a full read that starts after an update pay the read it was owed", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const refreshSession = vi.fn(async () => null);
+      const projection = controller({
+        readSessionUpdate: vi.fn(async (): Promise<number | null> => 700),
+        refreshSession,
+      });
+
+      await projection.request("sessionDelta");
+      await projection.request("session");
+      expect(refreshSession).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(refreshSession).toHaveBeenCalledTimes(1);
+
+      await projection.request("sessionDelta");
+      projection.dispose();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(refreshSession).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("clears the bounded React session projection when selection is empty", async () => {
@@ -262,10 +336,21 @@ describe("desktopUpdateRefreshScope", () => {
     expect(desktopUpdateRefreshScope("health", "session-1", "request-1")).toBe(
       "snapshot",
     );
+    expect(desktopUpdateRefreshScope("health", "session-1", "request-1", false)).toBe(
+      "snapshot",
+    );
     expect(desktopUpdateRefreshScope("store", "session-1", "request-1")).toBe(
       "sessionDelta",
     );
     expect(desktopUpdateRefreshScope("store", "session-1", null)).toBe("full");
     expect(desktopUpdateRefreshScope("config", null, null)).toBe("full");
+  });
+
+  it("re-reads a session waiting on its node when its pairing changes", () => {
+    expect(desktopUpdateRefreshScope("health", "session-1", "request-1", true)).toBe(
+      "full",
+    );
+    expect(desktopUpdateRefreshScope("health", "session-1", null, true)).toBe("full");
+    expect(desktopUpdateRefreshScope("health", null, null, true)).toBe("snapshot");
   });
 });

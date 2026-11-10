@@ -1,12 +1,18 @@
-import { screen } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { fleetNodes } from "../src/ui/lib/scope";
-import { NodeHoverCard } from "../src/ui/screens/HoverCards";
-import { node, renderIn, testApp } from "./app-fixture";
+import { AgentHoverCard, NodeHoverCard } from "../src/ui/screens/HoverCards";
+import { avatarSrc } from "@/lib/avatar";
+import { deployment } from "./config-panel-wiring/fixtures";
+import { node, renderIn, renderRouted, testApp } from "./app-fixture";
 
-function cardFor(nodeDid: string) {
+function cardFor(
+  nodeDid: string,
+  more: Record<string, unknown> = {},
+  trigger = <button type="button">avatar</button>,
+) {
   const app = testApp({
     snapshot: {
       bootstrap: {
@@ -14,16 +20,11 @@ function cardFor(nodeDid: string) {
         initToolRoot: "/Users/me/work",
         initToolCeiling: "readwrite",
       },
-      client: { deployments: [node({ nodeDid, source: "enrollment" })] },
+      client: { deployments: [node({ nodeDid, source: "enrollment", ...more })] },
     },
   });
   const [shown] = fleetNodes(app.stores.fleet.getState());
-  renderIn(
-    app,
-    <NodeHoverCard deployment={shown!}>
-      <button type="button">avatar</button>
-    </NodeHoverCard>,
-  );
+  renderIn(app, <NodeHoverCard deployment={shown!}>{trigger}</NodeHoverCard>);
 }
 
 describe("a node's hover card", () => {
@@ -40,5 +41,225 @@ describe("a node's hover card", () => {
     await userEvent.hover(screen.getByRole("button", { name: "avatar" }));
     expect(await screen.findByText("Agents", {}, { timeout: 2000 })).toBeVisible();
     expect(screen.queryByText("/Users/me/work")).toBeNull();
+  });
+
+  it("shows a node's inference as one logo per provider, its accounts named", async () => {
+    const backend = (name: string, providerKind: string) => ({
+      ...deployment.inferenceBackends[0]!,
+      backendId: name,
+      name,
+      providerKind,
+      endpoint: null,
+    });
+    cardFor("did:key:remote", {
+      inferenceBackends: [
+        backend("Claude Max", "ClaudeCliSubscription"),
+        backend("Work key", "AnthropicApiKey"),
+        backend("Codex", "ChatGptCodex"),
+      ],
+    });
+    await userEvent.hover(screen.getByRole("button", { name: "avatar" }));
+    const logos = await screen.findByRole(
+      "img",
+      { name: "Claude Max, Work key, Codex" },
+      { timeout: 2000 },
+    );
+    expect(logos.querySelectorAll("img")).toHaveLength(2);
+  });
+
+  it("draws the node's saved portrait", async () => {
+    cardFor("did:key:remote", {
+      nodeConfig: { node_did: "did:key:remote", avatar: "12" },
+    });
+    await userEvent.hover(screen.getByRole("button", { name: "avatar" }));
+    await screen.findByText("Agents", {}, { timeout: 2000 });
+    expect(document.querySelector(`img[src="${avatarSrc("12")}"]`)).not.toBeNull();
+  });
+
+  it("says None when a node has no inference", async () => {
+    cardFor("did:key:remote", { inferenceBackends: [] });
+    await userEvent.hover(screen.getByRole("button", { name: "avatar" }));
+    expect(await screen.findByText("None set up", {}, { timeout: 2000 })).toBeVisible();
+  });
+
+  it("leads from its lines to the node's sections, and copies its id", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    cardFor("did:key:remote");
+    await userEvent.hover(screen.getByRole("button", { name: "avatar" }));
+    await screen.findByText("Agents", {}, { timeout: 2000 });
+    const links = screen.getAllByRole("link").map((a) => a.getAttribute("href"));
+    for (const section of ["agents", "folders", "tasks", "inference"])
+      expect(links.some((h) => h?.endsWith(`/${section}`))).toBe(true);
+    /* a line is one link over its label and value */
+    expect(screen.getByRole("link", { name: /^Tasks/ })).toHaveAttribute(
+      "href",
+      expect.stringMatching(/\/tasks$/),
+    );
+    /* the same last line as an agent's card */
+    expect(screen.getByRole("button", { name: "New session" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute(
+      "href",
+      expect.stringMatching(/\/agent$/),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Copy node id" }));
+    expect(writeText).toHaveBeenCalledWith("did:key:remote");
+    vi.unstubAllGlobals();
+  });
+
+  it("stays closed over the page its link opened until the pointer returns", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      cardFor("did:key:remote", {}, <a href="#node">node</a>);
+      const link = screen.getByRole("link", { name: "node" });
+      await user.click(link);
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+      expect(screen.queryByText("Agents")).toBeNull();
+      await user.unhover(link);
+      await user.hover(link);
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+      expect(await screen.findByText("Agents")).toBeVisible();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("opens again on focus after its link is followed from the keyboard", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      cardFor("did:key:remote", {}, <a href="#node">node</a>);
+      const link = screen.getByRole("link", { name: "node" });
+      await user.tab();
+      expect(link).toHaveFocus();
+      await user.keyboard("{Enter}");
+      await user.tab();
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+      expect(screen.queryByText("Agents")).toBeNull();
+      await user.tab();
+      expect(link).toHaveFocus();
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+      expect(await screen.findByText("Agents")).toBeVisible();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("opens for a later mouse hover after its link is tapped", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      cardFor("did:key:remote", {}, <a href="#node">node</a>);
+      const link = screen.getByRole("link", { name: "node" });
+      /* a touch tap's pointerleave arrives before its click */
+      fireEvent.pointerDown(link, { pointerType: "touch" });
+      fireEvent.pointerUp(link, { pointerType: "touch" });
+      fireEvent.pointerLeave(link, { pointerType: "touch" });
+      fireEvent.click(link, { detail: 1 });
+      link.blur();
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+      await user.hover(link);
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+      expect(await screen.findByText("Agents")).toBeVisible();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("an agent's hover card", () => {
+  it("starts a new session with the agent on its node", async () => {
+    const app = testApp({ deployments: [node()] });
+    const [shown] = fleetNodes(app.stores.fleet.getState());
+    const view = renderRouted(app, { name: "sessions" }, () => (
+      <AgentHoverCard deployment={shown!} agentDid="default">
+        <button type="button">agent</button>
+      </AgentHoverCard>
+    ));
+    await userEvent.hover(screen.getByRole("button", { name: "agent" }));
+    await userEvent.click(
+      await screen.findByRole("button", { name: "New session" }, { timeout: 2000 }),
+    );
+    await waitFor(() =>
+      expect(view.nav().route).toMatchObject({ name: "session", sessionId: null }),
+    );
+    expect(app.stores.selection.getState()).toMatchObject({
+      nodeDid: shown!.nodeDid,
+      agentDid: "default",
+    });
+  });
+
+  it("counts the tasks that run with the agent, and leaves the line out at none", async () => {
+    const task = (taskId: string, agentDid: string) => ({
+      ...deployment.tasks[0]!,
+      taskId,
+      agentDid,
+    });
+    const app = testApp({
+      deployments: [
+        node({
+          tasks: [task("a", "default"), task("b", "default"), task("c", "other")],
+        }),
+      ],
+    });
+    const [shown] = fleetNodes(app.stores.fleet.getState());
+    renderIn(
+      app,
+      <AgentHoverCard deployment={shown!} agentDid="default">
+        <button type="button">agent</button>
+      </AgentHoverCard>,
+    );
+    await userEvent.hover(screen.getByRole("button", { name: "agent" }));
+    const card = await screen.findByTestId("agent-hover-card", {}, { timeout: 2000 });
+    expect(card).toHaveTextContent("Tasks2");
+  });
+});
+
+describe("starting this machine's node from its card", () => {
+  const withServer = (state: string) => {
+    const startManagedServer = vi.fn().mockResolvedValue({ state: "running" });
+    const app = testApp({
+      api: {
+        managedServerStatus: vi.fn().mockResolvedValue({ state, nodeName: "Forge" }),
+        startManagedServer,
+      },
+      snapshot: {
+        bootstrap: { initNodeDid: "did:key:home" },
+        client: { deployments: [node({ nodeDid: "did:key:home" })] },
+      },
+    });
+    act(() =>
+      app.stores.localServer.setState({
+        status: { state, nodeName: "Forge" },
+      } as never),
+    );
+    const [shown] = fleetNodes(app.stores.fleet.getState());
+    renderIn(
+      app,
+      <NodeHoverCard deployment={shown!}>
+        <button type="button">avatar</button>
+      </NodeHoverCard>,
+    );
+    return startManagedServer;
+  };
+
+  it("offers Start node while it is stopped, and starts it", async () => {
+    const start = withServer("stopped");
+    await userEvent.hover(screen.getByRole("button", { name: "avatar" }));
+    const button = await screen.findByRole(
+      "button",
+      { name: /Start node/ },
+      { timeout: 2000 },
+    );
+    await userEvent.click(button);
+    expect(start).toHaveBeenCalled();
+  });
+
+  it("offers nothing to start while it runs", async () => {
+    withServer("running");
+    await userEvent.hover(screen.getByRole("button", { name: "avatar" }));
+    await screen.findByText("New session", {}, { timeout: 2000 });
+    expect(screen.queryByRole("button", { name: /Start node/ })).toBeNull();
   });
 });

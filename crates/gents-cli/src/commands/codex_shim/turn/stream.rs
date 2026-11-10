@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 
 use anyhow::{Context, Result};
-use gents::config_client::ConfigAccess;
 use gents::UpdateSubscriptionSource;
 use gents_codex_protocol as codex;
 use gents_codex_protocol::MessagePhase;
@@ -209,7 +208,7 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
         let progress_query =
             gents_turn_progress_query(&current.request_doc_id, &current.session_id);
         let response = tokio::select! {
-            response = query_node_json(state.node.as_ref(), &progress_query) => response?,
+            response = query_node_json(&state.reader, &progress_query) => response?,
             changed = cancel_rx.changed() => {
                 if changed.is_ok() && *cancel_rx.borrow() {
                     return finish_interrupted_turn(
@@ -279,12 +278,10 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
         let canonical_request: gents_protocol::row::AgentRequestRow =
             serde_json::from_value(request_row.cloned().context("live request row missing")?)
                 .context("decoding canonical Codex request")?;
-        let canonical_output = gents::session::observe_request_output(
-            &ConfigAccess::local(state.node.clone()),
-            &canonical_request,
-        )
-        .await
-        .context("observing canonical Codex output")?;
+        let canonical_output =
+            gents::session::observe_request_output(&state.reader, &canonical_request)
+                .await
+                .context("observing canonical Codex output")?;
         let presentation = match &canonical_output {
             gents::session::CanonicalRequestOutput::Live(value)
             | gents::session::CanonicalRequestOutput::Settling(value)
@@ -407,7 +404,7 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
                 continue;
             }
             let tool = match hydrate_gents_tool_call_progress(
-                &ConfigAccess::local(state.node.clone()),
+                &state.reader,
                 row,
                 &current.node_did,
                 &current.session_id,
@@ -727,13 +724,13 @@ async fn canonical_output_started_at_ms(
         return Ok(header.and_then(|header| timestamp_millis(&header.created_at)));
     };
     let response = query_node_json(
-        &state.node,
+        &state.reader,
         &format!(
             r#"{{ AgentOutputSegment(
                 filter: {{ request_doc_id: {{ _eq: "{}" }} }},
                 order: {{ created_at: ASC }}
             ) {{ source writer created_at }} }}"#,
-            gents::graphql::escape_graphql_string(&selected.request_doc_id),
+            gents::store::graphql::escape_graphql_string(&selected.request_doc_id),
         ),
     )
     .await
@@ -793,7 +790,7 @@ fn prime_projection_from_turn(
     known_tool_calls: &mut BTreeMap<String, ToolProjectionStatus>,
     known_compaction_states: &mut BTreeMap<String, String>,
 ) {
-    let preferred_agent_id = format!("gents-{request_id}");
+    let preferred_agent_did = format!("gents-{request_id}");
     let preferred_reasoning_id = reasoning_item_id(request_id, 0);
     let mut resumed_agent = None;
     let mut found_preferred_agent = false;
@@ -801,7 +798,7 @@ fn prime_projection_from_turn(
     for item in &turn.items {
         match item {
             codex::ThreadItem::AgentMessage { id, text, .. } => {
-                if id == &preferred_agent_id {
+                if id == &preferred_agent_did {
                     resumed_agent = Some((id.clone(), text.clone()));
                     found_preferred_agent = true;
                 } else if !found_preferred_agent {
@@ -1121,7 +1118,7 @@ async fn send_thread_token_usage_update(
         &state.node,
         &request.node_did,
         request
-            .agent_id
+            .agent_did
             .as_deref()
             .context("committed request missing agent")?,
     )
@@ -1205,21 +1202,23 @@ async fn announce_consumed_inputs(
     current: &SubmittedRequest,
     announced: &mut BTreeSet<String>,
 ) -> Result<()> {
-    use gents::graphql::escape_graphql_string;
+    use gents::store::graphql::escape_graphql_string;
+    use gents_protocol::request_lifecycle::RequestLifecycleState;
     let query = format!(
-        r#"{{ AgentRequest(filter: {{ node_did: {{_eq:"{}"}}, requester_did: {{_eq:"{}"}}, session_id: {{_eq:"{}"}}, superseded_by_request_doc_id: {{_eq:"{}"}}, lifecycle_state: {{_eq:"superseded"}}, failure_reason: {{_eq:"{}"}} }}) {{ _docID request_id node_did requester_did session_id lifecycle_state failure_reason superseded_by_request superseded_by_request_doc_id content created_at }} }}"#,
+        r#"{{ AgentRequest(filter: {{ node_did: {{_eq:"{}"}}, requester_did: {{_eq:"{}"}}, session_id: {{_eq:"{}"}}, superseded_by_request_doc_id: {{_eq:"{}"}}, lifecycle_state: {{_eq:"{superseded}"}}, failure_reason: {{_eq:"{}"}} }}) {{ _docID request_id node_did requester_did session_id lifecycle_state failure_reason superseded_by_request superseded_by_request_doc_id content created_at }} }}"#,
         escape_graphql_string(&current.node_did),
         escape_graphql_string(state.local_requester_did()),
         escape_graphql_string(&current.session_id),
         escape_graphql_string(&current.request_doc_id),
-        escape_graphql_string(gents::lifecycle::FOLDED_REASON)
+        escape_graphql_string(gents::request::lifecycle::FOLDED_REASON),
+        superseded = RequestLifecycleState::Superseded.as_str()
     );
-    let response = query_node_json(state.node.as_ref(), &query).await?;
+    let response = query_node_json(&state.reader, &query).await?;
     let rows = response
         .pointer("/data/AgentRequest")
         .and_then(Value::as_array)
         .context("consumed input query omitted rows")?;
-    let access = ConfigAccess::local(state.node.clone());
+    let access = state.reader.clone();
     let mut ready = Vec::new();
     for raw in rows {
         let row: gents_protocol::row::AgentRequestRow = serde_json::from_value(raw.clone())?;
@@ -1230,7 +1229,7 @@ async fn announce_consumed_inputs(
         if announced.contains(doc) {
             continue;
         }
-        let (_, key) = gents::lifecycle::input_message_owner(&row)
+        let (_, key) = gents::request::lifecycle::input_message_owner(&row)
             .context("consumed input lacks authored owner")?;
         let query = format!(
             r#"{{ AgentMessage(filter: {{ message_key: {{_eq:"{}"}}, node_did: {{_eq:"{}"}}, requester_did: {{_eq:"{}"}}, session_id: {{_eq:"{}"}}, request_doc_id: {{_eq:"{}"}} }}) {{ {} }} }}"#,
@@ -1239,9 +1238,9 @@ async fn announce_consumed_inputs(
             escape_graphql_string(state.local_requester_did()),
             escape_graphql_string(&current.session_id),
             escape_graphql_string(&current.request_doc_id),
-            gents::session::canonical_rows::AGENT_MESSAGE_FIELDS
+            gents_protocol::output::rows::AGENT_MESSAGE_FIELDS
         );
-        let headers = query_node_json(state.node.as_ref(), &query).await?;
+        let headers = query_node_json(&state.reader, &query).await?;
         let headers = headers
             .pointer("/data/AgentMessage")
             .and_then(Value::as_array)
@@ -1253,7 +1252,7 @@ async fn announce_consumed_inputs(
         let raw_header = headers
             .first()
             .context("consumed input authored header is not yet visible")?;
-        let observed = gents::session::canonical_rows::decode_transcript_message_row(raw_header)?;
+        let observed = gents_protocol::output::rows::decode_transcript_message_row(raw_header)?;
         let (header, _) = gents::session::load_canonical_message(
             &access,
             &observed.doc_id,
@@ -1293,6 +1292,7 @@ async fn cancel_pending_steering_request(
     connection.take_steering_input(&request.request_id).await;
     if let Err(error) = gents::interrupt_request_by_doc_id(
         &state.node,
+        state.agent_signer.as_ref(),
         &request.request_doc_id,
         &state.node_did,
         Some(state.local_requester_did()),
@@ -1316,13 +1316,13 @@ async fn steering_input_for_request(
     if let Some(input) = connection.take_steering_input(request_id).await {
         return Ok(input);
     }
-    let physical = gents::graphql::escape_graphql_string(request_doc_id);
-    let owner = gents::graphql::escape_graphql_string(state.node_did.as_ref());
-    let logical = gents::graphql::escape_graphql_string(request_id);
+    let physical = gents::store::graphql::escape_graphql_string(request_doc_id);
+    let owner = gents::store::graphql::escape_graphql_string(state.node_did.as_ref());
+    let logical = gents::store::graphql::escape_graphql_string(request_id);
     let query = format!(
         r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{physical}"}}, node_did: {{_eq: "{owner}"}}, requester_did: {{_eq: "{owner}"}}, request_id: {{_eq: "{logical}"}}}}, limit: 2) {{content input}} }}"#
     );
-    let response = query_node_json(state.node.as_ref(), &query).await?;
+    let response = query_node_json(&state.reader, &query).await?;
     let rows = response
         .pointer("/data/AgentRequest")
         .and_then(Value::as_array)
@@ -1382,7 +1382,7 @@ mod tests {
 
         let temp = tempfile::tempdir().expect("reasoning projection directory");
         let node = Arc::new(
-            gents::defra_node::EmbeddedNode::builder()
+            gents::defra_node::Node::builder()
                 .data_path(temp.path().join("node"))
                 .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
                 .build()
@@ -1395,11 +1395,16 @@ mod tests {
             trace_path: temp.path().join("reasoning.jsonl"),
             cwd: temp.path().to_path_buf(),
             fs_root: None,
-            node,
+            node: node.clone(),
             background_execution_registry: gents::BackgroundExecutionRegistry::default(),
-            graphql: gents::config_client::GraphqlEndpoint::anonymous("http://127.0.0.1/graphql"),
+            graphql: gents::store::config_client::GraphqlEndpoint::anonymous(
+                "http://127.0.0.1/graphql",
+            ),
+            client_did: Arc::from("did:test:reasoning"),
+            reader: gents::store::config_client::ConfigAccess::local(node.clone()),
             node_did: Arc::from("did:test:reasoning"),
-            agent_id: Arc::from("reasoning"),
+            agent_did: Arc::from("reasoning"),
+            agent_signer: None,
             id_counter: Arc::new(AtomicU64::new(1)),
             timeout: Duration::from_secs(5),
             poll_interval: Duration::from_millis(10),

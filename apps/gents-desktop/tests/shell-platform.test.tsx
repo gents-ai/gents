@@ -77,6 +77,11 @@ describe("native shell classifier", () => {
     expect(supportsLocalManagedServer()).toBe(true);
     enterTauri("iPhone", "iPhone", 5);
     expect(ownsAutomaticRecovery()).toBe(true);
+    enterTauri("Linux x86_64");
+    windowMocks.label = "main";
+    expect(ownsAutomaticRecovery()).toBe(true);
+    windowMocks.label = "gents-plugin-612f62";
+    expect(ownsAutomaticRecovery()).toBe(false);
   });
 
   it("lets macOS own title and tab chrome outside the web viewport", () => {

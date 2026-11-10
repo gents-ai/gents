@@ -397,7 +397,7 @@ export function InferenceSetup({
 
   const waitForSelectedAgent = async (
     profileId: string,
-    defaultAgentId: string | null,
+    defaultAgentDid: string | null,
   ) => {
     const deadline = Date.now() + SAVE_CONFIRMATION_TIMEOUT_MS;
     while (Date.now() < deadline) {
@@ -407,10 +407,11 @@ export function InferenceSetup({
       );
       const bound = deployment?.agentConfigs.find(
         (agent) =>
-          agent.agent_id === defaultAgentId && agent.inference_profile_id === profileId,
+          agent.agent_did === defaultAgentDid &&
+          agent.inference_profile_id === profileId,
       );
       const ready = deployment?.nodeReadiness.agents.some(
-        (status) => status.state === "ready" && status.agentId === defaultAgentId,
+        (status) => status.state === "ready" && status.agentDid === defaultAgentDid,
       );
       const savedProfile = deployment?.inferenceProfiles.find(
         (profile) => profile.profile_id === profileId,
@@ -436,8 +437,8 @@ export function InferenceSetup({
   const saveInference = async () => {
     dispatch({ type: "opStarted", op: "save" });
     try {
-      const { profileId, defaultAgentId } = await persistInference();
-      const snapshot = await waitForSelectedAgent(profileId, defaultAgentId);
+      const { profileId, defaultAgentDid } = await persistInference();
+      const snapshot = await waitForSelectedAgent(profileId, defaultAgentDid);
       onDone(snapshot);
     } catch (cause) {
       dispatch({ type: "failed", error: setupErrorMessage(cause) });

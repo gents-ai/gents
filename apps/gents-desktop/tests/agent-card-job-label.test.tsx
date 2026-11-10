@@ -9,7 +9,10 @@ function cardWith(backgroundedTools: object[]) {
     api: { fetchOperationsSnapshot: vi.fn().mockResolvedValue({ backgroundedTools }) },
     snapshot: { bootstrap, client: { deployments: [deployment] } },
   });
-  renderIn(app, <AgentCard deployment={deployment} />);
+  renderIn(
+    app,
+    <AgentCard deployment={deployment} avatar={null} onAvatar={() => {}} />,
+  );
 }
 
 describe("AgentCard background labels", () => {

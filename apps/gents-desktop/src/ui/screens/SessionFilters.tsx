@@ -24,7 +24,7 @@ import {
 } from "@/lib/session-filter";
 import { nodeKeyOf } from "../../hooks/fleetStore";
 import { useFleet } from "@/hooks/useFleet";
-import { agentName } from "./behavior";
+import { agentName, didTail, isShared, sharedNames } from "./behavior";
 import { Button } from "@gents/ui/components/button";
 import {
   DropdownMenu,
@@ -67,6 +67,28 @@ export const STATES: Option<SessionState>[] = [
   { value: "stopped", label: "Stopped", icon: CircleMinus },
   { value: "finished", label: "Finished", icon: Circle },
 ];
+
+/** The agents a session list can be narrowed to: every agent on the nodes
+    shown, pack agents with no sessions yet among them, then any other agent
+    a session ran with, and any already picked. Both the sessions list and
+    the nav's recent sessions choose from these. */
+export function useAgentChoices(
+  sessions: readonly SessionSummary[],
+  nodeDids: readonly string[],
+  picked: readonly string[],
+  count: (agentDid: string) => number,
+) {
+  const fleetNodes = useFleet((state) => state.nodes);
+  const names = new Map<string, string>();
+  for (const did of nodeDids)
+    for (const b of fleetNodes[nodeKeyOf({ nodeDid: did })]?.agents ?? [])
+      if (!names.has(b.agentDid)) names.set(b.agentDid, b.displayName);
+  for (const c of sessions)
+    if (c.agentDid && !names.has(c.agentDid))
+      names.set(c.agentDid, agentName(c.agentDid, fleetNodes[nodeKeyOf(c)] ?? null));
+  for (const id of picked) if (!names.has(id)) names.set(id, id);
+  return [...names].map(([id, name]) => ({ id, name, count: count(id) }));
+}
 
 export const SOURCES: Option<SessionSource>[] = [
   { value: "person", label: "A person", icon: User },
@@ -158,6 +180,10 @@ function AgentAxis({
 }) {
   const byId = new Map(agents.map((b) => [b.id, b]));
   const picked = agents.filter((b) => value.includes(b.id));
+  const shared = sharedNames(
+    agents.map((b) => ({ agentDid: b.id, displayName: b.name })),
+  );
+  const sharing = (b: { name: string }) => isShared(shared, b.name);
   const popover = useExclusivePopover();
   const ANY = "*";
   return (
@@ -198,6 +224,8 @@ function AgentAxis({
               <AgentInitials
                 key={b.id}
                 name={b.name}
+                agentDid={b.id}
+                shared={sharing(b)}
                 className="size-5 text-[9px] ring-1 ring-background"
               />
             ))}
@@ -234,8 +262,18 @@ function AgentAxis({
             if (!b) return null;
             return (
               <ComboboxItem key={id} value={id}>
-                <AgentInitials name={b.name} className="size-5 text-[9px]" />
+                <AgentInitials
+                  name={b.name}
+                  agentDid={b.id}
+                  shared={sharing(b)}
+                  className="size-5 text-[9px]"
+                />
                 <span className="min-w-0 flex-1 truncate">{b.name}</span>
+                {sharing(b) && (
+                  <span className="shrink-0 text-xs text-muted-foreground">
+                    {didTail(b.id)}
+                  </span>
+                )}
                 {b.count > 0 && (
                   <span className="text-xs tabular-nums text-muted-foreground">
                     {b.count}
@@ -273,20 +311,9 @@ export function SessionFilters({
       countFor("sources", (c) => matchesSource(c, s.value)),
     ]),
   );
-  const fleetNodes = useFleet((state) => state.nodes);
-  const names = new Map<string, string>();
-  for (const did of nodeDids)
-    for (const b of fleetNodes[nodeKeyOf({ nodeDid: did })]?.agents ?? [])
-      if (!names.has(b.agentId)) names.set(b.agentId, b.displayName);
-  for (const c of sessions)
-    if (c.agentId && !names.has(c.agentId))
-      names.set(c.agentId, agentName(c.agentId, fleetNodes[nodeKeyOf(c)] ?? null));
-  for (const id of value.agents) if (!names.has(id)) names.set(id, id);
-  const agents = [...names].map(([id, name]) => ({
-    id,
-    name,
-    count: countFor("agents", (c) => c.agentId === id),
-  }));
+  const agents = useAgentChoices(sessions, nodeDids, value.agents, (id) =>
+    countFor("agents", (c) => c.agentDid === id),
+  );
 
   if (sessions.length === 0 && !hasFilter(value)) return null;
 

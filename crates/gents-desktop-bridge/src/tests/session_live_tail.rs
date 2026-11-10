@@ -1,133 +1,123 @@
-use gents_protocol::output::{
-    OutputSegment, OutputSource, OutputWriter, SegmentRun, StreamDeclaration, StreamPayload,
-};
-use serde_json::Value;
-
-use super::support::{boot_core, refresh_request_and_assert_fresh_projection, OPERATOR};
+use super::streaming_backend::{StreamPlan, StreamResponse, StreamScript};
+use super::support::{refresh_request_and_assert_fresh_projection, RunningDesktop};
 use crate::commands::session_snapshot;
 use crate::types::RenderedTimelineItem;
 
-async fn create(
-    core: &gents_desktop_core::client::ClientCore,
-    collection: &str,
-    input: Value,
-) -> String {
-    let mutation = format!(
-        "mutation {{ create_{collection}(input: {}) {{ _docID }} }}",
-        gents_protocol::graphql::graphql_input_literal(&input).expect("input literal")
-    );
-    let response = core.node().execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "seed {collection}: {:?}",
-        response.errors
-    );
-    gents::graphql::single_mutation_document(&response, &format!("create_{collection}"))
-        .expect("created")
-        .and_then(|document| document["_docID"].as_str())
-        .expect("doc id")
-        .to_owned()
+fn held(marker: &'static str, text: &'static str) -> StreamPlan {
+    StreamPlan::current_authored_user(
+        marker,
+        vec![StreamResponse::Stream(StreamScript::paused(marker, [text]))],
+    )
 }
 
-fn request(request_id: &str, state: &str, created_at: &str) -> Value {
-    serde_json::json!({
-        "purpose": "normal", "request_id": request_id, "node_did": OPERATOR,
-        "agent_id": "worker", "session_id": "sess_live",
-        "content": format!("{request_id} text"), "lifecycle_state": state, "backend_id": "",
-        "created_at": created_at, "retry_count": 0
-    })
+fn queued(
+    content: &'static str,
+    after: Option<&'static str>,
+) -> impl FnOnce(&mut gents_protocol::request_admission::AgentRequestCreate) {
+    move |create| {
+        create.content = content.into();
+        let mut queue = serde_json::json!({"source": "user", "policy": "append"});
+        if let Some(after) = after {
+            queue["queued_after_request_id"] = after.into();
+        }
+        create.input.queue = Some(serde_json::from_value(queue).unwrap());
+    }
+}
+
+fn steered(
+    content: &'static str,
+    after: &'static str,
+) -> impl FnOnce(&mut gents_protocol::request_admission::AgentRequestCreate) {
+    move |create| {
+        queued(content, Some(after))(create);
+        if let Some(queue) = create.input.queue.as_mut() {
+            queue.delivery = gents_protocol::request_input::QueueDelivery::Steer;
+        }
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_queued_or_folded_submission_keeps_the_running_turns_streaming_text() {
-    let (core, _tmp) = boot_core().await;
-    let session = gents_protocol::session::AgentSession {
-        session_id: "sess_live".into(),
-        node_did: OPERATOR.into(),
-        requester_did: None,
-        agent_id: "worker".into(),
-        created_at: "2026-05-20T00:00:00Z".into(),
-        closed_at: None,
-        archived_at: None,
-        archive_revision: 0,
-        stopped_at: None,
-        title: None,
-        tags: Vec::new(),
-        provenance: None,
-        observation: None,
-    };
-    create(
-        &core,
-        "AgentSession",
-        serde_json::to_value(&session).expect("session json"),
-    )
+    // Lean `Session.ordinary_queued_input_never_folds`: only an explicit
+    // steer folds. `QueuedSteering.user_steer_passes_queued_turns`: the steer
+    // reaches the running turn at its next safe boundary, so the head's
+    // request supersedes it and keeps streaming, while a later ordinary append
+    // waits for its own turn.
+    let desktop = RunningDesktop::start(vec![
+        held("LIVE-HEAD", "before the steer"),
+        held("LIVE-FOLDED", "still streaming"),
+    ])
     .await;
-    let mut head = request("req_head", "processing", "2026-05-20T00:00:00Z");
-    head["execution_generation"] = "gen-1".into();
-    head["execution_lease_secs"] = 300.into();
-    head["execution_lease_expires_at"] = "2099-01-01T00:00:00Z".into();
-    let head_doc = create(&core, "AgentRequest", head).await;
-    let queue = serde_json::json!({
-        "queue": {"source": "user", "policy": "append", "queued_after_request_id": "req_head"}
-    });
-    let mut queued = request("req_queued", "pending", "2026-05-20T00:00:01Z");
-    queued["input"] = queue.clone();
-    create(&core, "AgentRequest", queued).await;
-    let mut folded = request("req_folded", "superseded", "2026-05-20T00:00:02Z");
-    folded["input"] = queue;
-    folded["superseded_by_request"] = "req_head".into();
-    folded["superseded_by_request_doc_id"] = head_doc.clone().into();
-    folded["failure_reason"] = gents::lifecycle::FOLDED_REASON.into();
-    create(&core, "AgentRequest", folded).await;
-
-    let segment = OutputSegment {
-        node_did: OPERATOR.into(),
-        requester_did: None,
-        session_id: "sess_live".into(),
-        request_doc_id: head_doc.clone(),
-        source: OutputSource::ProviderTurn {
-            scope: gents_protocol::rendered_request::CaptureScope {
-                kind: gents_protocol::rendered_request::CaptureScopeKind::Inference,
-                seq: 0,
+    let head = desktop.send("sess_live", "req_head", "LIVE-HEAD").await;
+    desktop.wait_for_request_state(&head, "processing").await;
+    desktop.provider.wait_for_chunks("LIVE-HEAD", 1).await;
+    let folded = desktop
+        .send_shaped(
+            "sess_live",
+            "req_folded",
+            steered("LIVE-FOLDED", "req_head"),
+        )
+        .await;
+    desktop.provider.release("LIVE-HEAD");
+    let folded_row = desktop.wait_for_request_state(&folded, "superseded").await;
+    assert_eq!(folded_row["request_id"], "req_folded");
+    desktop
+        .wait_for(
+            "the steer superseded by the head",
+            &format!(
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{folded}" }} }}) {{ superseded_by_request_doc_id }} }}"#
+            ),
+            |data| data["AgentRequest"][0]["superseded_by_request_doc_id"] == head.as_str(),
+        )
+        .await;
+    desktop
+        .wait_for(
+            "the head's streaming text",
+            "{ AgentOutputSegment { payload request_doc_id } }",
+            |data| {
+                data["AgentOutputSegment"].as_array().is_some_and(|rows| {
+                    rows.iter().any(|row| {
+                        row["request_doc_id"] == head.as_str()
+                            && row["payload"]
+                                .as_str()
+                                .is_some_and(|payload| payload.contains("still streaming"))
+                    })
+                })
             },
-            turn_index: 0,
-            attempt: 0,
-        },
-        writer: OutputWriter::RequestExecution {
-            execution_generation: "gen-1".into(),
-        },
-        ordinal: Some(0),
-        runs: vec![SegmentRun {
-            stream: 0,
-            bytes: 15,
-            declaration: Some(StreamDeclaration {
-                block_index: 0,
-                part_index: 0,
-                payload: StreamPayload::Text,
-            }),
-        }],
-        payload: "still streaming".into(),
-        close: None,
-        created_at: "2026-05-20T00:00:03Z".into(),
-    };
-    create(
-        &core,
-        "AgentOutputSegment",
-        serde_json::to_value(&segment).expect("segment json"),
-    )
-    .await;
+        )
+        .await;
+    desktop.wait_for_request_state(&head, "processing").await;
+    let queued_doc = desktop
+        .send_shaped(
+            "sess_live",
+            "req_queued",
+            queued("LIVE-QUEUED", Some("req_head")),
+        )
+        .await;
+    desktop.wait_for_request_state(&queued_doc, "pending").await;
+
+    // Subscription events from the running runtime cannot supersede the
+    // reads under test.
+    desktop.core.stop_observer_for_test().await;
+    let user = desktop.user_did();
+    let node = desktop.node_did().to_owned();
     for request_id in ["req_head", "req_queued", "req_folded"] {
-        refresh_request_and_assert_fresh_projection(&core, OPERATOR, "sess_live", None, request_id)
-            .await;
+        refresh_request_and_assert_fresh_projection(
+            &desktop.core,
+            &node,
+            "sess_live",
+            Some(&user),
+            request_id,
+        )
+        .await;
     }
 
     for submitted in ["req_queued", "req_folded"] {
         let snapshot = session_snapshot(
-            &core,
+            &desktop.core,
             "sess_live".into(),
-            Some(OPERATOR.into()),
+            Some(node.clone()),
             Some(submitted.into()),
-            None,
             None,
         )
         .await
@@ -148,4 +138,5 @@ async fn a_queued_or_folded_submission_keeps_the_running_turns_streaming_text() 
             snapshot.timeline_items
         );
     }
+    desktop.shutdown().await;
 }

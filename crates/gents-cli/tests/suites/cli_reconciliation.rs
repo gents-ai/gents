@@ -78,7 +78,7 @@ async fn runtime_state_reset_is_explicit() -> Result<()> {
 
     fs::write(&runtime_state, r#"{"status":"stale-again"}"#)
         .context("rewriting stale runtime state")?;
-    let reset = run_cli_json(&home_dir, &["reset"])?;
+    let reset = run_cli_json(&home_dir, &["runtime", "reset"])?;
     assert_eq!(reset.get("status").and_then(Value::as_str), Some("reset"));
     assert_eq!(reset.get("cleared").and_then(Value::as_bool), Some(true));
     assert!(
@@ -187,6 +187,8 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
     let result = run_cli_json(
         &home_dir,
         &[
+            "utils",
+            "debug",
             "request",
             "submit",
             "--graphql",
@@ -267,8 +269,9 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
         "expected follow-up request to include persisted tool result with token {token}: {tool_result_request}"
     );
 
-    let (_request_id, session_id, agent_id) = wait_for_request(&graphql, &node_did, prompt).await?;
-    assert!(!agent_id.is_empty(), "request should be pinned to a agent");
+    let (_request_id, session_id, agent_did) =
+        wait_for_request(&graphql, &node_did, prompt).await?;
+    assert!(!agent_did.is_empty(), "request should be pinned to a agent");
 
     let tool_call = wait_for_tool_call(&graphql, &session_id, "read_file").await?;
     assert_eq!(

@@ -4,9 +4,9 @@ use anyhow::Context;
 use std::sync::Arc;
 
 use chrono::Utc;
-use gents::backend_registry::{list_all_backends, lookup_backend_observation};
-use gents::defra_node::EmbeddedNode;
-use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use gents::inference::backends::registry::lookup_backend_observation_in_txn;
+use gents::store::config_client::{list_inference_backends_in_txn, ConfigAccess};
+use gents::store::graphql::escape_graphql_string;
 use gents_desktop_core::client::ClientCore;
 use gents_protocol::job::JobControlOutcome;
 use gents_protocol::process_control::{OperatorProcessControlRequest, ProcessControlOutcome};
@@ -21,8 +21,7 @@ use crate::types::{
     BackendHealthView, DesktopInterruptRequest, DesktopJobControlRequest,
     DesktopOperationsSnapshot, DesktopOperationsSnapshotRequest, DesktopProbeMcpServiceRequest,
     DesktopSessionProvenanceRequest, InferenceCallSummaryView, InterruptRequestResult,
-    MCPServiceHealthView, McpServiceProbeResult, NativeExecutorStatusView, RuntimeLivenessView,
-    SessionProvenanceView,
+    MCPServiceHealthView, McpServiceProbeResult, RuntimeLivenessView, SessionProvenanceView,
 };
 
 const BACKGROUND_TOOL_CALL_LIMIT: usize = 256;
@@ -30,71 +29,81 @@ const BACKGROUND_TOOL_CALL_LIMIT: usize = 256;
 const RECENT_CALLS_PER_BACKEND: usize = 10;
 
 #[tauri::command]
-pub async fn desktop_operations_snapshot(
+pub async fn desktop_operations_snapshot<R>(
+    window: tauri::WebviewWindow<R>,
     state: State<'_, DesktopAppState>,
     request: DesktopOperationsSnapshotRequest,
-) -> Result<DesktopOperationsSnapshot, BridgeError> {
+) -> Result<DesktopOperationsSnapshot, BridgeError>
+where
+    R: tauri::Runtime,
+{
     let core = current_core(&state)
         .ok_or_else(|| BridgeError::untyped("desktop bridge not initialized"))?;
-    let node_did = request
-        .node_did
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .or_else(|| core.selected_node_did())
+    let node_did = state
+        .window_command_node(window.label(), request.node_did.as_deref())
         .ok_or_else(|| BridgeError::untyped("no node selected; pass nodeDid explicitly"))?;
 
-    let native_executors: Vec<NativeExecutorStatusView> =
-        gents::native_executor_status::active_native_executors()
-            .into_iter()
-            .map(|ne| NativeExecutorStatusView {
-                id: ne.id as i64,
-                pid: ne.pid as u32,
-                argv0: ne.argv0,
-                tool_name: ne.tool_name,
-                started_at: ne.started_at,
-                age_ms: ne.age_ms,
-            })
-            .collect();
-
-    let tool_call_rows = fetch_background_tool_calls(&core, &node_did)
+    let endpoint = core
+        .operator_observation_endpoint(&node_did)
         .await
-        .map_err(|e| format!("failed to query AgentToolCall: {e}"))?;
-
-    let liveness = RuntimeLivenessView {
+        .ok_or_else(|| {
+            BridgeError::untyped(format!(
+                "runtime {node_did} has no authenticated database endpoint"
+            ))
+        })?;
+    let access = ConfigAccess::Graphql(endpoint.clone());
+    let (tool_call_rows, status) = tokio::join!(
+        fetch_background_tool_calls(&access, &node_did),
+        gents_desktop_core::local_runtime::fetch_runtime_status_for_node(&endpoint, &node_did),
+    );
+    let tool_call_rows = tool_call_rows?;
+    let liveness = status.and_then(|status| {
+        serde_json::from_value::<RuntimeLivenessView>(
+            status
+                .get("liveness")
+                .cloned()
+                .context("runtime status has no liveness observation")?,
+        )
+        .context("decoding runtime liveness")
+    });
+    let (liveness, liveness_unavailable_reason) = match liveness {
+        Ok(liveness) => (Some(liveness), None),
+        Err(error) => (None, Some(format!("{error:#}"))),
+    };
+    let unavailable = RuntimeLivenessView {
         expired_processing_count: 0,
         requests: Vec::new(),
         active_tool_calls: Vec::new(),
-        active_native_executors_available: true,
-        active_native_executors: native_executors,
+        active_native_executors_available: false,
+        active_native_executors: Vec::new(),
     };
-
-    let backgrounded_tools = project_backgrounded_tools(&tool_call_rows, &liveness);
+    let backgrounded_tools =
+        project_backgrounded_tools(&tool_call_rows, liveness.as_ref().unwrap_or(&unavailable));
     let stuck_diagnostics = stuck_diagnostics_from_tool_calls(&tool_call_rows);
 
     Ok(DesktopOperationsSnapshot {
         fetched_at: Utc::now().to_rfc3339(),
         node_did: Some(node_did),
-        liveness: Some(liveness),
-        liveness_unavailable_reason: None,
+        liveness,
+        liveness_unavailable_reason,
         backgrounded_tools,
         stuck_diagnostics,
     })
 }
 
 async fn fetch_background_tool_calls(
-    core: &Arc<ClientCore>,
+    access: &ConfigAccess,
     node_did: &str,
 ) -> Result<Vec<ToolCallRow>, BridgeError> {
     let query = background_tool_calls_query(node_did);
 
-    let response = graphql_with_transaction_retry(core.node(), &query, "background tool calls")
+    let response = access
+        .execute(&query)
         .await
         .map_err(|error| BridgeError::untyped(format!("{error:#}")))?;
 
     let data = response
-        .data
+        .get("data")
         .ok_or_else(|| BridgeError::untyped("AgentToolCall query returned no data"))?;
     let rows = data
         .get("AgentToolCall")
@@ -194,6 +203,21 @@ mod background_tool_query_tests {
     use super::*;
 
     #[test]
+    fn runtime_liveness_decodes_native_names_and_keeps_product_names() {
+        let view: RuntimeLivenessView = serde_json::from_value(serde_json::json!({
+            "expired_processing_count": 0,
+            "requests": [],
+            "active_tool_calls": [],
+            "active_native_executors_available": true,
+            "active_native_executors": [{ "id": 7, "pid": 42, "argv0": "runtime-task", "tool_name": "Bash", "started_at": "2026-11-04T00:00:00Z", "age_ms": 10 }]
+        })).unwrap();
+        assert_eq!(view.active_native_executors[0].pid, 42);
+        let product = serde_json::to_value(view).unwrap();
+        assert_eq!(product["activeNativeExecutors"][0]["toolName"], "Bash");
+        assert!(product.get("active_native_executors").is_none());
+    }
+
+    #[test]
     fn background_query_selects_job_pin() {
         let query = background_tool_calls_query("did:key:z6Mk");
 
@@ -203,24 +227,34 @@ mod background_tool_query_tests {
 }
 
 #[tauri::command]
-pub async fn desktop_session_provenance(
+pub async fn desktop_session_provenance<R>(
+    window: tauri::WebviewWindow<R>,
     state: State<'_, DesktopAppState>,
-    request: DesktopSessionProvenanceRequest,
-) -> Result<SessionProvenanceView, BridgeError> {
+    mut request: DesktopSessionProvenanceRequest,
+) -> Result<SessionProvenanceView, BridgeError>
+where
+    R: tauri::Runtime,
+{
     let core = current_core(&state)
         .ok_or_else(|| BridgeError::untyped("desktop bridge has not finished bootstrapping"))?;
+    request.node_did = state.window_command_node(window.label(), request.node_did.as_deref());
     crate::provenance::session_provenance_request(&core, request)
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))
 }
 
 #[tauri::command]
-pub async fn desktop_interrupt_request(
+pub async fn desktop_interrupt_request<R>(
+    window: tauri::WebviewWindow<R>,
     state: State<'_, DesktopAppState>,
-    request: DesktopInterruptRequest,
-) -> Result<InterruptRequestResult, BridgeError> {
+    mut request: DesktopInterruptRequest,
+) -> Result<InterruptRequestResult, BridgeError>
+where
+    R: tauri::Runtime,
+{
     let core = crate::state::current_core(&state)
         .ok_or_else(|| BridgeError::untyped("desktop bridge core not initialized"))?;
+    request.node_did = state.window_command_node(window.label(), request.node_did.as_deref());
     tracing::info!(
         target: "gents_desktop::interrupt",
         request_id = %request.request_id,
@@ -272,11 +306,11 @@ pub async fn desktop_job_control(
         Err(error) => tracing::warn!(
             target: "gents_desktop::job_control",
             tool_call_doc_id = %request.tool_call_doc_id,
-            error,
+            %error,
             "desktop job control failed"
         ),
     }
-    result.map_err(|error| BridgeError::untyped(error.to_string()))
+    result
 }
 
 #[tauri::command]
@@ -286,35 +320,59 @@ pub async fn desktop_process_control(
 ) -> Result<ProcessControlOutcome, BridgeError> {
     let core = current_core(&state)
         .ok_or_else(|| BridgeError::untyped("desktop bridge core not initialized"))?;
-    crate::process_control::process_control(&core, &request)
-        .await
-        .map_err(BridgeError::untyped)
+    crate::process_control::process_control(&core, &request).await
 }
 
 #[tauri::command]
-pub async fn desktop_list_backends_with_health(
+pub async fn desktop_list_backends_with_health<R>(
+    window: tauri::WebviewWindow<R>,
     state: State<'_, DesktopAppState>,
-) -> Result<Vec<BackendHealthView>, BridgeError> {
+) -> Result<Vec<BackendHealthView>, BridgeError>
+where
+    R: tauri::Runtime,
+{
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
-    list_backends_with_health_for_core(core).await
+    list_backends_with_health_for_core(core, state.window_command_node(window.label(), None)).await
 }
 
+/// The backends of `node_did`, the calling window's node.
 pub async fn list_backends_with_health_for_core(
     core: Arc<ClientCore>,
+    node_did: Option<String>,
 ) -> Result<Vec<BackendHealthView>, BridgeError> {
-    let node = core.node_arc();
-    let backends = list_all_backends(&node)
+    let node_did = node_did.ok_or_else(|| BridgeError::untyped("no runtime selected"))?;
+    let endpoint = core
+        .operator_observation_endpoint(&node_did)
         .await
-        .map_err(|err| err.to_string())?;
+        .ok_or_else(|| {
+            BridgeError::untyped(format!(
+                "runtime {node_did} has no authenticated database endpoint"
+            ))
+        })?;
+    let access = ConfigAccess::Graphql(endpoint);
+    let backends = access
+        .transact_readonly("desktop.backend_health", |txn| {
+            let node_did = &node_did;
+            Box::pin(async move {
+                let backends = list_inference_backends_in_txn(txn, node_did).await?;
+                let mut observations = Vec::with_capacity(backends.len());
+                for backend in backends {
+                    let observation =
+                        lookup_backend_observation_in_txn(txn, node_did, &backend.backend_id)
+                            .await?;
+                    observations.push((backend, observation));
+                }
+                Ok::<_, anyhow::Error>(observations)
+            })
+        })
+        .await
+        .map_err(|error| BridgeError::untyped(format!("{error:#}")))?;
 
     let mut views = Vec::with_capacity(backends.len());
-    for backend in backends {
-        let observation = lookup_backend_observation(&node, &backend.node_did, &backend.backend_id)
-            .await
-            .map_err(|err| err.to_string())?;
-        let recent_calls = fetch_recent_calls(&node, &backend.backend_id)
+    for (backend, observation) in backends {
+        let recent_calls = fetch_recent_calls(&access, &node_did, &backend.backend_id)
             .await
             .map_err(|err| err.to_string())?;
         let probe_status = observation
@@ -334,11 +392,10 @@ pub async fn list_backends_with_health_for_core(
             .to_string();
         let display_state = serde_json::from_value(serde_json::Value::String(display_state))
             .map_err(|error| format!("invalid backend display state: {error}"))?;
-        let catalog_scope = matches!(
-            backend.auth,
-            gents::document_config::BackendAuth::NodeOAuth { .. }
-        )
-        .then_some(backend.node_did.as_str());
+        let catalog_scope = backend
+            .auth
+            .uses_node_oauth()
+            .then_some(backend.node_did.as_str());
         let models = observation
             .as_ref()
             .map(|row| row.catalog_for(catalog_scope))
@@ -372,14 +429,16 @@ pub async fn list_backends_with_health_for_core(
 }
 
 async fn fetch_recent_calls(
-    node: &EmbeddedNode,
+    access: &ConfigAccess,
+    node_did: &str,
     backend_id: &str,
 ) -> Result<Vec<InferenceCallSummaryView>, anyhow::Error> {
     let escaped_id = escape_graphql_string(backend_id);
+    let escaped_node = escape_graphql_string(node_did);
     let query = format!(
         r#"query {{
             InferenceCall(
-                filter: {{ backend_id: {{ _eq: "{escaped_id}" }} }},
+                filter: {{ node_did: {{ _eq: "{escaped_node}" }}, backend_id: {{ _eq: "{escaped_id}" }} }},
                 order: {{ queued_at: DESC }},
                 limit: {limit}
             ) {{
@@ -401,13 +460,13 @@ async fn fetch_recent_calls(
         limit = RECENT_CALLS_PER_BACKEND,
     );
 
-    let resp = graphql_with_transaction_retry(node, &query, "list InferenceCall by backend")
+    let resp = access
+        .execute(&query)
         .await
         .with_context(|| format!("list InferenceCall for backend {backend_id}"))?;
 
     Ok(resp
-        .data
-        .as_ref()
+        .get("data")
         .and_then(|data| data.get("InferenceCall"))
         .and_then(|value| value.as_array())
         .map(|rows| rows.iter().map(parse_call_row).collect::<Vec<_>>())
@@ -465,19 +524,26 @@ fn parse_call_row(row: &serde_json::Value) -> InferenceCallSummaryView {
 }
 
 #[tauri::command]
-pub async fn desktop_list_mcp_services_with_health(
+pub async fn desktop_list_mcp_services_with_health<R>(
+    window: tauri::WebviewWindow<R>,
     state: State<'_, DesktopAppState>,
-) -> Result<Vec<MCPServiceHealthView>, BridgeError> {
+) -> Result<Vec<MCPServiceHealthView>, BridgeError>
+where
+    R: tauri::Runtime,
+{
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
-    list_mcp_services_with_health_for_core(core).await
+    list_mcp_services_with_health_for_core(core, state.window_command_node(window.label(), None))
+        .await
 }
 
+/// The MCP services of `node_did`, the calling window's node.
 pub async fn list_mcp_services_with_health_for_core(
     core: Arc<ClientCore>,
+    node_did: Option<String>,
 ) -> Result<Vec<MCPServiceHealthView>, BridgeError> {
-    load_mcp_services_with_health(core.as_ref())
+    load_mcp_services_with_health(core.as_ref(), node_did.as_deref())
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))
 }

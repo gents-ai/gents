@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
-use gents::config_client::ConfigAccess;
-use gents::graphql::escape_graphql_string;
-use gents::tool_call_lifecycle::ToolCallState;
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::escape_graphql_string;
+use gents::tools::call::lifecycle::ToolCallState;
 use gents_codex_protocol as codex;
 use gents_protocol::client_protocol::{ClientTurnState, RequestLifecycleState};
 use serde_json::{json, Value};
@@ -191,7 +191,7 @@ pub(super) async fn hydrate_gents_tool_call_progress(
         .doc_id
         .as_deref()
         .context("AgentToolCall omitted _docID")?;
-    let presentation = gents::tool_call_lifecycle::load_tool_call_presentation(
+    let presentation = gents::tools::call::lifecycle::load_tool_call_presentation(
         access,
         doc_id,
         node_did,
@@ -432,14 +432,14 @@ mod tests {
         let state =
             super::super::turn_projection::tests::notification_test_state(temp.path()).await;
         let node_did = escape_graphql_string(state.node_did.as_ref());
-        let agent_id = escape_graphql_string(state.agent_id.as_ref());
+        let agent_did = escape_graphql_string(state.agent_did.as_ref());
         for (id, purpose, created_at) in [
             ("turn", "normal", "2026-09-25T00:00:00Z"),
             ("title", "title-audit", "2026-09-25T00:00:01Z"),
             ("steer", "normal", "2026-09-25T00:00:02Z"),
         ] {
             let mutation = format!(
-                r#"mutation {{ create_AgentRequest(input: {{request_id: "{id}", purpose: "{purpose}", session_id: "thread", node_did: "{node_did}", requester_did: "{node_did}", agent_id: "{agent_id}", content: "prompt", lifecycle_state: "processing", created_at: "{created_at}"}}) {{_docID}} }}"#,
+                r#"mutation {{ create_AgentRequest(input: {{request_id: "{id}", purpose: "{purpose}", session_id: "thread", node_did: "{node_did}", requester_did: "{node_did}", agent_did: "{agent_did}", content: "prompt", lifecycle_state: "processing", created_at: "{created_at}"}}) {{_docID}} }}"#,
                 id = escape_graphql_string(id),
                 purpose = escape_graphql_string(purpose),
                 created_at = escape_graphql_string(created_at),
@@ -449,7 +449,7 @@ mod tests {
                 .expect("create request");
         }
         let turn = super::super::store::query_node_json(
-            &state.node,
+            &state.reader,
             r#"{ AgentRequest(filter: { request_id: {_eq: "turn"} }) {_docID} }"#,
         )
         .await
@@ -459,7 +459,7 @@ mod tests {
             .expect("turn doc id");
 
         let response = super::super::store::query_node_json(
-            &state.node,
+            &state.reader,
             &gents_turn_progress_query(turn_doc_id, "thread"),
         )
         .await

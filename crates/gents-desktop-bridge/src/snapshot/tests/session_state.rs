@@ -12,7 +12,7 @@ fn session(requester_did: Option<&str>) -> AgentSession {
         session_id: "session-1".into(),
         node_did: "did:test:amy".into(),
         requester_did: requester_did.map(str::to_owned),
-        agent_id: "amy-default".into(),
+        agent_did: "amy-default".into(),
         created_at: "2026-04-21T12:00:00Z".into(),
         closed_at: None,
         archived_at: None,
@@ -43,7 +43,7 @@ fn request(id: &str, state: RequestLifecycleState) -> AgentRequestRow {
         doc_id: Some(id.into()),
         request_id: id.into(),
         node_did: Some("did:test:amy".into()),
-        agent_id: Some("amy-default".into()),
+        agent_did: Some("amy-default".into()),
         session_id: Some("session-1".into()),
         content: Some(format!("{id} prompt")),
         lifecycle_state: Some(state),
@@ -114,7 +114,7 @@ fn lean_session_rows(
                 request_id: contract_request_id(row.request),
                 node_did: Some(CONTRACT_NODE.into()),
                 requester_did: lean_requester(row.requester),
-                agent_id: Some("contract-agent".into()),
+                agent_did: Some("contract-agent".into()),
                 session_id: Some(session_id.into()),
                 content: Some(format!("input {}", row.request)),
                 lifecycle_state: Some(lifecycle),
@@ -131,10 +131,10 @@ fn lean_session_rows(
                     .map(|doc| format!("doc-{doc}")),
                 failure_reason: row
                     .folded_into
-                    .map(|_| gents::lifecycle::FOLDED_REASON.to_owned())
+                    .map(|_| gents::request::lifecycle::FOLDED_REASON.to_owned())
                     .or_else(|| {
                         row.replaced_by
-                            .map(|_| gents::lifecycle::REPLACED_REASON.to_owned())
+                            .map(|_| gents::request::lifecycle::REPLACED_REASON.to_owned())
                     }),
                 input: (row.queued_after.is_some() || row.background_wake).then(|| RequestInput {
                     queue: Some(RequestQueue {
@@ -168,7 +168,7 @@ fn contract_session(
         session_id: session_id.into(),
         node_did: CONTRACT_NODE.into(),
         requester_did,
-        agent_id: "contract-agent".into(),
+        agent_did: "contract-agent".into(),
         created_at: "2026-04-21T12:00:00Z".into(),
         closed_at: None,
         archived_at: None,
@@ -202,7 +202,7 @@ fn client_shell_contract_store(case: &super::lean_vocab_test::LeanClientShellCas
                 doc_id: Some(contract_request_id(id)),
                 request_id: contract_request_id(id),
                 node_did: Some(CONTRACT_NODE.into()),
-                agent_id: Some("contract-agent".into()),
+                agent_did: Some("contract-agent".into()),
                 session_id: Some(session_id.clone()),
                 content: Some("contract prompt".into()),
                 lifecycle_state: Some(request_state_for_turn(
@@ -497,8 +497,11 @@ fn session_queue_order_matches_native_arrival_model_after_claim() {
     }
 }
 
+/// Only the Agent's verified observation shows a Goal (Lean
+/// `SessionObservation.no_goal_only_from_verified_absence`), so a readable
+/// Goal row never reaches the snapshot projection.
 #[test]
-fn session_snapshot_projects_durable_goal_state() {
+fn session_snapshot_never_projects_goal_rows() {
     let goal = GoalRow {
         goal_id: "goal-1".into(),
         creation_key: None,
@@ -535,19 +538,7 @@ fn session_snapshot_projects_durable_goal_state() {
         None,
     )
     .expect("snapshot");
-    let goal = snapshot.goal.expect("goal");
-    assert_eq!(
-        goal.objective.as_deref(),
-        Some("Ship the durable controller")
-    );
-    assert_eq!(
-        (
-            goal.tokens_used,
-            goal.consecutive_blocked_audits,
-            goal.continuation_sequence
-        ),
-        (1_200, 2, 3)
-    );
+    assert!(snapshot.goal.is_none(), "{:?}", snapshot.goal);
 }
 
 #[test]
@@ -701,7 +692,7 @@ fn session_snapshot_does_not_report_unobserved_preferred_request() {
 #[test]
 fn session_snapshot_projection_consumes_generated_client_shell_contract_cases() {
     let cases = lean_desktop_client_shell_cases();
-    assert_eq!(cases.len(), 26);
+    assert_eq!(cases.len(), 28);
     assert!(cases
         .iter()
         .any(|case| !case.desktop_queued_request_ids.is_empty()));
@@ -811,8 +802,8 @@ fn session_snapshot_binds_request_lifecycle_operator_ui_cases() {
         );
         if let Some(pending) = snapshot.pending_turn.as_ref() {
             assert_eq!(
-                pending.lifecycle_state.as_deref(),
-                Some(request_state_for_turn(Some(expected)).as_str()),
+                pending.lifecycle_state,
+                Some(request_state_for_turn(Some(expected))),
                 "{}",
                 case.name
             );
@@ -1280,7 +1271,7 @@ fn refused_latest_request_observation_keeps_the_failed_turn_reason_retry_and_pro
     let pending = snapshot.pending_turn.expect("refused prompt stays visible");
     assert_eq!(pending.request_id, "req-2");
     assert_eq!(pending.content, "run the disallowed skill");
-    assert_eq!(pending.lifecycle_state.as_deref(), Some("failed"));
+    assert_eq!(pending.lifecycle_state, Some(RequestLifecycleState::Failed));
     assert!(
         snapshot
             .timeline_items

@@ -2,7 +2,7 @@ use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::outcome::{classify, EvidenceClass, OutcomeKind, ProviderReason};
-use crate::document_config::{EvalReducer, EvalSplit, EvalTier};
+use crate::documents::{EvalReducer, EvalSplit, EvalTier};
 
 pub const SCORE_BP_MAX: u32 = 10_000;
 
@@ -139,12 +139,6 @@ pub struct PairedEvidence {
     pub dropped_candidate: usize,
 }
 
-impl PairedEvidence {
-    pub fn dropped_keys(&self) -> usize {
-        self.keys.saturating_sub(self.pairs.len())
-    }
-}
-
 pub fn pair_trials(baseline: &[TrialScore], candidate: &[TrialScore]) -> PairedEvidence {
     let index = |trials: &[TrialScore]| -> BTreeMap<(String, u32), CaseTrialScore> {
         let mut scores: BTreeMap<(String, u32), CaseTrialScore> = BTreeMap::new();
@@ -252,7 +246,7 @@ pub fn exposure(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document_config::EvalTier;
+    use crate::documents::EvalTier;
 
     fn v(
         id: &str,

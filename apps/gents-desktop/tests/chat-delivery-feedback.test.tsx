@@ -1,9 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type {
-  ChatSendRequest,
-  ChatSubmissionRecovery,
-} from "@source-inc/gents-desktop-client";
+import type { ChatSendRequest } from "@source-inc/gents-desktop-client";
 import { ChatDeliveryFeedback } from "../src/ui/screens/session/ChatDeliveryFeedback";
 import { retainChatDraft, saveChatDraft } from "../src/hooks/chatDrafts";
 import { acceptedChat } from "./chat-delivery-fixture";
@@ -22,27 +19,21 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-function fixture() {
+function fixture(sending = false) {
   const nodeDid = node().nodeDid;
   const request: ChatSendRequest = {
     clientDid: "client",
     nodeDid,
     requestId: "original-request",
     sessionId: "original-session",
-    agentId: "default",
+    agentDid: "default",
     content: "Original message",
     cwd: "/original",
   };
-  const read = vi
-    .fn<() => Promise<ChatSubmissionRecovery>>()
-    .mockResolvedValue({ kind: "unconfirmed", nodeDid, requestId: "original-request" });
   const control = vi.fn(async (request: ChatSendRequest) => acceptedChat(request));
-  const ack = vi.fn().mockRejectedValue(new Error("Lost acknowledgement"));
   const app = testApp({
     api: {
-      recoverChatSubmission: read,
       sendChatMessage: control,
-      acknowledgeChatSubmission: ack,
       fetchSessionSnapshot: vi.fn().mockResolvedValue(null),
     },
     deployments: [node()],
@@ -55,75 +46,81 @@ function fixture() {
     },
   }));
   app.drafts.setState({ drafts: { newer: "Keep this newer draft" } });
-  saveChatDraft(app.stores.chat, retainChatDraft(request, null));
+  saveChatDraft(
+    app.stores.chat,
+    sending
+      ? { ...retainChatDraft(request, null), pendingUntil: Date.now() + 60_000 }
+      : {
+          ...retainChatDraft(request, null),
+          failure: { message: "The runtime connection was lost", error: null },
+        },
+  );
   const view = render(<ChatDeliveryFeedback />, { wrapper: withApp(app) });
-  return { app, request, read, control, ack, view };
+  return { app, request, control, view };
 }
 
-it("checks without dispatch and explicitly resumes the retained message while preserving newer text", async () => {
-  const f = fixture();
-  const check = screen.getByRole("button", { name: "Check message delivery" });
-  check.focus();
-  expect(check).toHaveFocus();
-  fireEvent.click(check);
-  await waitFor(() => expect(f.read).toHaveBeenCalledTimes(1));
-  expect(f.control).not.toHaveBeenCalled();
-  await screen.findByText(
-    "Delivery is still unconfirmed. Check again or resume the saved message.",
-  );
-  fireEvent.click(screen.getByRole("button", { name: "Resume saved message" }));
-  await screen.findByText("Message sent");
-  expect(f.control).toHaveBeenCalledWith(f.request);
-  expect(f.app.drafts.getState().drafts.newer).toBe("Keep this newer draft");
-  expect(screen.queryByRole("button", { name: "Resume saved message" })).toBeNull();
+it("shows a message as sending from the moment it is sent, with no actions", () => {
+  fixture(true);
+  const shown = screen.getByRole("status", { name: "Saved message" });
+  expect(shown.textContent).toContain("Sending the message…");
+  expect(shown.textContent).toContain("Original message");
+  expect(screen.queryByRole("button", { name: "Retry message" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Discard message" })).toBeNull();
 });
 
-it("shows a verified refusal and dismisses only that saved change", async () => {
+it("shows a failed message with its cause, and Retry resends the original while preserving newer text", async () => {
   const f = fixture();
-  f.read.mockResolvedValue({
-    kind: "prepared",
-    result: { ...acceptedChat(f.request), outcome: "notDelivered" },
-  });
-  f.ack.mockResolvedValue(undefined);
-  fireEvent.click(screen.getByRole("button", { name: "Check message delivery" }));
-  await screen.findByText("Message was not delivered");
-  expect(screen.queryByRole("button", { name: "Resume saved message" })).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "Dismiss saved message" }));
+  await screen.findByText("The message wasn't sent");
+  screen.getByText(/The runtime connection was lost/);
+  const retry = screen.getByRole("button", { name: "Retry message" });
+  retry.focus();
+  expect(retry).toHaveFocus();
+  fireEvent.click(retry);
+  await waitFor(() =>
+    expect(screen.queryByRole("status", { name: "Saved message" })).toBeNull(),
+  );
+  expect(f.control).toHaveBeenCalledTimes(1);
+  expect(f.control).toHaveBeenCalledWith(f.request);
+  expect(loadChatDrafts().chatDrafts).toEqual([]);
+  expect(f.app.drafts.getState().drafts.newer).toBe("Keep this newer draft");
+});
+
+it("discards a failed message without sending it", async () => {
+  const f = fixture();
+  fireEvent.click(await screen.findByRole("button", { name: "Discard message" }));
   await waitFor(() =>
     expect(screen.queryByRole("status", { name: "Saved message" })).toBeNull(),
   );
   expect(f.control).not.toHaveBeenCalled();
+  expect(loadChatDrafts().chatDrafts).toEqual([]);
   expect(f.app.drafts.getState().drafts.newer).toBe("Keep this newer draft");
 });
 
-it("disables recovery while the original call is still in flight", () => {
+it("keeps a failed retry saved with its new cause", async () => {
   const f = fixture();
-  f.app.stores.chat.setState({ chatRequestsInFlight: new Set(["original-request"]) });
-  return waitFor(() => {
-    expect(
-      screen.getByRole("button", { name: "Check message delivery" }),
-    ).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Resume saved message" })).toBeDisabled();
-  });
+  f.control.mockRejectedValueOnce(new Error("The selected agent was removed"));
+  fireEvent.click(await screen.findByRole("button", { name: "Retry message" }));
+  await screen.findAllByText(/The selected agent was removed/);
+  expect(loadChatDrafts().chatDrafts[0].failure?.message).toBe(
+    "The selected agent was removed",
+  );
+  expect(screen.getByRole("button", { name: "Retry message" })).toBeEnabled();
 });
 
-it("retains a confirmed result after its recovery view closes without navigating", async () => {
+it("retries without navigating once its view closes", async () => {
   const f = fixture();
-  let finish!: (value: ChatSubmissionRecovery) => void;
-  f.read.mockImplementationOnce(
-    () =>
+  let finish!: () => void;
+  f.control.mockImplementationOnce(
+    (request) =>
       new Promise((resolve) => {
-        finish = resolve;
+        finish = () => resolve(acceptedChat(request));
       }),
   );
-  f.ack.mockResolvedValue(undefined);
-  fireEvent.click(screen.getByRole("button", { name: "Check message delivery" }));
-  await waitFor(() => expect(f.read).toHaveBeenCalledTimes(1));
+  fireEvent.click(await screen.findByRole("button", { name: "Retry message" }));
+  await waitFor(() => expect(f.control).toHaveBeenCalledTimes(1));
   f.view.unmount();
-  finish({ kind: "prepared", result: acceptedChat(f.request) });
-  await waitFor(() => expect(f.ack).toHaveBeenCalledTimes(1));
+  finish();
+  await waitFor(() => expect(loadChatDrafts().chatDrafts).toEqual([]));
   expect(f.app.stores.selection.getState().sessionId).toBeNull();
   expect(navigate).not.toHaveBeenCalled();
-  expect(loadChatDrafts().chatDrafts[0].result).toEqual(acceptedChat(f.request));
-  expect(f.app.drafts.getState().drafts.newer).toBe("Keep this newer draft");
 });

@@ -144,6 +144,8 @@ export const useSeenSince = (): string | null =>
 
 export const seenMarks = {
   of: (session: SessionKey) => seenOf(store.getState(), session),
+  /** when this device started keeping marks */
+  since: () => store.getState().since,
   /** a mark saved moves its session to the front; one unchanged writes nothing */
   set(session: SessionKey, mark: SeenMark) {
     const state = store.getState();

@@ -1,4 +1,4 @@
-type PendingChatSubmission {
+type PendingChatSubmission @policy(id: "0db680be49781d06d5793ca0eecc8fad2b1a5d05467c535325ddeb148f679b9c", resource: "journals") {
     request_id: String @index(unique: true)
     payload: String
 }

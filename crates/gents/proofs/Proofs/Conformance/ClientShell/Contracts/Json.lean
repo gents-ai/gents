@@ -44,6 +44,7 @@ def ClientShellContractCase.toJson (witness : ClientShellContractCase) : String 
     ++ "\"frontend_session_turn_state\":" ++ jsonStringOption witness.frontendSessionTurnState ++ ","
     ++ "\"frontend_session_pending_request_id\":" ++ jsonNatOption witness.frontendSessionPendingRequestId ++ ","
     ++ "\"frontend_session_queued_request_ids\":" ++ jsonNatList witness.frontendSessionQueuedRequestIds ++ ","
+    ++ "\"frontend_session_pending_queue_request_ids\":" ++ jsonNatList witness.frontendSessionPendingQueueRequestIds ++ ","
     ++ "\"frontend_session_folded_request_ids\":" ++ jsonNatList witness.frontendSessionFoldedRequestIds ++ ","
     ++ "\"frontend_local_workflow_kind\":" ++ jsonString witness.frontendLocalWorkflowKind ++ ","
     ++ "\"frontend_local_workflow_session\":" ++ jsonNatOption witness.frontendLocalWorkflowSession ++ ","

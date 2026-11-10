@@ -42,7 +42,7 @@ import { revealInFolder } from "../../lib/nativeShell";
 import { revealInFolderLabel } from "../../lib/shellPlatform";
 import { isAbsolutePath } from "./tool-summary";
 import { CONTEXT_MENU, DROPDOWN_MENU, type MenuParts } from "./SessionMenu";
-import { Counts, FileLabel, fileName } from "./TurnChanges";
+import { FileCounts, FileLabel, fileName } from "./TurnChanges";
 
 const RecordedDiffView = lazy(() => import("./RecordedDiffView"));
 
@@ -123,7 +123,7 @@ export const ChangedFileSection = memo(function ChangedFileSection({
             <FileLabel path={file.path} within={within} />
             {viewed && <ViewedMark />}
           </span>
-          <Counts added={file.added} removed={file.removed} />
+          <FileCounts file={file} />
         </button>
         <FileMenu {...items} />
       </FileContextMenu>

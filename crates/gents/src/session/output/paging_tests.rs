@@ -1,5 +1,8 @@
-use super::*;
-use crate::session::canonical_rows::{
+use std::sync::Arc;
+
+use super::reader::{load_canonical_message_in_txn, load_canonical_payload_in_txn};
+use crate::store::config_client::ConfigAccess;
+use gents_protocol::output::rows::{
     output_segment_create_variables, transcript_message_create_variables,
     CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
@@ -63,9 +66,11 @@ async fn transaction_payload_reads_cross_pages_and_reject_conflicting_segments()
                             &output_segment_create_variables(&row)?,
                         )
                         .await?;
-                    close_id = crate::graphql::created_doc_id(&response, "AgentOutputSegment")?;
+                    close_id =
+                        crate::store::graphql::created_doc_id(&response, "AgentOutputSegment")?;
                 }
                 let header = TranscriptMessage {
+                    native_request_id: None,
                     message_key: "paged-canonical".into(),
                     session_id: segment.session_id.clone(),
                     node_did: segment.node_did.clone(),
@@ -96,7 +101,7 @@ async fn transaction_payload_reads_cross_pages_and_reject_conflicting_segments()
                     )
                     .await?;
                 Ok::<_, anyhow::Error>((
-                    crate::graphql::created_doc_id(&response, "AgentMessage")?,
+                    crate::store::graphql::created_doc_id(&response, "AgentMessage")?,
                     close_id,
                 ))
             })
@@ -172,5 +177,5 @@ async fn transaction_payload_reads_cross_pages_and_reject_conflicting_segments()
     })
     .await
     .unwrap();
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }

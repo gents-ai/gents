@@ -3,31 +3,16 @@ use std::sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock};
 use tokio::sync::watch;
 use tokio::sync::RwLock;
 
-use gents::agent::p2p_reconcile::{
-    compare_client_replicated_schema, read_client_replicated_schema,
-};
-use gents::P2pSyncStatusSnapshot;
-use gents_protocol::peer_schema::{
-    ReplicatedSchema, ReplicatedSchemaSkew, STATUS_REPLICATED_SCHEMA_FIELD,
-};
-use serde_json::Value;
-
-use super::enrollment::EnrollmentAuthorizationGeneration;
+use super::enrollment::reconcile::EnrollmentAuthorizationGeneration;
 use super::{
     p2p_health_materially_changed, ClientPeerStatus, ClientSyncStateSnapshot,
     EnrollmentActivationError, P2PHealth,
 };
-use crate::client::peer_directory::RemovalCause;
+use crate::client::peer_directory::{EndedAccess, RemovalCause};
 use crate::client::{PeerDirectory, PeerRecord};
 
 type LastErrorPatch = (Option<String>, Option<String>);
 
-/// Replicated-schema compatibility is a live observation between two running
-/// nodes, owned here, and deliberately not part of the signed enrollment
-/// schema fingerprint: signed offers are re-verified against the current
-/// fingerprint on every projection, so folding replicated versions into it
-/// would invalidate every membership on any schema-changing release even
-/// when both sides upgrade together.
 #[derive(Clone)]
 pub(in crate::client) struct ClientSyncStateOwner {
     tx: watch::Sender<ClientSyncStateSnapshot>,
@@ -35,9 +20,6 @@ pub(in crate::client) struct ClientSyncStateOwner {
     enrollment_observation_generations:
         Arc<StdMutex<BTreeMap<String, EnrollmentAuthorizationGeneration>>>,
     advertised_enrollment_labels: Arc<StdRwLock<BTreeMap<String, String>>>,
-    local_replicated_schema: Arc<tokio::sync::OnceCell<ReplicatedSchema>>,
-    schema_observation_sequence: Arc<std::sync::atomic::AtomicU64>,
-    schema_observation_latest: Arc<std::sync::Mutex<BTreeMap<String, u64>>>,
 }
 
 impl ClientSyncStateOwner {
@@ -81,10 +63,7 @@ impl ClientSyncStateOwner {
         sort_statuses(&mut peers);
         let (tx, _) = watch::channel(ClientSyncStateSnapshot {
             transport,
-            database_sync: None,
-            database_sync_error: None,
             enrollment_activation_errors: BTreeMap::new(),
-            peer_schema_skew: BTreeMap::new(),
             directory: records,
             peers,
         });
@@ -93,9 +72,6 @@ impl ClientSyncStateOwner {
             directory,
             enrollment_observation_generations: Arc::new(StdMutex::new(BTreeMap::new())),
             advertised_enrollment_labels: Arc::new(StdRwLock::new(BTreeMap::new())),
-            local_replicated_schema: Arc::new(tokio::sync::OnceCell::new()),
-            schema_observation_sequence: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-            schema_observation_latest: Arc::new(std::sync::Mutex::new(BTreeMap::new())),
         }
     }
 
@@ -207,7 +183,7 @@ impl ClientSyncStateOwner {
         self.tx.borrow().clone()
     }
 
-    pub(super) fn subscribe(&self) -> watch::Receiver<ClientSyncStateSnapshot> {
+    pub(in crate::client) fn subscribe(&self) -> watch::Receiver<ClientSyncStateSnapshot> {
         self.tx.subscribe()
     }
 
@@ -365,6 +341,18 @@ impl ClientSyncStateOwner {
         Ok(removed)
     }
 
+    pub(super) async fn ended_access(&self) -> Vec<EndedAccess> {
+        self.directory.read().await.ended_access().to_vec()
+    }
+
+    pub(super) async fn dismiss_ended_access(&self, node_did: &str) -> anyhow::Result<bool> {
+        self.directory
+            .write()
+            .await
+            .dismiss_ended_access(node_did)
+            .await
+    }
+
     pub(super) async fn complete_removal_if_matches(
         &self,
         expected: &PeerRecord,
@@ -377,133 +365,36 @@ impl ClientSyncStateOwner {
         Ok(completed)
     }
 
-    pub(super) fn replace_database_observation(
-        &self,
-        transport: P2PHealth,
-        database_sync: Option<P2pSyncStatusSnapshot>,
-        database_sync_error: Option<String>,
-    ) {
+    pub(super) fn replace_transport_observation(&self, transport: P2PHealth) {
         self.tx.send_if_modified(|state| {
-            let transport_changed = p2p_health_materially_changed(&state.transport, &transport);
-            let previous_health = crate::client::project_sync_health(state);
+            let changed = p2p_health_materially_changed(&state.transport, &transport);
             state.transport = transport;
-            state.database_sync = database_sync;
-            state.database_sync_error = database_sync_error;
-            transport_changed || previous_health != crate::client::project_sync_health(state)
-        });
-    }
-
-    /// Capture configured peers plus a sequence number before the endpoint's
-    /// `/status` is fetched; a fetch may only be recorded against the
-    /// generation of the endpoint it came from, and finishing records only on
-    /// peers still in that generation and never behind a newer observation.
-    pub(super) fn begin_runtime_schema_observation(
-        &self,
-        runtime_did: &str,
-        endpoint: Option<&str>,
-    ) -> Option<RuntimeSchemaObservation> {
-        let expected = self
-            .records()
-            .into_iter()
-            .filter(|record| {
-                record.node_did == runtime_did && same_endpoint(record.graphql.as_deref(), endpoint)
-            })
-            .collect::<Vec<_>>();
-        let bound_endpoint = expected.first()?.graphql.clone();
-        Some(RuntimeSchemaObservation {
-            runtime_did: runtime_did.to_string(),
-            endpoint: bound_endpoint,
-            sequence: self
-                .schema_observation_sequence
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
-            expected,
-        })
-    }
-
-    pub(super) async fn finish_runtime_schema_observation(
-        &self,
-        local: &Arc<defra_node::EmbeddedNode>,
-        observation: &RuntimeSchemaObservation,
-        status: &Value,
-    ) -> anyhow::Result<()> {
-        let local = self.local_replicated_schema(local).await?;
-        self.record_runtime_schema(observation, local, status)
-    }
-
-    /// Compare without recording; enrollment uses this before the offer is
-    /// authenticated, so an unverified `/status` cannot set or clear skew.
-    pub(super) async fn compare_runtime_schema(
-        &self,
-        local: &Arc<defra_node::EmbeddedNode>,
-        runtime_did: &str,
-        status: &Value,
-    ) -> anyhow::Result<()> {
-        let local = self.local_replicated_schema(local).await?;
-        compare_runtime_status(local, runtime_did, status)
-    }
-
-    async fn local_replicated_schema(
-        &self,
-        local: &Arc<defra_node::EmbeddedNode>,
-    ) -> anyhow::Result<&ReplicatedSchema> {
-        self.local_replicated_schema
-            .get_or_try_init(|| read_client_replicated_schema(Arc::clone(local)))
-            .await
-    }
-
-    fn record_runtime_schema(
-        &self,
-        observation: &RuntimeSchemaObservation,
-        local: &ReplicatedSchema,
-        status: &Value,
-    ) -> anyhow::Result<()> {
-        let observed = compare_runtime_status(local, &observation.runtime_did, status);
-        let skew = match &observed {
-            Ok(()) => None,
-            Err(error) => match error.downcast_ref::<ReplicatedSchemaSkew>() {
-                Some(skew) => Some(skew.clone()),
-                None => return observed,
-            },
-        };
-        let mut latest = self
-            .schema_observation_latest
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        self.tx.send_if_modified(|state| {
-            let mut changed = false;
-            for expected in &observation.expected {
-                let current = state.directory.iter().any(|record| {
-                    record.peer_id == expected.peer_id
-                        && observation_generation_matches(expected, record)
-                });
-                let newest = latest
-                    .get(&expected.peer_id)
-                    .is_none_or(|sequence| *sequence <= observation.sequence);
-                if !current || !newest {
-                    continue;
-                }
-                latest.insert(expected.peer_id.clone(), observation.sequence);
-                changed |= match &skew {
-                    None => state.peer_schema_skew.remove(&expected.peer_id).is_some(),
-                    Some(skew) => {
-                        state
-                            .peer_schema_skew
-                            .insert(expected.peer_id.clone(), skew.clone())
-                            .as_ref()
-                            != Some(skew)
-                    }
-                };
-            }
             changed
         });
-        observed
     }
 
     #[cfg(test)]
-    pub(super) async fn upsert_for_test(&self, record: PeerRecord) -> anyhow::Result<()> {
+    pub(in crate::client) async fn upsert_for_test(
+        &self,
+        record: PeerRecord,
+    ) -> anyhow::Result<()> {
         let mut directory = self.directory.write().await;
         directory.upsert(record).await?;
         self.publish_persisted_directory(directory.records().to_vec());
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(in crate::client) async fn remove_for_test(
+        &self,
+        expected: &PeerRecord,
+    ) -> anyhow::Result<()> {
+        self.queue_removal(
+            expected,
+            super::super::peer_directory::RemovalCause::Operator,
+        )
+        .await?;
+        self.complete_removal_if_matches(expected).await?;
         Ok(())
     }
 
@@ -576,20 +467,8 @@ impl ClientSyncStateOwner {
                     status
                 })
                 .collect();
-            let skew_before = state.peer_schema_skew.len();
-            state.peer_schema_skew.retain(|peer_id, _| {
-                let previous = previous_directory
-                    .iter()
-                    .find(|record| &record.peer_id == peer_id);
-                let next = records.iter().find(|record| &record.peer_id == peer_id);
-                previous
-                    .zip(next)
-                    .is_some_and(|(previous, next)| observation_generation_matches(previous, next))
-            });
             state.directory.clone_from(records);
-            state.directory != previous_directory
-                || state.peers != previous_peers
-                || state.peer_schema_skew.len() != skew_before
+            state.directory != previous_directory || state.peers != previous_peers
         });
     }
 
@@ -614,54 +493,6 @@ impl ClientSyncStateOwner {
             *peer != previous
         })
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct RuntimeSchemaObservation {
-    runtime_did: String,
-    endpoint: Option<String>,
-    sequence: u64,
-    expected: Vec<PeerRecord>,
-}
-
-impl RuntimeSchemaObservation {
-    pub fn endpoint(&self) -> Option<&str> {
-        self.endpoint.as_deref()
-    }
-}
-
-fn same_endpoint(configured: Option<&str>, target: Option<&str>) -> bool {
-    match (configured, target) {
-        (None, None) => true,
-        (Some(configured), Some(target)) => {
-            match (reqwest::Url::parse(configured), reqwest::Url::parse(target)) {
-                (Ok(configured), Ok(target)) => configured == target,
-                _ => configured == target,
-            }
-        }
-        _ => false,
-    }
-}
-
-fn compare_runtime_status(
-    local: &ReplicatedSchema,
-    runtime_did: &str,
-    status: &Value,
-) -> anyhow::Result<()> {
-    let status_did = status.get("node_did").and_then(Value::as_str);
-    anyhow::ensure!(
-        status_did == Some(runtime_did),
-        "runtime status belongs to {}, not {runtime_did}",
-        status_did.unwrap_or("an unidentified runtime")
-    );
-    let remote = match status.get(STATUS_REPLICATED_SCHEMA_FIELD) {
-        Some(Value::Null) => {
-            anyhow::bail!("runtime {runtime_did} has not published its replicated schema yet")
-        }
-        Some(schema) => serde_json::from_value::<ReplicatedSchema>(schema.clone()).ok(),
-        None => None,
-    };
-    compare_client_replicated_schema(local, remote.as_ref()).map_err(anyhow::Error::from)
 }
 
 fn observation_generation_matches(previous: &PeerRecord, current: &PeerRecord) -> bool {
@@ -713,11 +544,30 @@ pub(super) fn conservative_status(record: &PeerRecord) -> ClientPeerStatus {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn transport_observation_changes_notify_subscribers() {
+        use super::*;
+
+        let (_temp, owner) = ClientSyncStateOwner::for_test(Vec::new(), Vec::new()).await;
+        let mut updates = owner.subscribe();
+        let degraded = P2PHealth {
+            status: super::super::P2PHealthStatus::Degraded,
+            consecutive_failures: 1,
+            ..P2PHealth::default()
+        };
+        owner.replace_transport_observation(degraded.clone());
+        assert!(updates.has_changed().unwrap());
+        assert_eq!(updates.borrow_and_update().transport, degraded);
+
+        owner.replace_transport_observation(degraded);
+        assert!(!updates.has_changed().unwrap());
+    }
 
     #[tokio::test]
     async fn generated_activation_traces_drive_the_sync_owner() {
         use super::super::EnrollmentActivationStage;
         use super::*;
+        use serde_json::Value;
         let output = gents_lean_contract::run_prepared_generator(
             &gents_lean_contract::proofs_dir().unwrap(),
             "Proofs.Conformance.EnrollmentActivation:olean",
@@ -874,7 +724,6 @@ mod tests {
             [
                 "\n#[cfg(test)]\nmod tests {",
                 "\n#[cfg(test)]\nmod pairing_reconcile_tests {",
-                "\n#[cfg(test)]\nmod delete_source_tests {",
             ]
             .into_iter()
             .filter_map(|marker| source.find(marker))
@@ -885,6 +734,23 @@ mod tests {
         for (name, source) in [
             ("core", include_str!("../core.rs")),
             ("writes", include_str!("writes.rs")),
+            (
+                "writes/config_delete",
+                include_str!("writes/config_delete.rs"),
+            ),
+            ("writes/config_save", include_str!("writes/config_save.rs")),
+            ("writes/manual_runs", include_str!("writes/manual_runs.rs")),
+            ("writes/operator", include_str!("writes/operator.rs")),
+            (
+                "writes/pending_queue",
+                include_str!("writes/pending_queue.rs"),
+            ),
+            (
+                "writes/request_patch",
+                include_str!("writes/request_patch.rs"),
+            ),
+            ("writes/requests", include_str!("writes/requests.rs")),
+            ("writes/sessions", include_str!("writes/sessions.rs")),
             ("route_manager", include_str!("route_manager.rs")),
             ("supervisor", include_str!("supervisor.rs")),
             ("observer", include_str!("../observe.rs")),

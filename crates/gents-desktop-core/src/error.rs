@@ -13,8 +13,18 @@ pub enum BridgeErrorCode {
     StorageFull,
     /// The read could not publish against the current observation fence.
     ProjectionPending,
+    /// The selected session's node has not returned its canonical row; the
+    /// local request is written and the pairing to `endpoint` replicates.
+    SessionDelivering,
+    /// As `SessionDelivering`, but the pairing to `endpoint` is down.
+    SessionNotConnected,
+    /// The node at `endpoint` claimed the request; its session row has not
+    /// replicated back yet.
+    SessionAccepted,
     /// A verified runtime Goal-control rejection, never transport or message classification.
     GoalControlRejected,
+    /// DefraDB explicitly rejected the authenticated operation.
+    PermissionDenied,
     NotFound,
     InvalidArgument,
     Unsupported,
@@ -39,7 +49,11 @@ impl BridgeErrorCode {
             Self::RuntimeKeyAccess => "runtimeKeyAccess",
             Self::StorageFull => "storageFull",
             Self::ProjectionPending => "projectionPending",
+            Self::SessionDelivering => "sessionDelivering",
+            Self::SessionNotConnected => "sessionNotConnected",
+            Self::SessionAccepted => "sessionAccepted",
             Self::GoalControlRejected => "goalControlRejected",
+            Self::PermissionDenied => "permissionDenied",
             Self::NotFound => "notFound",
             Self::InvalidArgument => "invalidArgument",
             Self::Unsupported => "unsupported",
@@ -59,6 +73,9 @@ impl BridgeErrorCode {
         matches!(
             self,
             Self::ProjectionPending
+                | Self::SessionDelivering
+                | Self::SessionNotConnected
+                | Self::SessionAccepted
                 | Self::ClientStartFailed
                 | Self::EndpointUnreachable
                 | Self::Backend
@@ -118,15 +135,22 @@ impl BridgeError {
     }
 
     pub fn classify_transport_error(error: anyhow::Error) -> Self {
-        if gents::graphql::is_storage_full(error.as_ref()) {
+        if gents::store::graphql::is_storage_full(error.as_ref()) {
             return Self::storage_full();
         }
         if let Some(classified) = error.chain().find_map(|cause| cause.downcast_ref::<Self>()) {
             return classified.clone();
         }
-        let transport = gents::config_client::TransactionFailure::config_client_error(&error)
-            .and_then(gents::config_client::ConfigClientError::transport_error)
-            .filter(|error| error.is_connect() || error.is_timeout() || error.is_body());
+        if gents::store::config_client::TransactionFailure::permission_denied(&error) {
+            return Self::new(
+                BridgeErrorCode::PermissionDenied,
+                "Access was denied. Check this client's permissions with the runtime owner.",
+            );
+        }
+        let transport =
+            gents::store::config_client::TransactionFailure::config_client_error(&error)
+                .and_then(gents::store::config_client::ConfigClientError::transport_error)
+                .filter(|error| error.is_connect() || error.is_timeout() || error.is_body());
         let message = error.to_string();
         let Some(transport) = transport else {
             return Self::untyped(message);
@@ -138,7 +162,17 @@ impl BridgeError {
     }
 
     pub(crate) fn runtime_http_error(error: reqwest::Error, message: String) -> anyhow::Error {
-        if error.is_connect() || error.is_timeout() || error.is_body() {
+        if error.status().is_some_and(|status| {
+            matches!(
+                status,
+                reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+            )
+        }) {
+            anyhow::Error::from(Self::new(
+                BridgeErrorCode::PermissionDenied,
+                "Access was denied. Check this client's permissions with the runtime owner.",
+            ))
+        } else if error.is_connect() || error.is_timeout() || error.is_body() {
             let mut bridge = match error.url() {
                 Some(url) => {
                     Self::endpoint_unreachable(url.origin().ascii_serialization(), message.clone())
@@ -150,6 +184,28 @@ impl BridgeError {
         } else {
             anyhow::Error::from(error).context(message)
         }
+    }
+}
+
+/// A verified agent rejection is a denial; every unconfirmed control keeps its
+/// intent reference in the message because the action may still take effect.
+impl From<gents::tools::call::control::client::send::ControlSendError> for BridgeError {
+    fn from(error: gents::tools::call::control::client::send::ControlSendError) -> Self {
+        use gents::tools::call::control::client::send::ControlSendError;
+        let code = match &error {
+            ControlSendError::NotAuthorized
+            | ControlSendError::PermissionDenied
+            | ControlSendError::Rejected { .. } => BridgeErrorCode::PermissionDenied,
+            ControlSendError::NotFound => BridgeErrorCode::NotFound,
+            ControlSendError::RuntimeRequired => BridgeErrorCode::Unsupported,
+            ControlSendError::Unavailable(_) | ControlSendError::Unconfirmed { .. } => {
+                BridgeErrorCode::Unknown
+            }
+        };
+        Self::new(
+            code,
+            gents_protocol::error_chain::ErrorChain(&error).to_string(),
+        )
     }
 }
 
@@ -186,6 +242,31 @@ impl From<&str> for BridgeError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_database_denial_is_nonretryable_without_inferring_hidden_documents() {
+        let denial = gents_protocol::database_error::GraphqlFailure::new(
+            "write",
+            serde_json::json!([
+                {"message":"opaque", "extensions":{"code":"PERMISSION_DENIED"}}
+            ]),
+        );
+        let error = gents::store::config_client::ConfigClientError::Database(denial);
+        let bridge = BridgeError::classify_transport_error(anyhow::Error::new(error));
+        assert_eq!(bridge.code, BridgeErrorCode::PermissionDenied);
+        assert!(!bridge.retryable);
+        assert!(!bridge.message.contains("opaque"));
+        let hidden = gents::store::config_client::ConfigClientError::Database(
+            gents_protocol::database_error::GraphqlFailure::new(
+                "read",
+                serde_json::json!([
+                    {"message":"not found or unavailable"}
+                ]),
+            ),
+        );
+        let bridge = BridgeError::classify_transport_error(anyhow::Error::new(hidden));
+        assert_eq!(bridge.code, BridgeErrorCode::Unknown);
+    }
 
     #[test]
     fn an_unpublished_read_fence_remains_a_retryable_observation() {
@@ -232,8 +313,9 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
         drop(listener);
-        let access =
-            gents::config_client::ConfigAccess::graphql(format!("{endpoint}/api/v0/graphql"));
+        let access = gents::store::config_client::ConfigAccess::graphql(format!(
+            "{endpoint}/api/v0/graphql"
+        ));
         let error = access
             .transact_readonly("test.desktop_transport", |_txn| {
                 Box::pin(async { Ok::<_, anyhow::Error>(()) })
@@ -247,9 +329,10 @@ mod tests {
 
     #[tokio::test]
     async fn classify_config_query_transport_uses_typed_protocol_source() {
-        let endpoint =
-            gents::config_client::GraphqlEndpoint::anonymous("http://127.0.0.1:0/api/v0/graphql");
-        let result = gents::config_client::query_graphql_with_options(
+        let endpoint = gents::store::config_client::GraphqlEndpoint::anonymous(
+            "http://127.0.0.1:0/api/v0/graphql",
+        );
+        let result = gents::store::config_client::query_graphql_with_options(
             &endpoint,
             "{__typename}",
             gents_protocol::graphql::GraphqlRequestOptions {

@@ -5,14 +5,14 @@ import type { QueueDelivery } from "@source-inc/gents-desktop-client/generated/Q
 import { useApp, useView } from "@/app/AppContext";
 import { navigate } from "@/lib/router";
 import { workspace } from "@/app/workspace";
-import { useSelectedAgentId } from "@/hooks/useClient";
+import { useSelectedAgentDid } from "@/hooks/useClient";
 import { useDraft } from "../../../hooks/draftStore";
 
 export function useAgentChoice() {
-  const selectedAgentId = useSelectedAgentId();
+  const selectedAgentDid = useSelectedAgentDid();
   const { selectAgent } = useApp().actions;
   return {
-    agentId: selectedAgentId,
+    agentDid: selectedAgentDid,
     setPicked: selectAgent,
   };
 }
@@ -20,7 +20,7 @@ export function useAgentChoice() {
 /** `/goal` and a space begin a goal's objective, typed or in goal mode. */
 const GOAL_COMMAND = /^\s*\/goal\s+(?=\S)/;
 
-export function useComposerSend(agentId: string | null | undefined) {
+export function useComposerSend(agentDid: string | null | undefined) {
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -61,13 +61,20 @@ export function useComposerSend(agentId: string | null | undefined) {
       ? failure.message
       : null);
 
+  /* A first send adopts its session into the selection, which replaces the
+     new-session composer before the send returns; the route must still move
+     to the session, or New session stays the current route and does nothing. */
   const follow = (
     intentGeneration: ReturnType<typeof captureComposeIntent>,
     result: { sessionId: string } | null,
   ) => {
+    const adopted =
+      !selectedSessionId &&
+      !!result &&
+      stores.selection.getState().sessionId === result.sessionId;
     if (
       acceptsComposeIntent(intentGeneration) &&
-      mounted.current &&
+      (mounted.current || adopted) &&
       result &&
       result.sessionId !== selectedSessionId
     ) {
@@ -85,7 +92,7 @@ export function useComposerSend(agentId: string | null | undefined) {
     const clientDid = stores.client.getState().snapshot?.client?.clientDid;
     const pending = setGoal(
       objective.replace(GOAL_COMMAND, "").trim(),
-      agentId,
+      agentDid,
       () => mounted.current,
     );
     const intentGeneration = captureComposeIntent();
@@ -119,7 +126,7 @@ export function useComposerSend(agentId: string | null | undefined) {
     const clientDid = stores.client.getState().snapshot?.client?.clientDid;
     const pending = sendMessage(
       content,
-      agentId,
+      agentDid,
       attachments,
       followUp,
       () => mounted.current,

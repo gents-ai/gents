@@ -1,11 +1,12 @@
 import { isValidElement, memo, useRef, type ReactNode } from "react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Check, Copy } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
 import { useCopied } from "@/lib/clipboard";
 import { ContribBoundary } from "@/contrib/react/boundary";
 import { useContributions } from "@/contrib/react/use-contributions";
+import { isAppLink } from "@/lib/links";
 import {
   parseTranscriptDirective,
   resolveDirective,
@@ -148,6 +149,10 @@ function softBreaks(node: MdNode) {
 }
 const remarkSoftBreaks = () => softBreaks;
 
+/* the default drops every scheme it doesn't know; a gents: link only
+   navigates, through the router's click handling */
+const urlTransform = (url: string) => (isAppLink(url) ? url : defaultUrlTransform(url));
+
 const PLUGINS = [remarkGfm];
 const PLUGINS_WITH_BREAKS = [remarkGfm, remarkSoftBreaks];
 const COMPONENTS = { pre: CodeBlock, table: Table };
@@ -170,6 +175,7 @@ export const Markdown = memo(function Markdown({
     <ReactMarkdown
       remarkPlugins={breaks ? PLUGINS_WITH_BREAKS : PLUGINS}
       components={directives ? COMPONENTS_WITH_DIRECTIVES : COMPONENTS}
+      urlTransform={urlTransform}
     >
       {children}
     </ReactMarkdown>

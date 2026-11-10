@@ -40,17 +40,18 @@ fn removed_authority_collections_are_absent_from_schema_and_replication_inventor
 }
 
 #[test]
-fn hydration_repair_and_cli_sources_cannot_reference_removed_authorities() {
+fn pairing_inventory_and_cli_sources_cannot_reference_removed_authorities() {
     let production = [
-        include_str!("../../src/agent/p2p_reconcile/engine.rs"),
-        include_str!("../../src/agent/p2p_reconcile/engine/desired.rs"),
-        include_str!("../../src/agent/p2p_reconcile/engine/enrollment.rs"),
-        include_str!("../../src/agent/p2p_reconcile/engine/reconcile.rs"),
-        include_str!("../../src/agent/p2p_reconcile/engine/rows.rs"),
-        include_str!("../../src/agent/p2p_reconcile/engine/store.rs"),
-        include_str!("../../src/agent/p2p_reconcile/engine/sweep.rs"),
-        include_str!("../../src/agent/p2p_reconcile/enrollment_reconcile.rs"),
-        include_str!("../../src/agent/p2p_reconcile/session_hydration_reconcile.rs"),
+        include_str!("../../src/runtime/agent/p2p_reconcile/engine.rs"),
+        include_str!("../../src/runtime/agent/p2p_reconcile/engine/desired.rs"),
+        include_str!("../../src/runtime/agent/p2p_reconcile/engine/enrollment.rs"),
+        include_str!("../../src/runtime/agent/p2p_reconcile/engine/reconcile.rs"),
+        include_str!("../../src/runtime/agent/p2p_reconcile/engine/rows.rs"),
+        include_str!("../../src/runtime/agent/p2p_reconcile/engine/store.rs"),
+        include_str!("../../src/runtime/agent/p2p_reconcile/engine/sweep.rs"),
+        include_str!("../../src/runtime/agent/p2p_reconcile/enrollment_reconcile.rs"),
+        include_str!("../../src/file_inventory.rs"),
+        include_str!("../../src/file_inventory/selection.rs"),
         include_str!("../../../gents-cli/src/commands/p2p/mod.rs"),
         include_str!("../../../gents-cli/src/commands/p2p/network.rs"),
         include_str!("../../../gents-cli/src/commands/p2p/pairings.rs"),
@@ -61,7 +62,7 @@ fn hydration_repair_and_cli_sources_cannot_reference_removed_authorities() {
     for removed in REMOVED_COLLECTIONS {
         assert!(
             !production.contains(removed),
-            "removed authority {removed} returned to hydration, repair, or CLI production code"
+            "removed authority {removed} returned to pairing, inventory, or CLI production code"
         );
     }
 }
@@ -99,19 +100,24 @@ fn client_sync_cannot_regrow_a_synthetic_owner_or_runtime_readiness_join() {
 
     assert!(owner.contains("struct ClientSyncStateOwner"));
     assert_eq!(owner.matches("struct ClientSyncStateOwner").count(), 1);
-    assert!(projection.contains("pub fn project_sync_health("));
-    assert_eq!(projection.matches("pub fn project_sync_health(").count(), 1);
-    assert!(bridge.contains("project_sync_health(sync)"));
-    assert!(wire.contains("pub sync_health: Option<SyncHealthView>"));
+    assert_eq!(
+        projection
+            .matches("pub fn project_sync_health<I>(sync: &ClientSyncStateSnapshot, runtimes: I)")
+            .count(),
+        1
+    );
+    assert_eq!(projection.matches("fn project_sync_health").count(), 1);
+    assert!(wire.contains("pub sync_health: SyncHealthView"));
 
-    let bridge_sync_projection = bridge
-        .split("pub(crate) fn to_sync_health_view")
-        .nth(1)
-        .and_then(|tail| {
-            tail.split("pub(crate) fn to_pairing_collection_view")
-                .next()
-        })
-        .expect("bridge sync projection source boundary");
+    let (_, bridge_sync_projection) = bridge
+        .split_once("pub(crate) fn to_sync_health_view")
+        .expect("bridge sync projection start boundary");
+    let (bridge_sync_projection, _) = bridge_sync_projection
+        .split_once("pub(crate) fn system_time_rfc3339")
+        .expect("bridge sync projection end boundary");
+    assert!(bridge_sync_projection.contains("let sync = core.sync_state();"));
+    assert!(bridge_sync_projection.contains("project_sync_health(\n        &sync,"));
+    assert!(!bridge_sync_projection.contains("SyncHealthState::"));
 
     for source in [owner, projection, bridge] {
         assert!(!source.contains("NodeReadiness"));
@@ -133,8 +139,8 @@ fn operator_nonce_is_local_only_and_never_broad_synced() {
 
 #[test]
 fn legacy_invite_metadata_is_wire_only_and_reciprocal_timing_does_not_return() {
-    let intervals = include_str!("../../src/agent/p2p_reconcile/intervals.rs");
-    let registry_writer = include_str!("../../src/agent/p2p_reconcile/registry.rs");
+    let intervals = include_str!("../../src/runtime/agent/p2p_reconcile/intervals.rs");
+    let registry_writer = include_str!("../../src/runtime/agent/p2p_reconcile/registry.rs");
     let registry_schema =
         include_str!("../../../gents-schemas/schemas/agent/peer_registry.graphql");
 
@@ -147,12 +153,13 @@ fn legacy_invite_metadata_is_wire_only_and_reciprocal_timing_does_not_return() {
 #[test]
 fn production_pending_request_writers_use_the_signed_canonical_builder() {
     let writers = [
-        include_str!("../../src/lifecycle/materialize.rs"),
-        include_str!("../../src/lifecycle/queue/mutation.rs"),
-        include_str!("../../src/lifecycle/queue/goal_continuation.rs"),
+        include_str!("../../src/request/lifecycle/materialize.rs"),
+        include_str!("../../src/request/lifecycle/queue/mutation.rs"),
+        include_str!("../../src/request/lifecycle/queue/goal_continuation.rs"),
         include_str!("../../../gents-cli/src/request_helpers.rs"),
         include_str!("../../../gents-cli/src/commands/config/task_run.rs"),
-        include_str!("../../../gents-desktop-core/src/client/mutations/chat/request.rs"),
+        include_str!("../../../gents-desktop-core/src/client/mutations/chat/request/prepare.rs"),
+        include_str!("../../../gents-desktop-core/src/client/mutations/chat/request/retry.rs"),
     ];
     for source in writers {
         assert!(
@@ -167,12 +174,12 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
         );
     }
 
-    let background = include_str!("../../src/lifecycle/background_wake_recovery.rs");
+    let background = include_str!("../../src/request/lifecycle/background_wake_recovery.rs");
     assert!(background.contains("create.graphql_input_fields()"));
     assert_eq!(background.matches("create_AgentRequest(input:").count(), 1);
 
-    let materialize = include_str!("../../src/lifecycle/materialize.rs");
-    let oneshot = include_str!("../../src/oneshot.rs");
+    let materialize = include_str!("../../src/request/lifecycle/materialize.rs");
+    let oneshot = include_str!("../../src/runtime/oneshot.rs");
     let signed_direct_materializer = materialize
         .split("pub async fn materialize_claimed_with_execution_binding")
         .nth(1)
@@ -180,8 +187,15 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
         .expect("signed direct materializer source boundary");
     assert!(!signed_direct_materializer.contains("add_AgentRequest(input:"));
     assert!(!signed_direct_materializer.contains("status: \"processing\""));
-    assert!(signed_direct_materializer.contains("Arc<dyn crate::identity::NodeIdentity>"));
-    assert!(signed_direct_materializer.contains("build_signed_request"));
+    assert!(signed_direct_materializer.contains("Arc<dyn crate::store::identity::NodeIdentity>"));
+    assert!(signed_direct_materializer.contains("build_signed_client_request"));
+    assert!(signed_direct_materializer.contains("submit_client_request"));
+    assert!(
+        signed_direct_materializer.contains("AgentRequestAdmissionRecord::local_self(&agent_did)")
+    );
+    assert!(signed_direct_materializer.contains("RequestSigner::Identity(identity.as_ref())"));
+    assert!(signed_direct_materializer.contains("ConfigAccess::local_managed_agent"));
+    assert!(signed_direct_materializer.contains("identity::Did::new(agent_did.clone())"));
     assert!(signed_direct_materializer.contains("verify_fresh_local_self_request"));
     assert!(signed_direct_materializer.contains("claim_with_identity"));
     assert!(!oneshot.contains("add_AgentRequest(input:"));
@@ -198,7 +212,15 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
         ),
         (
             "desktop requests",
-            include_str!("../../../gents-desktop-core/src/client/mutations/chat/request.rs"),
+            concat!(
+                include_str!("../../../gents-desktop-core/src/client/mutations/chat/request.rs"),
+                include_str!(
+                    "../../../gents-desktop-core/src/client/mutations/chat/request/prepare.rs"
+                ),
+                include_str!(
+                    "../../../gents-desktop-core/src/client/mutations/chat/request/retry.rs"
+                ),
+            ),
         ),
     ] {
         let production = source.split("#[cfg(test)]\nmod tests {").next().unwrap();
@@ -213,8 +235,8 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
             );
         }
         assert!(
-            production.contains("build_signed_request("),
-            "{name} lost the shared builder"
+            production.contains("gents::request::lifecycle::build_signed_client_request"),
+            "{name} lost the shared client request builder"
         );
     }
     assert_eq!(
@@ -225,11 +247,11 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
     for (name, source) in [
         (
             "lifecycle/queue/mutation.rs",
-            include_str!("../../src/lifecycle/queue/mutation.rs"),
+            include_str!("../../src/request/lifecycle/queue/mutation.rs"),
         ),
         (
             "lifecycle/queue/goal_continuation.rs",
-            include_str!("../../src/lifecycle/queue/goal_continuation.rs"),
+            include_str!("../../src/request/lifecycle/queue/goal_continuation.rs"),
         ),
     ] {
         assert!(
@@ -241,25 +263,28 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
 
 #[test]
 fn clean_break_has_no_legacy_pairing_or_remote_snapshot_authority() {
-    let policy = include_str!("../../src/agent/p2p_reconcile/policy.rs");
-    let desired = include_str!("../../src/agent/p2p_reconcile/engine/desired.rs");
-    let topology = include_str!("../../src/agent/p2p_reconcile/engine/remote_topology.rs");
+    let policy = include_str!("../../src/runtime/agent/p2p_reconcile/policy.rs");
+    let desired = include_str!("../../src/runtime/agent/p2p_reconcile/engine/desired.rs");
+    let topology = include_str!("../../src/runtime/agent/p2p_reconcile/engine/remote_topology.rs");
     let observer = include_str!("../../../gents-desktop-core/src/client/observe.rs");
     let merges = include_str!("../../../gents-desktop-core/src/client/store/merges.rs");
     let writes = include_str!("../../../gents-desktop-core/src/client/core/writes.rs");
+    let writes_operator =
+        include_str!("../../../gents-desktop-core/src/client/core/writes/operator.rs");
 
     assert!(!desired.contains("unwrap_or(policy::PairingDirection::ClientToRuntime)"));
     assert!(!topology.contains("teardown_unowned_replicators_at_endpoint"));
     assert!(!observer.contains("selected_is_legacy_remote"));
     assert!(!merges.contains("replace_remote_agent_scope"));
     assert!(!writes.contains("machines.next()?.clone()"));
+    assert!(!writes_operator.contains("machines.next()?.clone()"));
     assert!(policy.contains("client pairing id has no recognized direction suffix"));
 }
 
 #[test]
 fn request_admission_has_no_logical_only_recovery_or_terminal_mutation() {
-    let request_admission = include_str!("../../src/request_admission.rs");
-    let modules = include_str!("../../src/agent/p2p_reconcile/mod.rs");
+    let request_admission = include_str!("../../src/request/admission.rs");
+    let modules = include_str!("../../src/runtime/agent/p2p_reconcile/mod.rs");
 
     assert!(!request_admission.contains("parent_authorizes_subagent_target"));
     assert!(request_admission.contains("load_exact_parent_request"));
@@ -270,7 +295,7 @@ fn request_admission_has_no_logical_only_recovery_or_terminal_mutation() {
 #[test]
 fn session_message_admission_has_no_child_or_bridge_authority() {
     let protocol = include_str!("../../../gents-protocol/src/request_admission.rs");
-    let verifier = include_str!("../../src/request_admission.rs");
+    let verifier = include_str!("../../src/request/admission.rs");
     let request_schema = include_str!("../../../gents-schemas/schemas/agent/agent_request.graphql");
     let tool_schema = include_str!("../../../gents-schemas/schemas/agent/agent_tool_call.graphql");
 
@@ -285,7 +310,8 @@ fn session_message_admission_has_no_child_or_bridge_authority() {
                 .next()
         })
         .expect("peer admission branch");
-    assert!(peer_verifier.contains("fresh_member_authorized_for_agent"));
+    assert!(peer_verifier.contains("observation.signer_matches_requester"));
+    assert!(peer_verifier.contains("observation.requester_matches_target"));
     assert!(verifier.contains("request_hop_admitted"));
     assert!(request_schema.contains("runtime_source_kind: String @index @immutable"));
     assert!(!request_schema.contains("runtime_bridge_author_did"));

@@ -7,7 +7,7 @@ use crate::types::{SessionSummary, TriggerView};
 fn canonical_session(requester: Option<&str>) -> AgentSession {
     serde_json::from_value(serde_json::json!({
         "session_id":"session", "node_did":"did:test:owner", "requester_did":requester,
-        "agent_id":"agent", "created_at":"2026-09-01T00:00:00Z",
+        "agent_did":"agent", "created_at":"2026-09-01T00:00:00Z",
         "title":{"text":"Saved title","source":"user"}, "tags":["review"],
         "provenance":{"task_id":"task","fork":{"source_session_id":"parent","at_user_turn":2}}
     }))
@@ -17,7 +17,7 @@ fn canonical_session(requester: Option<&str>) -> AgentSession {
 fn indexed_session(requester: Option<&str>) -> AgentSession {
     let mut session = canonical_session(requester);
     session.observation = Some(SessionObservation {
-        reply_preview: None,
+        reply_preview: Some("latest reply".into()),
         last_activity_at: "2026-09-02T00:00:00Z".into(),
         preview: Some("latest prompt".into()),
         latest_request: Some(SessionRequestObservation {
@@ -37,7 +37,7 @@ fn indexed_request(requester: Option<&str>) -> AgentRequestRow {
         node_did: Some("did:test:owner".into()),
         requester_did: requester.map(str::to_owned),
         session_id: Some("session".into()),
-        agent_id: Some("agent".into()),
+        agent_did: Some("agent".into()),
         lifecycle_state: Some(RequestLifecycleState::Processing),
         ..Default::default()
     }
@@ -83,8 +83,91 @@ fn missing_indexed_request_does_not_fall_back_to_older_or_foreign_rows() {
     );
     assert_eq!(summaries[0].status.as_deref(), Some("processing"));
     assert_eq!(summaries[0].preview_text.as_deref(), Some("latest prompt"));
+    assert_eq!(summaries[0].reply_preview.as_deref(), Some("latest reply"));
     assert!(
         session_summaries(&[], &[indexed_request(None)], "did:test:owner", &[], &[]).is_empty()
+    );
+}
+
+#[test]
+fn verified_worker_lineage_inherits_the_task_without_changing_provenance() {
+    let mut parent = canonical_session(Some("did:test:requester"));
+    parent.session_id = "parent".into();
+    let mut child = canonical_session(Some("did:test:requester"));
+    child.session_id = "child".into();
+    child.provenance = None;
+    let mut summaries = session_summaries(
+        &[parent.clone(), child.clone()],
+        &[],
+        "did:test:owner",
+        &[],
+        &[],
+    );
+    let child_summary = summaries
+        .iter_mut()
+        .find(|summary| summary.session_id == "child")
+        .unwrap();
+    child_summary.started_by = Some(crate::types::LinkedSessionView {
+        node_did: "did:test:owner".into(),
+        session_id: "parent".into(),
+        requester_did: Some("did:test:requester".into()),
+        cause_request_doc_id: "opening".into(),
+    });
+    super::super::runtime_tasks::apply_originating_tasks(&mut summaries, &[], "did:test:owner");
+    let child_summary = summaries
+        .iter()
+        .find(|summary| summary.session_id == "child")
+        .unwrap();
+    assert_eq!(child_summary.task_id.as_deref(), Some("task"));
+    assert!(child_summary.provenance.is_none());
+
+    let mut ambiguous = session_summaries(
+        &[parent.clone(), parent, child],
+        &[],
+        "did:test:owner",
+        &[],
+        &[],
+    );
+    let child_summary = ambiguous
+        .iter_mut()
+        .find(|summary| summary.session_id == "child")
+        .unwrap();
+    child_summary.started_by = Some(crate::types::LinkedSessionView {
+        node_did: "did:test:owner".into(),
+        session_id: "parent".into(),
+        requester_did: Some("did:test:requester".into()),
+        cause_request_doc_id: "opening".into(),
+    });
+    super::super::runtime_tasks::apply_originating_tasks(&mut ambiguous, &[], "did:test:owner");
+    assert!(ambiguous
+        .iter()
+        .find(|summary| summary.session_id == "child")
+        .unwrap()
+        .task_id
+        .is_none());
+}
+
+#[test]
+fn session_reply_previews_are_cut_on_a_character_boundary() {
+    let reply_for = |reply: String| {
+        let mut session = indexed_session(None);
+        session
+            .observation
+            .as_mut()
+            .expect("observation")
+            .reply_preview = Some(reply);
+        session_summaries(&[session], &[], "did:test:owner", &[], &[])
+            .remove(0)
+            .reply_preview
+            .expect("reply preview")
+    };
+    let exact = "a".repeat(120);
+    assert_eq!(reply_for(exact.clone()), exact);
+    let cut = reply_for("é".repeat(200));
+    assert_eq!(cut, format!("{}…", "é".repeat(120)));
+    assert_eq!(
+        reply_for(format!("{} tail", "b".repeat(119))),
+        format!("{}…", "b".repeat(119))
     );
 }
 
@@ -177,6 +260,65 @@ fn task_run_history_is_node_scoped_when_trigger_ids_match() {
     let runs = histories.get("task-1").unwrap();
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].request_id, "req-mini-1");
+}
+
+#[test]
+fn manual_task_history_uses_exact_opening_and_preserves_later_turns() {
+    let mut session = indexed_session(Some("requester"));
+    session.provenance.as_mut().unwrap().opening_request_doc_id = Some("opening-doc".into());
+    let mut opening = indexed_request(Some("requester"));
+    opening.doc_id = Some("opening-doc".into());
+    opening.request_id = "opening".into();
+    opening.caused_by_trigger_kind = Some("manual".into());
+    opening.lifecycle_state = Some(RequestLifecycleState::Completed);
+    let mut foreign = opening.clone();
+    foreign.request_id = "foreign".into();
+    foreign.requester_did = Some("other".into());
+    let mut wrong_agent = opening.clone();
+    wrong_agent.request_id = "wrong-agent".into();
+    wrong_agent.agent_did = Some("other".into());
+    let later = indexed_request(Some("requester"));
+    let store = ClientStore::from_rows(ClientStoreRows {
+        sessions: vec![session.clone()],
+        requests: vec![opening.clone(), foreign, wrong_agent, later.clone()],
+        ..Default::default()
+    });
+    let histories = task_run_histories(&store, "did:test:owner", &[]);
+    assert_eq!(histories["task"].len(), 1);
+    assert_eq!(histories["task"][0].request_id, "opening");
+    let summaries = session_summaries(
+        &[session.clone()],
+        &[opening.clone(), later],
+        "did:test:owner",
+        &[],
+        &[],
+    );
+    assert_eq!(summaries[0].task_id.as_deref(), Some("task"));
+    assert_eq!(summaries[0].trigger_kind.as_deref(), Some("manual"));
+    assert_eq!(
+        summaries[0].latest_request_id.as_deref(),
+        Some("logical-head")
+    );
+
+    let ambiguous = ClientStore::from_rows(ClientStoreRows {
+        sessions: vec![session.clone(), session],
+        requests: vec![opening],
+        ..Default::default()
+    });
+    assert!(!task_run_histories(&ambiguous, "did:test:owner", &[]).contains_key("task"));
+
+    let mut duplicate = indexed_request(Some("requester"));
+    duplicate.doc_id = Some("opening-doc".into());
+    let mut other = duplicate.clone();
+    other.request_id = "conflicting-opening".into();
+    let mut session = indexed_session(Some("requester"));
+    session.provenance.as_mut().unwrap().opening_request_doc_id = Some("opening-doc".into());
+    let ambiguous_request = ClientStore::from_rows(ClientStoreRows {
+        sessions: vec![session],
+        requests: vec![duplicate, other],
+        ..Default::default()
+    });
+    assert!(!task_run_histories(&ambiguous_request, "did:test:owner", &[]).contains_key("task"));
 }
 
 #[test]
@@ -317,7 +459,7 @@ fn task_recent_runs_view_consumes_generated_trigger_dispatch_lineage_contract_ca
                 request_id: request_id.clone(),
                 node_did: Some("did:test:contract-node".to_string()),
                 requester_did: None,
-                agent_id: Some("contract-agent".to_string()),
+                agent_did: Some("contract-agent".to_string()),
                 session_id: Some(format!("contract-session-{index}")),
                 retry_parent_request: None,
                 retry_root_request: None,
@@ -420,7 +562,7 @@ fn starter_receipt(
         session_id: session.session_id.clone(),
         session_doc_id: session_doc_id.into(),
         requester_did: session.requester_did.clone(),
-        agent_id: session.agent_id.clone(),
+        agent_did: session.agent_did.clone(),
         opening_request_doc_id: "opening".into(),
         cause: gents_protocol::session::SessionCreationCause::AgentNew,
         cause_binding: "tool".into(),
@@ -439,6 +581,7 @@ async fn fleet_snapshot_verifies_indexed_starters_once_per_evidence() {
     let (core, tmp) = crate::tests::support::boot_core().await;
     let signer = gents::KeyIdentity::load_or_create(tmp.path().join("fleet.key"), None).unwrap();
     let node_did = signer.did().to_owned();
+    let creator = crate::tests::support::fixture_signer(7);
     let source = |session_id: &str| gents_protocol::session::SessionReference {
         node_did: "did:test:remote-node".into(),
         session_id: session_id.into(),
@@ -452,7 +595,7 @@ async fn fleet_snapshot_verifies_indexed_starters_once_per_evidence() {
     ] {
         crate::tests::support::create_started_session(
             &core,
-            &signer,
+            &creator,
             crate::tests::support::fixture_session(&node_did, child),
             &source(parent_session),
             parent,
@@ -460,11 +603,11 @@ async fn fleet_snapshot_verifies_indexed_starters_once_per_evidence() {
         )
         .await;
     }
-    let access = gents::config_client::ConfigAccess::local(core.node_arc());
+    let access = gents::store::config_client::ConfigAccess::local(core.node_arc());
     let load = |session_id: &'static str| {
         let access = access.clone();
         async move {
-            gents::session_origin::load_session(&access, session_id, Some(OPERATOR))
+            gents::session::origin::load_session(&access, session_id, Some(OPERATOR))
                 .await
                 .unwrap()
                 .unwrap_or_else(|| panic!("fixture session {session_id} must load"))
@@ -578,11 +721,11 @@ async fn recorded_summary_starters_follow_the_starter_verification_model() {
     use gents::NodeIdentity;
     struct SessionRead(serde_json::Value, std::sync::atomic::AtomicUsize);
     #[async_trait::async_trait]
-    impl gents::config_client::ConfigRead for SessionRead {
+    impl gents::store::config_client::ConfigRead for SessionRead {
         async fn execute_read(
             &self,
             query: &str,
-        ) -> Result<serde_json::Value, gents::config_client::ConfigClientError> {
+        ) -> Result<serde_json::Value, gents::store::config_client::ConfigClientError> {
             assert!(
                 query.contains("AgentSession") && !query.contains("AgentRequest"),
                 "a starter is verified from its session row alone: {query}"
@@ -603,8 +746,9 @@ async fn recorded_summary_starters_follow_the_starter_verification_model() {
     let dir = tempfile::tempdir().unwrap();
     let signer = gents::KeyIdentity::load_or_create(dir.path().join("node.key"), None).unwrap();
     for requester in [None, Some("did:test:source-requester")] {
-        let mut session = canonical_session(None);
-        session.node_did = signer.did().to_owned();
+        // An agent-started session's receipt is signed by its requester, the
+        // Agent that created it.
+        let mut session = canonical_session(Some(signer.did()));
         let source = gents_protocol::session::SessionReference {
             node_did: "did:test:remote-node".into(),
             session_id: "source-session".into(),
@@ -623,7 +767,7 @@ async fn recorded_summary_starters_follow_the_starter_verification_model() {
         row["_docID"] = "physical-session".into();
         row["started_by_node_did"] = source.node_did.clone().into();
         row["started_by_session_id"] = source.session_id.clone().into();
-        let scope = gents::session_origin::SessionScope::from(&session);
+        let scope = gents_protocol::session::SessionScope::from(&session);
         let candidate = |name: &str| {
             let mut row = row.clone();
             match name {
@@ -665,7 +809,7 @@ async fn recorded_summary_starters_follow_the_starter_verification_model() {
             let expected = case["accepted"].as_bool().unwrap();
             let candidate = candidate(name);
             let read = SessionRead(candidate.clone(), Default::default());
-            let verified = gents::session_origin::verified_recorded_starter(&read, &scope)
+            let verified = gents::session::origin::verified_recorded_starter(&read, &scope)
                 .await
                 .unwrap();
             assert_eq!(verified.is_some(), expected, "{name}");

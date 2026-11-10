@@ -6,6 +6,7 @@
    contrib/plugins-store.ts, with useSyncExternalStore in place of nanostores
    (the app has no nanostores dependency). */
 import { useSyncExternalStore } from "react";
+import type { UxNotificationKind } from "@/sandbox/contract";
 
 export type UxPluginDoor = "bundled" | "dev" | "pack";
 export type UxPluginProducer = "file" | "afb";
@@ -25,6 +26,8 @@ export interface UxPluginRecord {
   pack?: string;
   /** areas and directive names the manifest declared; the gate the context enforces */
   declared?: UxDeclaredContributions;
+  /** the kinds of notification its module declared, once it has loaded */
+  notifications?: readonly UxNotificationKind[];
 }
 
 export interface UxDeclaredContributions {
@@ -139,6 +142,35 @@ export function dropUxPlugin(id: string): void {
   records = rest;
   handles.delete(id);
   notify();
+}
+
+/* Another window's toggle. The choice is shared storage, but each window
+   runs its own copy of every plugin, and a storage event reaches only the
+   windows that did not write it; they apply it as their own toggle would. */
+export function followOtherWindowsDecisions(): () => void {
+  const follow = (event: StorageEvent) => {
+    if (event.key !== DECISIONS_KEY) return;
+    let next: Record<string, boolean> = {};
+    try {
+      if (event.newValue) next = parseDecisions(event.newValue);
+    } catch {
+      /* unreadable: no choices */
+    }
+    decisions = next;
+    for (const [id, enabled] of Object.entries(next)) {
+      const handle = handles.get(id);
+      const loaded = records[id]?.status === "loaded";
+      if (!handle || enabled === loaded) continue;
+      if (enabled) void handle.activate();
+      else {
+        handle.deactivate();
+        patchUxPlugin(id, { status: "disabled" });
+      }
+    }
+    notify();
+  };
+  window.addEventListener("storage", follow);
+  return () => window.removeEventListener("storage", follow);
 }
 
 /** live toggle: deactivate and remember, or remember and reactivate */

@@ -71,6 +71,11 @@ export function sourceInWords(deployment: NodeView, t: TriggerView): string | nu
   return e ? eventInWords(e) : null;
 }
 
+/** Whether an automation's last run failed: a schedule writes "error" for a
+    fire that failed, and "failed" is kept for other sources. */
+export const lastRunFailed = (t: Pick<TriggerView, "lastStatus">) =>
+  t.lastStatus === "error" || t.lastStatus === "failed";
+
 export type Readiness =
   { ok: true; note: string | null } | { ok: false; reason: string };
 
@@ -88,12 +93,12 @@ export function triggerReadiness(deployment: NodeView, t: TriggerView): Readines
   const task = deployment.tasks.find((x) => x.taskId === cfg.task_id);
   if (!task) return { ok: false, reason: "Task is missing" };
   if (task.enabled === false) return { ok: false, reason: "Task is disabled" };
-  const b = agentOf(deployment, task.agentId);
+  const b = agentOf(deployment, task.agentDid);
   if (!b) return { ok: false, reason: "Agent is missing" };
-  const readiness = agentReadiness(deployment, b.agentId);
+  const readiness = agentReadiness(deployment, b.agentDid);
   if (!readiness.ready)
     return { ok: false, reason: `${b.displayName}: ${readiness.reason}` };
-  if (t.lastStatus === "failed")
+  if (lastRunFailed(t))
     return {
       ok: true,
       note: `Last run failed${t.lastError ? `: ${t.lastError}` : ""}`,
@@ -106,7 +111,7 @@ export function triggerReadiness(deployment: NodeView, t: TriggerView): Readines
 export function actionInWords(deployment: NodeView, t: TriggerView): string {
   const task = deployment.tasks.find((x) => x.taskId === t.config.task_id);
   if (!task) return "run a missing task";
-  const b = agentOf(deployment, task.agentId);
+  const b = agentOf(deployment, task.agentDid);
   return `run ${task.name ?? task.taskId}${b ? ` with ${b.displayName}` : ""}`;
 }
 

@@ -57,12 +57,15 @@ Do not duplicate changing versions in instructions.
 - The owned loop is the sole provider-input boundary. Durable transcripts may
   be permissive; sanitize and narrow them there.
 - DefraDB authenticates actors as DIDs and enforces document authorization
-  through ACP. Keep Gents node identity bound to those DIDs; do not add a parallel
-  identity or authorization layer. Agents are reusable configuration. The
-  operating convention is one active runtime per node; enforcement is
-  deferred. Do not add host identity, leases, or host-migration machinery. Validate
-  configured paths/resources through existing owners and fail affected work
-  clearly when unavailable. Paths/observations are not portable identity data.
+  through ACP; do not add a parallel identity or authorization layer. User keys
+  stay on clients, which sign user configuration, plugin installs and agent creation.
+  The node key authenticates peer admission and synchronization and owns node-local
+  operational documents not caused by an agent; enrollment grants no document access. Each node-local Agent has a runtime-managed DID and owns the
+  data it creates. Clients connect to its hosting runtime. The operating convention
+  is one active runtime per node; enforcement is deferred. Do not add host identity,
+  leases, or host-migration machinery. Validate configured paths/resources through
+  existing owners and fail affected work clearly when unavailable. Paths and
+  observations are not portable identity data.
 - Tools, MCP services, agent targets, skills, tasks, callbacks, schedules,
   and event sources are documents. Tool groups are nested settings within Tools.
   Extend existing reconcilers and owners instead of adding side channels.
@@ -78,13 +81,14 @@ Do not duplicate changing versions in instructions.
   Agent is its only configuration selection. Title and creation provenance live
   within the session; request state and derived UI observations keep their existing
   owners. Use the canonical protocol session type rather than another writable copy.
-- Client sync has one observation owner: `gents::p2p_observability` adapts
-  DefraDB status, `ClientSyncStateOwner` combines facts, and
-  `project_sync_health` derives product state. Keep runtime readiness separate
-  and do not add UI-local sync heuristics.
+- Discovery and enrollment use P2P; clients read runtime data through authenticated
+  GraphQL and observe it through subscriptions. `ClientSyncStateOwner` combines
+  the discovery and enrollment facts and `project_sync_health` derives product
+  state from them and the runtime connections. Keep runtime
+  readiness separate and do not add UI-local sync heuristics.
 - Rig is a provider client behind `gents_loop::rig_compat` and
-  `gents_loop::provider_input`, re-exported as `llm::rig_compat` and
-  `provider_input` for callers here. Rig's own types stay inside those two
+  `gents_loop::provider_input`, re-exported by the inference owner
+  (`llm::rig_compat`) and the turn owner (`provider_input`) for callers here. Rig's own types stay inside those two
   and the loop that drives them (`gents_loop::loop_stream`); runtime owners
   use their native handles (`ProviderModel`, `ProviderClient`). For now,
   provider transport adapters (the `*_http`, Codex, Claude Messages, xAI and
@@ -94,7 +98,7 @@ Do not duplicate changing versions in instructions.
   Persisted messages remain native. DefraDB is the pinned public dependency in
   the workspace `Cargo.toml`; investigate node, schema, identity, and
   transaction behavior there. Claude subscriptions use Anthropic Messages HTTP
-  with a node-scoped `OAuthCredential` written by `gents claude-login` and
+  with a node-scoped `OAuthCredential` written by `gents accounts login claude` and
   refreshed by gents; the `claude` binary is not a dependency.
 
 ## Foundation
@@ -120,8 +124,8 @@ decoders and native adapters translate representations, not redefine policy.
 - Escape every interpolated GraphQL string with
   `graphql::escape_graphql_string()`.
 - Never emit `[]` in a DefraDB mutation; use `null` for an empty nillable list.
-- All application DefraDB access goes through the `gents::config_client` and
-  `gents::graphql` owners: single writes via `ConfigAccess::write`/`write_local`,
+- All application DefraDB access goes through the store layer's config_client
+  and graphql owners: single writes via `ConfigAccess::write`/`write_local`,
   multi-statement or DID-scoped work via `ConfigAccess::transact*`, reads via
   `graphql_with_transaction_retry` (embedded) or `ConfigAccess::execute`
   (local/HTTP). Never call `EmbeddedNode::execute*`, `runner()`, or raw DefraDB
@@ -163,7 +167,7 @@ decoders and native adapters translate representations, not redefine policy.
   one documented exception. Code that needs a `tokio::runtime::Handle` takes it
   from its caller; `tokio::spawn` inside a running task is fine. Never call
   `Handle::current`/`try_current`: a guard whose `Drop` owes async cleanup
-  binds its runtime with `gents::drop_cleanup::DropCleanup::current`, and tests
+  binds its runtime with the drop-cleanup owner's `DropCleanup::current`, and tests
   take theirs from their crate's test-support helper.
 - Never block a runtime thread: every wait is an `.await` (`tokio::time::sleep`,
   the owner's notification, never a polling loop) and synchronous work runs on
@@ -173,8 +177,8 @@ decoders and native adapters translate representations, not redefine policy.
   process or test, a dedicated OS thread, a `spawn_blocking` closure) or is a
   test future that deliberately overruns a deadline within one poll.
   `Runtime::block_on` is for process and test entry points and dedicated
-  threads. Drive a non-`Send` embedded-node future through
-  `storage_backend::drive_unsendable`.
+  threads. Drive a non-`Send` embedded-node future through the
+  store layer's storage backend (`drive_unsendable`).
 - Every hash map and set is `rapidhash::RapidHashMap`/`RapidHashSet` (the fast
   hasher, built with `new`, `default` or `with_capacity` via `HashMapExt`/
   `HashSetExt`), and hashers are `rapidhash::fast::RapidHasher`, as in DefraDB.

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 #[cfg(test)]
-use gents::config_client::GraphqlEndpoint;
-use gents::defra_query::{CollectionScope, DefraQueryParams};
+use gents::store::config_client::GraphqlEndpoint;
+use gents::tools::builtin::defra_query::{CollectionScope, DefraQueryParams};
 use serde_json::{json, Value};
 
 use crate::cli::args::QueryArgs;
@@ -13,8 +13,8 @@ pub(crate) async fn run_defra_query(
     params: &DefraQueryParams,
     scope: &CollectionScope,
 ) -> Result<Value> {
-    gents::defra_query::execute_command(
-        &gents::config_client::ConfigAccess::Graphql(graphql.clone()),
+    gents::tools::builtin::defra_query::execute_command(
+        &gents::store::config_client::ConfigAccess::Graphql(graphql.clone()),
         &params.clone().into(),
         scope,
     )
@@ -49,16 +49,20 @@ pub(crate) async fn query(args: QueryArgs) -> Result<()> {
     let (access, _) =
         crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let (command, scope) = command_from_args(args)?;
-    let output = gents::defra_query::execute_command(&access, &command, &scope).await?;
+    let output =
+        gents::tools::builtin::defra_query::execute_command(&access, &command, &scope).await?;
     print_json(&output)?;
     Ok(())
 }
 
 fn command_from_args(
     args: QueryArgs,
-) -> Result<(gents::defra_query::QueryParams, CollectionScope)> {
+) -> Result<(
+    gents::tools::builtin::defra_query::QueryParams,
+    CollectionScope,
+)> {
     let (params, scope) = params_from_args(&args)?;
-    let mut command: gents::defra_query::QueryParams = params.into();
+    let mut command: gents::tools::builtin::defra_query::QueryParams = params.into();
     if let Some(verb) = args.verb {
         command.argv = vec![verb.clone()];
         if verb == "fields" || verb == "count" {
@@ -81,6 +85,12 @@ fn command_from_args(
     if let Some(offset) = args.offset {
         command.options.insert("offset".into(), json!(offset));
     }
+    if let Some(page) = args.field_page {
+        command.options.insert(
+            "field_page".into(),
+            serde_json::from_str(&page).context("parsing --field-page as JSON")?,
+        );
+    }
     if let Some(text) = args.text {
         command.options.insert("text".into(), json!(text));
     }
@@ -100,10 +110,12 @@ mod tests {
 
     #[test]
     fn query_search_cli_preserves_typed_search_options() {
-        use crate::cli::args::{Cli, Command};
+        use crate::cli::args::{Cli, Command, DataCommand, UtilsCommand};
         use clap::Parser;
         let cli = Cli::try_parse_from([
             "gents",
+            "utils",
+            "data",
             "query",
             "search",
             "--collection",
@@ -122,7 +134,13 @@ mod tests {
             "AdmiralReport",
         ])
         .unwrap();
-        let Command::Query(args) = cli.command else {
+        let Some(Command::Utils {
+            command:
+                UtilsCommand::Data {
+                    command: DataCommand::Query(args),
+                },
+        }) = cli.command
+        else {
             panic!("expected query")
         };
         let (params, scope) = command_from_args(args).unwrap();
@@ -134,6 +152,53 @@ mod tests {
         assert_eq!(params.options["limit"], 1);
         assert!(scope.ensure_allowed("AdmiralReport").is_ok());
         assert!(scope.ensure_allowed("OtherReport").is_err());
+    }
+
+    #[test]
+    fn query_field_page_preserves_continuation_and_filter() {
+        use crate::cli::args::{Cli, Command, DataCommand, UtilsCommand};
+        use clap::Parser;
+        let cli = Cli::try_parse_from([
+            "gents",
+            "utils",
+            "data",
+            "query",
+            "find",
+            "--collection",
+            "Record",
+            "--field",
+            "body",
+            "--filter",
+            r#"{"kind":{"_eq":"note"}}"#,
+            "--field-page",
+            r#"{"doc_id":"doc","field":"body","offset_bytes":2000,"expected_hash":"sha256:abc"}"#,
+        ])
+        .unwrap();
+        let Some(Command::Utils {
+            command:
+                UtilsCommand::Data {
+                    command: DataCommand::Query(args),
+                },
+        }) = cli.command
+        else {
+            panic!("expected query")
+        };
+        let (command, _) = command_from_args(args).unwrap();
+        assert_eq!(command.options["filter"], json!({"kind":{"_eq":"note"}}));
+        assert_eq!(
+            command.options["field_page"],
+            json!({
+                "doc_id":"doc", "field":"body", "offset_bytes":2000, "expected_hash":"sha256:abc"
+            })
+        );
+    }
+
+    #[test]
+    fn query_field_page_rejects_invalid_json() {
+        let mut args = protected_args(vec!["body".into()]);
+        args.field_page = Some("{".into());
+        let error = command_from_args(args).unwrap_err();
+        assert!(format!("{error:#}").contains("parsing --field-page as JSON"));
     }
 
     fn protected_args(fields: Vec<String>) -> QueryArgs {
@@ -149,6 +214,7 @@ mod tests {
             collection: EVAL_VERDICT_NAME.into(),
             fields,
             filter: None,
+            field_page: None,
             limit: None,
             allow_collections: Vec::new(),
         }
@@ -161,12 +227,14 @@ mod tests {
         assert!(scope.is_unrestricted(), "no --allow-collection means all");
 
         let error = run_defra_query(
-            &gents::config_client::GraphqlEndpoint::anonymous("http://127.0.0.1:1/api/v0/graphql"),
+            &gents::store::config_client::GraphqlEndpoint::anonymous(
+                "http://127.0.0.1:1/api/v0/graphql",
+            ),
             &params,
             &scope,
         )
         .await
-        .expect_err("EvalVerdict must never be readable through `gents query`");
+        .expect_err("EvalVerdict must never be readable through `gents utils data query`");
         let message = format!("{error:#}");
         assert!(message.contains(EVAL_VERDICT_NAME), "{message}");
         assert!(message.contains("protected"), "{message}");
@@ -179,7 +247,9 @@ mod tests {
         assert!(params.is_discovery(), "a lone `*` is the discovery request");
 
         let error = run_defra_query(
-            &gents::config_client::GraphqlEndpoint::anonymous("http://127.0.0.1:1/api/v0/graphql"),
+            &gents::store::config_client::GraphqlEndpoint::anonymous(
+                "http://127.0.0.1:1/api/v0/graphql",
+            ),
             &params,
             &scope,
         )

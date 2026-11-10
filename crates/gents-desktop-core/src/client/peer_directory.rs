@@ -15,6 +15,69 @@ use uuid::Uuid;
 mod enrollment_endpoints;
 use enrollment_endpoints::EnrollmentEndpoint;
 
+/// Why a saved route refuses a chat write: the Lean
+/// `ClientChatReadiness.Cause`, with its `causeToken` and `nextAction`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChatRouteCause {
+    NoRoute,
+    NoEndpoint,
+    EndpointNotAdvertised,
+}
+
+/// What a refused send tells the user to do: the Lean
+/// `ClientChatReadiness.NextAction`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChatNextAction {
+    ConnectRuntime,
+    AwaitEndpointAdvertisement,
+}
+
+impl ChatNextAction {
+    pub fn token(self) -> &'static str {
+        match self {
+            Self::ConnectRuntime => "connect_runtime",
+            Self::AwaitEndpointAdvertisement => "await_endpoint_advertisement",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::ConnectRuntime => "connect this runtime with its authenticated endpoint",
+            Self::AwaitEndpointAdvertisement => {
+                "waiting for the enrolled runtime to advertise its signed HTTP endpoint; check that it is running"
+            }
+        }
+    }
+}
+
+impl ChatRouteCause {
+    pub fn token(self) -> &'static str {
+        match self {
+            Self::NoRoute => "no_route",
+            Self::NoEndpoint => "no_endpoint",
+            Self::EndpointNotAdvertised => "endpoint_not_advertised",
+        }
+    }
+
+    pub fn next_action(self) -> ChatNextAction {
+        match self {
+            Self::NoRoute | Self::NoEndpoint => ChatNextAction::ConnectRuntime,
+            Self::EndpointNotAdvertised => ChatNextAction::AwaitEndpointAdvertisement,
+        }
+    }
+}
+
+impl std::fmt::Display for ChatRouteCause {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{}: {}",
+            self.token(),
+            self.next_action().description()
+        )
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PeerRecord {
     pub peer_id: String,
@@ -63,28 +126,40 @@ impl PeerRecord {
     }
 
     pub fn operator_graphql(&self) -> Option<&str> {
-        if self.source.as_deref() != Some("local-standard")
-            && !(self.is_enrollment() && self.is_managed_runtime())
-        {
-            return None;
-        }
         let graphql = self.graphql.as_deref()?.trim();
-        graphql
-            .contains("/api/v0/graphql")
-            .then_some(graphql)
-            .filter(|value| value.starts_with("http://") || value.starts_with("https://"))
+        let url = reqwest::Url::parse(graphql).ok()?;
+        (matches!(url.scheme(), "http" | "https")
+            && url.host_str().is_some()
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.query().is_none()
+            && url.fragment().is_none()
+            && url.path().ends_with("/api/v0/graphql"))
+        .then_some(graphql)
     }
 
-    pub fn is_chat_ready_at(&self, now: DateTime<Utc>) -> bool {
-        if self.source.as_deref() == Some("local-standard") {
-            return self.pairing_ready;
+    /// The chat write fence, `ClientChatReadiness.chatReadiness`: the
+    /// operator endpoint is the only write path, and the runtime's ACP decides
+    /// whether the signed write is admitted. Pairing and the enrollment lease
+    /// are P2P route observations and do not gate it. `None` is ready.
+    pub fn chat_refusal(&self) -> Option<ChatRouteCause> {
+        if self.operator_graphql().is_some() {
+            None
+        } else if self.is_enrollment() && !self.is_managed_runtime() {
+            Some(ChatRouteCause::EndpointNotAdvertised)
+        } else {
+            Some(ChatRouteCause::NoEndpoint)
         }
-        self.is_enrollment()
-            && self.pairing_ready
-            && self
-                .pairing_network_id
-                .as_deref()
-                .is_some_and(|value| !value.trim().is_empty())
+    }
+
+    pub fn is_chat_ready(&self) -> bool {
+        self.chat_refusal().is_none()
+    }
+
+    fn enrollment_generation_complete(&self) -> bool {
+        self.pairing_network_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
             && self
                 .enrollment_request_digest
                 .as_deref()
@@ -92,6 +167,23 @@ impl PeerRecord {
             && self
                 .enrollment_authorization_sequence
                 .is_some_and(|sequence| sequence > 0)
+    }
+
+    /// This client's enrollment into `node_did` reached an authorization
+    /// generation. The desktop's managed pairing grants Node administration
+    /// before it approves the request (`grant_then_approve_managed`), so for its
+    /// own co-hosted Node a completed generation records that this client key
+    /// administers it. The P2P lease is not consulted: it gates routes, not the
+    /// grant.
+    pub fn records_completed_enrollment_into(&self, node_did: &str) -> bool {
+        self.node_did == node_did && self.is_enrollment() && self.enrollment_generation_complete()
+    }
+
+    /// An operator endpoint does not establish an authenticated enrollment route.
+    pub fn is_enrollment_ready_at(&self, now: DateTime<Utc>) -> bool {
+        self.is_enrollment()
+            && self.pairing_ready
+            && self.enrollment_generation_complete()
             && self
                 .enrollment_authorization_expires_at
                 .as_deref()
@@ -171,10 +263,63 @@ impl RetiredEnrollment {
     }
 }
 
+const MAX_ENDED_ACCESS: usize = 32;
+
+/// Why this desktop stopped being able to use a node it joined.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EndedAccessReason {
+    /// The lease had run out when the authorization stopped being current.
+    Expired,
+    /// The authorization stopped being current before its lease ran out.
+    /// Enrollment authority ends a fresh grant only by a signed revocation;
+    /// a newer grant for the same node replaces this record instead.
+    Revoked,
+}
+
+/// A joined node whose authorization reconciliation withdrew, kept so the
+/// person learns their access ended rather than seeing the node vanish.
+/// Joining the node again, or dismissing it, removes the record.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EndedAccess {
+    pub node_did: String,
+    pub label: String,
+    pub reason: EndedAccessReason,
+    pub ended_at: String,
+    pub lease_expires_at: String,
+}
+
+impl EndedAccess {
+    fn from_record(record: &PeerRecord, now: DateTime<Utc>) -> Option<Self> {
+        if !record.is_enrollment() {
+            return None;
+        }
+        let lease_expires_at = record.enrollment_authorization_expires_at.clone()?;
+        let reason = if authorization_lease_is_fresh_at(&lease_expires_at, now) {
+            EndedAccessReason::Revoked
+        } else {
+            EndedAccessReason::Expired
+        };
+        Some(Self {
+            node_did: record.node_did.clone(),
+            label: record.label.clone(),
+            reason,
+            ended_at: now.to_rfc3339(),
+            lease_expires_at,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::client) enum RemovalCause {
     Operator,
+    /// Reconciliation tore the route down while the node's authority over
+    /// this desktop still reads as current, such as a route receipt not yet
+    /// observed; the route returns with the receipt.
     Reconciliation,
+    /// Reconciliation found no current authority for the node any more: it
+    /// was revoked or its lease ran out.
+    AuthorityEnded,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -186,6 +331,8 @@ struct StoredPeerDirectory {
     pending_removals: Vec<PeerRecord>,
     #[serde(default)]
     retired_enrollments: Vec<RetiredEnrollment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    ended_access: Vec<EndedAccess>,
 }
 
 #[derive(Debug, Clone)]
@@ -194,6 +341,7 @@ pub(crate) struct PeerDirectory {
     peers: Vec<PeerRecord>,
     pending_removals: Vec<PeerRecord>,
     retired_enrollments: Vec<RetiredEnrollment>,
+    ended_access: Vec<EndedAccess>,
     enrollment_endpoints: Vec<EnrollmentEndpoint>,
     _lease: Arc<PeerDirectoryLease>,
     #[cfg(test)]
@@ -243,6 +391,7 @@ impl PeerDirectory {
                     peers: stored.peers,
                     pending_removals: stored.pending_removals,
                     retired_enrollments: stored.retired_enrollments,
+                    ended_access: stored.ended_access,
                     enrollment_endpoints: stored.enrollment_endpoints,
                     _lease: lease,
                     #[cfg(test)]
@@ -495,9 +644,13 @@ impl PeerDirectory {
                 .peers
                 .retain(|candidate| candidate.peer_id != existing.peer_id);
         }
+        candidate
+            .ended_access
+            .retain(|ended| ended.node_did != node_did);
 
         if existing.as_ref() == Some(&record)
             && candidate.enrollment_endpoints == self.enrollment_endpoints
+            && candidate.ended_access == self.ended_access
         {
             return Ok(record);
         }
@@ -594,9 +747,39 @@ impl PeerDirectory {
                 .retain(|existing| existing.request_digest != retired.request_digest);
             candidate.retired_enrollments.push(retired);
         }
+        if let Some(ended) = EndedAccess::from_record(&removed, Utc::now())
+            .filter(|_| cause == RemovalCause::AuthorityEnded)
+        {
+            candidate
+                .ended_access
+                .retain(|existing| existing.node_did != ended.node_did);
+            candidate.ended_access.push(ended);
+            let overflow = candidate
+                .ended_access
+                .len()
+                .saturating_sub(MAX_ENDED_ACCESS);
+            candidate.ended_access.drain(..overflow);
+        }
         candidate.sort_records();
         self.commit(candidate).await?;
         Ok(Some(removed))
+    }
+
+    pub(in crate::client) fn ended_access(&self) -> &[EndedAccess] {
+        &self.ended_access
+    }
+
+    pub(in crate::client) async fn dismiss_ended_access(&mut self, node_did: &str) -> Result<bool> {
+        let mut candidate = self.clone();
+        let before = candidate.ended_access.len();
+        candidate
+            .ended_access
+            .retain(|ended| ended.node_did != node_did);
+        if candidate.ended_access.len() == before {
+            return Ok(false);
+        }
+        self.commit(candidate).await?;
+        Ok(true)
     }
 
     pub(in crate::client) async fn complete_removal_if_matches(
@@ -655,6 +838,7 @@ impl PeerDirectory {
             peers: self.peers.clone(),
             pending_removals: self.pending_removals.clone(),
             retired_enrollments: self.retired_enrollments.clone(),
+            ended_access: self.ended_access.clone(),
             enrollment_endpoints: self.enrollment_endpoints.clone(),
         })?;
         let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
@@ -749,24 +933,48 @@ fn sort_peer_records(records: &mut [PeerRecord]) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn operator_endpoint_requires_the_canonical_runtime_suffix() {
+        let mut record: PeerRecord = serde_json::from_value(serde_json::json!({
+            "peer_id": "peer", "node_did": "did:test:runtime", "label": "runtime", "addr": "iroh:peer",
+            "created_at": "2026-11-04T00:00:00Z", "updated_at": "2026-11-04T00:00:00Z"
+        }))
+        .unwrap();
+        for path in ["/api/v0/graphql", "/proxy/api/v0/graphql"] {
+            let url = format!("https://runtime.example{path}");
+            record.graphql = Some(url.clone());
+            assert_eq!(record.operator_graphql(), Some(url.as_str()));
+        }
+        for path in [
+            "/api/v1/graphql",
+            "/graphql",
+            "/api/v0/graphql/extra",
+            "/status?next=/api/v0/graphql",
+        ] {
+            record.graphql = Some(format!("https://runtime.example{path}"));
+            assert!(record.operator_graphql().is_none());
+        }
+    }
 
     #[test]
     fn source_less_peer_is_not_an_immediate_chat_authority() {
         let unscoped = PeerRecord::new("Unscoped bridge", "iroh://unscoped", "did:test:unscoped");
-        assert!(!unscoped.is_chat_ready_at(Utc::now()));
+        assert!(!unscoped.is_chat_ready());
         assert!(validate_fresh_directory(&StoredPeerDirectory {
             peers: vec![unscoped],
             enrollment_endpoints: Vec::new(),
             pending_removals: Vec::new(),
             retired_enrollments: Vec::new(),
+            ended_access: Vec::new(),
         })
         .is_err());
     }
 
     #[tokio::test]
-    async fn restart_clears_persisted_managed_readiness_before_chat_reopens() {
+    async fn startup_clears_persisted_enrollment_pairing_readiness() {
         let tempdir = tempfile::tempdir().unwrap();
         let path = tempdir.path().join("peers.json");
         let mut directory = PeerDirectory::load(&path).await.unwrap();
@@ -782,7 +990,7 @@ mod tests {
             .find(|record| record.peer_id == managed.peer_id)
             .unwrap();
         assert!(!record.pairing_ready);
-        assert!(!record.is_chat_ready_at(Utc::now()));
+        assert!(!record.is_enrollment_ready_at(Utc::now()));
 
         let reloaded = load_peer_records(&path).await.unwrap();
         assert!(!reloaded[0].pairing_ready);
@@ -839,6 +1047,235 @@ mod tests {
         assert!(reloaded.contains(&original));
         assert!(reloaded.contains(&later));
         assert!(!reloaded.contains(&failed));
+    }
+
+    #[test]
+    fn generated_enrollment_route_readiness_matches_lean() {
+        let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+        let cases = snapshot["enrollment_route_readiness_cases"]
+            .as_array()
+            .unwrap();
+        assert!(!cases.is_empty());
+        let now = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        for case in cases {
+            let flag = |name: &str| case[name].as_bool().unwrap();
+            let mut peer = PeerRecord::base("runtime", "peer", "node");
+            peer.source = flag("enrollment").then(|| "enrollment".into());
+            peer.pairing_ready = flag("route_applied");
+            peer.pairing_network_id = flag("network").then(|| "network".into());
+            peer.enrollment_request_digest = flag("digest").then(|| "digest".into());
+            peer.enrollment_authorization_sequence = flag("sequence_fresh").then_some(1);
+            peer.enrollment_authorization_expires_at = Some(if flag("lease_fresh") {
+                "2026-01-02T00:00:00Z".into()
+            } else {
+                "2025-12-31T00:00:00Z".into()
+            });
+            if flag("operator_endpoint") {
+                peer.graphql = Some("http://127.0.0.1:9191/api/v0/graphql".into());
+                peer.local_node_home = Some("/runtime".into());
+            }
+            assert_eq!(
+                peer.is_enrollment_ready_at(now),
+                flag("expected_ready"),
+                "{}",
+                case["name"]
+            );
+        }
+    }
+
+    /// Materializes a Lean `ClientChatReadiness.Route` as the record the
+    /// native directory holds; `null` is no route.
+    pub(crate) fn chat_case_record(route: &serde_json::Value) -> Option<PeerRecord> {
+        if route.is_null() {
+            return None;
+        }
+        let flag = |name: &str| route[name].as_bool().unwrap();
+        let mut peer = PeerRecord::base("runtime", "peer", "did:key:runtime");
+        peer.source = route["source"].as_str().map(str::to_owned);
+        peer.graphql = match (flag("operator_endpoint"), flag("managed")) {
+            (true, _) => Some("http://127.0.0.1:9191/api/v0/graphql".into()),
+            (false, true) => Some("http://127.0.0.1:9191/graphql".into()),
+            (false, false) => None,
+        };
+        peer.local_node_home = flag("managed").then(|| "/runtime/home".into());
+        assert_eq!(peer.operator_graphql().is_some(), flag("operator_endpoint"));
+        assert_eq!(peer.is_managed_runtime(), flag("managed"));
+        Some(peer)
+    }
+
+    /// The P2P route observations the Lean route does not carry. Each Lean
+    /// case is materialized under every combination: the fence must not read
+    /// them.
+    pub(crate) fn with_route_observations(record: &PeerRecord) -> Vec<PeerRecord> {
+        let mut observed = Vec::new();
+        for pairing in [false, true] {
+            for lease in [
+                None,
+                Some("not-a-timestamp"),
+                Some("2000-01-01T00:00:00Z"),
+                Some("2999-01-01T00:00:00Z"),
+            ] {
+                let mut peer = record.clone();
+                peer.pairing_ready = pairing;
+                peer.pairing_network_id = pairing.then(|| "network".into());
+                peer.enrollment_request_digest = pairing.then(|| "digest".into());
+                peer.enrollment_authorization_sequence = Some(u64::from(pairing));
+                peer.enrollment_authorization_expires_at = lease.map(str::to_owned);
+                observed.push(peer);
+            }
+        }
+        observed
+    }
+
+    /// Every Lean `ClientChatReadiness` fence case as (record, refusal), each
+    /// record under every route observation.
+    pub(crate) fn chat_readiness_cases() -> Vec<(Option<PeerRecord>, Option<String>)> {
+        let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+        snapshot["client_chat_readiness_cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|case| {
+                let refusal = case["refusal"].as_str().map(str::to_owned);
+                match chat_case_record(&case["route"]) {
+                    None => vec![(None, refusal)],
+                    Some(record) => with_route_observations(&record)
+                        .into_iter()
+                        .map(|peer| (Some(peer), refusal.clone()))
+                        .collect(),
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn chat_readiness_matches_lean() {
+        let cases = chat_readiness_cases();
+        assert!(cases.len() > 100, "{}", cases.len());
+        let mut sources = std::collections::BTreeSet::new();
+        for (record, refusal) in cases {
+            let Some(record) = record else {
+                assert_eq!(refusal.as_deref(), Some("no_route"));
+                continue;
+            };
+            sources.insert(record.source.clone());
+            assert_eq!(
+                record.chat_refusal().map(ChatRouteCause::token),
+                refusal.as_deref(),
+                "{record:?}"
+            );
+            assert_eq!(record.is_chat_ready(), refusal.is_none(), "{record:?}");
+        }
+        assert_eq!(sources.len(), 4, "{sources:?}");
+    }
+
+    #[test]
+    fn chat_refusal_causes_match_lean() {
+        let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+        let causes = snapshot["client_chat_readiness_causes"].as_array().unwrap();
+        let native = [
+            ChatRouteCause::NoRoute,
+            ChatRouteCause::NoEndpoint,
+            ChatRouteCause::EndpointNotAdvertised,
+        ];
+        assert_eq!(causes.len(), native.len());
+        for (case, cause) in causes.iter().zip(native) {
+            assert_eq!(case["cause"], cause.token());
+            assert_eq!(case["next_action"], cause.next_action().token());
+        }
+    }
+
+    async fn joined(directory: &mut PeerDirectory, digest: &str, expires_at: &str) -> PeerRecord {
+        directory
+            .upsert_enrollment_peer(
+                "server-peer",
+                "Harbor",
+                "iroh://ticket",
+                "did:key:harbor",
+                "network-a",
+                &format!("request-{digest}"),
+                digest,
+                "did:key:admin",
+                1,
+                expires_at,
+            )
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_withdrawn_joined_node_is_remembered_with_why_its_access_ended() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join("peers.json");
+        let mut directory = PeerDirectory::load(&path).await.unwrap();
+
+        let fresh = joined(&mut directory, "digest-a", "2099-01-01T00:00:00Z").await;
+        directory
+            .queue_removal(&fresh, RemovalCause::AuthorityEnded)
+            .await
+            .unwrap()
+            .expect("the withdrawn grant's record is removed");
+        let ended = directory.ended_access().to_vec();
+        assert_eq!(ended.len(), 1);
+        assert_eq!(ended[0].node_did, "did:key:harbor");
+        assert_eq!(ended[0].label, "Harbor");
+        assert_eq!(
+            ended[0].reason,
+            EndedAccessReason::Revoked,
+            "a grant withdrawn before its lease ran out was revoked"
+        );
+
+        let lapsed = joined(&mut directory, "digest-b", "2001-01-01T00:00:00Z").await;
+        assert!(
+            directory.ended_access().is_empty(),
+            "joining the node again forgets that its access ended"
+        );
+        directory
+            .queue_removal(&lapsed, RemovalCause::AuthorityEnded)
+            .await
+            .unwrap()
+            .expect("the lapsed grant's record is removed");
+        assert_eq!(
+            directory
+                .ended_access()
+                .iter()
+                .map(|ended| ended.reason)
+                .collect::<Vec<_>>(),
+            vec![EndedAccessReason::Expired],
+            "one record per node, saying its lease ran out"
+        );
+
+        drop(directory);
+        let mut directory = PeerDirectory::load(&path).await.unwrap();
+        assert_eq!(directory.ended_access().len(), 1, "it survives a restart");
+        assert!(directory
+            .dismiss_ended_access("did:key:harbor")
+            .await
+            .unwrap());
+        assert!(!directory
+            .dismiss_ended_access("did:key:harbor")
+            .await
+            .unwrap());
+        drop(directory);
+        let directory = PeerDirectory::load(&path).await.unwrap();
+        assert!(directory.ended_access().is_empty(), "a dismissal persists");
+    }
+
+    #[tokio::test]
+    async fn removing_a_joined_node_yourself_is_not_an_ended_access() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let mut directory = PeerDirectory::load(tempdir.path().join("peers.json"))
+            .await
+            .unwrap();
+        let record = joined(&mut directory, "digest-a", "2099-01-01T00:00:00Z").await;
+        directory
+            .queue_removal(&record, RemovalCause::Operator)
+            .await
+            .unwrap()
+            .expect("the record is removed");
+        assert!(directory.ended_access().is_empty());
     }
 
     #[tokio::test]
@@ -1011,7 +1448,9 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(!managed.is_chat_ready_at(Utc::now()));
+        // Discovery-only P2P pairing does not gate the local HTTP write path.
+        assert!(!managed.pairing_ready);
+        assert!(managed.is_chat_ready());
 
         let enrolled = directory
             .upsert_enrollment_peer(

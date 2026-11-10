@@ -5,21 +5,63 @@ import {
   setProductTelemetry,
   type ProductTelemetryStatus,
 } from "../../../lib/nativeShell";
-import type { FollowUp, NavMode, SentTurnPlacement } from "@/preferences";
+import type { FollowUp, SentTurnPlacement, SidebarMode } from "@/preferences";
 import {
   preferences,
   useFollowUp,
-  useNavMode,
+  useSidebarMode,
   useSentTurnPlacement,
-  useTheme,
+  useThemePreference,
 } from "@/preferences";
 import { MOD } from "../Shortcuts";
+import { Monitor, Moon, Sun } from "lucide-react";
+import { ToggleGroup, ToggleGroupItem } from "@gents/ui/components/toggle-group";
+import { Hint } from "../Hint";
+import { Button } from "@gents/ui/components/button";
+import { openCustomizeNav } from "@/app/CustomizeNav";
+import { SIDEBAR_MODES } from "@/app/sidebarModes";
+import { sidebar } from "@/app/sidebarChange";
 import { ChoiceRow } from "../agent/editors";
 import { Group, Row } from "../agent/rows";
+import { NodesGroup } from "./NodesGroup";
+
+const THEMES: { value: ThemePreference; label: string; icon: typeof Sun }[] = [
+  { value: "system", label: "System", icon: Monitor },
+  { value: "light", label: "Light", icon: Sun },
+  { value: "dark", label: "Dark", icon: Moon },
+];
+
+/* the three themes side by side, the chosen one filled; the arrow keys
+   move between them */
+function ThemeChoice({ value }: { value: ThemePreference }) {
+  return (
+    <ToggleGroup
+      aria-label="Theme"
+      value={[value]}
+      onValueChange={(next) => {
+        const chosen = next[0] as ThemePreference | undefined;
+        if (chosen) preferences.setTheme(chosen);
+      }}
+      className="shrink-0 gap-0.5 rounded-xl bg-muted/60 p-0.5"
+    >
+      {THEMES.map(({ value: theme, label, icon: Icon }) => (
+        <Hint key={theme} label={label}>
+          <ToggleGroupItem
+            value={theme}
+            aria-label={label}
+            className="size-7 rounded-lg text-muted-foreground hover:bg-transparent hover:text-foreground aria-pressed:bg-background aria-pressed:text-foreground aria-pressed:shadow-sm"
+          >
+            <Icon className="size-4" />
+          </ToggleGroupItem>
+        </Hint>
+      ))}
+    </ToggleGroup>
+  );
+}
 
 export function GeneralPanel() {
-  const theme = useTheme();
-  const nav = useNavMode();
+  const theme = useThemePreference();
+  const sidebarShown = useSidebarMode();
   const sentTurn = useSentTurnPlacement();
   const followUp = useFollowUp();
   const [usageTelemetry, setUsageTelemetry] = useState<ProductTelemetryStatus | null>(
@@ -37,30 +79,30 @@ export function GeneralPanel() {
   return (
     <div>
       <Group title="Appearance">
-        <ChoiceRow
-          id="settings-theme"
+        <Row
           label="Theme"
-          description="Light or dark, for every window of the app."
-          value={theme}
-          onChange={(v) => preferences.setTheme(v as ThemePreference)}
-          items={[
-            { value: "light", label: "Light" },
-            { value: "dark", label: "Dark" },
-          ]}
-        />
+          description="Follow the system, or always light or dark, for every window of the app."
+        >
+          <ThemeChoice value={theme} />
+        </Row>
         <ChoiceRow
           id="settings-nav"
-          label="Side nav"
-          description="How the navigation panel next to the rail shows on a wide window."
-          value={nav}
-          onChange={(v) => preferences.setNav(v as NavMode)}
-          items={[
-            { value: "hover", label: "Show on hover" },
-            { value: "expanded", label: "Always expanded" },
-            { value: "collapsed", label: "Collapsed" },
-          ]}
+          label="Sidebar"
+          description="How the sidebar shows on a wide window."
+          value={sidebarShown}
+          onChange={(v) => sidebar.setMode(v as SidebarMode)}
+          items={SIDEBAR_MODES}
         />
+        <Row
+          label="Sidebar items"
+          description="Reorder the sidebar's items, hide them, or add pages of the node to it."
+        >
+          <Button variant="outline" size="sm" onClick={openCustomizeNav}>
+            Customize…
+          </Button>
+        </Row>
       </Group>
+      <NodesGroup />
       <Group title="Privacy">
         {usageTelemetry?.configured || usageTelemetry?.enabled ? (
           <ChoiceRow

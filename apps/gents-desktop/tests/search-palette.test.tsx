@@ -15,6 +15,8 @@ import {
 } from "../src/ui/screens/SearchPalette";
 import { node, renderIn, renderRouted, testApp } from "./app-fixture";
 import { useExclusivePopover } from "../src/ui/hooks/useExclusivePopover";
+import { MailboxStack } from "../src/ui/screens/MailboxStack";
+import { avatarSrc } from "@/lib/avatar";
 
 const NODE = "did:key:z6MkAgent";
 
@@ -36,7 +38,7 @@ const session = (
   title: sessionId,
   previewText: null,
   status: null,
-  agentId: "default",
+  agentDid: "default",
   taskId: null,
   taskName: null,
   triggerId: null,
@@ -66,7 +68,7 @@ const question = {
   requestId: null,
   causeDocId: null,
   targetNodeDid: NODE,
-  targetAgentId: "default",
+  targetAgentDid: "default",
   expectedCollection: null,
   parentItemId: null,
   deadlineAt: null,
@@ -115,15 +117,55 @@ const options = (group: string) =>
     .map((o) => o.textContent);
 
 describe("the search palette", () => {
+  it("asks the system not to autocorrect the query, so ↓ reaches the results", () => {
+    open();
+    const field = screen.getByRole("combobox");
+    expect(field).toHaveAttribute("autocorrect", "off");
+    expect(field).toHaveAttribute("autocapitalize", "off");
+    expect(field).toHaveAttribute("writingsuggestions", "false");
+    expect(field).toHaveAttribute("spellcheck", "false");
+  });
+
+  it("opens an item on the active node in the mailbox's dialog, over the page", () => {
+    const app = testApp({
+      deployments: [
+        node({
+          sessions: [session("release", { title: "Release check" })],
+          mailboxItems: [question],
+        }),
+      ],
+      selection: { nodeDid: NODE },
+    });
+    renderRouted(app, { name: "sessions" }, (route) => (
+      <>
+        <SearchPalette />
+        <MailboxStack route={route} />
+      </>
+    ));
+    act(() => openSearch());
+    fireEvent.click(
+      within(screen.getByRole("group", { name: "Needs attention" })).getByRole(
+        "option",
+      ),
+    );
+    const dialog = screen.getByTestId("mailbox-dialog");
+    expect(
+      within(dialog).getByRole("heading", { name: "Which branch should I use?" }),
+    ).toBeVisible();
+    expect(screen.queryByRole("combobox", { name: "Search" })).toBeNull();
+  });
+
   it("waits for the current overlay to acknowledge its exit before opening", async () => {
     const previous = renderHook(() => useExclusivePopover());
     act(() => previous.result.current.onOpenChange(true));
-    previous.result.current.popupRef.current = document.createElement("div");
+    act(() => previous.result.current.popupRef(document.createElement("div")));
     renderIn(testApp({ deployments: [node()] }), <SearchPalette />);
     act(() => openSearch());
     expect(previous.result.current.open).toBe(false);
     expect(screen.queryByRole("combobox", { name: "Search" })).toBeNull();
     act(() => previous.result.current.onOpenChangeComplete(false));
+    expect(screen.queryByRole("combobox", { name: "Search" })).toBeNull();
+    act(() => previous.result.current.popupRef(null));
     await waitFor(() =>
       expect(screen.getByRole("combobox", { name: "Search" })).toHaveFocus(),
     );
@@ -149,6 +191,39 @@ describe("the search palette", () => {
     ]);
   });
 
+  it("opens short, and lists a group's rest from its Show more row", () => {
+    open();
+    /* six actions: three, then a row for the other three */
+    expect(options("Actions")).toEqual([
+      "New session",
+      "Go to sessions",
+      "Go to mailbox",
+      "Show 3 more",
+    ]);
+    const input = screen.getByRole("combobox", { name: "Search" });
+    const rows = screen.getAllByRole("option");
+    for (let i = 0; i < rows.length - 1; i++)
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(screen.getByRole("option", { name: "Show 3 more" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(options("Actions")).toEqual([
+      "New session",
+      "Go to sessions",
+      "Go to mailbox",
+      "Go to nodes",
+      "Open settings",
+      "Switch node…",
+    ]);
+    /* the palette stays open, on the first row it revealed */
+    expect(screen.getByRole("option", { name: "Go to nodes" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  });
+
   it("ranks matches, narrows by kind and opens the chosen session", async () => {
     const view = open();
     const box = screen.getByRole("combobox", { name: "Search" });
@@ -172,6 +247,115 @@ describe("the search palette", () => {
       nodeDid: NODE,
     });
     expect(screen.queryByRole("combobox", { name: "Search" })).toBeNull();
+  });
+
+  it("goes to the experimental features settings", async () => {
+    const view = open();
+    const box = screen.getByRole("combobox", { name: "Search" });
+    fireEvent.change(box, { target: { value: "experimental" } });
+    expect((await screen.findAllByRole("option"))[0]).toHaveTextContent(
+      "Experimental features",
+    );
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(view.nav().route).toEqual({ name: "settings", section: "experimental" });
+  });
+
+  it("finds a node by its name and switches to it", async () => {
+    const app = testApp({
+      deployments: [
+        node(),
+        node({
+          nodeDid: "did:key:juno",
+          label: "Juno",
+          source: "enrollment",
+          node: { ...node().node, nodeDid: "did:key:juno", displayName: null },
+        }),
+      ],
+      selection: { nodeDid: NODE },
+    });
+    renderIn(app, <SearchPalette />);
+    act(() => openSearch());
+    fireEvent.change(screen.getByRole("combobox", { name: "Search" }), {
+      target: { value: "juno" },
+    });
+    expect(groupNames()[0]).toBe("Nodes");
+    const juno = options("Nodes")[0];
+    expect(juno).toContain("Juno");
+    expect(juno).toContain("Remote");
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Search" }), {
+      key: "Enter",
+    });
+    await waitFor(() =>
+      expect(app.stores.selection.getState().nodeDid).toBe("did:key:juno"),
+    );
+  });
+
+  it("draws a node result with the node's saved portrait", () => {
+    const app = testApp({
+      deployments: [
+        node(),
+        node({
+          nodeDid: "did:key:juno",
+          label: "Juno",
+          source: "enrollment",
+          nodeConfig: { node_did: "did:key:juno", avatar: "12" },
+          node: { ...node().node, nodeDid: "did:key:juno", displayName: null },
+        }),
+      ],
+      selection: { nodeDid: NODE },
+    });
+    renderIn(app, <SearchPalette />);
+    act(() => openSearch());
+    fireEvent.change(screen.getByRole("combobox", { name: "Search" }), {
+      target: { value: "juno" },
+    });
+    const juno = screen
+      .getAllByRole("option")
+      .find((o) => o.textContent?.includes("Juno"));
+    expect(juno?.querySelector(`img[src="${avatarSrc("12")}"]`)).not.toBeNull();
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Search" }), {
+      key: "Escape",
+    });
+  });
+
+  it("names the pack an agent came from, and finds its agents by the pack", () => {
+    const base = node();
+    renderIn(
+      testApp({
+        deployments: [
+          node({
+            agents: [
+              ...base.agents,
+              {
+                ...base.agents[0]!,
+                agentDid: "lister",
+                displayName: "Lister",
+                isDefault: false,
+                tags: ["gents:pack:demo-research"],
+              },
+            ],
+          }),
+        ],
+        selection: { nodeDid: NODE },
+      }),
+      <SearchPalette />,
+    );
+    act(() => openSearch());
+    fireEvent.change(screen.getByRole("combobox", { name: "Search" }), {
+      target: { value: "demo-research" },
+    });
+    const agents = options("Agents");
+    expect(agents).toHaveLength(1);
+    expect(agents[0]).toContain("Lister");
+    expect(agents[0]).toContain("demo-research");
+    /* the person's own agents name only their node */
+    fireEvent.change(screen.getByRole("combobox", { name: "Search" }), {
+      target: { value: "ops" },
+    });
+    expect(options("Agents")[0]).not.toContain("·");
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Search" }), {
+      key: "Escape",
+    });
   });
 
   it("opens from the title bar's Search button", async () => {

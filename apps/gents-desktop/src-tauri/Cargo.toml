@@ -18,10 +18,12 @@ tauri-build = { version = "2", features = [] }
 anyhow.workspace = true
 clap.workspace = true
 chrono.workspace = true
+defra-p2p-adapter.workspace = true
 gents = { path = "../../../crates/gents" }
 gents-fs-runner = { path = "../../../crates/gents-fs-runner" }
 gents-desktop-bridge = { workspace = true }
 gents-desktop-core.workspace = true
+gents-server = { package = "gents-cli", path = "../../../crates/gents-cli", default-features = false, features = ["typescript"] }
 gents-protocol = { path = "../../../crates/gents-protocol" }
 reqwest.workspace = true
 rapidhash = { workspace = true }
@@ -29,6 +31,7 @@ tauri = { version = "2", features = ["image-png", "tray-icon"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
+tauri-plugin-notification = "=2.3.3"
 serde.workspace = true
 serde_json.workspace = true
 tempfile = "3"
@@ -46,18 +49,24 @@ custom-protocol = ["tauri/custom-protocol"]
 native-e2e = ["gents-desktop-bridge/native-e2e"]
 
 [dev-dependencies]
+gents = { path = "../../../crates/gents", features = ["test-home-guard"] }
 axum = "0.8"
 gents-lean-contract.workspace = true
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 mimalloc.workspace = true
-tauri-plugin-single-instance = "2"
+# 2.5 needs tauri 2.12; move it with the tauri upgrade.
+tauri-plugin-deep-link = "~2.4.10"
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+# What tauri-plugin-notification delivers through (via notify-rust); used
+# directly to wait on a notice's click. Keep it on notify-rust's version.
+mac-notification-sys = "=0.6.15"
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSRunningApplication", "NSResponder", "NSWindow", "NSWindowTabGroup", "NSGraphics", "NSEvent", "block2", "objc2-core-foundation"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSRunningApplication", "NSResponder", "NSWindow", "NSWindowTabGroup", "NSGraphics", "NSEvent", "NSView", "NSAlert", "NSButton", "NSControl", "NSTextField", "NSOpenPanel", "NSSavePanel", "NSPanel", "block2", "objc2-core-foundation"] }
 block2 = "0.6"
 objc2-core-foundation = "0.3"
 
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSBundle", "NSDate", "NSRunLoop", "NSString", "NSUUID", "NSSet", "NSArray", "NSDictionary", "NSHTTPCookie"] }
-objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "WKWebsiteDataStore", "WKHTTPCookieStore", "block2"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSBundle", "NSDate", "NSRunLoop", "NSString", "NSUUID", "NSSet", "NSArray", "NSDictionary", "NSHTTPCookie", "NSKeyValueObserving", "NSURL", "NSURLRequest", "NSGeometry", "NSError", "NSObject"] }
+objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "WKWebsiteDataStore", "WKHTTPCookieStore", "WKWebView", "WKWebViewConfiguration", "WKNavigationDelegate", "WKUIDelegate", "WKNavigationAction", "WKNavigation", "WKWindowFeatures", "WKFrameInfo", "WKOpenPanelParameters", "objc2-app-kit", "block2"] }

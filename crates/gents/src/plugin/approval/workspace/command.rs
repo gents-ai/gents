@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 use super::{context, BindingAction};
-use crate::toolset::{CommandExecutionMode, CommandExecutionPolicy};
+use crate::tools::native::{CommandExecutionMode, CommandExecutionPolicy};
 
 pub(crate) fn guard_home() -> Result<Option<PathBuf>> {
     let Some(home) = context::current_home() else {

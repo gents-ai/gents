@@ -6,11 +6,13 @@ use crate::message::{
 };
 use crate::rendered_request::{CaptureScope, CaptureScopeKind};
 
+pub mod authored;
 pub mod extent;
 pub mod live;
 pub mod origin;
 pub mod reconstruction;
 pub mod recovery;
+pub mod rows;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -77,6 +79,8 @@ pub enum StreamPayload {
     ReasoningRedacted,
     /// The signature field of a reasoning text part; never rendered.
     ReasoningSignature,
+    /// A provider-confirmed end of one reasoning block; carries no bytes.
+    ReasoningStop,
     /// Native JSON argument text exactly as emitted; it may be incomplete
     /// until sealed and is never rewritten to canonicalize.
     ToolArguments {
@@ -133,6 +137,8 @@ pub struct OutputSegment {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requester_did: Option<String>,
     pub session_id: String,
+    /// The owning request, or for a fork copy the logical closing record it
+    /// reproduces within `session_id`.
     pub request_doc_id: String,
     pub source: OutputSource,
     /// The source's producer, the same on every record of the source.
@@ -237,8 +243,8 @@ pub enum MessagePublication {
         execution_generation: String,
     },
     RequestRecovery {
-        /// Recovery publishes only retained text from an unheaded provider
-        /// source; never fabricate native metadata.
+        /// Recovery publishes retained text and proven stopped reasoning from
+        /// an unheaded provider source; never fabricate native metadata.
         execution_generation: String,
     },
     /// Tool-owned invocation reply or completion notification. Payload
@@ -247,8 +253,11 @@ pub enum MessagePublication {
     ToolDelivery {
         tool_call_doc_id: String,
     },
-    /// No live request membership; all referenced payloads remain at origin.
-    /// Forks retain origin tool IDs as provenance, never copied executable rows.
+    /// No live request membership. References keep their logical closing
+    /// records; fork publication copies each referenced closure into the
+    /// destination session under that logical coordinate, so the fork reads
+    /// without its origin. Forks retain origin tool IDs as provenance, never
+    /// copied executable rows.
     Fork {
         origin_message_doc_id: String,
     },
@@ -280,33 +289,37 @@ pub enum TerminalOutput {
 /// later dispatch fails. Recovery resumes its existing rows, never new calls.
 ///
 /// `blocks` is in native content order, so reconstruction yields the exact
-/// native `Message` (including `Message::Assistant.id` via `native_id`).
+/// native `Message` (including `Message::Assistant.id` and `request_id` via `native_id` and
+/// `native_request_id`).
 ///
 /// Recovery of an unheaded provider source is deliberately narrower: close its
 /// committed extent Partial (or reuse its existing Partial closure), then
-/// publish only ordinary Text streams at native part zero as Full
-/// PresentedPayload references, in original block order, with outcome Partial
-/// and native_id None. Never turn argument/reasoning/media bytes into text or
-/// fabricate their missing metadata. If no eligible text stream exists, publish
+/// publish ordinary text and stopped reasoning at native part zero in original
+/// block order, with outcome Partial and native metadata absent. Never turn
+/// argument/reasoning/media bytes into text or fabricate missing metadata. If
+/// no eligible stream exists, publish
 /// no assistant header for that source; retain every omitted stream as
 /// diagnostic data. An existing published header is resolved unchanged, not
 /// replaced by this recovery policy. Provider-input narrowing still applies.
 /// Validate source extent/run accounting for all streams, but decode native
 /// payloads only for referenced blocks.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+///
+/// Stored form: `AgentMessage` is client-authored, so its schema stays the v1.0.0-rc0 one
+/// (#1123/#1125) and `native_request_id` has no column. It is read from a
+/// `native_request_id` key inside the `publication` JSON, and written there only when
+/// [`storage::PERSIST_NATIVE_REQUEST_ID`] is on (it is off; see there).
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(try_from = "storage::TranscriptMessageWire")]
 pub struct TranscriptMessage {
     /// Existing owner-defined idempotency key (tool-result key, request-scoped
     /// authored key, or provider-turn coordinate).
     pub message_key: String,
     pub session_id: String,
     pub node_did: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requester_did: Option<String>,
     /// Exact request this message belongs to, not necessarily the request that
     /// produced its referenced bytes. Absent only for history a fork placed in
     /// a child session, which must not acquire live request membership.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_doc_id: Option<String>,
     pub publication: MessagePublication,
     /// Set by the publisher; never derived from the closing records its blocks
@@ -314,13 +327,10 @@ pub struct TranscriptMessage {
     pub outcome: OutputOutcome,
     pub sequence: u32,
     pub role: MessageRole,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_id: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "storage::deserialize_blocks",
-        skip_serializing_if = "Vec::is_empty"
-    )]
+    /// The provider's response request id, carried like `native_id`: only a
+    /// provider assistant message has one (never system, user or recovery).
+    pub native_request_id: Option<String>,
     pub blocks: Vec<MessageBlock>,
     pub created_at: String,
 }

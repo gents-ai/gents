@@ -1,15 +1,27 @@
 use super::*;
-use gents::session::canonical_rows::{
+#[cfg(test)]
+use gents_protocol::output::rows::{
     decode_output_segment_row, decode_transcript_message_row, AGENT_MESSAGE_FIELDS,
     AGENT_OUTPUT_SEGMENT_FIELDS,
 };
 
+#[cfg(test)]
+pub(super) async fn load_rows<T>(node: &EmbeddedNode, root: &str, query: &str) -> Result<Vec<T>>
+where
+    T: DeserializeOwned,
+{
+    let data = execute_local_graphql_query(node, query, &format!("query for {root}")).await?;
+    parse_query_rows(&data, root)
+}
+
+#[cfg(test)]
 pub struct DocumentPatch {
     pub store: ClientStore,
     pub observed_documents: usize,
     pub missing_doc_ids: Option<Vec<String>>,
 }
 
+#[cfg(test)]
 pub async fn fetch_doc_patch(
     node: &EmbeddedNode,
     collection_name: &str,
@@ -196,7 +208,7 @@ pub async fn fetch_doc_patch(
         INFERENCE_BACKEND_NAME => {
             let data = execute_local_graphql_query(
                 node,
-                &format!("query {{ {INFERENCE_BACKEND_NAME}(docIDs: [{in_clause}]) {{ {INFERENCE_BACKEND_FIELDS} {INFERENCE_BACKEND_OBSERVATION_FIELDS} }} }}"),
+                &format!("query {{ {INFERENCE_BACKEND_NAME}(docIDs: [{in_clause}]) {{ {INFERENCE_BACKEND_FIELDS} }} }}"),
                 "inference backend document patch",
             ).await?;
             observed_physical_documents = Some(
@@ -204,15 +216,25 @@ pub async fn fetch_doc_patch(
                     .and_then(Value::as_array)
                     .map_or(0, Vec::len),
             );
-            (rows.inference_backends, rows.inference_backend_source_node_dids) = parse_projected_query_rows_with_source(
+            let (metadata, sources): (Vec<gents::documents::InferenceBackendMetadata>, _) = parse_projected_query_rows_with_source(
                 &data,
                 INFERENCE_BACKEND_NAME,
                 INFERENCE_BACKEND_FIELDS,
-                INFERENCE_BACKEND_OBSERVATION_FIELDS,
+                "",
                 Some("node_did"),
             )?;
+            rows.inference_backends = metadata.into_iter().map(|metadata| metadata.into_backend().map_err(anyhow::Error::from)).collect::<Result<_>>()?;
+            rows.inference_backend_source_node_dids = sources;
+        }
+        INFERENCE_BACKEND_OBSERVATION_NAME => {
+            let data = execute_local_graphql_query(
+                node,
+                &format!("query {{ {INFERENCE_BACKEND_OBSERVATION_NAME}(docIDs: [{in_clause}]) {{ node_did {INFERENCE_BACKEND_OBSERVATION_FIELDS} }} }}"),
+                "inference backend observation patch",
+            ).await?;
+            observed_physical_documents = Some(data.get(INFERENCE_BACKEND_OBSERVATION_NAME).and_then(Value::as_array).map_or(0, Vec::len));
             (rows.backend_observations, rows.backend_observation_source_node_dids) =
-                parse_backend_observation_rows(&data, INFERENCE_BACKEND_NAME)?;
+                parse_backend_observation_rows(&data, INFERENCE_BACKEND_OBSERVATION_NAME)?;
         }
         "AgentContext" => rows.contexts = load_rows(node, "AgentContext", &format!("query {{ AgentContext(docIDs: [{in_clause}]) {{ {AGENT_CONTEXT_FIELDS} }} }}")).await?,
         "CompactionConfig" => rows.compactions = load_rows(node, "CompactionConfig", &format!("query {{ CompactionConfig(docIDs: [{in_clause}]) {{ {COMPACTION_CONFIG_FIELDS} }} }}")).await?,
@@ -221,7 +243,6 @@ pub async fn fetch_doc_patch(
         "EventSource" => rows.event_sources = load_rows(node, "EventSource", &format!("query {{ EventSource(docIDs: [{in_clause}]) {{ {EVENT_SOURCE_FIELDS} }} }}")).await?,
         AGENT_TARGET_NAME => rows.agent_targets = load_rows(node, AGENT_TARGET_NAME, &format!("query {{ {AGENT_TARGET_NAME}(docIDs: [{in_clause}]) {{ {AGENT_TARGET_FIELDS} }} }}")).await?,
         "DatastoreToolSurface" => rows.datastore_tool_surfaces = load_rows(node, "DatastoreToolSurface", &format!("query {{ DatastoreToolSurface(docIDs: [{in_clause}]) {{ {DATASTORE_TOOL_SURFACE_FIELDS} }} }}")).await?,
-        "ChainKeyBinding" => rows.chain_key_bindings = load_rows(node, "ChainKeyBinding", &format!("query {{ ChainKeyBinding(docIDs: [{in_clause}]) {{ {CHAIN_KEY_BINDING_FIELDS} }} }}")).await?,
         INFERENCE_PROFILE_NAME => {
             rows.inference_profiles = load_rows(
                 node,
@@ -275,11 +296,6 @@ pub async fn fetch_doc_patch(
         .iter()
         .map(|row| Some(row.node_did.clone()))
         .collect();
-    rows.chain_key_binding_source_node_dids = rows
-        .chain_key_bindings
-        .iter()
-        .map(|row| Some(row.node_did.clone()))
-        .collect();
     rows.tool_service_registry_source_node_dids = rows
         .tool_service_registries
         .iter()
@@ -316,38 +332,40 @@ pub async fn fetch_doc_patch(
     })
 }
 
+pub(crate) const OBSERVED_COLLECTIONS: &[&str] = &[
+    NODE_NAME,
+    AGENT_NAME,
+    NODE_RUNTIME_NAME,
+    NODE_READINESS_NAME,
+    AGENT_REQUEST_NAME,
+    MAILBOX_ITEM_NAME,
+    AGENT_MESSAGE_NAME,
+    AGENT_OUTPUT_SEGMENT_NAME,
+    AGENT_SESSION_NAME,
+    GOAL_NAME,
+    AGENT_TOOL_CALL_NAME,
+    COMPACTION_ENTRY_NAME,
+    TASK_NAME,
+    SCHEDULE_NAME,
+    TRIGGER_NAME,
+    SKILL_NAME,
+    TOOLS_NAME,
+    INFERENCE_BACKEND_NAME,
+    INFERENCE_BACKEND_OBSERVATION_NAME,
+    INFERENCE_PROFILE_NAME,
+    TOOL_SERVICE_REGISTRY_NAME,
+    "AgentContext",
+    "CompactionConfig",
+    "InferenceSampling",
+    "InferenceExecution",
+    "EventSource",
+    AGENT_TARGET_NAME,
+    "DatastoreToolSurface",
+];
+
+#[cfg(test)]
 pub(crate) fn supports_doc_patch_collection(collection_name: &str) -> bool {
-    matches!(
-        collection_name,
-        NODE_NAME
-            | AGENT_NAME
-            | NODE_RUNTIME_NAME
-            | NODE_READINESS_NAME
-            | AGENT_REQUEST_NAME
-            | MAILBOX_ITEM_NAME
-            | AGENT_MESSAGE_NAME
-            | AGENT_OUTPUT_SEGMENT_NAME
-            | AGENT_SESSION_NAME
-            | GOAL_NAME
-            | AGENT_TOOL_CALL_NAME
-            | COMPACTION_ENTRY_NAME
-            | TASK_NAME
-            | SCHEDULE_NAME
-            | TRIGGER_NAME
-            | SKILL_NAME
-            | TOOLS_NAME
-            | INFERENCE_BACKEND_NAME
-            | INFERENCE_PROFILE_NAME
-            | TOOL_SERVICE_REGISTRY_NAME
-            | "AgentContext"
-            | "CompactionConfig"
-            | "InferenceSampling"
-            | "InferenceExecution"
-            | "EventSource"
-            | AGENT_TARGET_NAME
-            | "DatastoreToolSurface"
-            | "ChainKeyBinding"
-    )
+    OBSERVED_COLLECTIONS.contains(&collection_name)
 }
 
 pub(crate) fn is_transcript_content_collection(collection_name: &str) -> bool {

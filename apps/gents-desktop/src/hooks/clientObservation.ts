@@ -7,15 +7,34 @@ import type { DesktopApp } from "./desktopApp";
 import { createProjectionController } from "./projectionController";
 import { logShellEvent } from "./clientLifecycle";
 import { desktopUpdateRefreshScope } from "./projectionController";
-import { timingConfig } from "./timing";
 import { errorText } from "../lib/errorText";
+
+/** Re-listen backoff after a rejected registration: doubling, capped. Each
+    rejection is still reported; only the wait between attempts is bounded. */
+const RELISTEN_FIRST_MS = 250;
+const RELISTEN_MAX_MS = 8_000;
+/** How long the observer waits for its listener before it reads the selection
+    without one. A registration that keeps failing, or never settles, must not
+    leave the selection unread (TLA `DesktopUpdateListener` `StartupRead`). */
+export const UNREGISTERED_READ_MS = 250;
 
 export function startClientObservation(
   { api, stores, view, actions, lifecycle, trackedRequestId }: DesktopApp,
   listenToUpdates: DesktopClientUpdatedListenerFactory,
 ): () => void {
   const selection = stores.selection;
-  const { refreshSession, refreshSessionLiveDelta, refreshSnapshot } = actions;
+  const { refreshSession, rereadSession, readSessionUpdate, refreshSnapshot } = actions;
+  /* the selected session shows no snapshot: it waits on its node, or its
+     read has not resolved yet */
+  const selectedSessionUnresolved = () => {
+    const { sessionId, nodeDid } = selection.getState();
+    const open = readSession(stores.session);
+    return !(
+      open &&
+      open.sessionId === sessionId &&
+      (!nodeDid || !open.nodeDid || open.nodeDid === nodeDid)
+    );
+  };
 
   function run() {
     let stopped = false;
@@ -30,27 +49,75 @@ export function startClientObservation(
       currentSessionId: () => selection.getState().sessionId,
       refreshSnapshot,
       refreshSession,
-      refreshSessionLiveDelta,
+      rereadSession,
+      readSessionUpdate,
       onError: reportListenerError,
     });
-    void listenToDesktopClientUpdates(
-      async (event) => {
-        if (stopped) return;
-        const scope = desktopUpdateRefreshScope(
-          event.reason,
-          selection.getState().sessionId,
-          trackedRequestId(),
-        );
-        await controller.request(scope);
-      },
-      reportListenerError,
-      listenToUpdates,
-    )
-      .then((cleanup) => {
-        if (stopped) cleanup();
-        else unlisten = cleanup;
-      })
-      .catch(reportListenerError);
+    const unfollowReads = actions.followSessionReads(
+      () => void controller.request("reread"),
+    );
+    /* Store and pairing-health events drive the reads. Tauri drops an event
+       emitted while no handler is registered and never replays it, so the
+       full read that brings the view up to date follows the registration; a
+       rejected registration is retried. Until a registration succeeds, a
+       rejection or the deadline reads the selection once without it. */
+    let unregisteredTimer: ReturnType<typeof setTimeout> | undefined;
+    let startupRead = true;
+    const readUnregistered = () => {
+      clearTimeout(unregisteredTimer);
+      unregisteredTimer = undefined;
+      if (stopped || !startupRead) return;
+      startupRead = false;
+      void controller.request("session");
+    };
+    let relistenTimer: ReturnType<typeof setTimeout> | undefined;
+    let relistenMs = RELISTEN_FIRST_MS;
+    let registrationError: string | null = null;
+    const listen = () => {
+      void listenToDesktopClientUpdates(
+        async (event) => {
+          if (stopped) return;
+          const scope = desktopUpdateRefreshScope(
+            event.reason,
+            selection.getState().sessionId,
+            trackedRequestId(),
+            selectedSessionUnresolved(),
+          );
+          await controller.request(scope);
+        },
+        reportListenerError,
+        listenToUpdates,
+      ).then(
+        (cleanup) => {
+          if (stopped) {
+            cleanup();
+            return;
+          }
+          unlisten = cleanup;
+          clearTimeout(unregisteredTimer);
+          startupRead = false;
+          relistenMs = RELISTEN_FIRST_MS;
+          if (
+            registrationError !== null &&
+            stores.client.getState().error === registrationError
+          )
+            lifecycle.setError(null);
+          registrationError = null;
+          void controller.request("full");
+        },
+        (listenerError: unknown) => {
+          if (stopped) return;
+          reportListenerError(listenerError);
+          registrationError = errorText(listenerError);
+          readUnregistered();
+          relistenTimer = setTimeout(() => {
+            relistenTimer = undefined;
+            if (!stopped) listen();
+          }, relistenMs);
+          relistenMs = Math.min(relistenMs * 2, RELISTEN_MAX_MS);
+        },
+      );
+    };
 
     let published = 0;
     const publishSelection = () => {
@@ -60,63 +127,40 @@ export function startClientObservation(
       });
     };
 
-    const pollMs = timingConfig().activeSessionPollMs;
-    let polled: string | null = null;
-    let pollTimer: ReturnType<typeof setTimeout> | undefined;
-    const followPoll = () => {
-      const sessionId = selection.getState().sessionId;
-      const requestId = view.getState().trackedRequestId;
-      const key =
-        sessionId && requestId && pollMs !== null ? `${sessionId}\0${requestId}` : null;
-      if (key === polled) return;
-      polled = key;
-      clearTimeout(pollTimer);
-      pollTimer = undefined;
-      if (key === null || pollMs === null) return;
-      const nextPollMs = () =>
-        readSession(stores.session)?.liveCursor
-          ? Math.min(250, pollMs)
-          : (actions.sessionReadGapMs() ?? pollMs);
-      const poll = async () => {
-        await controller.request("sessionDelta");
-        if (!stopped && polled === key) pollTimer = setTimeout(poll, nextPollMs());
-      };
-      pollTimer = setTimeout(poll, nextPollMs());
-    };
+    const hidden = () => document.visibilityState === "hidden";
 
     publishSelection();
-    void controller.request("session");
-    followPoll();
+    unregisteredTimer = setTimeout(readUnregistered, UNREGISTERED_READ_MS);
+    listen();
     const unsubscribeSelection = selection.subscribe((state, prev) => {
       if (state.nodeDid !== prev.nodeDid) publishSelection();
       if (state.nodeDid !== prev.nodeDid || state.sessionId !== prev.sessionId) {
         void controller.request("session");
-        followPoll();
       }
     });
     const unsubscribeTracked = view.subscribe((state, prev) => {
       if (state.trackedRequestId === prev.trackedRequestId) return;
       void controller.request("session");
-      followPoll();
     });
 
+    /* showing the window reads it in full */
     const refreshForegroundState = () => {
-      if (document.visibilityState !== "hidden") void controller.request("full");
+      if (hidden()) return;
+      void controller.request("full");
     };
-    const onVisibilityChange = () => {
-      if (document.visibilityState === "visible") refreshForegroundState();
-    };
-    document.addEventListener("visibilitychange", onVisibilityChange);
+    document.addEventListener("visibilitychange", refreshForegroundState);
     window.addEventListener("focus", refreshForegroundState);
 
     return () => {
       stopped = true;
+      clearTimeout(relistenTimer);
+      clearTimeout(unregisteredTimer);
       controller.dispose();
+      unfollowReads();
       actions.invalidateSessionReads();
-      clearTimeout(pollTimer);
       unsubscribeSelection();
       unsubscribeTracked();
-      document.removeEventListener("visibilitychange", onVisibilityChange);
+      document.removeEventListener("visibilitychange", refreshForegroundState);
       window.removeEventListener("focus", refreshForegroundState);
       unlisten?.();
     };

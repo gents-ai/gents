@@ -53,6 +53,29 @@ pub struct AuthoredRequestInput {
     pub attachments: Vec<RequestAttachment>,
 }
 
+impl AuthoredRequestInput {
+    pub fn has_authored_input(&self, prose: &str) -> bool {
+        has_authored_input(
+            prose,
+            &self.selected_skill_ids,
+            &self.captured_context,
+            &self.attachments,
+        )
+    }
+}
+
+fn has_authored_input(
+    prose: &str,
+    selected_skill_ids: &[String],
+    captured_context: &[CapturedContext],
+    attachments: &[RequestAttachment],
+) -> bool {
+    !prose.trim().is_empty()
+        || !selected_skill_ids.is_empty()
+        || !captured_context.is_empty()
+        || !attachments.is_empty()
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RequestInput {
@@ -105,6 +128,11 @@ pub struct RequestInput {
 }
 
 impl RequestInput {
+    /// The destination validates an inherited directory using its existing policy.
+    pub fn agent_new_cwd(&self, same_node: bool) -> Option<String> {
+        same_node.then(|| self.cwd.clone()).flatten()
+    }
+
     /// The serving runtime must advertise support before a client publishes
     /// typed captures. This observation grants no request or workspace authority.
     pub fn captured_input_compatible(&self, runtime_version: Option<u64>) -> bool {
@@ -134,9 +162,12 @@ impl RequestInput {
     }
 
     pub fn has_authored_input(&self, prose: &str) -> bool {
-        !prose.trim().is_empty()
-            || !self.captured_context.is_empty()
-            || !self.attachments.is_empty()
+        has_authored_input(
+            prose,
+            &self.selected_skill_ids,
+            &self.captured_context,
+            &self.attachments,
+        )
     }
 
     /// A retry or queue edit is a new physical request in the same session.

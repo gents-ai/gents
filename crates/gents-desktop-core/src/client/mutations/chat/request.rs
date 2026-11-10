@@ -1,36 +1,37 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
-use gents::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
-use gents::lifecycle::{ExecutionOrigin, TriggerLineage, DEFAULT_REQUEST_MAX_RETRIES};
-use gents::skills::prompt_slash_skill_selection;
-use gents::{build_signed_request, RequestIdentity, RequestSigner, RequestSpec, RetryLink};
+use gents::request::lifecycle::TriggerLineage;
+use gents::store::config_client::ConfigAccess;
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 use gents_protocol::request_input::RequestInput;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
-use serde_json::Value;
-use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::client::store::ClientStore;
 
-use super::super::graphql::{escape_graphql_string, normalize_optional_string, normalize_required};
-use super::binding::resolve_agent_binding;
+use super::super::graphql::escape_graphql_string;
+#[cfg(test)]
+use super::super::graphql::normalize_required;
+use prepare::prepare_request_submission;
 
-/// The durable submission receipt. Replica observation may still be pending;
-/// callers must not replay the mutation when a subsequent refresh fails.
+/// The request the runtime holds for a send. Replica observation may still be
+/// pending; callers must not resend under a new identity when a subsequent
+/// refresh fails.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SubmittedRequest {
     pub request_id: String,
     pub session_id: String,
     pub node_did: String,
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct SubmitRequestOptions {
-    pub caller_intent: Option<SubmissionIntent>,
+    /// The request identity the client picked when the person sent (Lean
+    /// `ClientOptimisticSend`). A retry passes the same identity, which the
+    /// runtime's create treats as the same request; `None` mints one.
+    pub request_id: Option<String>,
     pub valid_until: Option<DateTime<Utc>>,
     pub retry_parent_request: Option<String>,
     pub input: RequestInput,
@@ -39,20 +40,17 @@ pub struct SubmitRequestOptions {
     pub retry_key: Option<String>,
 }
 
-fn normalize_authored_content<'a>(input: &RequestInput, content: &'a str) -> Result<&'a str> {
-    anyhow::ensure!(
-        input.has_authored_input(content),
-        "content must not be empty"
-    );
-    Ok(content.trim())
-}
-
+/// One signed, idempotent create (`send_client_request`). A resend of an
+/// identity the runtime already holds returns that request before any other
+/// check, so a held answer to a question the runtime has since claimed still
+/// confirms (Lean `ClientOptimisticSend.held_resend_never_refused`). A failure
+/// leaves no request under the identity, so the caller shows the message
+/// failed and may resend the same identity.
 #[expect(
     clippy::too_many_arguments,
     reason = "admission inputs from separate owners (store, access, identity, admission record)"
 )]
 pub async fn submit_request(
-    node: &Arc<EmbeddedNode>,
     store: &ClientStore,
     access: &ConfigAccess,
     session_id: &str,
@@ -61,21 +59,32 @@ pub async fn submit_request(
     signer: &dyn gents::NodeIdentity,
     admission: AgentRequestAdmissionRecord,
     content: &str,
-    agent_id: Option<&str>,
+    agent_did: Option<&str>,
     options: SubmitRequestOptions,
 ) -> Result<SubmittedRequest> {
-    let caller_intent = options.caller_intent.clone();
-    if let Some(intent) = caller_intent.as_ref() {
-        anyhow::ensure!(
-            intent.node_did == node_did,
-            "caller submission belongs to another node"
-        );
-        if let Some(record) = receipt::journal::caller::recover(node, intent).await? {
-            return receipt::delivery::reconcile(node, Some(access), record).await;
+    let request_id = options.request_id.clone();
+    if let Some(request_id) = request_id.as_deref() {
+        let held = gents::request::lifecycle::held_client_request(
+            access,
+            gents::request::lifecycle::ClientRequestScope {
+                node_did,
+                session_id,
+                requester_did,
+                request_id,
+            },
+        )
+        .await?;
+        if let Some(held) = held {
+            return Ok(SubmittedRequest {
+                request_id: held.request_id,
+                session_id: held.session_id,
+                node_did: node_did.to_owned(),
+                agent_did: held.agent_did,
+            });
         }
     }
     let (result, create) = prepare_request_submission(
-        node,
+        access,
         store,
         session_id,
         node_did,
@@ -83,39 +92,21 @@ pub async fn submit_request(
         signer,
         admission,
         content,
-        agent_id,
+        agent_did,
         options,
-        caller_intent
-            .as_ref()
-            .map(|intent| intent.request_id.as_str()),
+        request_id.as_deref(),
     )
     .await?;
-    // Owner submissions, including resends routed through this function, are
-    // receipt-reconciled. An unknown outcome returns `SubmissionOutcomeUnknown`
-    // carrying the original signed payload, so reconciliation replays identical
-    // bytes instead of minting a new request identity.
-    let pending = receipt::UnresolvedSubmission::new(create, result)?;
-    if let Some(intent) = caller_intent {
-        let proposal = receipt::correlated::Record::proposal(intent, pending);
-        let record = receipt::journal::caller::reserve(node, &proposal).await?;
-        return receipt::delivery::reconcile(node, Some(access), record).await;
-    }
-    receipt::journal::save(node, &pending).await?;
-    let result = receipt::commit_signed_submission(access, pending.clone()).await;
-    if !result
-        .as_ref()
-        .err()
-        .is_some_and(|error| error.is::<receipt::SubmissionOutcomeUnknown>())
-    {
-        receipt::journal::forget(node, &pending.request_id).await;
-    }
-    result
+    let held = gents::request::lifecycle::send_client_request(access, &create).await?;
+    Ok(SubmittedRequest {
+        request_id: held,
+        ..result
+    })
 }
 
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub async fn submit_goal_backed_request(
-    node: &EmbeddedNode,
     store: &ClientStore,
     access: &ConfigAccess,
     session_id: &str,
@@ -124,7 +115,7 @@ pub async fn submit_goal_backed_request(
     signer: &dyn gents::NodeIdentity,
     admission: AgentRequestAdmissionRecord,
     content: &str,
-    agent_id: Option<&str>,
+    agent_did: Option<&str>,
     mut options: SubmitRequestOptions,
     objective: &str,
     token_budget: Option<i64>,
@@ -136,7 +127,7 @@ pub async fn submit_goal_backed_request(
         ));
     }
     let (result, create) = prepare_request_submission(
-        node,
+        access,
         store,
         session_id,
         node_did,
@@ -144,7 +135,7 @@ pub async fn submit_goal_backed_request(
         signer,
         admission,
         content,
-        agent_id,
+        agent_did,
         options,
         None,
     )
@@ -163,7 +154,6 @@ pub async fn submit_goal_backed_request(
 
 #[allow(clippy::too_many_arguments)]
 pub async fn submit_task_request(
-    node: &EmbeddedNode,
     store: &ClientStore,
     access: &ConfigAccess,
     fire: &gents_protocol::trigger_delivery::TriggerFire,
@@ -171,12 +161,12 @@ pub async fn submit_task_request(
     signer: &dyn gents::NodeIdentity,
     admission: AgentRequestAdmissionRecord,
     content: &str,
-    agent_id: Option<&str>,
+    agent_did: Option<&str>,
     mut options: SubmitRequestOptions,
 ) -> Result<SubmittedRequest> {
     options.retry_key = Some(fire.fire_key.clone());
     let (result, create) = prepare_request_submission(
-        node,
+        access,
         store,
         &fire.session_id,
         &fire.identity.owner_did,
@@ -184,12 +174,13 @@ pub async fn submit_task_request(
         signer,
         admission,
         content,
-        agent_id,
+        agent_did,
         options,
         Some(&fire.request_id),
     )
     .await?;
-    let admitted = gents::lifecycle::write_task_delivery(access, fire, false, &create).await?;
+    let admitted =
+        gents::request::lifecycle::write_task_delivery(access, fire, false, &create).await?;
     Ok(SubmittedRequest {
         request_id: admitted.request.request_id,
         session_id: admitted.request.session_id,
@@ -197,668 +188,25 @@ pub async fn submit_task_request(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn prepare_request_submission(
-    node: &EmbeddedNode,
-    store: &ClientStore,
-    session_id: &str,
-    node_did: &str,
-    requester_did: &str,
-    signer: &dyn gents::NodeIdentity,
-    admission: AgentRequestAdmissionRecord,
-    content: &str,
-    agent_id: Option<&str>,
-    options: SubmitRequestOptions,
-    request_id: Option<&str>,
-) -> Result<(
-    SubmittedRequest,
-    gents_protocol::request_admission::AgentRequestCreate,
-)> {
-    let session_id = normalize_required("session_id", session_id)?;
-    let node_did = normalize_required("node_did", node_did)?;
-    let requester_did = normalize_required("requester_did", requester_did)?;
-    let content = normalize_authored_content(&options.input, content)?.to_owned();
-    let (content, options) = prepare_prompt_submission(&content, options)?;
-    let request_id = request_id
-        .map(str::to_owned)
-        .unwrap_or_else(|| Uuid::new_v4().to_string());
-    let binding = resolve_agent_binding(store, node_did, agent_id, Some(session_id))?;
-    if let Some(mailbox_item_id) = options
-        .caused_by_source_doc_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        validate_mailbox_submission_cause(
-            node,
-            mailbox_item_id,
-            requester_did,
-            node_did,
-            binding.agent_id.as_deref().unwrap_or(""),
-            session_id,
-        )
-        .await?;
-    }
-
-    let (retry_parent_request, retry_parent_request_doc_id, retry_root_request, parent_created_at) =
-        if let Some(parent_id) = options.retry_parent_request.as_deref() {
-            let parent = fetch_retry_lineage(node, parent_id, node_did, requester_did).await?;
-            (
-                parent_id.to_string(),
-                Some(parent.doc_id),
-                parent
-                    .retry_root_request
-                    .unwrap_or_else(|| parent_id.to_string()),
-                parent.created_at,
-            )
-        } else {
-            (String::new(), None, request_id.clone(), None)
-        };
-    let created_at = canonical_request_created_at_after(parent_created_at.as_deref())?;
-
-    let create = build_signed_request(
-        RequestSpec {
-            retry: Some(RetryLink {
-                parent_request_id: (!retry_parent_request.is_empty())
-                    .then_some(retry_parent_request),
-                parent_request_doc_id: retry_parent_request_doc_id,
-                root_request_id: retry_root_request,
-                retry_count: 0,
-                max_retries: i64::from(DEFAULT_REQUEST_MAX_RETRIES),
-            }),
-            input: options.input,
-            valid_until: options
-                .valid_until
-                .map(|value| value.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
-            trigger_lineage: TriggerLineage {
-                source_doc_id: options
-                    .caused_by_source_doc_id
-                    .or(options.trigger_lineage.source_doc_id),
-                ..options.trigger_lineage
-            },
-            retry_key: options.retry_key,
-            ..RequestSpec::new(
-                gents_protocol::request_admission::RequestPurpose::Normal,
-                RequestIdentity {
-                    request_id: request_id.clone(),
-                    node_did: node_did.to_string(),
-                    requester_did: Some(requester_did.to_string()),
-                    agent_id: binding.agent_id.clone().unwrap_or_default(),
-                    session_id: session_id.to_string(),
-                    content: content.to_string(),
-                    execution_origin: ExecutionOrigin::Interactive,
-                    created_at,
-                },
-                admission,
-            )
-        },
-        RequestSigner::Identity(signer),
-    )
-    .await?;
-    Ok((
-        SubmittedRequest {
-            request_id,
-            session_id: session_id.to_string(),
-            node_did: node_did.to_string(),
-            agent_id: binding.agent_id,
-        },
-        create,
-    ))
-}
-
-async fn validate_mailbox_submission_cause(
-    node: &EmbeddedNode,
-    item_id: &str,
-    requester_did: &str,
-    node_did: &str,
-    agent_id: &str,
-    session_id: &str,
-) -> Result<()> {
-    let query = format!(
-        r#"query {{
-            MailboxItem(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{
-                requester_did status action target_node_did target_agent_id session_id
-            }}
-        }}"#,
-        escape_graphql_string(item_id)
-    );
-    let response = gents::graphql::graphql_with_transaction_retry(
-        node,
-        &query,
-        "validate mailbox submission cause",
-    )
-    .await?;
-    let rows = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("MailboxItem"))
-        .and_then(Value::as_array)
-        .context("mailbox cause query returned no row array")?;
-    if rows.len() != 1 {
-        bail!("mailbox submission cause must identify exactly one item");
-    }
-    let row = &rows[0];
-    let field = |name: &str| row.get(name).and_then(Value::as_str).unwrap_or("");
-    if field("requester_did") != requester_did {
-        bail!("mailbox submission cause is owned by another requester");
-    }
-    if field("status") != "open" {
-        bail!("mailbox submission cause is no longer open");
-    }
-    if !matches!(field("action"), "start_request" | "write_document") {
-        bail!("mailbox submission cause does not open a compose surface");
-    }
-    if field("target_node_did") != node_did || field("target_agent_id") != agent_id {
-        bail!("mailbox submission route does not match the target agent");
-    }
-    if let Some(expected_session) = row
-        .get("session_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        if expected_session != session_id {
-            bail!("mailbox submission route does not match the target session");
-        }
-    }
-    Ok(())
-}
-
-fn prepare_prompt_submission(
-    content: &str,
-    mut options: SubmitRequestOptions,
-) -> Result<(String, SubmitRequestOptions)> {
-    let selection = prompt_slash_skill_selection(content);
-    if selection.selected_skill_ids.is_empty() {
-        return Ok((content.to_string(), options));
-    }
-
-    options.input.selected_skill_ids = selection.selected_skill_ids;
-    Ok((selection.prompt, options))
-}
-
-pub async fn retry_request(
-    node: &Arc<EmbeddedNode>,
-    store: &ClientStore,
-    parent: &AgentRequestRow,
-    requester_did: &str,
-    signer: &dyn gents::NodeIdentity,
-    admission: AgentRequestAdmissionRecord,
-) -> Result<SubmittedRequest> {
-    retry_request_with_request_id(
-        node,
-        store,
-        parent,
-        requester_did,
-        signer,
-        admission,
-        Uuid::new_v4().to_string(),
-    )
-    .await
-}
-
-async fn retry_request_with_request_id(
-    node: &Arc<EmbeddedNode>,
-    store: &ClientStore,
-    parent: &AgentRequestRow,
-    requester_did: &str,
-    signer: &dyn gents::NodeIdentity,
-    admission: AgentRequestAdmissionRecord,
-    request_id: String,
-) -> Result<SubmittedRequest> {
-    let request_id = normalize_required("new_request_id", &request_id)?.to_string();
-    let parent_request_id = normalize_required("request_id", &parent.request_id)?;
-    let node_did = normalize_required(
-        "node_did",
-        parent
-            .node_did
-            .as_deref()
-            .context("retry parent request must have a node_did")?,
-    )?;
-    let requester_did = normalize_required("requester_did", requester_did)?;
-
-    let request_id_ref = &request_id;
-    ConfigAccess::transact_local_idempotent(
-        node,
-        None,
-        IdempotentTransactionRetry::FiveAttempts,
-        "desktop.request.retry",
-        move |txn| {
-            let admission = admission.clone();
-            Box::pin(async move {
-                retry_request_in_txn(
-                    txn,
-                    store,
-                    parent_request_id,
-                    node_did,
-                    requester_did,
-                    signer,
-                    admission,
-                    request_id_ref,
-                )
-                .await
-            })
-        },
-    )
-    .await
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "admission inputs from separate owners (store, identity, admission record)"
-)]
-async fn retry_request_in_txn(
-    txn: &ConfigApplyTxn<'_>,
-    store: &ClientStore,
-    parent_request_id: &str,
-    node_did: &str,
-    requester_did: &str,
-    signer: &dyn gents::NodeIdentity,
-    admission: AgentRequestAdmissionRecord,
-    candidate_request_id: &str,
-) -> Result<SubmittedRequest> {
-    let (parent_doc_id, parent) =
-        load_retry_parent_in_txn(txn, parent_request_id, node_did, requester_did).await?;
-    let retry_key = retry_successor_key(&parent_doc_id);
-    if let Some(existing) = load_retry_successor_in_txn(txn, &retry_key).await? {
-        return Ok(existing);
-    }
-    let parent_session_id = normalize_required(
-        "session_id",
-        parent
-            .session_id
-            .as_deref()
-            .context("retry parent request must have a session_id")?,
-    )?;
-    let input = parent
-        .input
-        .clone()
-        .unwrap_or_default()
-        .reissued(&parent_doc_id);
-    let content = normalize_authored_content(
-        &input,
-        parent
-            .content
-            .as_deref()
-            .context("retry parent request must have content")?,
-    )?;
-    let execution_origin = normalize_required(
-        "execution_origin",
-        parent
-            .execution_origin
-            .as_deref()
-            .context("retry parent request must have an execution_origin")?,
-    )?;
-    let retry_count = parent.retry_count.unwrap_or_default() + 1;
-    let max_retries = parent
-        .max_retries
-        .unwrap_or(i64::from(DEFAULT_REQUEST_MAX_RETRIES));
-    ensure_retry_parent_eligible(&parent, retry_count - 1, max_retries, execution_origin)?;
-
-    let effective_latest_request_id =
-        latest_interactive_request_in_txn(txn, parent_session_id, node_did, requester_did).await?;
-    if effective_latest_request_id != parent_request_id {
-        bail!(
-            "retry parent request must be latest for session {parent_session_id}, got latest_request_id={effective_latest_request_id}"
-        );
-    }
-    ensure_retry_candidate_is_fresh_in_txn(txn, parent_session_id, candidate_request_id).await?;
-
-    let agent_id = normalize_optional_string(parent.agent_id.as_deref());
-    let retry_root_request = normalize_optional_string(parent.retry_root_request.as_deref())
-        .unwrap_or(parent_request_id);
-    let created_at = canonical_request_created_at_after(parent.created_at.as_deref())?;
-    let binding = resolve_agent_binding(store, node_did, agent_id, Some(parent_session_id))?;
-    let create = build_signed_request(
-        RequestSpec {
-            retry: Some(RetryLink {
-                parent_request_id: Some(parent_request_id.to_string()),
-                parent_request_doc_id: Some(parent_doc_id),
-                root_request_id: retry_root_request.to_string(),
-                retry_count,
-                max_retries,
-            }),
-            retry_key: Some(retry_key),
-            input,
-            ..RequestSpec::new(
-                gents_protocol::request_admission::RequestPurpose::Normal,
-                RequestIdentity {
-                    request_id: candidate_request_id.to_string(),
-                    node_did: node_did.to_string(),
-                    requester_did: Some(requester_did.to_string()),
-                    agent_id: binding.agent_id.clone().unwrap_or_default(),
-                    session_id: parent_session_id.to_string(),
-                    content: content.to_string(),
-                    execution_origin: ExecutionOrigin::from_persisted(Some(execution_origin))?,
-                    created_at,
-                },
-                admission,
-            )
-        },
-        RequestSigner::Identity(signer),
-    )
-    .await?;
-    txn.execute(&create.graphql_mutation().map_err(anyhow::Error::msg)?)
-        .await?;
-
-    Ok(SubmittedRequest {
-        request_id: candidate_request_id.to_string(),
-        session_id: parent_session_id.to_string(),
-        node_did: node_did.to_string(),
-        agent_id: binding.agent_id,
-    })
-}
-
-fn retry_successor_key(parent_request_doc_id: &str) -> String {
-    format!("retry:doc:{parent_request_doc_id}")
-}
-
-async fn load_retry_successor_in_txn(
-    txn: &ConfigApplyTxn<'_>,
-    retry_key: &str,
-) -> Result<Option<SubmittedRequest>> {
-    let retry_key = escape_graphql_string(retry_key);
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ retry_key: {{ _eq: "{retry_key}" }} }},
-                limit: 1
-            ) {{
-                request_id
-                session_id
-                node_did
-                agent_id
-            }}
-        }}"#
-    );
-    let response = txn.execute(&query).await?;
-    let Some(row) = response
-        .get("data")
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-    else {
-        return Ok(None);
-    };
-    Ok(Some(SubmittedRequest {
-        request_id: row
-            .get("request_id")
-            .and_then(Value::as_str)
-            .context("retry successor has no request_id")?
-            .to_string(),
-        session_id: row
-            .get("session_id")
-            .and_then(Value::as_str)
-            .context("retry successor has no session_id")?
-            .to_string(),
-        node_did: row
-            .get("node_did")
-            .and_then(Value::as_str)
-            .context("retry successor has no node_did")?
-            .to_string(),
-        agent_id: row
-            .get("agent_id")
-            .and_then(Value::as_str)
-            .and_then(|value| normalize_optional_string(Some(value)))
-            .map(str::to_string),
-    }))
-}
-
-async fn load_retry_parent_in_txn(
-    txn: &ConfigApplyTxn<'_>,
-    parent_request_id: &str,
-    node_did: &str,
-    requester_did: &str,
-) -> Result<(String, AgentRequestRow)> {
-    let parent_request_id = escape_graphql_string(parent_request_id);
-    let node_did = escape_graphql_string(node_did);
-    let requester_did = escape_graphql_string(requester_did);
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{
-                    request_id: {{ _eq: "{parent_request_id}" }},
-                    node_did: {{ _eq: "{node_did}" }},
-                    requester_did: {{ _eq: "{requester_did}" }}
-                }},
-                limit: 2
-            ) {{
-                _docID
-                request_id
-                node_did
-                requester_did
-                agent_id
-                session_id
-                retry_parent_request
-                retry_root_request
-                superseded_by_request
-                content
-                input
-                max_total_tokens
-                lifecycle_state
-                backend_id
-                execution_origin
-                caused_by_trigger_id
-                caused_by_trigger_kind
-                caused_by_parent_request_id
-                failure_reason
-                terminalized_at
-                terminal_redrive_attempts
-                created_at
-                claimed_at
-                deadline
-                retry_count
-                max_retries
-                interrupt_requested_at
-                valid_until
-            }}
-        }}"#
-    );
-    let response = txn.execute(&query).await?;
-    let rows = response
-        .get("data")
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    match rows.len() {
-        0 => bail!("retry parent request not found"),
-        1 => {}
-        count => bail!("retry parent request_id is ambiguous across {count} documents"),
-    }
-    let row = rows
-        .into_iter()
-        .next()
-        .context("retry parent request absent")?;
-    let doc_id = row
-        .get("_docID")
-        .and_then(Value::as_str)
-        .context("retry parent request has no _docID")?
-        .to_string();
-    let request = serde_json::from_value(row).context("decoding retry parent request")?;
-    Ok((doc_id, request))
-}
-
-async fn latest_interactive_request_in_txn(
-    txn: &ConfigApplyTxn<'_>,
-    session_id: &str,
-    node_did: &str,
-    requester_did: &str,
-) -> Result<String> {
-    let node = escape_graphql_string(node_did);
-    let requester = escape_graphql_string(requester_did);
-    let session = escape_graphql_string(session_id);
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{
-                    session_id: {{ _eq: "{session}" }},
-                    node_did: {{ _eq: "{node}" }},
-                    requester_did: {{ _eq: "{requester}" }}
-                }},
-                order: [{{ created_at: DESC }}, {{ request_id: DESC }}]
-            ) {{ request_id }}
-        }}"#
-    );
-    let response = txn.execute(&query).await?;
-    response
-        .get("data")
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .next()
-        .and_then(|row| row.get("request_id"))
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .context("retry parent session has no request")
-}
-
-async fn ensure_retry_candidate_is_fresh_in_txn(
-    txn: &ConfigApplyTxn<'_>,
-    session_id: &str,
-    candidate_request_id: &str,
-) -> Result<()> {
-    let session_id = escape_graphql_string(session_id);
-    let candidate_request_id = escape_graphql_string(candidate_request_id);
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{
-                    session_id: {{ _eq: "{session_id}" }},
-                    request_id: {{ _eq: "{candidate_request_id}" }}
-                }},
-                limit: 1
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = txn.execute(&query).await?;
-    let exists = response
-        .get("data")
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(Value::as_array)
-        .is_some_and(|rows| !rows.is_empty());
-    if exists {
-        bail!("retry new request id already exists: request_id={candidate_request_id}");
-    }
-    Ok(())
-}
-
-fn ensure_retry_parent_eligible(
-    parent: &AgentRequestRow,
-    parent_retry_count: i64,
-    max_retries: i64,
-    execution_origin: &str,
-) -> Result<()> {
-    // The Lean `.released` admission predicate is not persisted on
-    // `AgentRequestRow`; it is represented here by requiring the parent to be
-    // terminal failed.
-    let lifecycle_state = parent
-        .lifecycle_state
-        .context("retry parent request must have a lifecycle_state")?;
-
-    if lifecycle_state != RequestLifecycleState::Failed {
-        bail!("retry parent request must be failed, got lifecycle_state={lifecycle_state}");
-    }
-    if execution_origin != "interactive" {
-        bail!(
-            "client retry parent request must be interactive, got execution_origin={execution_origin}"
-        );
-    }
-    if parent_retry_count >= max_retries {
-        bail!(
-            "retry parent request exhausted retry budget: retry_count={parent_retry_count} max_retries={max_retries}"
-        );
-    }
-    if let Some(deadline) = normalize_optional_string(parent.deadline.as_deref()) {
-        let deadline = DateTime::parse_from_rfc3339(deadline)
-            .with_context(|| format!("retry parent request has invalid deadline {deadline:?}"))?
-            .with_timezone(&Utc);
-        if Utc::now() > deadline {
-            bail!(
-                "retry parent request deadline is closed: deadline={}",
-                deadline.to_rfc3339()
-            );
-        }
-    }
-
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-#[cfg(test)]
-fn build_add_agent_request_field(
-    alias: &str,
-    request_id: &str,
-    node_did: &str,
-    requester_did: &str,
-    agent_id: &str,
-    session_id: &str,
-    retry_parent_request: &str,
-    retry_parent_request_doc_id: Option<&str>,
-    retry_root_request: &str,
-    content: &str,
-    created_at: &str,
-    retry_count: i64,
-    max_retries: i64,
-    backend_id: &str,
-    execution_origin: &str,
-    extra_fields: &str,
-) -> String {
-    let escaped_request_id = escape_graphql_string(request_id);
-    let escaped_node_did = escape_graphql_string(node_did);
-    let escaped_requester_did = escape_graphql_string(requester_did);
-    let escaped_agent_id = escape_graphql_string(agent_id);
-    let escaped_session_id = escape_graphql_string(session_id);
-    let escaped_retry_parent = escape_graphql_string(retry_parent_request);
-    let retry_parent_doc_field = retry_parent_request_doc_id
-        .map(escape_graphql_string)
-        .map(|doc_id| format!(r#"retry_parent_request_doc_id: "{doc_id}","#))
-        .unwrap_or_default();
-    let escaped_retry_root = escape_graphql_string(retry_root_request);
-    let escaped_content = escape_graphql_string(content);
-    let escaped_created_at = escape_graphql_string(created_at);
-    let escaped_backend_id = escape_graphql_string(backend_id);
-    let escaped_execution_origin = escape_graphql_string(execution_origin);
-
-    format!(
-        r#"{alias}: add_AgentRequest(input: {{
-                request_id: "{escaped_request_id}",
-                node_did: "{escaped_node_did}",
-                requester_did: "{escaped_requester_did}",
-                agent_id: "{escaped_agent_id}",
-                session_id: "{escaped_session_id}",
-                retry_parent_request: "{escaped_retry_parent}",
-                {retry_parent_doc_field}
-                retry_root_request: "{escaped_retry_root}",
-                superseded_by_request: "",
-                content: "{escaped_content}",
-                lifecycle_state: "pending",
-                backend_id: "{escaped_backend_id}",
-                execution_origin: "{escaped_execution_origin}",
-                failure_reason: "",
-                created_at: "{escaped_created_at}",
-                retry_count: {retry_count},
-                max_retries: {max_retries}{extra_fields}
-            }}) {{ _docID }}
-        "#
-    )
-}
-
 /// Only `lifecycle_state=dead` with `failure_reason=Stale` is eligible — any
 /// other state would risk bypassing legitimate terminal classifications.
+///
+/// The stale request is read from the runtime by id: the desktop store holds
+/// only live requests and each session's latest terminal one, so a stale
+/// request elsewhere in a transcript is not in it. `requester_did` narrows the
+/// read to a requester scope the caller already holds; without it the
+/// runtime's ACP alone decides which request the signed reader may see.
 #[allow(clippy::too_many_arguments)]
 pub async fn resend_request(
-    node: &Arc<EmbeddedNode>,
     store: &ClientStore,
     access: &ConfigAccess,
     stale_request_id: &str,
     node_did: &str,
-    requester_did: &str,
+    requester_did: Option<&str>,
     signer: &dyn gents::NodeIdentity,
     admission: AgentRequestAdmissionRecord,
 ) -> Result<SubmittedRequest> {
-    let stale = fetch_request_view(node, stale_request_id, node_did, requester_did).await?;
+    let stale = fetch_request_view(access, stale_request_id, node_did, requester_did).await?;
     if stale.lifecycle_state != Some(RequestLifecycleState::Dead)
         || stale.failure_reason.as_deref() != Some("Stale")
     {
@@ -878,20 +226,28 @@ pub async fn resend_request(
         .content
         .as_deref()
         .context("stale request has no content")?;
-    let retry_session_id = Uuid::new_v4().to_string();
+    // The successor's identity is derived from the stale request, so a
+    // repeated resend (a lost reply, a second click) is the same request.
+    let successor = |part: &str| {
+        Uuid::new_v5(
+            &Uuid::NAMESPACE_OID,
+            format!("gents.resend:{stale_node_did}:{stale_request_id}:{part}").as_bytes(),
+        )
+        .to_string()
+    };
+    let retry_session_id = successor("session");
     submit_request(
-        node,
         store,
         access,
         &retry_session_id,
         stale_node_did,
-        requester_did,
+        signer.did(),
         signer,
         admission,
         stale_content,
-        stale.agent_id.as_deref(),
+        stale.agent_did.as_deref(),
         SubmitRequestOptions {
-            caller_intent: None,
+            request_id: Some(successor("request")),
             valid_until: Some(Utc::now() + chrono::Duration::minutes(5)),
             retry_parent_request: Some(stale_request_id.to_string()),
             input: stale.input.unwrap_or_default(),
@@ -904,27 +260,33 @@ pub async fn resend_request(
 }
 
 async fn fetch_request_view(
-    node: &EmbeddedNode,
+    access: &ConfigAccess,
     request_id: &str,
     node_did: &str,
-    requester_did: &str,
+    requester_did: Option<&str>,
 ) -> Result<AgentRequestRow> {
     let escaped = escape_graphql_string(request_id);
     let node_did = escape_graphql_string(node_did);
-    let requester_did = escape_graphql_string(requester_did);
+    let requester_filter = requester_did
+        .map(|did| {
+            format!(
+                r#", requester_did: {{ _eq: "{}" }}"#,
+                escape_graphql_string(did)
+            )
+        })
+        .unwrap_or_default();
     let query = format!(
         r#"query {{
             AgentRequest(
                 filter: {{
                     request_id: {{ _eq: "{escaped}" }},
-                    node_did: {{ _eq: "{node_did}" }},
-                    requester_did: {{ _eq: "{requester_did}" }}
+                    node_did: {{ _eq: "{node_did}" }}{requester_filter}
                 }},
                 limit: 1
             ) {{
                 request_id
                 node_did
-                agent_id
+                agent_did
                 content
                 input
                 lifecycle_state
@@ -932,102 +294,18 @@ async fn fetch_request_view(
             }}
         }}"#
     );
-    let resp = gents::graphql::graphql_with_transaction_retry(node, &query, "fetch_request")
+    let resp = access
+        .execute(&query)
         .await
         .with_context(|| format!("fetch_request({request_id})"))?;
     let row = resp
-        .data
-        .as_ref()
+        .get("data")
         .and_then(|d| d.get("AgentRequest"))
         .and_then(|v| v.as_array())
         .and_then(|arr| arr.first())
         .ok_or_else(|| anyhow::anyhow!("request {request_id} not found"))?;
     serde_json::from_value(row.clone())
         .with_context(|| format!("decoding AgentRequest {request_id}"))
-}
-
-struct RetryLineage {
-    doc_id: String,
-    retry_root_request: Option<String>,
-    created_at: Option<String>,
-}
-
-async fn fetch_retry_lineage(
-    node: &EmbeddedNode,
-    request_id: &str,
-    node_did: &str,
-    requester_did: &str,
-) -> Result<RetryLineage> {
-    let escaped = escape_graphql_string(request_id);
-    let node_did = escape_graphql_string(node_did);
-    let requester_did = escape_graphql_string(requester_did);
-    let query = format!(
-        r#"query {{
-            AgentRequest(
-                filter: {{
-                    request_id: {{ _eq: "{escaped}" }},
-                    node_did: {{ _eq: "{node_did}" }},
-                    requester_did: {{ _eq: "{requester_did}" }}
-                }},
-                limit: 2
-            ) {{
-                _docID
-                retry_root_request
-                created_at
-            }}
-        }}"#
-    );
-    let resp = gents::graphql::graphql_with_transaction_retry(node, &query, "fetch_retry_lineage")
-        .await
-        .with_context(|| format!("fetch_retry_lineage({request_id})"))?;
-    let rows = resp
-        .data
-        .as_ref()
-        .and_then(|d| d.get("AgentRequest"))
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-    match rows.len() {
-        0 => bail!("retry parent request not found"),
-        1 => {}
-        count => bail!("retry parent request_id is ambiguous across {count} documents"),
-    }
-    let row = rows
-        .into_iter()
-        .next()
-        .context("retry parent request absent")?;
-    Ok(RetryLineage {
-        doc_id: row
-            .get("_docID")
-            .and_then(Value::as_str)
-            .context("retry parent request has no _docID")?
-            .to_string(),
-        retry_root_request: normalize_optional_string(
-            row.get("retry_root_request").and_then(Value::as_str),
-        )
-        .map(str::to_string),
-        created_at: normalize_optional_string(row.get("created_at").and_then(Value::as_str))
-            .map(str::to_string),
-    })
-}
-
-fn canonical_request_created_at_after(parent_created_at: Option<&str>) -> Result<String> {
-    let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let now = DateTime::parse_from_rfc3339(&now)
-        .expect("UTC RFC3339 seconds formatter must parse")
-        .with_timezone(&Utc);
-    let created_at = match normalize_optional_string(parent_created_at) {
-        Some(parent_created_at) => {
-            let parent = DateTime::parse_from_rfc3339(parent_created_at)
-                .with_context(|| {
-                    format!("retry parent request has invalid created_at {parent_created_at:?}")
-                })?
-                .with_timezone(&Utc);
-            now.max(parent + chrono::Duration::seconds(1))
-        }
-        None => now,
-    };
-    Ok(created_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
 }
 
 #[cfg(test)]
@@ -1037,10 +315,5 @@ mod lean_vocab_test;
 #[cfg(test)]
 mod tests;
 
-pub(crate) mod receipt;
-
-pub use receipt::correlated::{Intent as SubmissionIntent, Reference as SubmissionReference};
-pub use receipt::{
-    reconcile_unretained_submission, resolve_unresolved_submission, DeliveryUnconfirmed,
-    SubmissionNotDelivered, SubmissionOutcomeUnknown, UnresolvedSubmission,
-};
+pub(super) mod prepare;
+pub(super) mod retry;

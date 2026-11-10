@@ -5,6 +5,7 @@ import {
   adoptNewChatFolder,
   loadChatFolders,
   recentFolders,
+  sessionFolder,
   withFolder,
 } from "../src/hooks/chatFolders";
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
@@ -12,11 +13,12 @@ import { createChatActions } from "../src/hooks/chatActions";
 import { admittingProjection, shellStores } from "./shell-fixture";
 
 describe("chat folders", () => {
-  it("keeps a pick per chat and clears it with null", () => {
+  it("keeps a pick per chat; a session keeps no folder as a choice", () => {
     let folders = withFolder({}, null, "/work/a");
     folders = withFolder(folders, "s1", "/work/b");
     expect(folders).toEqual({ "": "/work/a", s1: "/work/b" });
-    expect(withFolder(folders, "s1", null)).toEqual({ "": "/work/a" });
+    expect(withFolder(folders, "s1", null)).toEqual({ "": "/work/a", s1: "" });
+    expect(withFolder(folders, null, null)).toEqual({ s1: "/work/b" });
   });
 
   it("hands the new chat's pick to the session its first send created", () => {
@@ -56,7 +58,83 @@ describe("chat folders", () => {
   });
 });
 
+const ran = (source: string) =>
+  shellStores({
+    deployments: [
+      {
+        nodeDid: "node",
+        source,
+        sessions: [
+          { sessionId: "worked", nodeDid: "node", cwd: "/work/ran" },
+          { sessionId: "unnamed", nodeDid: "node" },
+        ],
+        mailboxItems: [],
+      },
+    ],
+    selection: { nodeDid: "node", sessionId: "worked" },
+  });
+
+describe("the folder a session's next message runs in", () => {
+  const folderIn = (
+    stores: ReturnType<typeof ran>,
+    folders: Record<string, string>,
+    sessionId: string | null,
+  ) => sessionFolder(folders, stores.fleet.getState(), null, "node", sessionId);
+
+  it("is the folder picked here, else the one a session on this computer last ran in", () => {
+    const stores = ran("local");
+    expect(folderIn(stores, { worked: "/work/picked" }, "worked")).toBe("/work/picked");
+    expect(folderIn(stores, {}, "worked")).toBe("/work/ran");
+    expect(folderIn(stores, {}, "unnamed")).toBeNull();
+    expect(folderIn(stores, withFolder({}, "worked", null), "worked")).toBeNull();
+    expect(folderIn(stores, { "": "/work/new" }, null)).toBe("/work/new");
+  });
+
+  it("never takes a folder another computer's node recorded", () => {
+    expect(folderIn(ran("remote"), {}, "worked")).toBeNull();
+  });
+});
+
+describe("branching with a chat folder", () => {
+  it("keeps an explicit Agent's folder choice instead of restoring the prefix's cwd", async () => {
+    const stores = ran("local");
+    stores.chat.setState({ folders: { worked: "" } });
+    const actions = createChatActions({
+      api: {
+        forkSessionBeforeMessage: vi.fn(async () => ({
+          nodeDid: "node",
+          sessionId: "child",
+        })),
+      } as unknown as DesktopApiAdapter,
+      stores,
+      project: () => admittingProjection(),
+      refreshSession: vi.fn(),
+      refreshSnapshot: vi.fn(),
+      reportFailure: vi.fn(),
+    });
+    await actions.forkBeforeMessage("worked", "prefix-message");
+    expect(stores.chat.getState().folders).toEqual({ worked: "", child: "" });
+  });
+});
+
 describe("sending with a chat folder", () => {
+  it("continues an unpicked session in the folder it last ran in", async () => {
+    const sendChatMessage = vi.fn(acceptedChatReply);
+    const stores = ran("local");
+    const actions = createChatActions({
+      api: { sendChatMessage } as unknown as DesktopApiAdapter,
+      stores,
+      project: () => admittingProjection(),
+      refreshSession: vi.fn(),
+      refreshSnapshot: vi.fn(),
+      reportFailure: vi.fn(),
+    });
+    await actions.sendMessage("carry on");
+    expect(sendChatMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: "worked", cwd: "/work/ran" }),
+    );
+  });
+
   it("sends the new chat's folder as cwd and hands it to the session the send created", async () => {
     const sendChatMessage = vi.fn(acceptedChatReply);
     const stores = shellStores({

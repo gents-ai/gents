@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use axum::{http::Uri, routing::get, Router};
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::{
     DocumentRuntimeOptions, Gents, KeyIdentity, McpPool, NodeIdentity, ProcessLifecycleObserver,
     ProcessLifecycleState,
@@ -80,9 +80,9 @@ impl gents::RuntimeSnapshotObserver for CliRuntimeSnapshotObserver {
         &self,
         generation: u64,
         configuration_fingerprint: &str,
-        runnable_agent_ids: &[String],
+        runnable_agent_dids: &[String],
     ) {
-        self.runnable_tx.send_replace(runnable_agent_ids.to_vec());
+        self.runnable_tx.send_replace(runnable_agent_dids.to_vec());
         self.configuration_tx
             .send_replace(Some(RuntimeConfigurationObservation {
                 generation,
@@ -124,15 +124,51 @@ async fn wait_for_runtime_configuration(
         .context("runtime configuration observer closed")
 }
 
+fn runtime_exit_before_readiness<T>(result: Result<()>) -> Result<T> {
+    match result {
+        Ok(()) => anyhow::bail!("runtime stopped before durable readiness"),
+        Err(error) => Err(error).context("runtime failed before durable readiness"),
+    }
+}
+
+async fn await_startup_readiness<T, F>(
+    runtime: &mut ServeRuntime,
+    process: &mut watch::Receiver<ProcessLifecycleState>,
+    readiness: F,
+) -> Result<T>
+where
+    F: std::future::Future<Output = Result<T>>,
+{
+    tokio::pin!(readiness);
+    loop {
+        if matches!(
+            *process.borrow_and_update(),
+            ProcessLifecycleState::ShuttingDown | ProcessLifecycleState::Shutdown
+        ) {
+            return runtime_exit_before_readiness(runtime.join().await);
+        }
+        tokio::select! {
+            biased;
+            result = runtime.join() => return runtime_exit_before_readiness(result),
+            changed = process.changed() => {
+                if changed.is_err() {
+                    return runtime_exit_before_readiness(runtime.join().await);
+                }
+            }
+            result = &mut readiness => return result,
+        }
+    }
+}
+
 async fn wait_for_live_node_readiness(
-    graphql_url: &str,
+    graphql: &gents::store::config_client::GraphqlEndpoint,
     node_did: &str,
     fence: Option<&PostApplyReadinessFence>,
 ) -> Result<NodeReadinessSummary> {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let last_observation = match crate::commands::status::load_live_node_readiness(
-            &gents::config_client::GraphqlEndpoint::as_principal(graphql_url, node_did),
+            graphql,
             node_did,
         )
         .await
@@ -145,7 +181,7 @@ async fn wait_for_live_node_readiness(
                 }
                 ProjectedNodeReadinessSummary::Observed(summary) => format!(
                     "waiting for post-apply runtime projection (current generation={}, default={:?})",
-                    summary.snapshot.active_generation, summary.snapshot.default_agent_id,
+                    summary.snapshot.active_generation, summary.snapshot.default_agent_did,
                 ),
                 ProjectedNodeReadinessSummary::Unknown(reason) => format!("{reason:?}"),
             },
@@ -162,27 +198,27 @@ async fn wait_for_live_node_readiness(
 }
 
 struct PostApplyReadinessFence {
-    expected_default_agent_id: String,
-    expected_agent_ids: BTreeSet<String>,
+    expected_default_agent_did: String,
+    expected_agent_dids: BTreeSet<String>,
 }
 
 impl PostApplyReadinessFence {
     fn matches(&self, summary: &NodeReadinessSummary) -> bool {
-        summary.snapshot.default_agent_id == self.expected_default_agent_id
-            && self.expected_agent_ids.iter().all(|expected| {
+        summary.snapshot.default_agent_did == self.expected_default_agent_did
+            && self.expected_agent_dids.iter().all(|expected| {
                 summary
                     .snapshot
                     .agents
                     .iter()
-                    .any(|entry| entry.agent_id == *expected)
+                    .any(|entry| entry.agent_did == *expected)
             })
     }
 }
 
 struct AppliedPack {
     report: Value,
-    expected_default_agent_id: String,
-    expected_agent_ids: BTreeSet<String>,
+    expected_default_agent_did: String,
+    expected_agent_dids: BTreeSet<String>,
 }
 
 fn announce_codex_shim(
@@ -211,7 +247,7 @@ fn announce_codex_shim(
         "launch_command": launch_command,
         "auth_required": bound.auth_required(),
         "bound_node_did": bound.node_did(),
-        "bound_agent_id": bound.agent_id(),
+        "bound_agent_did": bound.agent_did(),
         "shim_home": bound.codex_home().to_path_buf(),
         "codex_home": bound.codex_home().to_path_buf(),
         "event_log": bound.trace_path().to_path_buf(),
@@ -237,107 +273,140 @@ fn set_codex_shim_health(handle: &CodexShimHealthHandle, health: CodexShimHealth
     }
 }
 
+/// The user identity remains in a short-lived client process. The daemon only
+/// observes its public result and waits for runtime reconciliation.
 async fn apply_pack_after_ready(
     node: Arc<EmbeddedNode>,
+    graphql_url: &str,
     home_dir: &Path,
     root: &Path,
     prune: bool,
+    inference_slots: &[String],
 ) -> Result<AppliedPack> {
     use crate::cli::ManifestNodeDidBindingArg;
-    use crate::commands::config::apply::apply_bound_desired_manifest;
     use crate::commands::config::binding::{load_bound_manifest, ManifestBindingOptions};
-    use crate::commands::schema::apply_pack_schemas_if_present;
     use crate::config_writes::ConfigAccess;
 
-    if !root.is_dir() {
-        anyhow::bail!("--apply-root is not a directory: {}", root.display());
-    }
-
-    tracing::info!(
-        "Applying pack {} to in-process node (schemas/ if present, then config)…",
+    anyhow::ensure!(
+        root.is_dir(),
+        "--apply-root is not a directory: {}",
         root.display()
     );
-
+    let owner = crate::read_init_config(home_dir)?
+        .context("initialized home required for pack apply")?
+        .node_did;
+    let executable = std::env::current_exe().context("locating the gents client executable")?;
+    let manifest_pack = root.join("manifest.json").is_file();
+    let mut arguments = if manifest_pack {
+        anyhow::ensure!(
+            !prune,
+            "--apply-prune applies to desired-state roots; pack installs prune their own documents"
+        );
+        vec![
+            "pack".to_owned(),
+            "install".to_owned(),
+            root.to_string_lossy().into_owned(),
+            "--overwrite".to_owned(),
+            "--node-did".to_owned(),
+            owner.clone(),
+        ]
+    } else {
+        let mut arguments = vec![
+            "config".to_owned(),
+            "apply".to_owned(),
+            "--root".to_owned(),
+            root.to_string_lossy().into_owned(),
+            "--bind-node-did".to_owned(),
+            "home".to_owned(),
+            "--force-rebind-concrete-did".to_owned(),
+        ];
+        if prune {
+            arguments.push("--prune".to_owned());
+        }
+        arguments
+    };
+    arguments.extend([
+        "--home".to_owned(),
+        home_dir.to_string_lossy().into_owned(),
+        "--graphql".to_owned(),
+        graphql_url.to_owned(),
+    ]);
+    if manifest_pack {
+        for binding in inference_slots {
+            arguments.extend(["--inference-slot".to_owned(), binding.clone()]);
+        }
+    }
+    let report = crate::commands::pack::cli_process::run_cli_json(&executable, &arguments).await?;
     let access = ConfigAccess::local(node);
-    let schemas = apply_pack_schemas_if_present(&access, root)
-        .await
-        .with_context(|| format!("pack schemas under {}", root.display()))?;
-    if let Some(phase) = schemas.as_ref() {
-        tracing::info!(
-            "  schemas: {} ({} SDL file(s))",
-            phase.status,
-            phase.schema_files.len()
-        );
-    }
-
-    let bound = load_bound_manifest(ManifestBindingOptions {
-        root,
-        home: Some(home_dir),
-        graphql: None,
-        bind_node_did: Some(ManifestNodeDidBindingArg::Home),
-        force_rebind_concrete_did: true,
-        access: Some(&access),
-    })
-    .await?
-    .require_valid()?;
-
-    let expected_default_agent_id = bound
-        .manifest
-        .node
-        .default_agent_id
-        .clone()
-        .context("applied pack has no default agent")?;
-    let expected_agent_ids = bound
-        .manifest
-        .agents
-        .iter()
-        .map(|agent| agent.agent_id.clone())
-        .collect::<BTreeSet<_>>();
-
-    let mut report = apply_bound_desired_manifest(root, &access, &bound, prune).await?;
-    report.schemas = schemas;
-    if report
-        .schemas
-        .as_ref()
-        .is_some_and(crate::commands::schema::PackSchemaPhase::changed)
-        && report.status == "noop"
-    {
-        report.status = "applied";
-        report.changed = true;
-    }
-
-    tracing::info!(
-        "  config apply: status={} ok={} node_did={}",
-        report.status,
-        report.ok,
-        report.node_did
-    );
-    if !report.ok {
-        anyhow::bail!(
-            "pack apply did not converge for {} (status={})",
-            root.display(),
-            report.status
-        );
-    }
-
+    let (expected_default_agent_did, expected_agent_dids) = if manifest_pack {
+        let selected = access.execute(&format!(
+            "{{ Node(filter: {{ node_did: {{ _eq: \"{}\" }} }}, limit: 1) {{ default_agent_did }} }}",
+            gents::store::graphql::escape_graphql_string(&owner),
+        )).await?;
+        let default_agent = selected["data"]["Node"][0]["default_agent_did"]
+            .as_str()
+            .context("initialized node has no default agent")?
+            .to_owned();
+        let agents = report
+            .pointer("/apply/agents")
+            .and_then(Value::as_object)
+            .context("pack client omitted installed agent identities")?
+            .values()
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_owned)
+                    .context("pack client returned an invalid agent identity")
+            })
+            .collect::<Result<BTreeSet<_>>>()?;
+        (default_agent, agents)
+    } else {
+        let bound = load_bound_manifest(ManifestBindingOptions {
+            root,
+            home: Some(home_dir),
+            graphql: None,
+            bind_node_did: Some(ManifestNodeDidBindingArg::Home),
+            force_rebind_concrete_did: true,
+            access: Some(&access),
+        })
+        .await?
+        .require_valid()?;
+        let default_agent = bound
+            .manifest
+            .node
+            .default_agent_did
+            .clone()
+            .context("applied pack has no default agent")?;
+        (
+            default_agent,
+            bound
+                .manifest
+                .agents
+                .iter()
+                .map(|agent| agent.agent_did.clone())
+                .collect(),
+        )
+    };
     Ok(AppliedPack {
-        report: serde_json::to_value(&report).context("serializing pack apply report")?,
-        expected_default_agent_id,
-        expected_agent_ids,
+        report,
+        expected_default_agent_did,
+        expected_agent_dids,
     })
 }
 
 fn spawn_codex_shim_supervisor(
     bind_args: CodexShimBindArgs,
-    bound_agent_id: String,
+    bound_agent_did: String,
     mut runnable_rx: watch::Receiver<Vec<String>>,
     public_url: Option<String>,
     auth_token_env: Option<String>,
     health: CodexShimHealthHandle,
 ) {
     tokio::spawn(async move {
-        let mut binding =
-            ShimBinding::unbound(bound_agent_id.clone(), ShimUnboundReason::DependencyMissing);
+        let mut binding = ShimBinding::unbound(
+            bound_agent_did.clone(),
+            ShimUnboundReason::DependencyMissing,
+        );
 
         loop {
             let runnable = runnable_rx.borrow_and_update().clone();
@@ -358,11 +427,11 @@ fn spawn_codex_shim_supervisor(
                                 websocket: url.clone(),
                                 auth_required: bound.auth_required(),
                                 bound_node_did: bound.node_did().to_string(),
-                                bound_agent_id: bound.agent_id().to_string(),
+                                bound_agent_did: bound.agent_did().to_string(),
                             },
                         );
                         tracing::info!(
-                            "Codex endpoint bound: agent {bound_agent_id:?} became runnable; \
+                            "Codex endpoint bound: agent {bound_agent_did:?} became runnable; \
                              the shim is now running on {url} (no restart was needed)."
                         );
                         tracing::info!(
@@ -374,7 +443,7 @@ fn spawn_codex_shim_supervisor(
                     }
                     Err(error) if error.is_dependency_missing() => {
                         tracing::debug!(
-                            agent_id = %bound_agent_id,
+                            agent_did = %bound_agent_did,
                             error = %error.error(),
                             "Codex shim still waiting on its bound agent's documents"
                         );
@@ -388,7 +457,7 @@ fn spawn_codex_shim_supervisor(
                             },
                         );
                         tracing::warn!(
-                            "Codex endpoint disabled: agent {bound_agent_id:?} became runnable, \
+                            "Codex endpoint disabled: agent {bound_agent_did:?} became runnable, \
                              but the shim could not bind: {:#}",
                             error.error()
                         );
@@ -422,6 +491,16 @@ where
     let token = token.trim();
     if token.is_empty() {
         anyhow::bail!("app-server token in {env_name} is empty");
+    }
+    Ok(token.to_string())
+}
+
+fn read_metrics_auth_token(env_name: &str) -> Result<String> {
+    let token = std::env::var(env_name)
+        .with_context(|| format!("reading metrics scrape token from {env_name}"))?;
+    let token = token.trim();
+    if token.is_empty() {
+        anyhow::bail!("metrics scrape token in {env_name} is empty");
     }
     Ok(token.to_string())
 }
@@ -471,7 +550,7 @@ async fn serve_with_startup(
     let _keychain_prompt_guard =
         crate::process_resources::prevent_keychain_prompts(args.no_keychain_prompts)?;
     crate::process_resources::prepare()?;
-    gents::runtime_service::executable_build_id().await?;
+    gents::runtime::service::executable_build_id().await?;
     let mut store_lifetime = None;
     let outcome = serve_foreground(args, runtime, startup, &mut store_lifetime).await;
     drop(store_lifetime);
@@ -582,7 +661,7 @@ async fn serve_foreground(
     mut args: ServeArgs,
     executor: tokio::runtime::Handle,
     mut startup: Option<super::prepare_runtime::PreparedStartup>,
-    store_lifetime: &mut Option<gents::config_client::ConfigAccess>,
+    store_lifetime: &mut Option<gents::store::config_client::ConfigAccess>,
 ) -> Result<()> {
     #[cfg(not(unix))]
     anyhow::ensure!(
@@ -602,15 +681,50 @@ async fn serve_foreground(
     if args.codex_shim_public_url.is_some() && codex_shim_auth_token.is_none() {
         anyhow::bail!("--codex-shim-public-url requires --codex-shim-auth-token-env");
     }
+    let metrics_auth_token = args
+        .metrics_auth_token_env
+        .as_deref()
+        .map(read_metrics_auth_token)
+        .transpose()?;
     let home_dir = resolve_home_dir(args.home.as_deref());
+    tokio::fs::create_dir_all(&home_dir).await?;
+    // A home whose identity can never own the node is refused from its
+    // configuration alone, before any store is reserved or opened.
+    gents::store::local::home::ensure_home_identity_can_serve(&home_dir)?;
     let data_dir = args
         .data_dir
         .clone()
         .unwrap_or_else(|| default_data_dir(&home_dir));
-    fs::create_dir_all(&data_dir)
-        .with_context(|| format!("creating data directory {}", data_dir.display()))?;
-    let store_lock = gents::home::lock_store(&home_dir, &data_dir)?;
+    anyhow::ensure!(
+        tokio::fs::metadata(&data_dir)
+            .await
+            .is_ok_and(|metadata| metadata.is_dir()),
+        "the initialized data directory {} is unavailable",
+        data_dir.display()
+    );
+    // Native supervisor respawns must obey the same reservation as desktop
+    // preparation, before they can reopen a retiring store or claim work.
+    let mut native_reservation = if startup.is_none() {
+        Some(gents::store::local::home::reserve_runtime_startup(&home_dir).await?)
+    } else {
+        None
+    };
+    let store_lock = gents::store::local::home::lock_store(&home_dir, &data_dir)?;
+    let backend_store_key =
+        gents::store::local::store_key::open_home_store_key(&home_dir, &data_dir).await?;
+    let protected_backend = gents::store::local::backend_protection::ProtectedBackendStore::open(
+        &data_dir,
+        &backend_store_key,
+        &store_lock,
+    )
+    .await?;
     crate::network_settings::NetworkSettings::read(&home_dir)?.fill_unset(&mut args);
+    crate::client_settings::apply_home_client_setting(
+        &mut args,
+        &home_dir,
+        startup.is_some(),
+        cfg!(unix),
+    )?;
     let http_ip = args
         .http_addr
         .unwrap_or(crate::network_settings::DEFAULT_HTTP_ADDR);
@@ -635,6 +749,10 @@ async fn serve_foreground(
         display_host(http_ip),
         http_port
     );
+    let advertised_graphql_url = args.advertise_graphql_url.clone();
+    if let Some(url) = &advertised_graphql_url {
+        gents::runtime::agent::p2p_reconcile::endpoint::validate_advertised_graphql_url(url)?;
+    }
     let init_config = read_init_config(&home_dir)?;
     if let (Some(explicit), Some(config)) = (args.node_name.as_deref(), init_config.as_ref()) {
         if explicit != config.node_name {
@@ -654,10 +772,17 @@ async fn serve_foreground(
         .clone()
         .or_else(|| init_config.as_ref().map(|config| config.node_name.clone()))
         .unwrap_or_else(|| DEFAULT_NODE_NAME.to_string());
-    gents::home::ensure_home_identity_can_serve(&home_dir)?;
     let server_identity =
         resolve_server_identity(&args, init_config.as_ref(), &home_dir, &node_name)?;
     let identity = server_identity.identity;
+    if args.keychain_startup_approval {
+        drop(identity.sign(b"gents.runtime-key-unlock.v1").await?);
+    }
+    let _post_open_keychain_prompt_guard =
+        crate::process_resources::prevent_keychain_prompts(args.keychain_startup_approval)?;
+    let protected_backend = protected_backend
+        .preflight(&backend_store_key, Some(identity.did()))
+        .await?;
     let effective_tool_ceiling = args
         .tool_ceiling
         .or_else(|| init_config.as_ref().map(|config| config.tool_ceiling))
@@ -707,14 +832,21 @@ async fn serve_foreground(
             CodexShimHealth::Off
         } else {
             CodexShimHealth::Pending {
-                bound_agent_id: args
-                    .codex_shim_agent_id
+                bound_agent_did: args
+                    .codex_shim_agent_did
                     .clone()
                     .unwrap_or_else(|| "<default>".to_string()),
                 reason: "the Codex shim has not bound yet".to_string(),
             }
         }));
     preflight_embedded_http_bind(http_addr).await?;
+    let metrics_listener = match args.metrics_addr {
+        Some(addr) => Some(
+            crate::http::metrics_scrape::MetricsScrapeListener::bind(addr, metrics_auth_token)
+                .await?,
+        ),
+        None => None,
+    };
     let bind_probe_token = Uuid::new_v4().simple().to_string();
     let bind_probe_path = format!("/_gents/http-bind/{}", Uuid::new_v4().simple());
     let enrollment_offer_issuer = crate::http::enrollment::empty_issuer_handle();
@@ -724,24 +856,32 @@ async fn serve_foreground(
         .enable_mcp
         .then(|| crate::http::mcp_server::McpServiceOptions {
             scope: if args.mcp_query_collections.is_empty() {
-                gents::defra_query::CollectionScope::all()
+                gents::tools::builtin::defra_query::CollectionScope::all()
             } else {
-                gents::defra_query::CollectionScope::restricted(args.mcp_query_collections.clone())
+                gents::tools::builtin::defra_query::CollectionScope::restricted(
+                    args.mcp_query_collections.clone(),
+                )
             },
             write_collections: args.mcp_write_collections.iter().cloned().collect(),
         });
     let (activation_tx, activation_rx) = watch::channel(RuntimeActivationObservation::default());
     let replicated_schema = Arc::new(tokio::sync::OnceCell::new());
     let serve_lifecycle = ServeLifecycleHandle::default();
-    let extra_routes = runtime_contract_router(
+    let runtime_graphql = gents::store::config_client::GraphqlEndpoint::as_principal(
         graphql_url.clone(),
+        identity.did(),
+    )
+    .with_client_signing_capability(identity.client_signing_capability()?)?;
+    let runtime_routers = runtime_contract_router(
+        graphql_url.clone(),
+        runtime_graphql.clone(),
         node_name.clone(),
         identity.did().to_string(),
         format_tool_ceiling(effective_tool_ceiling).to_string(),
         effective_tool_root
             .as_deref()
             .map(|root| {
-                gents::tool_surface::resolve_configured_tool_root(root)
+                gents::tools::surface::resolve_configured_tool_root(root)
                     .map(|resolved| resolved.to_string_lossy().into_owned())
                     .map_err(|error| {
                         format!("tool root {} does not resolve: {error:#}", root.display())
@@ -750,6 +890,7 @@ async fn serve_foreground(
             .transpose(),
         args.cli_tools.clone(),
         Some(home_dir.to_string_lossy().into_owned()),
+        Some(data_dir.clone()),
         mcp_options,
         Some(backend_health.clone()),
         p2p_admission_state.clone(),
@@ -760,61 +901,88 @@ async fn serve_foreground(
         activation_rx,
         replicated_schema.clone(),
         serve_lifecycle.clone(),
-    )
-    .merge(
+    );
+    let scrape_state = runtime_routers.scrape_state;
+    let extra_routes = runtime_routers.contract.merge(
         embedded_http_probe_router(&bind_probe_path, bind_probe_token.clone())
             .merge(crate::http::explorer::explorer_router()),
     );
+    let client_access_ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
     if let Some(node_identity_did) = server_identity.node_identity_did.as_deref() {
         anyhow::ensure!(
-            gents::identity::can_mint_defradb_bearer(node_identity_did),
+            gents::store::identity::can_mint_defradb_bearer(node_identity_did),
             "identity {node_identity_did} has no exportable private key, so it cannot own the served node's access control; re-initialize the home with a file or macos-keychain identity to serve it"
         );
     }
-    let http_config = crate::http::access::HttpAuthority::for_endpoint(&graphql_url)
-        .protect_http(defra_node::HttpConfig::with_addr(http_addr).with_extra_routes(extra_routes));
-    let mut node_builder = crate::persistent_node_builder(&home_dir, &data_dir)
-        .await?
-        .with_http(http_config);
-    if args.keychain_startup_approval {
-        drop(identity.sign(b"gents.runtime-key-unlock.v1").await?);
-    }
-    let _post_open_keychain_prompt_guard =
-        crate::process_resources::prevent_keychain_prompts(args.keychain_startup_approval)?;
-    if let Some(node_identity_did) = server_identity.node_identity_did.as_ref() {
-        node_builder = node_builder
-            .with_node_identity_did(node_identity_did.clone())
-            .with_node_acp_enabled();
-    }
-    if let Some(config) = p2p_config {
-        node_builder = node_builder.with_p2p(config);
-    }
-    let node = Arc::new(
-        node_builder
-            .build()
-            .await
-            .context("building embedded DefraDB node")?,
+    let runtime = ServeRuntime::new(executor);
+    let authority = crate::http::access::HttpAuthority::for_endpoint(&graphql_url)
+        .with_advertised_endpoint(advertised_graphql_url.as_deref())
+        .with_startup_gate(client_access_ready.clone(), bind_probe_path.clone());
+    let streams =
+        crate::http::shutdown_streams::ShutdownStreams::new(runtime.shutdown_tx.subscribe());
+    let http_config = defra_node::HttpConfig::with_addr(http_addr)
+        .with_extra_routes(extra_routes)
+        .with_router_transform(Arc::new(move |router| authority.wrap(streams.wrap(router))));
+    anyhow::ensure!(
+        server_identity.node_identity_did.as_deref() == Some(identity.did()),
+        "runtime identity does not match the protected store identity"
     );
-    let store_access =
-        match gents::config_client::ConfigAccess::claimed_local(node.clone(), store_lock) {
-            Ok(access) => access,
-            Err(error) => {
-                node.shutdown().await;
-                return Err(error.into());
+    let (node, backend_admission) = gents::runtime::node_start::start_node(
+        protected_backend,
+        &backend_store_key,
+        identity.clone(),
+        Some(http_config),
+        p2p_config,
+        tool_ceiling.clone(),
+        &home_dir,
+    )
+    .await
+    .context("building protected embedded DefraDB node")?;
+    let store_access = match gents::store::config_client::ConfigAccess::claimed_local(
+        node.clone(),
+        store_lock,
+    ) {
+        Ok(access) => access,
+        Err(error) => {
+            if let Err(shutdown_error) = node.shutdown().await {
+                tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&shutdown_error), "failed to shut down embedded node after startup failure");
             }
-        };
+            return Err(error.into());
+        }
+    };
     *store_lifetime = Some(store_access.clone());
-    let mut runtime =
-        ServeRuntime::new(executor).retain_shutdown_owner(node.clone(), store_access.clone());
+    let mut runtime = runtime.retain_shutdown_owner(node.clone(), store_access.clone());
+    let _metrics_listener = metrics_listener.map(|listener| {
+        tracing::info!(
+            addr = %listener.addr(),
+            auth_required = listener.auth_required(),
+            "serving Prometheus metrics on the dedicated listener"
+        );
+        listener.spawn(scrape_state, runtime.shutdown_tx.subscribe())
+    });
     #[cfg(unix)]
     let mut grok_shim_handle = None;
     let serve_result: Result<()> = async {
         wait_for_embedded_http_bind(http_addr, &bind_probe_path, &bind_probe_token).await?;
-        if let Err(error) = gents::migration::ensure_all_runtime_migrations(node.clone()).await {
-            return Err(gents::storage_backend::classify_store_error(error, &data_dir).into());
+        if let Err(error) = gents::store::schema::migration::ensure_all_runtime_migrations(node.clone()).await {
+            return Err(gents::store::local::storage_backend::classify_store_error(error, &data_dir).into());
         }
-        gents::store_key::upgrade::finish(&data_dir)?;
-        let schema = gents::agent::p2p_reconcile::read_client_replicated_schema(node.clone())
+        if !matches!(effective_tool_ceiling, ToolCeilingArg::MetaOnly) {
+            // A root that does not resolve builds no host tools and is
+            // reported by the runtime contract; only a resolvable root must
+            // be covered by a published WorkspaceRoot before serving.
+            if let Some(Ok(root)) = effective_tool_root
+                .as_deref()
+                .map(gents::tools::surface::resolve_configured_tool_root)
+            {
+                gents::tools::surface::ensure_configured_root_published(&node, &root)
+                    .await
+                    .context("checking the configured host tool root against published WorkspaceRoot documents")?;
+            }
+        }
+        client_access_ready.store(true, std::sync::atomic::Ordering::Release);
+        gents::store::local::store_key::upgrade::finish(&data_dir)?;
+        let schema = gents::runtime::agent::p2p_reconcile::read_client_replicated_schema(node.clone())
             .await
             .context("reading client route collection versions after migrations")?;
         replicated_schema.set(schema).ok();
@@ -827,6 +995,7 @@ async fn serve_foreground(
         );
         let (ready_tx, mut ready_rx) = watch::channel(ProcessLifecycleState::Uninitialized);
         let (runnable_tx, runnable_rx) = watch::channel::<Vec<String>>(Vec::new());
+        let grok_socket_held = Arc::new(std::sync::OnceLock::new());
         let (configuration_tx, mut configuration_rx) =
             watch::channel::<Option<RuntimeConfigurationObservation>>(None);
 
@@ -834,8 +1003,10 @@ async fn serve_foreground(
             node.clone(),
             identity.clone(),
             DocumentRuntimeOptions {
+                backend_admission: Some(backend_admission),
                 mcp_pool: McpPool::new(),
                 local_hostname: Some(local_hostname),
+                advertised_graphql_url,
                 tool_ceiling,
                 plugin_home: Some(home_dir.clone()),
                 backend_health: Some(backend_health.clone()),
@@ -896,7 +1067,7 @@ async fn serve_foreground(
             let p2p_status =
                 load_local_server_p2p_status(node.as_ref(), args.p2p_transport, p2p_admission)
                     .await?;
-            if let Some(p2p) = gents::identity::node_p2p(&node) {
+            if let Some(p2p) = gents::store::identity::node_p2p(&node) {
                 *enrollment_offer_issuer.write().await =
                     Some(crate::http::enrollment::EnrollmentOfferIssuer::new(
                         identity.clone(),
@@ -916,12 +1087,18 @@ async fn serve_foreground(
                 background_execution_registry: background_execution_registry.clone(),
                 graphql: graphql_url.clone(),
                 node_did: identity.did().to_string(),
-                agent_id: args.codex_shim_agent_id.clone(),
+                agent_did: args.codex_shim_agent_did.clone(),
+                runtime_identity: identity.clone(),
                 auth_token: codex_shim_auth_token,
                 bind_addr: args.codex_shim_bind_addr,
                 port: args.codex_shim_port,
                 timeout_secs: args.codex_shim_timeout_secs,
                 poll_ms: args.codex_shim_poll_ms,
+                runnable: runnable_rx.clone(),
+                agent_routes: args.codex_shim_agent_did.is_none()
+                    && args.codex_shim_public_url.is_none(),
+                has_public_url: args.codex_shim_public_url.is_some(),
+                grok_socket: grok_socket_held.clone(),
             };
             let mut codex_shim_handle = if args.no_codex_shim {
                 None
@@ -939,41 +1116,41 @@ async fn serve_foreground(
                                     .to_string(),
                                 auth_required: bound.auth_required(),
                                 bound_node_did: bound.node_did().to_string(),
-                                bound_agent_id: bound.agent_id().to_string(),
+                                bound_agent_did: bound.agent_did().to_string(),
                             },
                         );
                         codex_shim_output = Some(announced);
                         Some(bound.spawn())
                     }
                     Err(error) if error.is_dependency_missing() => {
-                        match crate::commands::codex_shim::resolve_codex_shim_agent_id(
+                        match crate::commands::codex_shim::resolve_codex_shim_agent_did(
                             node.as_ref(),
-                            args.codex_shim_agent_id.as_deref(),
+                            args.codex_shim_agent_did.as_deref(),
                             identity.did(),
                         )
                         .await
                         {
-                            Ok(bound_agent_id) => {
+                            Ok(bound_agent_did) => {
                                 tracing::warn!("Codex endpoint pending: {:#}", error.error());
                                 tracing::warn!(
-                                    "The server keeps running. The shim binds by itself once agent {bound_agent_id:?} \
+                                    "The server keeps running. The shim binds by itself once agent {bound_agent_did:?} \
                                      becomes runnable (for example after `gents config apply`) — no restart needed."
                                 );
                                 codex_shim_output = Some(json!({
                                     "pending": true,
-                                    "bound_agent_id": bound_agent_id,
+                                    "bound_agent_did": bound_agent_did,
                                     "reason": format!("{:#}", error.error()),
                                 }));
                                 set_codex_shim_health(
                                     &codex_shim_health,
                                     CodexShimHealth::Pending {
-                                        bound_agent_id: bound_agent_id.clone(),
+                                        bound_agent_did: bound_agent_did.clone(),
                                         reason: format!("{:#}", error.error()),
                                     },
                                 );
                                 spawn_codex_shim_supervisor(
                                     codex_shim_bind_args.clone(),
-                                    bound_agent_id,
+                                    bound_agent_did,
                                     runnable_rx,
                                     args.codex_shim_public_url.clone(),
                                     args.codex_shim_auth_token_env.clone(),
@@ -1023,7 +1200,7 @@ async fn serve_foreground(
 
             let applied_pack = match args.apply_root.as_ref() {
                 Some(root) => {
-                    match apply_pack_after_ready(node.clone(), &home_dir, root, args.apply_prune).await {
+                    match apply_pack_after_ready(node.clone(), &graphql_url, &home_dir, root, args.apply_prune, &args.apply_inference_slots).await {
                         Ok(outcome) => Some(outcome),
                         Err(error) => {
                             return Err(error).with_context(|| {
@@ -1044,8 +1221,8 @@ async fn serve_foreground(
             let readiness_fence = applied_pack
                 .as_ref()
                 .map(|outcome| PostApplyReadinessFence {
-                    expected_default_agent_id: outcome.expected_default_agent_id.clone(),
-                    expected_agent_ids: outcome.expected_agent_ids.clone(),
+                    expected_default_agent_did: outcome.expected_default_agent_did.clone(),
+                    expected_agent_dids: outcome.expected_agent_dids.clone(),
                 });
 
             if applied_pack.is_some() {
@@ -1097,23 +1274,27 @@ async fn serve_foreground(
                 }
             }
 
-            let readiness = match wait_for_live_node_readiness(
-                &graphql_url,
-                identity.did(),
-                readiness_fence.as_ref(),
+            let readiness = match await_startup_readiness(
+                &mut runtime,
+                &mut ready_rx,
+                wait_for_live_node_readiness(
+                    &runtime_graphql,
+                    identity.did(),
+                    readiness_fence.as_ref(),
+                ),
             )
             .await
             {
                 Ok(readiness) => readiness,
                 Err(error) => return Err(error),
             };
-            let default_agent_id = readiness.snapshot.default_agent_id.clone();
+            let default_agent_did = readiness.snapshot.default_agent_did.clone();
             let runnable_agents = readiness
                 .snapshot
                 .agents
                 .iter()
                 .filter(|entry| entry.state == AgentReadinessState::Ready)
-                .map(|entry| json!({ "agent_id": entry.agent_id }))
+                .map(|entry| json!({ "agent_did": entry.agent_did }))
                 .collect::<Vec<_>>();
             let unavailable_agents = readiness
                 .snapshot
@@ -1122,7 +1303,7 @@ async fn serve_foreground(
                 .filter_map(|entry| {
                     entry.reason.map(|reason| {
                         json!({
-                            "agent_id": entry.agent_id,
+                            "agent_did": entry.agent_did,
                             "reason": reason,
                             "message": reason.public_message(),
                         })
@@ -1145,7 +1326,7 @@ async fn serve_foreground(
                     graphql: graphql_url.clone(),
                     node_name: node_name.clone(),
                     node_did: identity.did().to_string(),
-                    default_agent_id: default_agent_id.clone(),
+                    default_agent_did: default_agent_did.clone(),
                     p2p_transport: p2p_status
                         .get("p2p_transport")
                         .and_then(Value::as_str)
@@ -1168,6 +1349,9 @@ async fn serve_foreground(
                     p2p_admission: p2p_admission_state,
                 },
             )?;
+            if let Some((expected, updated)) = startup.as_ref().and_then(|startup| startup.pending_config.as_ref()) {
+                super::prepare_runtime::commit_root_change(&home_dir, expected, updated)?;
+            }
             serve_lifecycle.mark_ready();
 
             #[cfg(unix)]
@@ -1179,10 +1363,9 @@ async fn serve_foreground(
                     match bind_grok_shim(GrokShimBindArgs {
                         background_executions: background_execution_registry.clone(),
                         node: node.clone(),
-                        actor: identity::Did::new(identity.did().to_owned())
-                            .context("server node DID is not ACP-addressable")?,
-                        graphql: graphql_url.clone(),
-                        agent_id: args.grok_shim_agent_id.clone(),
+                        runtime_identity: identity.clone(),
+                        graphql_url: graphql_url.clone(),
+                        agent_did: args.grok_shim_agent_did.clone(),
                         node_did: identity.did().to_string(),
                         node_name: node_name.clone(),
                         socket_path: socket_path.clone(),
@@ -1190,7 +1373,10 @@ async fn serve_foreground(
                     })
                     .await
                     {
-                        Ok(handle) => grok_shim_handle = Some(handle),
+                        Ok(handle) => {
+                            grok_shim_handle = Some(handle);
+                            grok_socket_held.set(socket_path.clone()).ok();
+                        }
                         Err(error) => {
                             tracing::error!(
                                 socket = %socket_path.display(),
@@ -1218,7 +1404,7 @@ async fn serve_foreground(
                 "home": home_dir,
                 "node_name": node_name,
                 "node_did": identity.did(),
-                "default_agent_id": default_agent_id,
+                "default_agent_did": default_agent_did,
                 "tool_ceiling": format_tool_ceiling(effective_tool_ceiling),
                 "tool_root": effective_tool_root,
                 "runnable_agents": runnable_agents,
@@ -1232,13 +1418,14 @@ async fn serve_foreground(
                 "grok_shim": grok_shim_output,
                 "apply_root": pack_apply,
             });
-            if let Some(super::prepare_runtime::PreparedStartup { reservation, outcome }) = startup.take() {
+            drop(native_reservation.take());
+            if let Some(super::prepare_runtime::PreparedStartup { reservation, outcome, .. }) = startup.take() {
                 let report = gents_protocol::serve_lifecycle::preparation::RuntimePreparationResult::Ready {
                     outcome,
                     home: home_dir.to_string_lossy().into_owned(),
                     node_did: identity.did().to_owned(),
                     graphql: graphql_url.clone(),
-                    build: gents::runtime_service::executable_build_id().await?,
+                    build: gents::runtime::service::executable_build_id().await?,
                 };
                 if let Err(error) = super::prepare_runtime::emit(report).await {
                     tracing::warn!(%error, "runtime preparation channel closed after readiness; native work remains owned");
@@ -1280,6 +1467,8 @@ async fn serve_foreground(
                 tracing::info!("gents server is running local-only. Press Ctrl-C to stop.");
             }
 
+            let notices = crate::service_update::watch_notices(runtime_configuration_probe.clone(), home_dir.clone());
+            let serving = async {
             if let Some(handle) = codex_shim_handle.as_mut() {
                 tokio::select! {
                     result = runtime.join() => result,
@@ -1293,6 +1482,12 @@ async fn serve_foreground(
             } else {
                 runtime.join().await
             }
+            };
+            tokio::select! {
+                result = serving => result,
+                _ = notices => unreachable!("the notice observer remains scoped to the serving runtime"),
+            }
+
         }
         .await;
         outcome
@@ -1332,8 +1527,8 @@ struct ServeRuntime {
     shutdown_rx: Option<watch::Receiver<bool>>,
     handle: Option<tokio::task::JoinHandle<Result<()>>>,
     shutdown_owner: Option<(
-        Arc<gents::defra_node::EmbeddedNode>,
-        gents::config_client::ConfigAccess,
+        Arc<gents::defra_node::Node>,
+        gents::store::config_client::ConfigAccess,
     )>,
 }
 
@@ -1363,8 +1558,8 @@ impl ServeRuntime {
 
     fn retain_shutdown_owner(
         mut self,
-        node: Arc<gents::defra_node::EmbeddedNode>,
-        access: gents::config_client::ConfigAccess,
+        node: Arc<gents::defra_node::Node>,
+        access: gents::store::config_client::ConfigAccess,
     ) -> Self {
         self.shutdown_owner = Some((node, access));
         self
@@ -1419,11 +1614,13 @@ impl Drop for ServeRuntime {
 }
 
 async fn shutdown_claimed_node(
-    node: Arc<gents::defra_node::EmbeddedNode>,
-    access: gents::config_client::ConfigAccess,
+    node: Arc<gents::defra_node::Node>,
+    access: gents::store::config_client::ConfigAccess,
 ) {
     let shutdown = tokio::spawn(async move {
-        node.shutdown().await;
+        if let Err(error) = node.shutdown().await {
+            tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
+        }
         drop(node);
         drop(access);
     });
@@ -1555,7 +1752,7 @@ fn has_node_did(did: &str) -> bool {
 }
 
 fn default_p2p_secret_key_path(home_dir: &Path) -> PathBuf {
-    home_dir.join(gents::home::P2P_SECRET_KEY_FILE_NAME)
+    home_dir.join(gents::store::local::home::P2P_SECRET_KEY_FILE_NAME)
 }
 
 fn resolve_server_p2p_config(
@@ -1598,7 +1795,7 @@ fn resolve_server_p2p_config(
             .with_context(|| format!("creating P2P key directory {}", parent.display()))?;
     }
     Ok(Some(defra_node::P2PConfig {
-        port: args.p2p_port.unwrap_or(0),
+        port: Some(args.p2p_port.unwrap_or(0)),
         bind_addr: Some(
             args.p2p_bind_addr
                 .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST)),
@@ -1620,13 +1817,17 @@ fn resolve_server_p2p_config(
         allowlist: p2p::iroh::IrohAllowlistConfig::AcceptAll,
         max_concurrent_multipath_paths: None,
         secret_key_path: Some(secret_key_path),
+        peer_key: defra_node::PeerKeySource::File,
         load_persisted_collections: true,
-        max_concurrent_dag_fetches,
-        max_concurrent_push_tasks,
-        rate_limit_burst,
-        rate_limit_rate,
-        max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
-        max_pending_dags,
+        sync: defra_node::SyncTuning {
+            max_concurrent_dag_fetches,
+            max_concurrent_push_tasks,
+            rate_limit_burst,
+            rate_limit_rate,
+            max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
+            max_pending_dags,
+            replicator_retry_intervals: None,
+        },
         rebroadcast_on_merge: false,
     }))
 }
@@ -1681,22 +1882,22 @@ fn validate_p2p_admission_config(
 
 fn log_p2p_admission_config(config: &defra_node::P2PConfig) {
     tracing::info!(
-        max_pending_dags = config.max_pending_dags,
-        max_concurrent_push_tasks = config.max_concurrent_push_tasks,
-        max_concurrent_dag_fetches = config.max_concurrent_dag_fetches,
-        rate_limit_burst = config.rate_limit_burst,
-        rate_limit_rate = config.rate_limit_rate,
+        max_pending_dags = config.sync.max_pending_dags,
+        max_concurrent_push_tasks = config.sync.max_concurrent_push_tasks,
+        max_concurrent_dag_fetches = config.sync.max_concurrent_dag_fetches,
+        rate_limit_burst = config.sync.rate_limit_burst,
+        rate_limit_rate = config.sync.rate_limit_rate,
         "P2P admission configuration"
     );
 }
 
 fn p2p_admission_state(config: &defra_node::P2PConfig) -> P2pAdmissionState {
     P2pAdmissionState {
-        max_pending_dags: config.max_pending_dags,
-        max_concurrent_push_tasks: config.max_concurrent_push_tasks,
-        max_concurrent_dag_fetches: config.max_concurrent_dag_fetches,
-        rate_limit_burst: config.rate_limit_burst,
-        rate_limit_rate: config.rate_limit_rate,
+        max_pending_dags: config.sync.max_pending_dags,
+        max_concurrent_push_tasks: config.sync.max_concurrent_push_tasks,
+        max_concurrent_dag_fetches: config.sync.max_concurrent_dag_fetches,
+        rate_limit_burst: config.sync.rate_limit_burst,
+        rate_limit_rate: config.sync.rate_limit_rate,
     }
 }
 
@@ -1716,7 +1917,7 @@ async fn load_local_server_p2p_status(
             "p2p_admission": admission,
         })),
         P2pTransportArg::Iroh => {
-            let p2p = gents::identity::node_p2p(node).ok_or_else(|| {
+            let p2p = gents::store::identity::node_p2p(node).ok_or_else(|| {
                 anyhow::anyhow!(
                     "P2P transport was requested but is not available on the embedded node"
                 )
@@ -1805,7 +2006,7 @@ mod grok_shim_tests {
         argv.extend_from_slice(extra);
         let cli = Cli::try_parse_from(argv).expect("server should parse");
         match cli.command {
-            Command::Server(args) => args,
+            Some(Command::Server(args)) => args,
             _ => panic!("expected `server`"),
         }
     }
@@ -1816,7 +2017,7 @@ mod grok_shim_tests {
         use std::os::unix::fs::PermissionsExt;
         let temp = tempfile::tempdir().unwrap();
         let key = temp.path().join("keys").join("local.key");
-        gents::identity::load_or_create_file_identity(&key).unwrap();
+        gents::store::identity::load_or_create_file_identity(&key).unwrap();
         fs::set_permissions(&key, fs::Permissions::from_mode(0o644)).unwrap();
         let args = parse_server(&["--key-path", key.to_str().unwrap()]);
 
@@ -1824,11 +2025,12 @@ mod grok_shim_tests {
             Ok(_) => panic!("an insecure key must not load"),
             Err(error) => error,
         };
-        let store = gents::storage_backend::incompatible_store(error.as_ref(), Path::new(""))
-            .expect("typed refusal");
+        let store =
+            gents::store::local::storage_backend::incompatible_store(error.as_ref(), Path::new(""))
+                .expect("typed refusal");
         assert_eq!(
             store.kind,
-            gents::storage_backend::IncompatibleStoreKind::InsecureKey
+            gents::store::local::storage_backend::IncompatibleStoreKind::InsecureKey
         );
         assert_eq!(
             crate::native_service::incompatible_store_exit_code(store.kind),
@@ -1844,6 +2046,92 @@ mod grok_shim_tests {
 #[cfg(test)]
 mod shim_host_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn startup_readiness_preserves_runtime_exit_cases() {
+        let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+        let cases = snapshot["identity_startup_readiness_cases"]
+            .as_array()
+            .unwrap();
+        assert!(!cases.is_empty());
+        for case in cases {
+            let mut runtime =
+                ServeRuntime::new(crate::commands::eval::testing::test_runtime_handle());
+            let shutdown = runtime.shutdown_tx.clone();
+            let join_kind = case["join"]["kind"].as_str().unwrap().to_owned();
+            let failure = case["join"]["message"].as_str().unwrap_or("").to_owned();
+            let pending_join = join_kind == "pending";
+            runtime.start(move |mut stop| async move {
+                match join_kind.as_str() {
+                    "pending" => {
+                        let _ = stop.changed().await;
+                        Ok(())
+                    }
+                    "clean" => Ok(()),
+                    "failed" => Err(anyhow::anyhow!(failure)),
+                    other => panic!("unknown join case {other}"),
+                }
+            });
+            if !pending_join {
+                tokio::task::yield_now().await;
+            }
+            let initial = if case["shutting_down"].as_bool().unwrap() {
+                ProcessLifecycleState::ShuttingDown
+            } else {
+                ProcessLifecycleState::Ready
+            };
+            let (_process_tx, mut process_rx) = watch::channel(initial);
+            let ready = case["readiness"].as_bool().unwrap();
+            let deadline = case["deadline"].as_bool().unwrap();
+            let mut wait = Box::pin(await_startup_readiness(
+                &mut runtime,
+                &mut process_rx,
+                async move {
+                    if ready {
+                        Ok(())
+                    } else if deadline {
+                        Err(anyhow::anyhow!("readiness deadline"))
+                    } else {
+                        std::future::pending::<Result<()>>().await
+                    }
+                },
+            ));
+            let first = futures::poll!(wait.as_mut());
+            let expected = case["expected"]["kind"].as_str().unwrap();
+            match expected {
+                "wait" | "await_join" => {
+                    assert!(first.is_pending(), "{case}: {first:?}");
+                    shutdown.send_replace(true);
+                    let error = wait.as_mut().await.unwrap_err();
+                    assert!(
+                        format!("{error:#}").contains("runtime stopped before durable readiness")
+                    );
+                }
+                "ready" => assert!(
+                    matches!(&first, std::task::Poll::Ready(Ok(()))),
+                    "{case}: {first:?}"
+                ),
+                "timeout" | "premature" | "failed" => {
+                    let std::task::Poll::Ready(Err(error)) = &first else {
+                        panic!("{case}: {first:?}")
+                    };
+                    let expected_message = match expected {
+                        "timeout" => "readiness deadline",
+                        "premature" => "runtime stopped before durable readiness",
+                        _ => case["expected"]["message"].as_str().unwrap(),
+                    };
+                    assert!(
+                        format!("{error:#}").contains(expected_message),
+                        "{case}: {error:#}"
+                    );
+                }
+                other => panic!("unknown modeled outcome {other}"),
+            }
+            drop(wait);
+            shutdown.send_replace(true);
+            runtime.join().await.unwrap();
+        }
+    }
 
     #[tokio::test]
     async fn embedded_http_probe_rejects_an_unrelated_listener() {

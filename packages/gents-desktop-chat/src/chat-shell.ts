@@ -4,11 +4,12 @@ import type {
   DesktopSessionSnapshot,
   OperationalStatus,
   PendingTurnView,
+  RequestLifecycleState,
 } from "@source-inc/gents-desktop-client";
 import {
   isTerminalTurnState,
   projectClientOperationalStatus,
-  projectRouteOperationalStatus,
+  projectRuntimeConnectionStatus,
 } from "@source-inc/gents-desktop-client";
 
 export type OptimisticPendingTurn = PendingTurnView & {
@@ -23,8 +24,9 @@ export type RequestProgressPresentation = {
 };
 
 export function requestProgressPresentation(
-  lifecycleState?: string | null,
+  lifecycleState?: RequestLifecycleState | null,
 ): RequestProgressPresentation | null {
+  if (!lifecycleState) return null;
   switch (lifecycleState) {
     case "workspaceBindingPending":
     case "pending":
@@ -43,8 +45,6 @@ export function requestProgressPresentation(
       return { label: "Expired", animated: false };
     case "interrupted":
       return { label: "Stopped", animated: false };
-    default:
-      return null;
   }
 }
 
@@ -60,6 +60,7 @@ export type ChatBlockedReason =
   | "clientOffline"
   | "nodeNotSelected"
   | "routeNotReady"
+  | "runtimeNotConnected"
   | "agentUnavailable"
   | "composerEmpty"
   | "submittingRequest"
@@ -116,6 +117,7 @@ type ProjectionInput = {
     | "latestRequestId"
     | "pendingTurn"
     | "queuedTurns"
+    | "pendingQueue"
     | "foldedInputs"
   > | null;
   selectedSessionSummary: SessionSummary | null;
@@ -204,18 +206,20 @@ function hintFor(reason: ChatBlockedReason) {
       return "Select a node before sending";
     case "routeNotReady":
       return "Secure route to the node is not ready";
+    case "runtimeNotConnected":
+      return "The runtime connection is not ready";
     case "agentUnavailable":
       return "The selected agent is unavailable";
     case "composerEmpty":
       return "Type a message to send";
     case "submittingRequest":
-      return "Submitting request";
+      return "Still sending your last message. Try again in a moment.";
     case "waitingForRequestObservation":
-      return "Waiting for request observation";
+      return "Your last message is still on its way. Try again in a moment.";
     case "sessionMissingFromSnapshot":
-      return "Session missing from snapshot";
+      return "This session is still loading. Try again in a moment.";
     case "inconsistentTurnObservation":
-      return "Waiting for consistent turn observation";
+      return "Still syncing this session. Try again in a moment.";
     case "sessionNotOwned":
       return "Read-only";
   }
@@ -309,6 +313,7 @@ function activityStatusFor(
     case "clientOffline":
     case "nodeNotSelected":
     case "routeNotReady":
+    case "runtimeNotConnected":
     case "agentUnavailable":
       return admissionStatus ? chatActivity(admissionStatus) : null;
     case "submittingRequest":
@@ -351,7 +356,7 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
   );
   const deploymentStatus = input.selectedNodeDid
     ? (input.operationalState?.admissionBlocker ??
-      (input.operationalState ? null : projectRouteOperationalStatus(false)))
+      (input.operationalState ? null : projectRuntimeConnectionStatus(null)))
     : null;
   const admissionStatus = clientStatus ?? deploymentStatus;
   const rawObservedTurnState =
@@ -360,9 +365,13 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
     ? rawObservedTurnState
     : null;
 
-  const queuedRequestIds = new Set(
-    (input.session?.queuedTurns ?? []).map((turn) => turn.requestId),
-  );
+  /* the queue the tray edits can hold a sent request that queuedTurns does
+     not list; a request seen in neither stays awaited until the snapshot
+     names it, which a replaced or removed request never is */
+  const queuedRequestIds = new Set([
+    ...(input.session?.queuedTurns ?? []).map((turn) => turn.requestId),
+    ...(input.session?.pendingQueue ?? []).map((entry) => entry.requestId),
+  ]);
   const foldedRequestIds = new Set(
     (input.session?.foldedInputs ?? []).map((folded) => folded.requestId),
   );
@@ -479,10 +488,11 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
           ? "clientOffline"
           : admissionStatus.layer === "selection"
             ? "nodeNotSelected"
-            : admissionStatus.layer === "p2p" ||
-                admissionStatus.layer === "route"
-              ? "routeNotReady"
-              : "agentUnavailable";
+            : admissionStatus === input.operationalState?.connection
+              ? "runtimeNotConnected"
+              : admissionStatus.layer === "p2p" || admissionStatus.layer === "route"
+                ? "routeNotReady"
+                : "agentUnavailable";
       return {
         kind: "disabled",
         reason,

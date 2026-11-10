@@ -1,7 +1,12 @@
-type GoalCreationClaim @branchable {
-    creation_key: String @index(unique: true) @immutable
+type GoalCreationClaim @policy(id: "202ce2df1b18d27183b29b653e2c06654178b2e79d4d6b93229d0c706380e71e", resource: "children") @index(fields: ["session_doc_id", "creation_key"], unique: true) {
+    creation_key: String @index @immutable
     goal_id: String @index @immutable
     session_id: String @index @immutable
+    session_doc_id: String @index @immutable
+    agent_did: String @immutable
+    requester_did: String @index @immutable
+    creator_did: String @index @immutable
+    parent_linked: Boolean @index
     node_did: String @index @immutable
     objective: String @immutable
     token_budget: Int @immutable

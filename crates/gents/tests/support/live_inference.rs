@@ -1,334 +1,102 @@
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
-use gents::config_client::DesiredStateApplyPlan;
-use gents::defra_node::EmbeddedNode;
-use gents::document_config::{
-    Agent, BackendAuth, ConfigReferences, InferenceBackend, InferenceProfile, Node,
-};
-use gents::graphql::escape_graphql_string;
-use gents::pack::{decode_pack_config, PackInstallOptions};
+use anyhow::Result;
+use gents::documents::{Agent, InferenceProfile, Node};
+use gents::store::config_client::DesiredStateApplyPlan;
+use gents::store::graphql::escape_graphql_string;
 use gents::{
-    default_agent_id_for_node, default_inference_profile_id_for_agent, ensure_node,
-    BackendProviderKind, Collection, DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling,
+    default_inference_profile_id_for_agent, Collection, DocumentRuntimeOptions, Gents,
+    NodeIdentity, ToolCeiling,
 };
 use gents_protocol::output::reconstruction::{reconstruct_message, ObservedSegment};
 use gents_protocol::output::{OutputSegment, TranscriptMessage};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::Deserialize;
 
+use crate::support::agent_requests::RequestActors;
 use crate::support::interrupt::BootedAgent;
-use crate::support::{first_optional_row, TestDb};
+use crate::support::snapshots::SnapshotReader;
+use crate::support::TestDb;
 
-pub const EVAL_TARGET_VARIABLE: &str = "GENTS_EVAL_TARGET";
-
-const TARGET_VALIDATION_OWNER: &str = "did:key:inference-target-validation";
-
-fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
-
-pub fn targets_dir() -> PathBuf {
-    workspace_root().join("scripts/evals/targets")
-}
-
-#[derive(Clone, Debug)]
-pub struct InferenceTarget {
-    pub name: String,
-    backend: InferenceBackend,
-    profile: InferenceProfile,
-}
-
-impl InferenceTarget {
-    pub fn load(selector: &str) -> Result<Self> {
-        let (name, path) = resolve_selector(selector)?;
-        Self::load_path(name, &path)
-    }
-
-    fn load_path(name: String, path: &Path) -> Result<Self> {
-        let bytes = std::fs::read(path)
-            .with_context(|| format!("reading inference target {}", path.display()))?;
-        let value = serde_json::from_slice(&bytes)
-            .with_context(|| format!("parsing inference target {}", path.display()))?;
-        Self::decode(name, value)
-            .with_context(|| format!("invalid inference target {}", path.display()))
-    }
-
-    pub fn decode(name: String, value: serde_json::Value) -> Result<Self> {
-        let config = decode_pack_config(
-            value,
-            Some(&PackInstallOptions {
-                node_did: TARGET_VALIDATION_OWNER.to_owned(),
-            }),
-            // Targets are literal documents: interpolating the process
-            // environment could copy secrets into endpoints, reports or the DB.
-            &|_| None,
-            &|_, _, reference| anyhow::bail!("inference targets have no sidecars: {reference}"),
-        )?;
-        let authored = serde_json::to_value(&config)?;
-        let authored = authored.as_object().context("configuration bundle")?;
-        for key in authored.keys() {
-            anyhow::ensure!(
-                matches!(
-                    key.as_str(),
-                    "node" | "inference_backends" | "inference_profiles"
-                ),
-                "an inference target authors only one backend and one profile, not {key}"
-            );
-        }
-        anyhow::ensure!(
-            authored["node"]
-                .as_object()
-                .is_some_and(|node| node.len() == 1),
-            "an inference target's node must be empty; the test binds its node"
-        );
-        let plan = DesiredStateApplyPlan::from_pack_config(&config)?;
-        ConfigReferences::from_documents(
-            TARGET_VALIDATION_OWNER,
-            plan.documents()
-                .iter()
-                .map(|document| (document.collection, document.add.clone())),
-        )?
-        .validate()?;
-        let [backend] = <[InferenceBackend; 1]>::try_from(config.inference_backends)
-            .map_err(|_| anyhow::anyhow!("an inference target has exactly one backend"))?;
-        let [profile] = <[InferenceProfile; 1]>::try_from(config.inference_profiles)
-            .map_err(|_| anyhow::anyhow!("an inference target has exactly one profile"))?;
-        backend.validate()?;
-        profile.validate()?;
-        anyhow::ensure!(
-            !matches!(backend.auth, BackendAuth::NodeOAuth { .. }),
-            "NodeOAuth targets are not supported for fresh-node evals: \
-             each trial's new node has no OAuthCredential"
-        );
-        anyhow::ensure!(
-            !matches!(backend.auth, BackendAuth::ApiKey { .. }),
-            "inference targets select credentials by environment variable, never an inline API key"
-        );
-        anyhow::ensure!(backend.enabled, "inference target backend is disabled");
-        Ok(Self {
-            name,
-            backend,
-            profile,
-        })
-    }
-
-    pub fn selected_all() -> Result<Vec<Self>> {
-        let value = std::env::var(EVAL_TARGET_VARIABLE).map_err(|_| {
-            anyhow::anyhow!(
-                "set {EVAL_TARGET_VARIABLE} to one or more inference targets (names in {} or paths)",
-                targets_dir().display()
-            )
-        })?;
-        let targets = parse_selection(&value)?
-            .into_iter()
-            .map(|(name, path)| Self::load_path(name, &path))
-            .collect::<Result<Vec<_>>>()?;
-        for target in &targets {
-            target.require_credential()?;
-        }
-        Ok(targets)
-    }
-
-    fn require_credential(&self) -> Result<()> {
-        if let BackendAuth::Environment { variable } = &self.backend.auth {
-            anyhow::ensure!(
-                std::env::var(variable).is_ok_and(|key| !key.trim().is_empty()),
-                "inference target {} requires {variable} to be set",
-                self.name
-            );
-        }
-        Ok(())
-    }
-
-    pub fn selected() -> Result<Self> {
-        let mut targets = Self::selected_all()?;
-        anyhow::ensure!(
-            targets.len() == 1,
-            "this live test runs against one inference target; {EVAL_TARGET_VARIABLE} names {}",
-            targets.len()
-        );
-        Ok(targets.remove(0))
-    }
-
-    pub fn model(&self) -> &str {
-        &self.profile.model_name
-    }
-
-    pub fn endpoint(&self) -> &str {
-        &self.backend.endpoint
-    }
-
-    pub fn backend_id(&self) -> &str {
-        &self.backend.backend_id
-    }
-
-    pub fn provider_kind(&self) -> BackendProviderKind {
-        self.backend.provider_kind
-    }
-
-    pub fn auth(&self) -> &BackendAuth {
-        &self.backend.auth
-    }
-
-    pub fn backend(&self, node_did: &str) -> InferenceBackend {
-        InferenceBackend {
-            node_did: node_did.to_owned(),
-            ..self.backend.clone()
-        }
-    }
-
-    pub fn profile(&self, node_did: &str) -> InferenceProfile {
-        InferenceProfile {
-            node_did: node_did.to_owned(),
-            ..self.profile.clone()
-        }
-    }
-
-    pub async fn assert_reachable(&self) {
-        let url = format!("{}/models", self.endpoint().trim_end_matches('/'));
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(15))
-            .build()
-            .expect("reqwest client");
-        let mut request = client.get(&url);
-        if let Some(key) = self
-            .backend
-            .auth
-            .resolve_api_key()
-            .unwrap_or_else(|error| panic!("target {} credential: {error:#}", self.name))
-        {
-            request = request.bearer_auth(key);
-        }
-        let name = &self.name;
-        match tokio::time::timeout(Duration::from_secs(20), request.send()).await {
-            Ok(Ok(r)) if r.status().is_success() => {}
-            Ok(Ok(r)) => panic!(
-                "target {name} endpoint {url} returned status {}",
-                r.status()
-            ),
-            Ok(Err(e)) => panic!("target {name} endpoint {url} unreachable: {e}"),
-            Err(_) => panic!("target {name} endpoint {url} timed out (not reachable)"),
-        }
-    }
-}
-
-fn resolve_selector(selector: &str) -> Result<(String, PathBuf)> {
-    let selector = selector.trim();
-    anyhow::ensure!(!selector.is_empty(), "inference target selector is blank");
-    let path = if selector.contains('/') || selector.ends_with(".json") {
-        let path = PathBuf::from(selector);
-        if path.is_absolute() {
-            path
-        } else {
-            workspace_root().join(path)
-        }
-    } else {
-        targets_dir().join(format!("{selector}.json"))
-    };
-    let path = std::fs::canonicalize(&path).unwrap_or(path);
-    let name = path
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .with_context(|| format!("inference target path has no name: {}", path.display()))?
-        .to_owned();
-    Ok((name, path))
-}
-
-pub fn parse_selection(value: &str) -> Result<Vec<(String, PathBuf)>> {
-    let mut selected: Vec<(String, PathBuf)> = Vec::new();
-    for selector in value
-        .split(',')
-        .filter(|selector| !selector.trim().is_empty())
-    {
-        let (name, path) = resolve_selector(selector)?;
-        match selected.iter().find(|(existing, _)| *existing == name) {
-            Some((_, existing)) if *existing == path => {}
-            Some((_, existing)) => anyhow::bail!(
-                "inference targets {} and {} share the name {name}",
-                existing.display(),
-                path.display()
-            ),
-            None => selected.push((name, path)),
-        }
-    }
-    anyhow::ensure!(
-        !selected.is_empty(),
-        "{EVAL_TARGET_VARIABLE} names no inference target"
-    );
-    Ok(selected)
-}
+#[path = "inference_target.rs"]
+pub mod inference_target;
+pub use inference_target::InferenceTarget;
 
 pub fn live_target() -> InferenceTarget {
     InferenceTarget::selected().unwrap_or_else(|error| panic!("{error:#}"))
 }
 
-pub async fn bind_target(
-    node: &Arc<EmbeddedNode>,
-    identity: &dyn NodeIdentity,
-    target: &InferenceTarget,
-) -> (String, String) {
-    let node_did = identity.did().to_string();
-    let mut node_doc = ensure_node(node, &node_did).await.expect("ensure node");
-    let agent_id = default_agent_id_for_node(&node_did);
-    let profile_id = default_inference_profile_id_for_agent(&agent_id);
-    node_doc.default_agent_id = Some(agent_id.clone());
+/// Binds the live target as the node's client key. The fixture User is the
+/// User `gents init` creates: its key is the node's native admin
+/// (`GrantSet::HouseholdOwner`), and it configures the Node, the managed Agent
+/// and the Agent's inference documents. Requests and reads go through the
+/// returned actors.
+pub async fn bind_target(db: &TestDb, target: &InferenceTarget) -> RequestActors {
+    let fixture = crate::support::managed_agent_fixture(db).await;
+    crate::support::grant_household_owner(db, &fixture.user).await;
+    let node_did = db.node_identity.did().to_owned();
+    let agent_did = fixture.binding.agent_did.clone();
+    let profile_id = default_inference_profile_id_for_agent(&agent_did);
     let backend = target.backend(&node_did);
     let profile = InferenceProfile {
         profile_id: profile_id.clone(),
         ..target.profile(&node_did)
     };
-    let agent = Agent {
-        agent_id: agent_id.clone(),
-        node_did: node_did.clone(),
-        display_name: Some("Live default agent".to_string()),
-        description: None,
-        context_id: None,
-        inference_profile_id: profile_id,
-        enabled: true,
-        tags: Vec::new(),
-        created_at: Some(chrono::Utc::now().to_rfc3339()),
-    };
-
-    apply_live_backend_documents(node, node_doc, backend, profile, agent).await;
-    (node_did, agent_id)
-}
-
-async fn apply_live_backend_documents(
-    node: &Arc<EmbeddedNode>,
-    node_doc: Node,
-    backend: InferenceBackend,
-    profile: InferenceProfile,
-    agent: Agent,
-) {
-    use gents::config_client::{apply_desired_state_plan, DesiredStateApplyDocument};
-    let plan = DesiredStateApplyPlan::new(
-        [
-            (Collection::Node, serde_json::to_value(node_doc)),
-            (Collection::InferenceBackend, serde_json::to_value(backend)),
-            (Collection::InferenceProfile, serde_json::to_value(profile)),
-            (Collection::Agent, serde_json::to_value(agent)),
-        ]
-        .into_iter()
-        .map(|(collection, value)| {
-            let value = value.expect("serialize live configuration document");
-            DesiredStateApplyDocument {
-                collection,
-                add: value.clone(),
-                update: value,
-            }
+    let sampling = target.sampling(&node_did);
+    fixture
+        .access
+        .transact_write("test.bind_live_backend", |txn| {
+            use gents::documents::apply_desired_state_plan;
+            use gents::store::config_client::{
+                read_desired_state_record_in_txn as read, DesiredStateApplyDocument,
+            };
+            let node_did = &node_did;
+            let agent_did = &agent_did;
+            let profile_id = &profile_id;
+            let backend = &backend;
+            let profile = &profile;
+            let sampling = &sampling;
+            Box::pin(async move {
+                let (_, node) = read(txn, Collection::Node, node_did, node_did)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("the fixture User's Node is missing"))?;
+                let mut node: Node = serde_json::from_value(node)?;
+                node.default_agent_did = Some(agent_did.clone());
+                let (_, agent) = read(txn, Collection::Agent, node_did, agent_did)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("the fixture Agent is missing"))?;
+                let mut agent: Agent = serde_json::from_value(agent)?;
+                agent.display_name = Some("Live default agent".to_string());
+                agent.inference_profile_id = profile_id.clone();
+                let plan = DesiredStateApplyPlan::new(
+                    [
+                        (Collection::Node, serde_json::to_value(node)?),
+                        (Collection::InferenceBackend, serde_json::to_value(backend)?),
+                        (Collection::InferenceProfile, serde_json::to_value(profile)?),
+                    ]
+                    .into_iter()
+                    .chain(
+                        sampling
+                            .as_ref()
+                            .map(serde_json::to_value)
+                            .transpose()?
+                            .map(|sampling| (Collection::InferenceSampling, sampling)),
+                    )
+                    .chain([(Collection::Agent, serde_json::to_value(agent)?)])
+                    .map(|(collection, value)| DesiredStateApplyDocument {
+                        collection,
+                        add: value.clone(),
+                        update: value,
+                    })
+                    .collect(),
+                )?;
+                apply_desired_state_plan(txn, &plan).await.map(|_| ())
+            })
         })
-        .collect(),
-    )
-    .expect("build live backend plan");
-    gents::ConfigAccess::transact_local_write(node, None, "test.bind_live_backend", |txn| {
-        let plan = &plan;
-        Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
-    })
-    .await
-    .expect("upsert live backend");
+        .await
+        .expect("bind the live target as the node's client key");
+    RequestActors::from_fixture(db, fixture).await
 }
 
 pub async fn boot_live_agent(db: &TestDb, identity: Arc<dyn NodeIdentity>) -> Result<BootedAgent> {
@@ -369,7 +137,20 @@ fn is_terminal(state: &str) -> bool {
     RequestLifecycleState::is_terminal_str(Some(state))
 }
 
-async fn fetch_request_lifecycle(node: &EmbeddedNode, request_id: &str) -> Option<String> {
+fn optional_row<T>(data: &serde_json::Value, key: &str) -> Option<T>
+where
+    T: serde::de::DeserializeOwned,
+{
+    data[key]
+        .as_array()
+        .and_then(|rows| rows.first())
+        .map(|row| serde_json::from_value(row.clone()).expect("decode observed row"))
+}
+
+async fn fetch_request_lifecycle<R>(reader: &R, request_id: &str) -> Option<String>
+where
+    R: SnapshotReader + ?Sized,
+{
     let escaped = escape_graphql_string(request_id);
     let query = format!(
         r#"{{
@@ -382,31 +163,26 @@ async fn fetch_request_lifecycle(node: &EmbeddedNode, request_id: &str) -> Optio
     struct Row {
         lifecycle_state: Option<String>,
     }
-    let resp = node.execute(&query).await;
-    assert!(
-        !resp.has_errors(),
-        "request observation failed: {:?}",
-        resp.errors
-    );
-    let rows = resp.data.as_ref().unwrap()["AgentRequest"]
-        .as_array()
-        .unwrap();
+    let data = reader.read_data(&query).await;
+    let rows = data["AgentRequest"].as_array().cloned().unwrap_or_default();
     assert!(
         rows.len() <= 1,
         "live test request label is ambiguous: {request_id}"
     );
-    first_optional_row::<Row>(&resp, "AgentRequest").and_then(|r| r.lifecycle_state)
+    optional_row::<Row>(&data, "AgentRequest").and_then(|r| r.lifecycle_state)
 }
 
-pub async fn wait_for_request_terminal(
-    node: &EmbeddedNode,
-    request_id: &str,
-    timeout: Duration,
-) -> String {
+/// Waits for `request_id` to terminalize, observed as `reader`: ACP shows a
+/// request only to its related actors, so the reader is one of them or the
+/// node's native admin.
+pub async fn wait_for_request_terminal<R>(reader: &R, request_id: &str, timeout: Duration) -> String
+where
+    R: SnapshotReader + ?Sized,
+{
     let deadline = tokio::time::Instant::now() + timeout;
     let mut last = String::from("<none>");
     loop {
-        if let Some(state) = fetch_request_lifecycle(node, request_id).await {
+        if let Some(state) = fetch_request_lifecycle(reader, request_id).await {
             last = state.clone();
             if is_terminal(&state) {
                 return state;
@@ -414,8 +190,8 @@ pub async fn wait_for_request_terminal(
         }
         if tokio::time::Instant::now() >= deadline {
             let escaped = escape_graphql_string(request_id);
-            let evidence = node
-                .execute(&format!(
+            let evidence = reader
+                .read_data(&format!(
                     r#"{{
                 AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 2) {{
                     _docID lifecycle_state execution_generation execution_lease_expires_at
@@ -430,13 +206,16 @@ pub async fn wait_for_request_terminal(
             }}"#
                 ))
                 .await;
-            panic!("timed out waiting for request {request_id} to terminalize; last={last}; evidence={:?}; errors={:?}", evidence.data, evidence.errors);
+            panic!("timed out waiting for request {request_id} to terminalize; last={last}; evidence={evidence}");
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
 
-pub async fn terminal_assistant_answer(node: &EmbeddedNode, request_id: &str) -> String {
+pub async fn terminal_assistant_answer<R>(reader: &R, request_id: &str) -> String
+where
+    R: SnapshotReader + ?Sized,
+{
     let escaped = escape_graphql_string(request_id);
     let query = format!(
         r#"{{
@@ -454,13 +233,8 @@ pub async fn terminal_assistant_answer(node: &EmbeddedNode, request_id: &str) ->
         session_id: Option<String>,
         terminal_output: Option<gents_protocol::output::TerminalOutput>,
     }
-    let resp = node.execute(&query).await;
-    assert!(
-        !resp.has_errors(),
-        "canonical live answer request lookup failed: {:?}",
-        resp.errors
-    );
-    let row = first_optional_row::<RequestRow>(&resp, "AgentRequest");
+    let data = reader.read_data(&query).await;
+    let row = optional_row::<RequestRow>(&data, "AgentRequest");
     let Some(row) = row else { return String::new() };
     let session_id = match row.session_id {
         Some(s) if !s.is_empty() => s,
@@ -495,16 +269,9 @@ pub async fn terminal_assistant_answer(node: &EmbeddedNode, request_id: &str) ->
         escape_graphql_string(&row.doc_id),
         escape_graphql_string(&row.node_did)
     );
-    let resp = node.execute(&query).await;
-    assert!(
-        !resp.has_errors(),
-        "canonical live answer header lookup failed: {:?}",
-        resp.errors
-    );
-    let headers = resp
-        .data
-        .as_ref()
-        .and_then(|data| data["AgentMessage"].as_array())
+    let data = reader.read_data(&query).await;
+    let headers = data["AgentMessage"]
+        .as_array()
         .expect("canonical live answer query omitted headers");
     assert_eq!(
         headers.len(),
@@ -513,10 +280,8 @@ pub async fn terminal_assistant_answer(node: &EmbeddedNode, request_id: &str) ->
     );
     let header = serde_json::from_value::<TranscriptMessage>(headers[0].clone())
         .expect("decode selected canonical terminal header");
-    let observed = resp
-        .data
-        .as_ref()
-        .and_then(|data| data["AgentOutputSegment"].as_array())
+    let observed = data["AgentOutputSegment"]
+        .as_array()
         .expect("canonical live answer query omitted segments")
         .iter()
         .map(|value| {
@@ -545,14 +310,13 @@ pub async fn terminal_assistant_answer(node: &EmbeddedNode, request_id: &str) ->
     gents_protocol::transcript::present_message(&message).body_markdown
 }
 
-pub async fn wait_for_assistant_answer(
-    node: &EmbeddedNode,
-    request_id: &str,
-    timeout: Duration,
-) -> String {
+pub async fn wait_for_assistant_answer<R>(reader: &R, request_id: &str, timeout: Duration) -> String
+where
+    R: SnapshotReader + ?Sized,
+{
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
-        let answer = terminal_assistant_answer(node, request_id).await;
+        let answer = terminal_assistant_answer(reader, request_id).await;
         if !answer.trim().is_empty() {
             return answer;
         }
@@ -560,5 +324,265 @@ pub async fn wait_for_assistant_answer(
             return answer;
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+/// A live node's User: the client key `gents init` creates, which is the
+/// node's native admin (`GrantSet::HouseholdOwner`). It configures the node's
+/// Agents and inference documents, submits the User's requests and observes
+/// the node, whose ACP-governed rows its admin standing reads.
+pub struct LiveUser {
+    pub db_node: Arc<gents::defra_node::Node>,
+    pub runtime: Arc<dyn NodeIdentity>,
+    pub user: gents::KeyIdentity,
+    pub access: gents::ConfigAccess,
+    pub node_did: String,
+}
+
+/// One Agent a [`LiveUser`] configures on its node.
+pub struct LiveAgentSpec<'a> {
+    pub display_name: &'a str,
+    pub inference_profile_id: &'a str,
+    pub system_prompt: &'a str,
+    pub description: Option<&'a str>,
+    pub default_for_node: bool,
+}
+
+impl LiveUser {
+    /// Makes the node's fixture User its household owner, then writes the
+    /// Node document and the target's backend as that User.
+    pub async fn install(db: &TestDb, target: &InferenceTarget) -> Self {
+        let user = crate::support::managed_fixture_user(db).await;
+        crate::support::grant_household_owner(db, &user).await;
+        let access = db.client_access(&user);
+        let node_did = db.node_identity.did().to_owned();
+        let live = Self {
+            db_node: db.node.clone(),
+            runtime: db.node_identity.clone(),
+            user,
+            access,
+            node_did,
+        };
+        live.apply(
+            "test.live_user.node",
+            vec![
+                (
+                    Collection::Node,
+                    serde_json::json!({ "node_did": live.node_did }),
+                ),
+                (
+                    Collection::InferenceBackend,
+                    serde_json::to_value(target.backend(&live.node_did))
+                        .expect("serialize live backend"),
+                ),
+            ],
+        )
+        .await;
+        live
+    }
+
+    pub fn user_did(&self) -> &str {
+        self.user.did()
+    }
+
+    /// Applies desired-state documents as the User.
+    pub async fn apply(
+        &self,
+        operation: &'static str,
+        documents: Vec<(Collection, serde_json::Value)>,
+    ) {
+        use gents::documents::apply_desired_state_plan;
+        use gents::store::config_client::DesiredStateApplyDocument;
+        let plan = DesiredStateApplyPlan::new(
+            documents
+                .into_iter()
+                .map(|(collection, value)| DesiredStateApplyDocument {
+                    collection,
+                    add: value.clone(),
+                    update: value,
+                })
+                .collect(),
+        )
+        .expect("build live fixture plan");
+        self.access
+            .transact_write(operation, |txn| {
+                let plan = &plan;
+                Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+            })
+            .await
+            .unwrap_or_else(|error| panic!("{operation} as the node's User: {error:#}"));
+    }
+
+    /// Provisions one managed Agent under the User and configures its
+    /// high-effort live profile, sampling and context. Returns its DID.
+    pub async fn agent(&self, target: &InferenceTarget, spec: LiveAgentSpec<'_>) -> String {
+        use gents::documents::AgentContext;
+        let user_did = ::identity::Did::new(self.user.did()).expect("valid User DID");
+        let binding = gents::store::identity::provision_agent_identity_authorized(
+            &self.db_node,
+            self.runtime.as_ref(),
+            &user_did,
+        )
+        .await
+        .expect("provision a live Agent under its User");
+        let context_id = format!("{}:context", binding.agent_did);
+        let sampling_id = format!("{}:live-sampling", binding.agent_did);
+        let profile = InferenceProfile {
+            profile_id: spec.inference_profile_id.to_string(),
+            sampling_id: Some(sampling_id.clone()),
+            reasoning_effort: Some(gents::ReasoningEffort::High),
+            ..target.profile(&self.node_did)
+        };
+        let context = AgentContext {
+            context_id: context_id.clone(),
+            node_did: self.node_did.clone(),
+            display_name: None,
+            description: None,
+            system_prompt: Some(spec.system_prompt.to_string()),
+            tools_id: None,
+            compaction_id: None,
+            skill_ids: Vec::new(),
+            tags: Vec::new(),
+        };
+        let agent = Agent {
+            agent_did: binding.agent_did.clone(),
+            creation_nonce: binding.creation_nonce,
+            node_did: self.node_did.clone(),
+            display_name: Some(spec.display_name.to_string()),
+            description: spec.description.map(ToOwned::to_owned),
+            context_id: Some(context_id),
+            inference_profile_id: spec.inference_profile_id.to_string(),
+            enabled: true,
+            tags: Vec::new(),
+            created_at: Some(crate::support::agent_requests::canonical_now()),
+        };
+        let mut documents = vec![
+            (
+                Collection::InferenceSampling,
+                serde_json::to_value(target.live_sampling(&self.node_did, &sampling_id))
+                    .expect("serialize live sampling"),
+            ),
+            (
+                Collection::InferenceProfile,
+                serde_json::to_value(profile).expect("serialize live profile"),
+            ),
+            (
+                Collection::AgentContext,
+                serde_json::to_value(context).expect("serialize live context"),
+            ),
+            (
+                Collection::Agent,
+                serde_json::to_value(agent).expect("serialize live Agent"),
+            ),
+        ];
+        if spec.default_for_node {
+            documents.push((
+                Collection::Node,
+                serde_json::json!({
+                    "node_did": self.node_did,
+                    "default_agent_did": binding.agent_did,
+                }),
+            ));
+        }
+        self.apply("test.live_user.agent", documents).await;
+        // Production projects the baseline from the live Agent document;
+        // fixtures with no projection pass grant the same set as the node admin.
+        gents::store::identity::GrantSet::AgentBaseline
+            .grant(
+                &gents::ConfigAccess::local_as(
+                    self.db_node.clone(),
+                    ::identity::Did::new(&self.node_did).expect("valid runtime DID"),
+                ),
+                &::identity::Did::new(&binding.agent_did).expect("valid Agent DID"),
+            )
+            .await
+            .expect("grant the live Agent its baseline");
+        binding.agent_did
+    }
+
+    /// Submits the User's message to `agent_did` through the client request
+    /// owner and returns the request's physical ID.
+    pub async fn request(
+        &self,
+        agent_did: &str,
+        request_id: &str,
+        session_id: &str,
+        content: &str,
+    ) -> String {
+        crate::support::agent_requests::submit_user_request_to(
+            &self.access,
+            &self.user,
+            &self.node_did,
+            agent_did,
+            session_id,
+            request_id,
+            content,
+            gents_protocol::request_input::QueueDelivery::Queue,
+        )
+        .await
+    }
+
+    /// The Node document as the User reads it.
+    pub async fn node_config(&self) -> Node {
+        let node_did = self.node_did.clone();
+        self.access
+            .transact_readonly("test.live_user.read_node", |txn| {
+                let node_did = &node_did;
+                Box::pin(async move {
+                    let (_, node) = gents::store::config_client::read_desired_state_record_in_txn(
+                        txn,
+                        Collection::Node,
+                        node_did,
+                        node_did,
+                    )
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("the live Node is missing"))?;
+                    Ok::<_, anyhow::Error>(serde_json::from_value::<Node>(node)?)
+                })
+            })
+            .await
+            .expect("read the live Node as its User")
+    }
+
+    /// Reserves the User's session on `agent_did` before its first message,
+    /// as a client does to attach a Goal to a new session.
+    pub async fn reserve_session(&self, agent_did: &str, session_id: &str) -> String {
+        use gents_protocol::request_admission::{
+            AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+        };
+        let request = AgentRequestCreate::base(
+            RequestPurpose::Normal,
+            format!("{session_id}:reservation"),
+            &self.node_did,
+            self.user.did(),
+            agent_did,
+            session_id,
+            "",
+            "interactive",
+            crate::support::agent_requests::canonical_now(),
+            AgentRequestAdmissionRecord::client(self.user.did()),
+        );
+        gents::request::lifecycle::reserve_goal_session(&self.access, &request)
+            .await
+            .expect("reserve the User's session")
+    }
+
+    /// Reads as the User, shaped like a native response for observation
+    /// helpers that inspect `data` and `errors`.
+    pub async fn execute(&self, query: &str) -> gents::defra_node::QueryResponse {
+        let value = match self.access.execute(query).await {
+            Ok(value) => value,
+            Err(error) => serde_json::json!({
+                "data": null,
+                "errors": [{ "message": format!("{error:#}") }],
+            }),
+        };
+        serde_json::from_value(value).expect("decode the User's GraphQL response")
+    }
+}
+
+impl SnapshotReader for LiveUser {
+    async fn read_data(&self, query: &str) -> serde_json::Value {
+        self.access.read_data(query).await
     }
 }

@@ -7,6 +7,9 @@ const viteBin = join(
   "bin/vite.js",
 );
 
+/* specs whose point is a 2× display; the 1× projects skip them */
+const RETINA_ONLY = /(?:^|[\\/])avatar-zoom-visual\.spec\.ts$/;
+
 const port = Number(process.env.DESKTOP_UI_VISUAL_PORT ?? 1423);
 const baseURL = process.env.DESKTOP_UI_VISUAL_BASE_URL ?? `http://127.0.0.1:${port}`;
 
@@ -41,7 +44,17 @@ export default defineConfig({
   },
   projects: [
     {
+      name: "webkit-visual-retina",
+      testMatch: RETINA_ONLY,
+      use: {
+        ...devices["Desktop Safari"],
+        viewport: { width: 1280, height: 900 },
+        deviceScaleFactor: 2,
+      },
+    },
+    {
       name: "chromium-visual-desktop",
+      testIgnore: RETINA_ONLY,
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 1440, height: 900 },
@@ -49,6 +62,7 @@ export default defineConfig({
     },
     {
       name: "chromium-visual-laptop",
+      testIgnore: RETINA_ONLY,
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 1280, height: 800 },
@@ -56,6 +70,7 @@ export default defineConfig({
     },
     {
       name: "chromium-visual-narrow",
+      testIgnore: RETINA_ONLY,
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 390, height: 844 },

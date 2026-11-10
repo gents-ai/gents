@@ -133,8 +133,9 @@ describeLive("Tauri app live bridge runner sad paths", () => {
           await waitFor(
             () => {
               expect(
-                screen.getByText("The assistant could not finish this turn.")
-                  .parentElement,
+                screen
+                  .getByText("This turn couldn't finish")
+                  .closest("[data-slot=alert]"),
               ).toHaveTextContent(/agent stream failed|model|404|not found/i);
             },
             { timeout: 30_000 },
@@ -181,8 +182,9 @@ describeLive("Tauri app live bridge runner sad paths", () => {
           await waitFor(
             () => {
               expect(
-                screen.getByText("The assistant could not finish this turn.")
-                  .parentElement,
+                screen
+                  .getByText("This turn couldn't finish")
+                  .closest("[data-slot=alert]"),
               ).toHaveTextContent(
                 /agent stream failed|connection|connect|refused|error sending request|transport/i,
               );

@@ -2,10 +2,14 @@ mod support;
 
 #[path = "e2e_runtime/adapter_projection_external_fixtures.rs"]
 mod adapter_projection_external_fixtures;
+#[path = "e2e_runtime/client_submission_contention.rs"]
+mod client_submission_contention;
 #[path = "e2e_runtime/completion_retry_tape.rs"]
 mod completion_retry_tape;
 #[path = "e2e_runtime/defradb_time_travel.rs"]
 mod defradb_time_travel;
+#[path = "e2e_runtime/disabled_agent_sweep.rs"]
+mod disabled_agent_sweep;
 #[path = "e2e_runtime/document_config_bootstrap.rs"]
 mod document_config_bootstrap;
 #[path = "e2e_runtime/fork_invariants.rs"]
@@ -30,6 +34,8 @@ mod schedule_snapshot_reconcile;
 mod self_config_tools;
 #[path = "e2e_runtime/storage_budget.rs"]
 mod storage_budget;
+#[path = "e2e_runtime/workspace_binding_recovery.rs"]
+mod workspace_binding_recovery;
 
 #[test]
 fn provider_wire_fixtures_do_not_contain_credentials() {
@@ -59,3 +65,6 @@ mod steering_delivery;
 
 #[path = "e2e_runtime/session_input_edit.rs"]
 mod session_input_edit;
+
+#[path = "e2e_runtime/enrollment_renewal.rs"]
+mod enrollment_renewal;

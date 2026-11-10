@@ -27,7 +27,7 @@
           "child_run_id": "req-codex-child-1",
           "id": "call-shell-1",
           "name": "shell",
-          "output": "crates/gents/src/adapter_projection.rs",
+          "output": "crates/gents/src/observe/adapter_projection.rs",
           "request_id": "req-codex-1",
           "started_at": "2026-06-05T17:00:02Z",
           "status": "completed",
@@ -59,7 +59,7 @@
   },
   "redaction_mode": "training_safe",
   "source_node_did": "did:test:planner",
-  "source_agent_id": "planner",
+  "source_agent_did": "planner",
   "source_request_id": "req-codex-1",
   "source_session_id": "thread-codex-1"
 }

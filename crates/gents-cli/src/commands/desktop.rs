@@ -26,7 +26,7 @@ pub(crate) async fn run(command: DesktopCommand) -> Result<()> {
         desktop_executable,
     } = command;
     let mut ready = false;
-    let mut retry = "gents desktop reset".to_owned();
+    let mut retry = "gents runtime desktop reset".to_owned();
     let result = reset(
         home,
         desktop_home,
@@ -146,7 +146,7 @@ async fn reset(
         ),
     }
     let _home_lock = if plan.runtime.is_some() {
-        Some(gents::home::lock_home_store(&home)?)
+        Some(gents::store::local::home::lock_home_store(&home)?)
     } else {
         None
     };
@@ -201,7 +201,7 @@ fn retry_command(home: &std::path::Path, desktop: &std::path::Path) -> Result<St
             .into_owned())
     };
     Ok(format!(
-        "gents desktop reset --home {} --desktop-home {}",
+        "gents runtime desktop reset --home {} --desktop-home {}",
         quote(home)?,
         quote(desktop)?
     ))
@@ -211,16 +211,17 @@ fn notify(message: &str) {
     tracing::info!(message, "desktop reset finished");
     #[cfg(target_os = "macos")]
     {
-        let _ = std::process::Command::new("/usr/bin/osascript")
-            .args([
-                "-e",
-                "on run argv\ndisplay alert \"Gents reset\" message (item 1 of argv)\nend run",
-                message,
-            ])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
+        let _ = gents::tools::exec::native_spawn::status_std(
+            std::process::Command::new("/usr/bin/osascript")
+                .args([
+                    "-e",
+                    "on run argv\ndisplay alert \"Gents reset\" message (item 1 of argv)\nend run",
+                    message,
+                ])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null()),
+        );
     }
 }
 
@@ -292,22 +293,24 @@ fn run_browser_helper(
     timeout: std::time::Duration,
 ) -> Result<()> {
     use std::io::{Read as _, Seek as _, SeekFrom};
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     use wait_timeout::ChildExt as _;
     let temporary = tempfile::tempdir().context("creating browser clearing receipt directory")?;
     let receipt = temporary.path().join("browser-clear.json");
     let mut stderr = tempfile::tempfile().context("creating browser clearing stderr capture")?;
     // Launch the executable directly so timeout cleanup owns the exact process,
     // including an older app that does not recognize the headless command.
-    let mut command = Command::new(executable);
+    let mut command = std::process::Command::new(executable);
     command.arg("__clear-browser-data");
     if matches!(helper, BrowserHelper::Check) {
         command.arg("--check");
     }
-    let mut child = command
+    command
         .arg(&receipt)
-        .stdin(Stdio::null()).stdout(Stdio::null()).stderr(stderr.try_clone()?)
-        .spawn().context("starting Gents to clear browser data; install the matching Gents desktop app before resetting")?;
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(stderr.try_clone()?);
+    let mut child = gents::tools::exec::native_spawn::spawn_std(&mut command).context("starting Gents to clear browser data; install the matching Gents desktop app before resetting")?;
     let status = match child.wait_timeout(timeout) {
         Ok(Some(status)) => status,
         result => {
@@ -486,16 +489,19 @@ mod tests {
 
         let advertised = message.split('`').nth(1).expect("retry command");
         let argv = shlex::split(advertised).expect("shell words");
-        let crate::cli::Command::Desktop {
+        let Some(crate::cli::Command::Runtime {
             command:
-                DesktopCommand::Reset {
-                    home: retry_home,
-                    desktop_home,
-                    delete,
-                    confirm,
-                    ..
+                crate::cli::RuntimeCommand::Desktop {
+                    command:
+                        DesktopCommand::Reset {
+                            home: retry_home,
+                            desktop_home,
+                            delete,
+                            confirm,
+                            ..
+                        },
                 },
-        } = <crate::cli::Cli as clap::Parser>::try_parse_from(argv)
+        }) = <crate::cli::Cli as clap::Parser>::try_parse_from(argv)
             .unwrap()
             .command
         else {
@@ -528,9 +534,12 @@ mod tests {
         let selected = select_desktop(None, Some("rel/desktop".into()), &first).unwrap();
         assert_eq!(selected.root(), first.join("rel/desktop"));
         let retry = retry_command(&temp.path().join("home"), selected.root()).unwrap();
-        let crate::cli::Command::Desktop {
-            command: DesktopCommand::Reset { desktop_home, .. },
-        } = <crate::cli::Cli as clap::Parser>::try_parse_from(shlex::split(&retry).unwrap())
+        let Some(crate::cli::Command::Runtime {
+            command:
+                crate::cli::RuntimeCommand::Desktop {
+                    command: DesktopCommand::Reset { desktop_home, .. },
+                },
+        }) = <crate::cli::Cli as clap::Parser>::try_parse_from(shlex::split(&retry).unwrap())
             .unwrap()
             .command
         else {
@@ -551,6 +560,7 @@ mod tests {
             shlex::split(&command).unwrap(),
             [
                 "gents",
+                "runtime",
                 "desktop",
                 "reset",
                 "--home",

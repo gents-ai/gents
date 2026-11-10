@@ -1,18 +1,19 @@
-use crate::document_config::{Task, TaskHook};
+use crate::documents::{Task, TaskHook};
 use crate::lean_vocab_test::{
     lean_hook_phase, lean_task_hook_admission_cases, lean_task_hook_recovery_cases,
     lean_task_hook_run_cases,
 };
-use crate::task_hooks::effective_timeout_secs;
+use crate::request::task_hooks::effective_timeout_secs;
 
 fn task_with_hooks(task_id: &str, hooks: Vec<TaskHook>) -> Task {
     Task {
         emit_outcome: false,
+        outcome_readers: Vec::new(),
         node_did: "did:key:z6MkTaskHookConformance".to_string(),
         task_id: task_id.to_string(),
         display_name: None,
         description: None,
-        agent_id: "agent-1".to_string(),
+        agent_did: "agent-1".to_string(),
         prompt_template: "run the task".to_string(),
         goal_objective_template: None,
         goal_token_budget: None,

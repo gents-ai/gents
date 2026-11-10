@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use gents::config_client::ConfigAccess;
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
+use gents::store::config_client::ConfigAccess;
 use serde_json::{json, Value};
 use tokio::sync::{Barrier, Semaphore};
 use tokio::task::JoinSet;
@@ -124,7 +124,7 @@ async fn shared_owner_hot_counter_has_no_lost_updates_at_c64() -> Result<()> {
         "shared-owner",
         json!({"measurements": measurements, "counter":committed.len()}),
     )?;
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -190,7 +190,7 @@ async fn native_c64_distinct_writers_expose_conflicts_without_partial_commits() 
         "native-distinct",
         json!({"concurrency":64,"committed":committed.len(),"typed_conflicts":64-committed.len(),"max_open_transactions":maximum.load(Ordering::SeqCst),"elapsed_ms":started.elapsed().as_secs_f64()*1000.0}),
     )?;
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -242,7 +242,7 @@ async fn measure_encrypted_admission(
                     let count = active.fetch_add(1, Ordering::SeqCst) + 1;
                     maximum.fetch_max(count, Ordering::SeqCst);
                     tokio::task::yield_now().await;
-                    let body = gents::graphql::escape_graphql_string(&"x".repeat(1024));
+                    let body = gents::store::graphql::escape_graphql_string(&"x".repeat(1024));
                     let response = transaction
                         .execute(&format!(
                             "mutation {{ create_AdmissionDocument(input: {{writer: {writer}, iteration: {iteration}, body: \"{body}\"}}) {{_docID}} }}"
@@ -346,7 +346,7 @@ async fn measure_encrypted_admission(
             report_name,
             json!({"measurements": measurements, "retries": false}),
         )?;
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
     Ok(())
 }

@@ -3,8 +3,8 @@
 //! policy: a duplicate create is an error.
 
 use anyhow::{ensure, Context, Result};
-use gents::defra_node::{EmbeddedNode, QueryRequest, QueryResponse};
-use gents::session::canonical_rows::{
+use gents::defra_node::{Node as EmbeddedNode, QueryRequest, QueryResponse};
+use gents_protocol::output::rows::{
     decode_output_segment_row, output_segment_create_variables, AGENT_OUTPUT_SEGMENT_FIELDS,
     CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
@@ -60,8 +60,9 @@ fn created_id(response: &QueryResponse) -> Result<Option<String>> {
     if response.has_errors() {
         return Ok(None);
     }
-    let row = gents::graphql::single_mutation_document(response, "create_AgentOutputSegment")?
-        .context("successful create omitted its row")?;
+    let row =
+        gents::store::graphql::single_mutation_document(response, "create_AgentOutputSegment")?
+            .context("successful create omitted its row")?;
     Ok(Some(
         row.get("_docID")
             .and_then(serde_json::Value::as_str)
@@ -101,7 +102,7 @@ async fn canonical_segment_genesis_is_immutable_under_concurrent_and_repeated_cr
             .build()
             .await?,
     );
-    gents::schema::ensure_runtime_schemas(&node).await?;
+    gents::store::schema::ensure_runtime_schemas(&node).await?;
     let original = segment("original");
 
     let (first, second) = tokio::join!(create(&node, &original), create(&node, &original));

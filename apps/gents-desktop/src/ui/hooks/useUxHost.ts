@@ -17,13 +17,20 @@ import {
 import { discoverBundledUxPlugins } from "@/contrib/bundled";
 import { emitClientUpdated } from "@/contrib/events";
 import { installUxHost, type UxHost } from "@/contrib/plugin";
-import { configureUxDoors, scanRuntimeUxPlugins } from "@/contrib/runtime-door";
+import { createPluginNotifier } from "@/lib/notify/plugins";
+import { followOtherWindowsDecisions } from "@/contrib/plugins-store";
+import {
+  configureUxDoors,
+  followOtherWindowsPackChanges,
+  scanRuntimeUxPlugins,
+} from "@/contrib/runtime-door";
 import type { DesktopClientUpdatedEvent } from "@source-inc/gents-desktop-client";
 
-/* the gate on ctx.send: a plugin posts a turn in the user's name, so it
-   must follow the user's own gesture (a click or a key press), never a
-   timer, an effect or a directive's mount, or the model could prompt
-   itself through a plugin it addressed */
+/* the gate on ctx.send and os.openExternal: a plugin posts a turn in the
+   user's name, or carries data out of the app in a URL, so either must
+   follow the user's own gesture (a click or a key press), never a timer,
+   an effect or a directive's mount; otherwise the model could prompt itself
+   through a plugin it addressed, or a shared pack send data out unasked */
 function withinUserGesture(): boolean {
   const activation = (
     navigator as Navigator & { userActivation?: { isActive: boolean } }
@@ -36,6 +43,9 @@ const routeListeners = new Set<() => void>();
 function notifyRouteChanged() {
   routeListeners.forEach((listener) => listener());
 }
+
+/* one per window, so a plugin's rate holds across the host's rebuilds */
+let pluginNotifier: ReturnType<typeof createPluginNotifier> | null = null;
 
 export function buildUxHost(app: DesktopApp, route: () => Route): UxHost {
   let confirmingMessage = false;
@@ -52,7 +62,7 @@ export function buildUxHost(app: DesktopApp, route: () => Route): UxHost {
       deployments: () => fleetNodes(fleet()),
       selectedDeployment: selectedNode,
       selectedSessionId: () => selection().sessionId,
-      send: async (content) => {
+      send: async (content, caller) => {
         const target = selection();
         if (target.sessionId === null) {
           throw new Error("ctx.send: no session is selected");
@@ -66,20 +76,20 @@ export function buildUxHost(app: DesktopApp, route: () => Route): UxHost {
           throw new Error("ctx.send: a message is already awaiting confirmation");
         confirmingMessage = true;
         try {
-          if (!(await confirmPluginMessage(content))) {
+          if (!(await confirmPluginMessage(caller.name, content))) {
             throw new Error("ctx.send: message was not confirmed");
           }
           const current = selection();
           if (
             current.nodeDid !== target.nodeDid ||
             current.sessionId !== target.sessionId ||
-            current.agentId !== target.agentId
+            current.agentDid !== target.agentDid
           ) {
             throw new Error(
               "ctx.send: the selected chat changed; request the message again",
             );
           }
-          await app.actions.sendMessage(content, target.agentId);
+          await app.actions.sendMessage(content, target.agentDid);
         } finally {
           confirmingMessage = false;
         }
@@ -91,6 +101,11 @@ export function buildUxHost(app: DesktopApp, route: () => Route): UxHost {
     data: {
       call: (listing, nodeDid, surface, tool, args) =>
         app.actions.callUxData({ ux: listing, nodeDid, surface, tool, args }),
+      watch: (listing, nodeDid, surface, tool, args, listener) =>
+        app.actions.watchUxData(
+          { ux: listing, nodeDid, surface, tool, args },
+          listener,
+        ),
       surfaces: (listing, nodeDid) =>
         app.actions
           .listUxDataSurfaces({ ux: listing, nodeDid })
@@ -109,6 +124,7 @@ export function buildUxHost(app: DesktopApp, route: () => Route): UxHost {
     },
     os: {
       openExternal: async (url) => {
+        if (!withinUserGesture()) return false;
         try {
           await app.actions.openExternalUrl(url);
           return true;
@@ -126,10 +142,13 @@ export function buildUxHost(app: DesktopApp, route: () => Route): UxHost {
       },
       pickDirectory: (options) => pickDirectory(options ?? {}).catch(() => null),
     },
+    notify: (caller, request) =>
+      (pluginNotifier ??= createPluginNotifier())(caller, request),
   };
 }
 
 let opened = false;
+let following: Array<() => void> = [];
 
 /* idempotent: the doors open once per webview, however often the shell
    re-renders or HMR re-evaluates the caller */
@@ -142,6 +161,7 @@ export function openUxDoors(app: DesktopApp): void {
   });
   discoverBundledUxPlugins();
   void scanRuntimeUxPlugins();
+  following = [followOtherWindowsDecisions(), followOtherWindowsPackChanges()];
 }
 
 export function useUxHost(
@@ -177,4 +197,5 @@ export function useUxHost(
 /** test seam */
 export function resetUxDoors(): void {
   opened = false;
+  following.splice(0).forEach((stop) => stop());
 }

@@ -6,7 +6,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::post;
 use axum::{Json, Router};
-use gents::config_client::{ConfigAccess, GraphqlEndpoint, IdempotentTransactionRetry};
+use gents::store::config_client::{ConfigAccess, GraphqlEndpoint, IdempotentTransactionRetry};
 use serde_json::{json, Value};
 
 #[derive(Default)]
@@ -85,7 +85,7 @@ async fn storage_full_http_transactions_stop_without_replaying_or_discarding_con
                                 "mutation { create_StorageProbe(input: {value: 1}) { _docID } }",
                             )
                             .await?;
-                            Ok::<_, gents::config_client::ConfigClientError>(())
+                            Ok::<_, gents::store::config_client::ConfigClientError>(())
                         })
                     },
                 ),
@@ -94,7 +94,7 @@ async fn storage_full_http_transactions_stop_without_replaying_or_discarding_con
             .unwrap()
             .unwrap_err();
             assert!(
-                gents::graphql::is_storage_full(&error),
+                gents::store::graphql::is_storage_full(&error),
                 "{}",
                 gents_protocol::error_chain::ErrorChain(&error)
             );

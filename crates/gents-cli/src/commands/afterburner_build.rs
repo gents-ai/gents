@@ -26,7 +26,7 @@ fn validate_source_language(owner: &str, declared: &str) -> Result<SourceLang> {
     let normalized = declared.trim().to_ascii_lowercase();
     anyhow::ensure!(
         gents::pack::SUPPORTED_PLUGIN_LANGUAGES.contains(&normalized.as_str()),
-        "{owner} declares language {declared:?}; Afterburner can compile it, but gents plugin \
+        "{owner} declares language {declared:?}; Afterburner can compile it, but gents config pack plugin \
          run cannot run it under its declared bounds yet, so it is refused rather than built \
          unusable; supported languages: {}",
         gents::pack::SUPPORTED_PLUGIN_LANGUAGES.join(", ")
@@ -375,7 +375,7 @@ mod tests {
     }
 
     /// A pack generated from a dynamic run builds, passes its recorded step-0
-    /// fixture and checks clean, offline: the stages `gents job promote` runs
+    /// fixture and checks clean, offline: the stages `gents automation job promote` runs
     /// before it installs.
     #[tokio::test]
     async fn a_generated_promotion_pack_builds_tests_and_checks() {
@@ -384,7 +384,7 @@ mod tests {
         };
         use sha2::{Digest, Sha256};
         let script = r#"module.exports = (i) => i.pin ? {effects:{}} : {effects:{spawn:[{slot:"a",attempt:0,target:"wf-read-only",prompt:"p",title:"a"}]}};"#;
-        let run = gents::plugin_job::promote::DynamicRun {
+        let run = gents::tools::background::job::promote::DynamicRun {
             view: JobView {
                 address: "session-1:call_1".into(),
                 row_doc_id: "row-1".into(),
@@ -427,14 +427,14 @@ mod tests {
                 result_bytes: 65536,
                 max_wall_secs: 1800,
             },
-            caller_agent_id: "caller".into(),
+            caller_agent_did: "caller".into(),
         };
         let home = tempfile::tempdir().unwrap();
         let dir = home.path().join("packs/promoted/rome");
         // The step-0 fixture runs the script under wasmtime, which blocks.
         let generated = dir.clone();
         tokio::task::spawn_blocking(move || {
-            gents::plugin_job::promote::generate_pack(&generated, "rome", &run)
+            gents::tools::background::job::promote::generate_pack(&generated, "rome", &run)
         })
         .await
         .unwrap()
@@ -461,7 +461,7 @@ mod tests {
         assert_eq!(checked.problems, Vec::<String>::new());
     }
 
-    /// `gents pack new --template workflow --language js` scaffolds a pack whose
+    /// `gents config pack new --template workflow --language js` scaffolds a pack whose
     /// step function builds through the harness and answers its own fixture.
     #[tokio::test]
     async fn js_workflow_scaffold_builds_and_passes_its_fixture() {

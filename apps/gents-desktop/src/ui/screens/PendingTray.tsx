@@ -4,9 +4,20 @@ import {
   useMemo,
   useRef,
   useState,
+  type KeyboardEvent,
+  type MouseEvent,
   type PointerEvent,
+  type RefObject,
 } from "react";
-import { CornerDownRight, Ellipsis, GripVertical, Pencil, Trash2 } from "lucide-react";
+import {
+  ChevronDown,
+  Copy,
+  CornerDownRight,
+  Ellipsis,
+  GripVertical,
+  Pencil,
+  Trash2,
+} from "lucide-react";
 import type {
   PendingQueueEntryView,
   PendingTurnView,
@@ -21,6 +32,8 @@ import {
 } from "@gents/ui/components/dropdown-menu";
 import { cn } from "@gents/ui/lib/utils";
 import { useApp, useView } from "../app/AppContext";
+import { copyText } from "../lib/clipboard";
+import { writtenText } from "../lib/skillLines";
 import { useDragReorder } from "../hooks/useDragReorder";
 import { useSelectedSessionFields } from "../hooks/useSelectedSession";
 import {
@@ -36,6 +49,7 @@ import {
   type QueueSteer,
 } from "@source-inc/gents-desktop-client";
 import { Hint } from "./Hint";
+import { SentText } from "./SkillChips";
 import { useComposerEdit } from "./session/composerEdit";
 import { AutomatedInput } from "./TranscriptInputs";
 
@@ -123,6 +137,29 @@ export function PendingTray({
   const rows = useMemo(() => pendingRows(queued, queue), [queued, queue]);
   const [busy, setBusy] = useState(false);
   const edited = useRef(new Set<string>()).current;
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const pressedAt = useRef<{ x: number; y: number } | null>(null);
+  const toggle = (requestId: string) =>
+    setExpanded((open) => (open === requestId ? null : requestId));
+  /* a press that became a drag still ends in a click on the row, which
+     holds the pointer capture */
+  const toggleOnClick = (requestId: string) => (event: MouseEvent<HTMLElement>) => {
+    const target = event.target as HTMLElement;
+    if (!event.currentTarget.contains(target)) return;
+    if (target.closest("button, a, input, textarea")) return;
+    if (!event.currentTarget.querySelector("[data-more]")) return;
+    const at = pressedAt.current;
+    if (at && Math.hypot(event.clientX - at.x, event.clientY - at.y) >= CLICK_SLOP)
+      return;
+    toggle(requestId);
+  };
+  const collapseOnEscape =
+    (requestId: string) => (event: KeyboardEvent<HTMLElement>) => {
+      if (event.key !== "Escape" || expanded !== requestId) return;
+      if (!event.currentTarget.contains(event.target as Node)) return;
+      event.stopPropagation();
+      setExpanded(null);
+    };
   const locked = busy || editingDocId !== null;
   const apply = async (edit: QueueEdit | null): Promise<boolean> => {
     if (!edit || !onEdit || !queue || locked) return false;
@@ -224,6 +261,7 @@ export function PendingTray({
           entry && (canMove(position, position - 1) || canMove(position, position + 1)),
         );
         const beingEdited = Boolean(entry && entry.requestDocId === editingDocId);
+        const readable = row.kind === "message" && !taken(row.turn.requestId);
         return (
           <div
             key={row.turn.requestId}
@@ -234,6 +272,15 @@ export function PendingTray({
             data-editing={beingEdited || undefined}
             style={reorder.style(position)}
             {...(draggable ? rowDrag(reorder.handle(position)) : {})}
+            {...(readable
+              ? {
+                  onPointerDownCapture: (event: PointerEvent<HTMLElement>) => {
+                    pressedAt.current = { x: event.clientX, y: event.clientY };
+                  },
+                  onClick: toggleOnClick(row.turn.requestId),
+                  onKeyDown: collapseOnEscape(row.turn.requestId),
+                }
+              : {})}
             className={cn(
               "border-b border-border/60 bg-raised px-3 py-1.5 text-sm select-none last:border-b-0",
               draggable && "cursor-grab active:cursor-grabbing",
@@ -267,6 +314,8 @@ export function PendingTray({
                 own={Boolean(entry)}
                 draggable={draggable}
                 editing={beingEdited}
+                expanded={expanded === row.turn.requestId}
+                onToggle={() => toggle(row.turn.requestId)}
                 actions={
                   entry && {
                     locked,
@@ -295,6 +344,23 @@ export function PendingTray({
 }
 
 const NO_TURNS: readonly PendingTurnView[] = [];
+
+/* whether one line cuts the text off, kept while it is shown whole */
+function useCut(text: RefObject<HTMLElement | null>, expanded: boolean) {
+  const [cut, setCut] = useState(false);
+  useLayoutEffect(() => {
+    const el = text.current;
+    if (!el || expanded) return;
+    const measure = () => setCut(el.scrollWidth > el.clientWidth);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [text, expanded]);
+  return cut;
+}
+const CLICK_SLOP = 4;
 
 function useTaken(
   queue: readonly PendingQueueEntryView[] | null,
@@ -342,6 +408,17 @@ function useLeavingRows(rows: PendingRow[], edited: ReadonlySet<string>): Pendin
   );
 }
 
+/** A queued message's text, with its skills and session references as
+    chips like a sent one's; the queue's entry follows the message's edits,
+    the turn is what was sent. */
+function QueuedText({ row }: { row: PendingRow }) {
+  return <SentText content={row.turn.content} skills={queuedSkills(row)} />;
+}
+
+const queuedSkills = (row: PendingRow) =>
+  (row.kind === "message" ? row.entry?.selectedSkillIds : null) ??
+  row.turn.selectedSkillIds;
+
 function TakenRow({ row }: { row: PendingRow }) {
   return (
     <div className="flex min-w-0 items-center gap-2" data-taken>
@@ -350,7 +427,7 @@ function TakenRow({ row }: { row: PendingRow }) {
         className="size-3.5 shrink-0 text-muted-foreground"
       />
       <span className="min-w-0 flex-1 truncate text-muted-foreground">
-        {row.turn.content}
+        <QueuedText row={row} />
         {row.turn.attachments?.length
           ? ` · ${row.turn.attachments.length} attachment(s)`
           : ""}
@@ -380,6 +457,8 @@ function MessageRow({
   own,
   draggable,
   editing,
+  expanded,
+  onToggle,
   actions,
 }: {
   row: Extract<PendingRow, { kind: "message" }>;
@@ -388,6 +467,9 @@ function MessageRow({
   own: boolean;
   draggable: boolean;
   editing: boolean;
+  /** shows the whole message, which otherwise is cut to one line */
+  expanded: boolean;
+  onToggle: () => void;
   actions: {
     locked: boolean;
     onEdit: (() => void) | null;
@@ -400,8 +482,13 @@ function MessageRow({
     separated: boolean;
   } | null;
 }) {
+  const text = useRef<HTMLSpanElement>(null);
+  const cut = useCut(text, expanded);
+  const more = expanded || cut || row.turn.content.includes("\n");
   return (
-    <div className="flex min-w-0 items-center gap-2">
+    <div
+      className={cn("flex min-w-0 gap-2", expanded ? "items-start" : "items-center")}
+    >
       {own ? (
         <span
           aria-hidden
@@ -421,7 +508,17 @@ function MessageRow({
         />
       )}
       <span
-        className={cn("min-w-0 flex-1 truncate", editing && "text-muted-foreground")}
+        ref={text}
+        data-testid="queued-text"
+        data-expanded={expanded || undefined}
+        data-more={more || undefined}
+        className={cn(
+          "min-w-0 flex-1",
+          expanded
+            ? "max-h-48 overflow-y-auto overscroll-contain py-0.5 break-words whitespace-pre-wrap"
+            : "truncate",
+          editing && "text-muted-foreground",
+        )}
         title={
           row.entry?.steerable
             ? "Sends after the running turn finishes"
@@ -430,11 +527,39 @@ function MessageRow({
               : "Steers in at the next step"
         }
       >
-        {row.turn.content}
+        <QueuedText row={row} />
         {row.turn.attachments?.length
           ? ` · ${row.turn.attachments.length} attachment(s)`
           : ""}
       </span>
+      {more && (
+        <span className="flex shrink-0 items-center">
+          {expanded && (
+            <Button
+              size="icon-xs"
+              variant="quiet"
+              aria-label="Copy"
+              onClick={() => copyText(writtenText(row.turn.content, queuedSkills(row)))}
+            >
+              <Copy />
+            </Button>
+          )}
+          <Button
+            size="icon-xs"
+            variant="quiet"
+            aria-label="Show whole message"
+            aria-expanded={expanded}
+            onClick={onToggle}
+          >
+            <ChevronDown
+              className={cn(
+                "transition-transform motion-reduce:transition-none",
+                expanded && "rotate-180",
+              )}
+            />
+          </Button>
+        </span>
+      )}
       {editing ? (
         <span className="shrink-0 text-xs text-muted-foreground">Editing…</span>
       ) : (

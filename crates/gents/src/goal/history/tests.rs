@@ -12,7 +12,7 @@ impl ConfigRead for HistoryReader {
     async fn execute_read(
         &self,
         query: &str,
-    ) -> std::result::Result<Value, crate::config_client::ConfigClientError> {
+    ) -> std::result::Result<Value, crate::store::config_client::ConfigClientError> {
         if query.contains("_commits(") {
             return Ok(json!({"data":{"_commits":(0..67).rev().map(|index| json!({
                 "cid":format!("commit-{index:03}"), "height":index + 1, "fieldName":"_C",
@@ -30,7 +30,7 @@ impl ConfigRead for HistoryReader {
             calls.len()
         };
         if batch == 2 && self.fault == Some("unavailable") {
-            return Err(crate::config_client::ConfigClientError::Json(
+            return Err(crate::store::config_client::ConfigClientError::Json(
                 serde_json::Error::io(std::io::Error::other("retained block unavailable")),
             ));
         }
@@ -125,7 +125,7 @@ impl ConfigRead for UnchangedAssignmentReader {
     async fn execute_read(
         &self,
         query: &str,
-    ) -> std::result::Result<Value, crate::config_client::ConfigClientError> {
+    ) -> std::result::Result<Value, crate::store::config_client::ConfigClientError> {
         let mut response = self.inner.execute_read(query).await?;
         if let Some(commits) = response
             .pointer_mut("/data/_commits")

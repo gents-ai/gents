@@ -17,7 +17,7 @@ pub enum ToolPolicyError {
 
 type Result<T, E = ToolPolicyError> = std::result::Result<T, E>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum CommandExecutionMode {
@@ -153,7 +153,7 @@ pub fn normalize_workspace_lifecycle_state(value: &str) -> Option<&'static str> 
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum CommandNetworkMode {

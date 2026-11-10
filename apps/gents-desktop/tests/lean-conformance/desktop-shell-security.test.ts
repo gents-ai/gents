@@ -26,6 +26,7 @@ type Cases = {
     sameTarget: boolean;
     expected: boolean;
   }[];
+  openExternal: { gesture: boolean; expected: boolean }[];
 };
 
 afterEach(() => {
@@ -82,7 +83,7 @@ it("binds plugin loading and message consent to the executable shell model", asy
     });
     const app = testApp({
       deployments: [node({ nodeDid: "did:a" })],
-      selection: { sessionId: "s1", nodeDid: "did:a", agentId: "a1" },
+      selection: { sessionId: "s1", nodeDid: "did:a", agentDid: "a1" },
     });
     const send = vi.spyOn(app.actions, "sendMessage").mockResolvedValue(null);
     const confirm = vi.spyOn(window, "confirm").mockImplementation(() => {
@@ -91,6 +92,7 @@ it("binds plugin loading and message consent to the executable shell model", asy
     });
     const result = buildUxHost(app, () => ({ name: "sessions" })).shell.send(
       "Exact proposed text ✓",
+      { id: "probe", name: "probe" },
     );
     if (row.expected) await expect(result).resolves.toBeUndefined();
     else await expect(result).rejects.toThrow("ctx.send:");
@@ -101,5 +103,19 @@ it("binds plugin loading and message consent to the executable shell model", asy
       );
     else expect(confirm).not.toHaveBeenCalled();
     confirm.mockRestore();
+  }
+  expect(cases.openExternal).toHaveLength(2);
+  for (const row of cases.openExternal) {
+    Object.defineProperty(navigator, "userActivation", {
+      configurable: true,
+      value: { isActive: row.gesture },
+    });
+    const app = testApp();
+    const open = vi.spyOn(app.actions, "openExternalUrl").mockResolvedValue(undefined);
+    const opened = await buildUxHost(app, () => ({ name: "sessions" })).os.openExternal(
+      "https://example.test/?data=1",
+    );
+    expect(opened, JSON.stringify(row)).toBe(row.expected);
+    expect(open.mock.calls.length, JSON.stringify(row)).toBe(row.expected ? 1 : 0);
   }
 }, 240_000);

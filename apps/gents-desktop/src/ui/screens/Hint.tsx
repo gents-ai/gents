@@ -9,7 +9,7 @@ import {
 
 /* the kit's key cap inverts inside a tooltip, but its tooltip uses the
    popover colours, so the cap keeps its own muted look here */
-const TOOLTIP_KBD =
+export const TOOLTIP_KBD =
   "ml-1.5 in-data-[slot=tooltip-content]:bg-muted in-data-[slot=tooltip-content]:text-muted-foreground dark:in-data-[slot=tooltip-content]:bg-muted";
 
 export function Hint({

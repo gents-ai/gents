@@ -1,6 +1,8 @@
 use thiserror::Error;
 
-use crate::provider_limit::{classify_provider_limit, strip_provider_limit_marker, ProviderLimit};
+use crate::provider_limit::{
+    classify_provider_limit, strip_provider_limit_marker, ProviderLimit, ProviderLimitHeaders,
+};
 
 #[derive(Debug, Error)]
 pub enum DaemonError {
@@ -249,7 +251,10 @@ pub fn classify_loop_failure(cause: &LoopFailureCause, message: &str) -> Classif
             failure: CompletionFailure::Loop { .. },
             ..
         } => ProviderReport::default(),
-        _ => ProviderReport::classify_failure_text(&text),
+        _ => ProviderReport {
+            account_limited: ProviderLimitHeaders::from_text(message).account_rotated,
+            ..ProviderReport::classify_failure_text(&text)
+        },
     };
     let error = if let Some(overflow) = report.context_overflow {
         InferenceError::ContextLengthExceeded {
@@ -339,6 +344,10 @@ pub struct ProviderReport {
     pub reasoning_rejected: bool,
     pub permanent_status: bool,
     pub rejected_credentials_or_request: bool,
+    /// The failure text carries the `account-rotated` provider-limit marker:
+    /// another account of the pool can serve the request now. Read from the
+    /// marker, which `classify_failure_text` never sees.
+    pub account_limited: bool,
 }
 
 impl ProviderReport {
@@ -389,6 +398,7 @@ impl ProviderReport {
             ]
             .iter()
             .any(|marker| lower.contains(marker)),
+            account_limited: false,
         }
     }
 }

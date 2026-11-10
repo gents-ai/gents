@@ -8,12 +8,13 @@ pub async fn desktop_session_goal(
     node_did: String,
     session_id: String,
     state: State<'_, DesktopAppState>,
-) -> Result<Option<crate::types::SessionGoalView>, BridgeError> {
+) -> Result<Option<crate::types::SessionGoalState>, BridgeError> {
     let Some(core) = current_core(&state) else {
         return Ok(None);
     };
     crate::commands::session_goal(&core, &node_did, &session_id)
         .await
+        .map(Some)
         .map_err(|error| BridgeError::untyped(error.to_string()))
 }
 
@@ -74,21 +75,12 @@ pub async fn desktop_session_snapshot(
     node_did: Option<String>,
     request_id: Option<String>,
     timeline_limit: Option<usize>,
-    timeline_before_item_key: Option<String>,
     state: State<'_, DesktopAppState>,
 ) -> Result<Option<DesktopSessionSnapshot>, BridgeError> {
     let Some(core) = current_core(&state) else {
         return Ok(None);
     };
-    session_snapshot(
-        &core,
-        session_id,
-        node_did,
-        request_id,
-        timeline_limit,
-        timeline_before_item_key,
-    )
-    .await
+    session_snapshot(&core, session_id, node_did, request_id, timeline_limit).await
 }
 
 pub(crate) use crate::commands::session_snapshot;
@@ -135,7 +127,7 @@ pub async fn desktop_tool_file_changes(
 }
 
 #[tauri::command]
-pub async fn desktop_session_hydration_retry(
+pub async fn desktop_session_reload(
     session_id: String,
     node_did: Option<String>,
     state: State<'_, DesktopAppState>,
@@ -153,9 +145,9 @@ pub async fn desktop_session_hydration_retry(
                 .map(|session| session.node_did.clone())
         })
         .ok_or_else(|| {
-            BridgeError::untyped("session hydration retry requires a node for the selected session")
+            BridgeError::untyped("session reload requires a node for the selected session")
         })?;
-    core.retry_session_hydration(&session_id, &node_did)
+    core.reload_session(&session_id, &node_did)
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))
 }
@@ -216,30 +208,6 @@ pub async fn desktop_chat_send(
 }
 
 #[tauri::command]
-pub async fn desktop_chat_submission_recover(
-    query: crate::types::ChatSubmissionQuery,
-    state: State<'_, DesktopAppState>,
-) -> Result<crate::types::ChatSubmissionRecovery, BridgeError> {
-    let core = current_core(&state)
-        .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
-    crate::commands::recover_chat_submission(&core, query)
-        .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))
-}
-
-#[tauri::command]
-pub async fn desktop_chat_submission_acknowledge(
-    receipt: crate::types::ChatSubmissionReceipt,
-    state: State<'_, DesktopAppState>,
-) -> Result<(), BridgeError> {
-    let core = current_core(&state)
-        .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
-    crate::commands::acknowledge_chat_submission(&core, receipt)
-        .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))
-}
-
-#[tauri::command]
 pub async fn desktop_session_fork_before_message(
     request: crate::types::SessionForkBeforeRequest,
     state: State<'_, DesktopAppState>,
@@ -247,18 +215,6 @@ pub async fn desktop_session_fork_before_message(
     let core = current_core(&state)
         .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
     crate::commands::fork_session_before_message(&core, request)
-        .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))
-}
-
-#[tauri::command]
-pub async fn desktop_session_history(
-    request: crate::types::SessionHistoryRequest,
-    state: State<'_, DesktopAppState>,
-) -> Result<crate::types::SessionHistoryPage, BridgeError> {
-    let core = current_core(&state)
-        .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
-    crate::commands::session_history(&core, request)
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))
 }
@@ -289,45 +245,21 @@ pub async fn desktop_session_rename(
         .map_err(|error| BridgeError::untyped(error.to_string()))
 }
 
-#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
-#[serde(rename_all = "camelCase")]
-pub struct RequestResendResultView {
-    pub request_id: String,
-    pub session_id: String,
-}
-
 #[tauri::command]
-pub async fn desktop_request_resend(
+pub async fn desktop_request_retry<R>(
+    window: tauri::WebviewWindow<R>,
     request_id: String,
     node_did: Option<String>,
     state: State<'_, DesktopAppState>,
-) -> Result<RequestResendResultView, BridgeError> {
+) -> Result<ChatSendResult, BridgeError>
+where
+    R: tauri::Runtime,
+{
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
 
-    let scope = node_did.or_else(|| core.selected_node_did());
-    let submitted = core
-        .resend_request_in_scope(&request_id, scope.as_deref())
-        .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
-    Ok(RequestResendResultView {
-        request_id: submitted.request_id,
-        session_id: submitted.session_id,
-    })
-}
-
-#[tauri::command]
-pub async fn desktop_request_retry(
-    request_id: String,
-    node_did: Option<String>,
-    state: State<'_, DesktopAppState>,
-) -> Result<ChatSendResult, BridgeError> {
-    let Some(core) = current_core(&state) else {
-        return Err(BridgeError::untyped("desktop client is not running"));
-    };
-
-    let scope = node_did.or_else(|| core.selected_node_did());
+    let scope = state.window_command_node(window.label(), node_did.as_deref());
     crate::commands::retry_request(&core, &request_id, scope.as_deref())
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))
@@ -382,7 +314,7 @@ pub async fn desktop_pending_message_steer(
 pub async fn desktop_session_context_details(
     request: crate::types::SessionContextDetailsRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<Option<gents::toolset::SessionContextDetails>, BridgeError> {
+) -> Result<Option<gents::tools::native::SessionContextDetails>, BridgeError> {
     let core = current_core(&state)
         .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
     crate::commands::session_context_details(&core, request).await

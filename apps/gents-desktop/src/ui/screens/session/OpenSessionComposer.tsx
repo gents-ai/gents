@@ -1,15 +1,26 @@
+import { QuestionPanel } from "./QuestionPanel";
+import { MorphProvider, useMorphCard } from "@/lib/morph";
+import { COMPOSER_FIELD } from "./composerField";
+import { AskedChip } from "./AskedChip";
+import { useUnansweredQuestions } from "../../hooks/useSessionQuestions";
+import {
+  useSelectedSessionFields,
+  useSelectedSessionGoal,
+} from "../../hooks/useSelectedSession";
 import { AttachmentTray, SentAttachments, useAttachmentDraft } from "./attachments";
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
+  useState,
   type KeyboardEvent,
   type RefCallback,
 } from "react";
 import { useStore } from "zustand";
 import { ArrowDown, Check, Pencil, X } from "lucide-react";
-import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
+import { ComposerReasonBox, composerReason } from "./ComposerReason";
 import { RichComposer } from "@gents/ui/conversation";
 import { cn } from "@gents/ui/lib/utils";
 import { useApp, useView } from "@/app/AppContext";
@@ -21,7 +32,9 @@ import { SelectedChatFolder } from "../ChatFolderPicker";
 import { LoadingStatus } from "../LoadingStatus";
 import { SelectedPendingTray, useSessionQueue } from "../PendingTray";
 import { ReplyingTo } from "../ReplyingTo";
-import { Goal } from "../SessionHeader";
+import { Goal, GoalUnavailable } from "../SessionHeader";
+import { goalShown } from "../../../hooks/goalState";
+import { useMentionMenu } from "../useMentionMenu";
 import { useSlashMenu } from "../useSlashMenu";
 import {
   ComposerFooter,
@@ -29,6 +42,8 @@ import {
   presentedComposerSendStatus,
 } from "./composerParts";
 import { ComposerEditContext, lastEditable, useComposerEditing } from "./composerEdit";
+import { sentMessages, useComposerHistory } from "./composerHistory";
+import { selectedIn } from "@/hooks/useSelectedSession";
 import { GoalChip, goalCommand, goalIsEditable, useGoalMode } from "./goalMode";
 import { useComposerSend } from "./useComposerSend";
 import { useFollowUp } from "@/preferences";
@@ -37,23 +52,26 @@ import { ChatDeliveryFeedback } from "./ChatDeliveryFeedback";
 import { ActiveNodeLabel } from "@/app/ActiveNodeLabel";
 import { chipSkills, withSkillLines } from "@/lib/skillLines";
 
+/* the one card the composer box and the question panel share (morph.css) */
+const CARD = "[view-transition-class:morph-card]";
+
 export function OpenSessionComposer({
   roomRef,
   atBottom,
   toBottom,
   stop,
   stopping,
-  goal,
-  agentId,
+  agentDid,
 }: {
   roomRef: RefCallback<HTMLDivElement>;
   atBottom: boolean;
   toBottom: () => void;
   stop: () => void;
   stopping: boolean;
-  goal: DesktopSessionSnapshot["goal"];
-  agentId: string | null;
+  agentDid: string | null;
 }) {
+  const shown = goalShown(useSelectedSessionGoal());
+  const current = shown.kind === "goal" && shown.current ? shown.goal : null;
   const { drafts, stores, actions } = useApp();
   const activityStatus = useView((view) => view.shellProjection.activityStatus);
   const sendStatus = useView((view) => view.shellProjection.nonEmptyContentSendStatus);
@@ -61,18 +79,38 @@ export function OpenSessionComposer({
   const sending = stores.chat.use.sending();
   const inFlight = useInterruptVisible();
   const deployment = useSelectedNode();
-  const { draft, setDraft, send, setGoal, error: sendError } = useComposerSend(agentId);
+  const {
+    draft,
+    setDraft,
+    send,
+    setGoal,
+    error: sendError,
+  } = useComposerSend(agentDid);
   const textarea = useRef<HTMLDivElement | null>(null);
   const attachmentRoot = useRef<HTMLDivElement | null>(null);
   const { queue, onEdit } = useSessionQueue();
-  const edit = useComposerEditing({ queue, onEdit, setDraft, send, textarea });
+  const agent = agentOf(deployment, agentDid);
+  const editSlash = useSlashMenu(
+    deployment?.skills ?? [],
+    deployment?.contexts.find((c) => c.context_id === agent?.contextId),
+    [],
+    () => {},
+  );
+  const edit = useComposerEditing({
+    queue,
+    onEdit,
+    setDraft,
+    send,
+    textarea,
+    commands: editSlash.names,
+  });
   const editing = edit.editing;
   const editContext = useMemo(
     () => ({ editingDocId: editing?.docId ?? null, begin: edit.begin }),
     [editing?.docId, edit.begin],
   );
-  const agent = agentOf(deployment, agentId);
   const sessionId = stores.selection.use.sessionId();
+  const nodeDid = stores.selection.use.nodeDid();
   const goalMode = useGoalMode({
     draft,
     setDraft,
@@ -85,18 +123,29 @@ export function OpenSessionComposer({
   const slash = useSlashMenu(
     deployment?.skills ?? [],
     deployment?.contexts.find((c) => c.context_id === agent?.contextId),
-    [goalCommand(goal, inFlight)],
+    [goalCommand(shown, inFlight)],
     () =>
-      goal && goalIsEditable(goal)
-        ? goalMode.edit(goal.objective ?? "")
+      current && goalIsEditable(current)
+        ? goalMode.edit(current.objective)
         : goalMode.create(),
   );
-  const editSlash = useSlashMenu(
-    deployment?.skills ?? [],
-    deployment?.contexts.find((c) => c.context_id === agent?.contextId),
-    [],
-    () => {},
+  const mention = useMentionMenu(deployment?.nodeDid ?? null, sessionId);
+  const commands = editing ? editSlash : slash;
+  const chipKinds = useMemo(
+    () => ({ ...commands.chipKinds, ...mention.chipKinds }),
+    [commands.chipKinds, mention.chipKinds],
   );
+  const history = useComposerHistory({
+    field: slash.field,
+    sent: () =>
+      sentMessages(
+        selectedIn(stores.session.getState(), {
+          selectedSessionId: sessionId,
+          selectedNodeDid: nodeDid,
+        })?.timelineItems ?? [],
+      ),
+    kinds: chipKinds,
+  });
 
   /* a session that never takes this app's messages says so before anything is typed */
   const readOnly =
@@ -110,8 +159,50 @@ export function OpenSessionComposer({
   const otherWay = followUp === "steer" ? "queue" : "steer";
   const blocked = sendStatus.kind === "disabled" && !inFlight;
   const covered = blocked && loadingStatus !== null;
+  /* what nothing typed could get past stands in the input's place */
+  const reason =
+    blocked && !covered ? composerReason(deployment, agentDid, sendStatus) : null;
+  /* an open question takes the composer's place until it is answered, or
+     until the person chooses to write instead; a new question asks again */
+  const questionScope = useSelectedSessionFields((session) =>
+    session?.nodeDid
+      ? { nodeDid: session.nodeDid, sessionId: session.sessionId }
+      : null,
+  );
+  const questions = useUnansweredQuestions(questionScope);
+  const questionsKey = questions.map((q) => q.itemId).join(" ");
+  const [typingFor, setTypingFor] = useState<string | null>(null);
+  /* a question that arrives while the person writes waits beside the
+     composer, so it neither hides their draft nor reads their next key as a
+     pick; the composer still holds the focus while this renders */
+  const [askedKey, setAskedKey] = useState(questionsKey);
+  if (askedKey !== questionsKey) {
+    setAskedKey(questionsKey);
+    const shown = askedKey !== "" && typingFor !== askedKey && !editing;
+    const writing =
+      draft.trim() !== "" || !!attachmentRoot.current?.contains(document.activeElement);
+    if (questionsKey && !shown && writing) setTypingFor(questionsKey);
+  }
+  const asking = questions.length > 0 && typingFor !== questionsKey && !editing;
+  /* the composer box and the question panel are one card, so a question
+     arriving or leaving morphs one into the other */
+  const card = useMorphCard();
+  const [shownAsking, setShownAsking] = useState(asking);
+  useEffect(() => {
+    if (shownAsking !== asking) card.morph(() => setShownAsking(asking));
+  }, [asking, shownAsking, card]);
+  const cardPart = card.part("card");
+  const composerRef = useCallback(
+    (element: HTMLDivElement | null) => {
+      attachmentRoot.current = element;
+      return cardPart(element);
+    },
+    [cardPart],
+  );
   const draftKey = useView((view) => view.draftKey);
   const [field, setField] = useDraftField(drafts, draftKey);
+  const leaveHistory = history.leave;
+  useEffect(() => leaveHistory(), [draftKey, !!editing, leaveHistory]);
   const focusRequested = useStore(drafts, (state) => state.focus === draftKey);
   useEffect(() => {
     if (!focusRequested || blocked) return;
@@ -170,7 +261,8 @@ export function OpenSessionComposer({
     }
     goalMode.onKeyDown(event);
     if (event.defaultPrevented || goalMode.mode) return;
-    if (event.key === "ArrowUp" && draft === "" && !attachments.hasAttachments) {
+    const empty = draft === "" && !attachments.hasAttachments;
+    if (event.key === "ArrowUp" && empty) {
       const last = lastEditable(queue);
       if (last) {
         event.preventDefault();
@@ -178,6 +270,7 @@ export function OpenSessionComposer({
         return;
       }
     }
+    if (history.onKeyDown(event, empty)) return;
     if (
       !event.defaultPrevented &&
       turnRunning &&
@@ -194,11 +287,15 @@ export function OpenSessionComposer({
 
   return (
     <div ref={roomRef} className="sticky bottom-0 z-20 mt-auto bg-background pt-6 pb-6">
-      {goal && (
+      {shown.kind === "unavailable" && (
+        <GoalUnavailable label={shown.label} text={shown.text} />
+      )}
+      {shown.kind === "goal" && !shown.current && <Goal goal={shown.goal} stale />}
+      {current && (
         <Goal
-          goal={goal}
+          goal={current}
           onEdit={() => {
-            goalMode.edit(goal.objective ?? "");
+            goalMode.edit(current.objective);
             textarea.current?.focus();
           }}
           onControl={
@@ -211,7 +308,7 @@ export function OpenSessionComposer({
       <div
         aria-hidden
         className={cn(
-          "pointer-events-none absolute inset-x-0 bottom-full h-8 bg-gradient-to-t from-background to-transparent transition-opacity duration-200",
+          "pointer-events-none absolute inset-x-0 bottom-full h-8 bg-linear-to-t/srgb from-background to-transparent transition-opacity duration-200",
           atBottom ? "opacity-0" : "opacity-100",
         )}
       />
@@ -232,12 +329,27 @@ export function OpenSessionComposer({
       </ComposerEditContext.Provider>
       <GoalDeliveryFeedback />
       <ChatDeliveryFeedback />
+      {shownAsking && (
+        <div ref={cardPart} className={CARD}>
+          <MorphProvider value={card}>
+            <QuestionPanel
+              items={questions}
+              onTypeInstead={() => setTypingFor(questionsKey)}
+            />
+          </MorphProvider>
+        </div>
+      )}
+      {!shownAsking && questions.length > 0 && (
+        <AskedChip item={questions[0]!} onAnswer={() => setTypingFor(null)} />
+      )}
       <div
         data-testid="composer"
-        ref={attachmentRoot}
+        hidden={shownAsking || undefined}
+        ref={composerRef}
         {...activeAttachments.dropProps}
         className={cn(
           "relative grid rounded-2xl",
+          CARD,
           activeAttachments.over && "ring-2 ring-ring",
         )}
       >
@@ -247,20 +359,24 @@ export function OpenSessionComposer({
           aria-label="Choose attachments"
         />
         <div
-          inert={covered || undefined}
-          className={cn("[grid-area:1/1]", covered && "invisible")}
+          inert={covered || (reason && !editing) ? true : undefined}
+          className={cn(
+            "[grid-area:1/1]",
+            (covered || (reason && !editing)) && "invisible",
+          )}
         >
           <RichComposer
             key={editing ? `edit ${editing.docId}` : draftKey}
             editorState={editing ? null : field}
             onEditorStateChange={editing ? undefined : setField}
             className="text-foreground"
+            fieldProps={COMPOSER_FIELD}
             value={editing ? editing.text : draft}
             onChange={editing ? edit.setText : setDraft}
             onSend={
               editing
                 ? (text) => {
-                    const prepared = withSkillLines(text, [
+                    const skills = [
                       ...new Set([
                         ...editing.skills,
                         ...chipSkills(
@@ -268,10 +384,11 @@ export function OpenSessionComposer({
                           editSlash.names,
                         ),
                       ]),
-                    ]);
+                    ];
+                    const prepared = withSkillLines(text, skills);
                     void (editing.reached
                       ? edit.sendAsNew(text, addedAttachments(), prepared)
-                      : edit.save(text, addedAttachments(), prepared));
+                      : edit.save(text, addedAttachments(), prepared, skills));
                   }
                 : goalMode.mode
                   ? (text) => void goalMode.submit(text)
@@ -282,11 +399,15 @@ export function OpenSessionComposer({
             attachDisabled={
               blocked || readOnly !== null || (editing && edit.saving) || false
             }
+            /* what the field counts as something to send besides its text:
+               a queued message's kept skills are, as core takes a message of
+               skills alone */
             hasAttachments={
               editing
                 ? (editing.attachments?.length ?? 0) >
                     editing.removedAttachments.length ||
                   editing.capturedContext.length > 0 ||
+                  editing.skills.length > 0 ||
                   editAttachments.hasAttachments
                 : attachments.hasAttachments
             }
@@ -348,6 +469,15 @@ export function OpenSessionComposer({
                 />
               ) : (
                 <>
+                  {history.position && (
+                    <p
+                      role="status"
+                      data-testid="composer-history"
+                      className="px-3 pt-2 text-xs text-muted-foreground"
+                    >
+                      History {history.position.index}/{history.position.total}
+                    </p>
+                  )}
                   <ReplyingTo />
                   {attachments.over && (
                     <p
@@ -366,14 +496,13 @@ export function OpenSessionComposer({
               )
             }
             onKeyDown={onKeyDown}
+            onPartsChange={editing ? undefined : history.onPartsChange}
             fieldRef={textarea}
-            commands={editing ? editSlash.names : slash.names}
-            composerRef={editing ? editSlash.field : slash.field}
+            commands={commands.names}
+            composerRef={commands.field}
             commandsAt="word"
-            chipKinds={editing ? editSlash.chipKinds : slash.chipKinds}
-            triggers={
-              goalMode.mode ? undefined : [editing ? editSlash.trigger : slash.trigger]
-            }
+            chipKinds={chipKinds}
+            triggers={goalMode.mode ? undefined : [commands.trigger, mention.trigger]}
             clearable={!editing}
             submitLabel={
               editing
@@ -381,9 +510,9 @@ export function OpenSessionComposer({
                   ? "Send as a new message"
                   : "Save"
                 : goalMode.mode === "edit"
-                  ? "Save goal"
+                  ? "Save Goal"
                   : goalMode.mode
-                    ? "Set goal"
+                    ? "Set Goal"
                     : "Send"
             }
             submitIcon={editing && !editing.reached ? <Check /> : undefined}
@@ -393,7 +522,7 @@ export function OpenSessionComposer({
               editing
                 ? "Edit the message"
                 : goalMode.mode
-                  ? "Describe the goal"
+                  ? "Describe the Goal"
                   : inFlight
                     ? "Ask anything"
                     : readOnly
@@ -403,6 +532,9 @@ export function OpenSessionComposer({
           />
         </div>
         {covered && <LoadingStatus overlay />}
+        {reason && !editing && (
+          <ComposerReasonBox reason={reason} deployment={deployment} />
+        )}
       </div>
       {edit.error && (
         <p role="alert" className="mt-2 text-xs text-destructive">
@@ -422,17 +554,19 @@ export function OpenSessionComposer({
           </>
         }
         status={
-          <SessionSubmissionStatus
-            activityStatus={activityStatus}
-            hint={
-              status.kind === "disabled" &&
-              !inFlight &&
-              !covered &&
-              (draft.trim() !== "" || attachments.hasAttachments)
-                ? status.hint
-                : null
-            }
-          />
+          reason ? null : (
+            <SessionSubmissionStatus
+              activityStatus={activityStatus}
+              hint={
+                status.kind === "disabled" &&
+                !inFlight &&
+                !covered &&
+                (draft.trim() !== "" || attachments.hasAttachments)
+                  ? status.hint
+                  : null
+              }
+            />
+          )
         }
       />
     </div>

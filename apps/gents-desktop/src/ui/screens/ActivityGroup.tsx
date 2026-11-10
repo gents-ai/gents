@@ -4,7 +4,8 @@ import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import { cn } from "@gents/ui/lib/utils";
 import { ToolStep, ToolSteps } from "@gents/ui/conversation";
-import { holdRow, useFollowNewest, useScrollEdges } from "@/lib/scroll";
+import { messagePlaces, useOpeningAmong } from "@/app/messagePlaces";
+import { holdRow, scrollViewport, useFollowNewest, useScrollEdges } from "@/lib/scroll";
 import {
   Collapsible,
   CollapsibleContent,
@@ -15,9 +16,9 @@ import { BackgroundToolButton } from "./BackgroundToolButton";
 import { ToolIcon } from "./tool-icon";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { Spinner } from "@gents/ui/components/spinner";
-import { agentName } from "./behavior";
-import { AgentInitials } from "./parts";
+import { AgentMark } from "./parts";
 import { Markdown } from "./Markdown";
+import { FiledQuestion, filedQuestion } from "./FiledQuestion";
 import { ToolBody } from "./tool-views";
 import { gatherWorkers, workerStory, type GatheredWorker } from "./worker-gathering";
 import { WorkerStep, isWorkerStep } from "./WorkerStep";
@@ -32,22 +33,37 @@ import {
   type TranscriptEntry,
 } from "./transcript-groups";
 import { useSelectedNode } from "@/hooks/useClient";
+import { useNow } from "@/lib/clock";
+import { duration } from "@/lib/duration";
+import { groupTook, runningSince } from "@/lib/turnWorked";
+import { Hint } from "./Hint";
 
 function Step({
   tool,
   workers,
   note,
+  shown = false,
 }: {
   tool: RenderedToolCallView;
   workers: Workers;
   note?: string | null;
+  /* just opened from elsewhere, such as the Background pane */
+  shown?: boolean;
 }) {
-  if (isWorkerStep(tool)) return <WorkerStep tool={tool} workers={workers} />;
-  const summary = toolSummary(tool);
+  if (isWorkerStep(tool) && tool.reconstruction.state === "ready")
+    return <WorkerStep tool={tool} workers={workers} />;
+  const summary =
+    tool.reconstruction.state === "ready"
+      ? toolSummary(tool)
+      : { kind: "", primary: tool.toolName, secondary: null };
   const open = tool.statusKind !== "running";
   const p = tool.presentation;
-  const tally = p.kind === "fileEdit" ? diffTally(p.diff) : null;
+  const tally =
+    tool.reconstruction.state === "ready" && p.kind === "fileEdit"
+      ? diffTally(p.diff)
+      : null;
   const status = stepStatus(tool);
+  const asked = filedQuestion(tool);
   const outcome =
     status === "failed" || status === "stopped" ? summary.secondary : null;
   return (
@@ -55,18 +71,29 @@ function Step({
       label={`${summary.kind} ${summary.primary}`.trim()}
       icon={<ToolIcon tool={tool} />}
       meta={
-        <>
+        <span className="inline-flex items-center gap-1.5">
           {tally ?? outcome ?? undefined}
+          <Elapsed since={runningSince(tool)} />
           <BackgroundToolButton tool={tool} />
-        </>
+        </span>
       }
       status={status}
       stepKey={tool.itemKey}
+      className={cn(shown && "bg-accent duration-500 data-open:bg-accent")}
     >
       {open || note ? (
         <>
           {note && <p className="pb-2 text-xs text-muted-foreground">{note}</p>}
-          {open ? <ToolBody tool={tool} /> : null}
+          {open ? (
+            /* find counts a step's output on its own */
+            <div data-find-part={`step:${tool.itemKey}`} className="contents">
+              {asked ? (
+                <FiledQuestion itemId={asked.itemId} question={asked.question} />
+              ) : (
+                <ToolBody tool={tool} />
+              )}
+            </div>
+          ) : null}
         </>
       ) : undefined}
     </ToolStep>
@@ -127,14 +154,15 @@ function WorkerRunStep({
   const failed = tools.some(
     (t) => t.statusKind === "error" || t.statusKind === "failed",
   );
-  const agentId = reached?.summary?.agentId ?? null;
+  const agentDid = reached?.summary?.agentDid ?? null;
   return (
     <ToolStep
       label={name}
       icon={
-        agentId ? (
-          <AgentInitials
-            name={agentName(agentId, deployment)}
+        agentDid ? (
+          <AgentMark
+            agentDid={agentDid}
+            deployment={deployment}
             className="size-4 text-[8px]"
           />
         ) : (
@@ -172,6 +200,8 @@ function placeWorkers(members: GroupMember[]): PlacedMember[] {
   return out;
 }
 
+const SHOWN_MS = 1600;
+
 export function ActivityGroup({
   entry,
   workers,
@@ -182,18 +212,58 @@ export function ActivityGroup({
   const state = useContext(GroupStateContext)!;
   const single = entry.members.length === 1 && entry.members[0]!.kind === "tool";
   const chosen = state.folded[entry.key];
-  const openStep = state.openStep[entry.key] ?? null;
-
   const failed = groupFailures(entry.members) > 0;
-  const folded = !single && (chosen ?? !(openStep || failed));
+  const firstFailed = entry.members.find(
+    (member) => member.kind === "tool" && stepStatus(member.tool) === "failed",
+  );
+  const chosenStep = state.openStep[entry.key];
+  const openStep = chosenStep === undefined ? (firstFailed?.key ?? null) : chosenStep;
+  const folded = !single && (chosen ?? (!failed && !openStep));
 
   const live = (!entry.settled && liveGroupLabel(entry.members)) || null;
+  const last = entry.members[entry.members.length - 1];
+  const since = live && last?.kind === "tool" ? runningSince(last.tool) : null;
+  const took = live ? null : groupTook(groupTools(entry.members));
   const [animated, setAnimated] = useState(false);
   const root = useRef<HTMLDivElement>(null);
 
   const box = useRef<HTMLDivElement>(null);
   const capped = !single;
   const more = useScrollEdges(box);
+
+  /* a step opened from elsewhere opens its group and shows it */
+  const opening = useOpeningAmong(entry.members.map((m) => m.key));
+  const [shown, setShown] = useState<string | null>(null);
+  useEffect(() => {
+    if (!opening) return;
+    state.setFolded(entry.key, false);
+    state.setOpenStep(entry.key, opening);
+    messagePlaces.opened(opening);
+    setShown(opening);
+  }, [opening, state, entry.key]);
+  useEffect(() => {
+    if (!shown) return;
+    const viewport = scrollViewport(box.current);
+    const step = [...(box.current?.querySelectorAll("[data-step-key]") ?? [])].find(
+      (el) => el.getAttribute("data-step-key") === shown,
+    );
+    /* the step's body opens over a few frames; its top is held in view
+       until it has */
+    let frame = 0;
+    const until = performance.now() + 420;
+    const hold = () => {
+      if (!viewport || !step) return;
+      viewport.scrollTop +=
+        step.getBoundingClientRect().top - viewport.getBoundingClientRect().top;
+      if (performance.now() < until) frame = requestAnimationFrame(hold);
+    };
+    hold();
+    const done = setTimeout(() => setShown(null), SHOWN_MS);
+    return () => {
+      cancelAnimationFrame(frame);
+      clearTimeout(done);
+    };
+  }, [shown]);
   useFollowNewest(box, {
     rows: entry.members.length,
     paused: openStep !== null,
@@ -228,9 +298,16 @@ export function ActivityGroup({
           </span>
           <span className="flex min-w-0 items-center gap-1.5">
             {live && <Spinner className="size-3.5 shrink-0 motion-reduce:hidden" />}
-            <span className="min-w-0 truncate">
-              {live ?? groupLabel(entry.members)}
-            </span>
+            {took === null ? (
+              <span className="min-w-0 truncate">
+                {live ?? groupLabel(entry.members)}
+              </span>
+            ) : (
+              <Hint label={`Took ${duration(took)}`}>
+                <span className="min-w-0 truncate">{groupLabel(entry.members)}</span>
+              </Hint>
+            )}
+            <Elapsed since={since} />
           </span>
         </button>
       )}
@@ -255,7 +332,12 @@ export function ActivityGroup({
             >
               {placeWorkers(entry.members).map((m) =>
                 m.kind === "tool" ? (
-                  <Step key={m.key} tool={m.tool} workers={workers} />
+                  <Step
+                    key={m.key}
+                    tool={m.tool}
+                    workers={workers}
+                    shown={m.key === shown}
+                  />
                 ) : m.kind === "worker" ? (
                   <WorkerRunStep key={m.key} tools={m.tools} workers={workers} />
                 ) : (
@@ -269,20 +351,31 @@ export function ActivityGroup({
           <div
             aria-hidden
             className={cn(
-              "pointer-events-none absolute inset-x-0 top-0 h-6 bg-gradient-to-b from-background to-transparent transition-opacity duration-200",
+              "pointer-events-none absolute inset-x-0 top-0 h-6 bg-linear-to-b/srgb from-background to-transparent transition-opacity duration-200",
               capped && more.above ? "opacity-100" : "opacity-0",
             )}
           />
           <div
             aria-hidden
             className={cn(
-              "pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-background to-transparent transition-opacity duration-200",
+              "pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-linear-to-t/srgb from-background to-transparent transition-opacity duration-200",
               capped && more.below ? "opacity-100" : "opacity-0",
             )}
           />
         </div>
       </div>
     </div>
+  );
+}
+
+/* how long a running call has run, counting up each second */
+function Elapsed({ since }: { since: number | null }) {
+  const now = useNow(since !== null);
+  if (since === null || now - since < 1000) return null;
+  return (
+    <span className="shrink-0 text-muted-foreground tabular-nums">
+      {duration(now - since)}
+    </span>
   );
 }
 
@@ -334,6 +427,7 @@ export function Reasoning({ text, stateKey }: { text: string; stateKey?: string 
       <CollapsibleContent className="mt-1 border-l border-border pl-3">
         <div
           ref={body}
+          data-find-part={stateKey ? `reasoning:${stateKey}` : undefined}
           className={cn(
             "relative text-muted-foreground",
             !all && "max-h-80 overflow-hidden",
@@ -341,7 +435,7 @@ export function Reasoning({ text, stateKey }: { text: string; stateKey?: string 
         >
           <Markdown>{text}</Markdown>
           {!all && clipped && (
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-background to-transparent" />
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-linear-to-t/srgb from-background to-transparent" />
           )}
         </div>
         {(all || clipped) && (

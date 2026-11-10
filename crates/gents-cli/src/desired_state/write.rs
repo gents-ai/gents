@@ -20,8 +20,8 @@ pub(crate) fn write_manifest_root(
 }
 
 fn write_root(root: &Path, manifest: &DesiredStateManifest, force: bool) -> anyhow::Result<()> {
-    let plan = gents::config_client::DesiredStateApplyPlan::from_pack_config(manifest)?;
-    gents::document_config::ConfigReferences::from_documents(
+    let plan = gents::store::config_client::DesiredStateApplyPlan::from_pack_config(manifest)?;
+    gents::documents::ConfigReferences::from_documents(
         &manifest.node.node_did,
         plan.documents()
             .iter()
@@ -157,9 +157,9 @@ mod tests {
         let config: DesiredStateManifest = serde_json::from_value(serde_json::json!({
             "node":{"node_did":"owner"},
             "contexts":[{"node_did":"owner","context_id":"context","system_prompt":prompt}],
-            "agents":[{"node_did":"owner","agent_id":"agent","context_id":"context",
+            "agents":[{"node_did":"owner","agent_did":"agent","creation_nonce":"nonce","context_id":"context",
                 "inference_profile_id":"profile"}],
-            "tasks":[{"node_did":"owner","task_id":"task","agent_id":"agent",
+            "tasks":[{"node_did":"owner","task_id":"task","agent_did":"agent",
                 "prompt_template":"work","hooks":[
                     {"hook_id":"gate","phase":"before","command":["sh","-c",script]}
             ]}]

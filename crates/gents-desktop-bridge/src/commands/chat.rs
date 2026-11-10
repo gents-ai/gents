@@ -84,26 +84,18 @@ pub async fn send_chat_message(
     if node_did.is_empty() {
         bail!("node_did is required");
     }
-    let caller_intent = super::chat_submission::intent(core, &request)?;
-    if let Some(intent) = caller_intent.as_ref() {
-        match core.recover_caller_submission(intent).await {
-            Ok(None) => {}
-            recovered => {
-                return super::chat_submission::sent(
-                    core,
-                    intent,
-                    recovered.and_then(|receipt| {
-                        receipt.context("retained submission reply omitted its result")
-                    }),
-                )
-                .await;
-            }
-        }
+    if let Some(client_did) = request.client_did.as_deref() {
+        anyhow::ensure!(
+            client_did == core.node_identity().did(),
+            "this message was written under another client identity"
+        );
     }
-    if let Some(request_id) = super::chat_resolve::resolve_target(&request) {
-        return super::chat_resolve::resolve_chat_submission(core, &node_did, &request, request_id)
-            .await;
-    }
+    let request_id = request
+        .request_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
 
     let captured_context = request.captured_context.unwrap_or_default();
     let attachments = request.attachments.unwrap_or_default();
@@ -120,7 +112,7 @@ pub async fn send_chat_message(
                 request.caused_by_source_doc_id.as_deref(),
                 request.session_id.as_deref(),
                 &node_did,
-                request.agent_id.as_deref(),
+                request.agent_did.as_deref(),
                 answer,
             )?
         }
@@ -130,8 +122,8 @@ pub async fn send_chat_message(
         bail!("content is required");
     }
 
-    let agent_id = request
-        .agent_id
+    let agent_did = request
+        .agent_did
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -168,20 +160,16 @@ pub async fn send_chat_message(
             &session_id,
             &node_did,
             &content,
-            agent_id.as_deref(),
+            agent_did.as_deref(),
             SubmitRequestOptions {
-                caller_intent: caller_intent.clone(),
+                request_id,
                 caused_by_source_doc_id: request.caused_by_source_doc_id,
                 input,
                 ..SubmitRequestOptions::default()
             },
         )
-        .await;
-
-    match caller_intent.as_ref() {
-        Some(intent) => super::chat_submission::sent(core, intent, submitted).await,
-        None => super::chat_resolve::sent(submitted),
-    }
+        .await?;
+    Ok(submitted.into())
 }
 
 pub async fn retry_request(
@@ -226,7 +214,7 @@ pub async fn fork_session_before_message(
 #[cfg(test)]
 mod edit_fork_tests {
     use super::*;
-    use gents::config_client::ConfigAccess;
+    use gents::store::config_client::ConfigAccess;
 
     #[test]
     fn fork_wire_requires_the_retained_client_and_destination() {
@@ -333,13 +321,13 @@ pub async fn edit_pending_queue(
         .edit_pending_queue(
             &request.node_did,
             &request.session_id,
-            gents::lifecycle::PendingQueueEdit {
+            gents::request::lifecycle::PendingQueueEdit {
                 expected_request_doc_ids: request.expected_request_doc_ids,
                 selected_request_doc_ids: request.selected_request_doc_ids,
                 messages: request
                     .messages
                     .into_iter()
-                    .map(|message| gents::lifecycle::PendingMessageEdit {
+                    .map(|message| gents::request::lifecycle::PendingMessageEdit {
                         authored_input: message.authored_input,
                         request_doc_id: message.request_doc_id,
                         content: message.content,

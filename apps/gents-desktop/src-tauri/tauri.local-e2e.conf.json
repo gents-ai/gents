@@ -7,6 +7,7 @@
         "default",
         "desktop-runtime-admin",
         "native-windows",
+        "open-links",
         "native-e2e"
       ]
     }

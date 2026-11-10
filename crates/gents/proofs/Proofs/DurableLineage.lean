@@ -9,8 +9,9 @@ namespace DurableLineage
 
 /-- The session-message reader supplies these facts from a canonical session
 visible through DefraDB ACP and the caller's current agent-target grants.
-Listing and inspection use this same target predicate; neither copied session
-labels nor a lineage display grants access outside its requester scope. -/
+Inspection and listed send authority (`listedSession`) use this same target
+predicate; neither copied session labels nor a lineage display grants access
+outside its requester scope. -/
 def sessionTargetAllowed (sameRequester sameNode caused allowedTarget : Bool) : Bool :=
   sameRequester && (sameNode || (caused && allowedTarget))
 
@@ -29,6 +30,58 @@ theorem remote_target_requires_current_grant (caused : Bool) :
 theorem remote_root_target_refused (allowedTarget : Bool) :
     sessionTargetAllowed true false false allowedTarget = false := by
   simp [sessionTargetAllowed]
+
+/-- One `agent_session_list` entry, as its send and interrupt authority. The
+list holds every session `sessionTargetAllowed` admits and, besides them, the
+caller's starter: the scope `AgentSession.observedStarter` reads from the
+caller's own session row. A starter is requested by another actor (a User's
+client key, or the Agent that started it), so it lies outside the caller's
+requester scope: its entry exists only when `verifiedStarterReceipt` holds,
+that is, when the caller's own creation receipt verifies and names the
+starter; it reads none of the starter's documents and grants neither a send
+nor an interrupt. A session with neither link is unlisted. -/
+structure ListedSession where
+  canMessage : Bool
+  canInterrupt : Bool
+  deriving DecidableEq, Repr
+
+def listedSession
+    (sameRequester sameNode caused allowedTarget verifiedStarterReceipt interruptAllowed : Bool) :
+    Option ListedSession :=
+  if sessionTargetAllowed sameRequester sameNode caused allowedTarget then
+    some ⟨true, interruptAllowed⟩
+  else if verifiedStarterReceipt then some ⟨false, false⟩
+  else none
+
+theorem unverified_untargeted_session_unlisted
+    (sameNode caused allowedTarget interruptAllowed : Bool) :
+    listedSession false sameNode caused allowedTarget false interruptAllowed = none := rfl
+
+theorem starter_listed_without_authority
+    (sameNode caused allowedTarget interruptAllowed : Bool) :
+    listedSession false sameNode caused allowedTarget true interruptAllowed =
+      some ⟨false, false⟩ := rfl
+
+theorem listed_without_target_requires_verified_receipt :
+    ∀ sameRequester sameNode caused allowedTarget verifiedStarterReceipt interruptAllowed : Bool,
+      sessionTargetAllowed sameRequester sameNode caused allowedTarget = false →
+      (listedSession sameRequester sameNode caused allowedTarget verifiedStarterReceipt
+        interruptAllowed).isSome = verifiedStarterReceipt := by
+  decide
+
+theorem listed_send_is_target_authority :
+    ∀ sameRequester sameNode caused allowedTarget verifiedStarterReceipt interruptAllowed : Bool,
+      (listedSession sameRequester sameNode caused allowedTarget verifiedStarterReceipt
+        interruptAllowed).any (·.canMessage) =
+        sessionTargetAllowed sameRequester sameNode caused allowedTarget := by
+  decide
+
+theorem listed_interrupt_requires_target_and_interrupt :
+    ∀ sameRequester sameNode caused allowedTarget verifiedStarterReceipt interruptAllowed : Bool,
+      (listedSession sameRequester sameNode caused allowedTarget verifiedStarterReceipt
+        interruptAllowed).any (·.canInterrupt) =
+        (sessionTargetAllowed sameRequester sameNode caused allowedTarget && interruptAllowed) := by
+  decide
 
 structure RawLineage where
   hasParentRequestId : Bool
@@ -73,21 +126,6 @@ theorem malformed_head_does_not_poison
     admissibleRows (bad :: rest) = admissibleRows rest := by
   simp [admissibleRows, hBad]
 
-def controlContinuation (requestHop : Nat) : RawLineage :=
-  { hasParentRequestId := true
-  , hasParentRequestDocId := true
-  , hasParentToolCallId := false
-  , hasParentToolCallDocId := false
-  , requestHop
-  , requestOnlyControl := true
-  , controlAllowedAtDepthZero := true
-  }
-
-theorem control_continuation_is_admissible (depth : Nat) :
-    admissible (controlContinuation depth) = true := by
-  simp [admissible, edgePairsCoherent, pairCoherent, parentShapeCoherent,
-    depthCoherent, controlContinuation]
-
 /-- A busy session receives the message either as a queued turn or as a steer
 into its active turn; the receipt names which one the caller chose. -/
 inductive Delivery where
@@ -125,11 +163,6 @@ theorem session_message_write_names_its_caller (delivery : Delivery) (callerHop 
     edge and hop, written by the same single writer. -/
 def jobSpawnWrite : Nat → Nat → SessionMessageWrite :=
   sessionMessageWrite .request
-
-/-- A plugin job's message to a child session is a session message, delivered
-    as a new request or as a queued continuation like `agent_message`. -/
-def jobMessageWrite : Delivery → Nat → Nat → SessionMessageWrite :=
-  sessionMessageWrite
 
 /-- One calling tool call may name many requests: a job's spawns and messages
     all carry the job call's edge, and ingest admits every one of them. -/
@@ -267,7 +300,7 @@ def openingRequest (rows : List RequestRow) (cause session : String) : Option Re
   | none => earliest candidates
 
 /-- Whether a lineage reader lists `session` as started by `cause`. Only the
-    session's node-signed creation receipt names its starter
+    session's agent-signed creation receipt names its starter
     (`AgentSession.observedStarter`), and that receipt binds the opening
     request recorded at creation; a session with no recorded opening carries
     no such evidence, so its parent edge alone never lists it. -/
@@ -453,7 +486,7 @@ theorem two_job_requests_have_no_single_projection (call : String) (a b : Reques
   simp [singleRequestProjection, callRequests, jobRows]
 
 /-- Mutable provenance is an observation; creation authority requires the
-node signature and exact receipt, request and scope bindings. -/
+creator's signature and exact receipt, request and scope bindings. -/
 def verifiedCreation (signatureValid scopeMatches openingMatches causeMatches : Bool) : Bool :=
   signatureValid && scopeMatches && openingMatches && causeMatches
 

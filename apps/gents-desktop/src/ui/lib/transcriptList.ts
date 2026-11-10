@@ -57,10 +57,14 @@ const ABOVE_READER = 2;
 const BELOW_READER = 12;
 const UP_KEYS = new Set(["ArrowUp", "PageUp", "Home"]);
 const DOWN_KEYS = new Set(["ArrowDown", "PageDown", " "]);
-/* keys typed into a field edit it; they never scroll the transcript */
+/* keys typed into a field edit it, and keys in a dialog, menu or list move
+   within it; they never scroll the transcript behind */
 const editing = (target: EventTarget | null) =>
   target instanceof HTMLElement &&
-  (target.isContentEditable || target.closest("input, textarea, select") !== null);
+  (target.isContentEditable ||
+    target.closest(
+      'input, textarea, select, [role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]',
+    ) !== null);
 /* WebKit drops a position written while the reader's fling is moving; other
    engines take it */
 const DEFERS_WRITES =
@@ -262,6 +266,13 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
     };
     let lastInputAt = -Infinity;
     let lastScrollAt = -Infinity;
+    /* A wheel can reach WebKit's scroll event after the rest timer fires. */
+    let pendingWheel = 0;
+    let wheelGeneration = 0;
+    const clearWheel = () => {
+      pendingWheel = 0;
+      wheelGeneration += 1;
+    };
     /* a wheel or a finger moving the view, which WebKit counts as motion
        before any scroll event says so */
     let lastMotionAt = -Infinity;
@@ -479,6 +490,7 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
       if (s) seenTop = s.scrollTop;
       lastInputAt = -Infinity;
       readerScrolling = false;
+      clearWheel();
     }
 
     /* the carried difference written now: the list sits where it belongs
@@ -532,15 +544,14 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
       if (Math.abs(s.scrollTop - lastWrite) < 1) return;
       lastScrollAt = performance.now();
       glide = null;
-      /* at the top nothing more can scroll: the carried difference lands
-         with the reader's row kept where it is, never taken anew from the
-         layout it shifts */
-      if (hidden && s.scrollTop <= 0) {
-        landCarried();
-        ahead();
-        return;
-      }
-      if (readerScrolling || dragging || performance.now() - lastInputAt < INTENT_MS) {
+      const wheelMoved = pendingWheel !== 0 && Math.sign(moved) === pendingWheel;
+      pendingWheel = 0;
+      if (
+        readerScrolling ||
+        dragging ||
+        wheelMoved ||
+        performance.now() - lastInputAt < INTENT_MS
+      ) {
         const foot = s.scrollHeight - live.current.room - s.clientHeight;
         const atFoot = s.scrollTop >= foot - REPIN_PX;
         /* coming down to the foot follows again; a scroll up that starts
@@ -562,6 +573,15 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
           else capture();
         }
       }
+      /* at the top nothing more can scroll: the carried difference lands
+         with the reader's row, as their scroll left it, kept where it is,
+         never taken anew from the layout it shifts. Landed on the row held
+         before their scroll, a jump to the top would be sent back */
+      if (hidden && s.scrollTop <= 0) {
+        landCarried();
+        ahead();
+        return;
+      }
       ahead();
       publishBottom();
       scheduleRest();
@@ -578,6 +598,42 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
       lastMotionAt = lastInputAt;
       if (event.deltaY < 0) release();
       const s = el();
+      pendingWheel = 0;
+      const generation = ++wheelGeneration;
+      if (DEFERS_WRITES && s && !event.defaultPrevented && event.deltaY !== 0) {
+        const direction = Math.sign(event.deltaY);
+        let target = event.target instanceof Element ? event.target : null;
+        while (target && target !== s) {
+          if (
+            target instanceof HTMLElement &&
+            target.scrollHeight > target.clientHeight
+          ) {
+            const style = getComputedStyle(target);
+            const scrollable = /^(auto|scroll)$/.test(style.overflowY);
+            const canMove =
+              direction < 0
+                ? target.scrollTop > 0
+                : target.scrollTop < target.scrollHeight - target.clientHeight;
+            if (
+              (scrollable && canMove) ||
+              /^(contain|none)$/.test(style.overscrollBehaviorY)
+            )
+              break;
+          }
+          target = target.parentElement;
+        }
+        const canMove =
+          direction < 0
+            ? s.scrollTop > 0
+            : s.scrollTop < s.scrollHeight - s.clientHeight;
+        if (target === s && canMove) pendingWheel = direction;
+      }
+      if (pendingWheel) {
+        queueMicrotask(() => {
+          if (generation === wheelGeneration && event.defaultPrevented)
+            pendingWheel = 0;
+        });
+      }
       /* wheeling at the very top moves nothing and sends no scroll: a
          carried difference lands now, and the next rows are asked for */
       if (s && s.scrollTop <= 0 && event.deltaY < 0) {
@@ -590,6 +646,7 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
     };
     let touchY = 0;
     const onTouchStart = (event: TouchEvent) => {
+      clearWheel();
       touching = true;
       readerScrolling = true;
       touchY = event.touches[0]?.clientY ?? 0;
@@ -605,6 +662,7 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
       scheduleRest();
     };
     const onKey = (event: KeyboardEvent) => {
+      clearWheel();
       if (
         event.defaultPrevented ||
         event.metaKey ||
@@ -613,7 +671,8 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
         editing(event.target)
       )
         return;
-      if (UP_KEYS.has(event.key)) release();
+      /* Shift+Space pages up */
+      if (UP_KEYS.has(event.key) || (event.key === " " && event.shiftKey)) release();
       else if (event.key === "End") {
         setMode({ kind: "follow" });
         reconcile();
@@ -624,6 +683,7 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
       }
     };
     const onPointerDown = (event: PointerEvent) => {
+      clearWheel();
       if (
         (event.target as Element | null)?.closest("[data-slot=scroll-area-scrollbar]")
       ) {

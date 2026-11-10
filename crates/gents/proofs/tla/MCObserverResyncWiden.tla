@@ -1,0 +1,4 @@
+---- MODULE MCObserverResyncWiden ----
+EXTENDS ObserverResync
+
+====

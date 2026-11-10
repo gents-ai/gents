@@ -35,6 +35,7 @@ help:
 	@echo "  make release-cli           Build the release CLI (full features)"
 	@echo "  make release-cli-headless  Build the release CLI without embedded Codex TUI"
 	@echo "  make dist-cli              Build + package $(DIST_DIR)/gents-<triple>.tar.gz(+sha256)"
+	@echo "  make dist-docs             Export $(DIST_DIR)/gents-docs-<version>.tar.gz + SHA256SUMS-docs.txt from RELEASE_BIN"
 	@echo
 	@echo "Measurements:"
 	@echo "  make measure-build-graph   Report the normal CLI dependency graph"
@@ -75,12 +76,13 @@ help:
 	@echo
 	@echo "Live:"
 	@echo "  make live-cli              Run live CLI smoke test"
+	@echo "  make live-onboarding       Run bare gents against real launchd and a PTY (macOS)"
 	@echo "  make live-agent            Run ignored live runtime tests"
 	@echo "  make live-desktop-smoke    Run live desktop smoke suites"
 	@echo
 	@echo "Packs (published from gents-ai/packs):"
-	@echo "  gents pack install gents/code_review"
-	@echo "  gents pack wire gents/review_changes --agent AGENT --targets-from gents/code_review"
+	@echo "  gents config pack install gents/code_review"
+	@echo "  gents config pack wire gents/review_changes --agent AGENT --targets-from gents/code_review"
 	@echo
 	@echo "Worktrees:"
 	@echo "  make worktree BRANCH=<branch> [DIR=<dest>] [BASE=<ref>]"
@@ -125,8 +127,10 @@ CARGO_TARGET_FLAG := $(if $(TARGET),--target $(TARGET),)
 TARGET_TRIPLE := $(if $(TARGET),$(TARGET),$(shell rustc -Vv | awk '/^host:/ { print $$2 }'))
 RELEASE_BIN := target/$(if $(TARGET),$(TARGET)/,)release/gents
 RELEASE_ARTIFACT := gents-$(TARGET_TRIPLE)
+RELEASE_VERSION ?= $(shell awk '/^\[workspace\.package\]$$/ { p = 1; next } /^\[/ { p = 0 } p && $$1 == "version" { gsub(/"/, "", $$3); print $$3; exit }' Cargo.toml)
+DOCS_ARTIFACT := gents-docs-$(RELEASE_VERSION)
 
-.PHONY: release-cli release-cli-headless fast-dev-cli dist-cli measure-build-graph measure-release-cli measure-build-attribution
+.PHONY: release-cli release-cli-headless fast-dev-cli dist-cli dist-docs measure-build-graph measure-release-cli measure-build-attribution
 release-cli:
 	CARGO_TARGET_DIR="$(CARGO_TARGET_DIR)" $(CARGO) build -p gents-cli --release --locked $(CARGO_TARGET_FLAG)
 
@@ -156,6 +160,18 @@ dist-cli: release-cli
 	cd "$(DIST_DIR)" && sha256sum "$(RELEASE_ARTIFACT).tar.gz" > "$(RELEASE_ARTIFACT).tar.gz.sha256"
 	@rm -rf "$(DIST_DIR)/$(RELEASE_ARTIFACT)"
 	@ls -lh "$(DIST_DIR)/$(RELEASE_ARTIFACT).tar.gz"*
+
+# Exports from an already built binary (release-docs.yml passes the published
+# Linux CLI as RELEASE_BIN). The binary refuses a --tag that does not name its
+# own version, so a binary from another release cannot produce a mislabeled
+# archive, and it archives the bundle itself so the bytes match on every host.
+dist-docs:
+	@rm -rf "$(DIST_DIR)/$(DOCS_ARTIFACT)" "$(DIST_DIR)/$(DOCS_ARTIFACT).tar.gz"
+	@mkdir -p "$(DIST_DIR)"
+	"$(RELEASE_BIN)" __docs-bundle --tag "v$(RELEASE_VERSION)" --out "$(DIST_DIR)/$(DOCS_ARTIFACT)" --archive "$(DIST_DIR)/$(DOCS_ARTIFACT).tar.gz"
+	cd "$(DIST_DIR)" && sha256sum "$(DOCS_ARTIFACT).tar.gz" > SHA256SUMS-docs.txt
+	@rm -rf "$(DIST_DIR)/$(DOCS_ARTIFACT)"
+	@ls -lh "$(DIST_DIR)/$(DOCS_ARTIFACT).tar.gz" "$(DIST_DIR)/SHA256SUMS-docs.txt"
 
 .PHONY: fmt fmt-check lint check-cli-headless proofs
 fmt:
@@ -254,12 +270,16 @@ desktop-native-dev: build-cli
 desktop-native-build: desktop-native-stage-sidecar
 	$(NPM) --prefix $(DESKTOP_DIR) run tauri -- build --config src-tauri/tauri.bundle.conf.json --config $(DESKTOP_LOCAL_TAURI_CONFIG)
 
-.PHONY: live-cli live-agent live-desktop-smoke
+.PHONY: live-cli live-onboarding live-agent live-desktop-smoke
 live-cli:
 	$(CARGO) test -p gents-cli --features live-e2e --test cli_live_suite cli_live::standard_onboarding_live_demo_runs_real_conversation_with_filesystem_tools $(CARGO_PROFILE_FLAG) -- --ignored --nocapture --test-threads=1
 
+LIVE_FILTER ?= cli_onboarding_live::
+live-onboarding:
+	$(CARGO) test -p gents-cli --features live-e2e,native-e2e --test cli_live_suite $(LIVE_FILTER) $(CARGO_PROFILE_FLAG) -- --ignored --nocapture --test-threads=1
+
 live-agent:
-	GENTS_EVAL_TARGET=$${GENTS_EVAL_TARGET:-workstation-1} $(CARGO) test -p gents --features live-e2e --test e2e_live -- --ignored --nocapture --test-threads=1
+	GENTS_EVAL_TARGET=$${GENTS_EVAL_TARGET:-workstation-1} $(CARGO) test -p gents --features live-e2e --test e2e_live $(CARGO_PROFILE_FLAG) -- --ignored --nocapture --test-threads=1
 
 live-desktop-smoke:
 	$(NPM) --prefix $(DESKTOP_DIR) run test:live:chat

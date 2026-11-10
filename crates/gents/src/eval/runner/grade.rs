@@ -1,6 +1,6 @@
 use serde_json::{json, Value};
 
-use crate::document_config::{EvalCase, EvalCheckRef, EvalStage, EvalTier};
+use crate::documents::{EvalCase, EvalCheckRef, EvalStage, EvalTier};
 use crate::eval::checks::{failure_feedback, CheckRegistry};
 use crate::eval::runner::executor::{StageEvidence, TrialEvidence};
 use crate::eval::{classify, EvidenceClass, OutcomeKind, ProviderReason};
@@ -128,7 +128,9 @@ fn checked(
             "unknown_check",
         );
     };
-    let verdict = implementation.evaluate(&check.params, observed);
+    let verdict = registry
+        .evaluate_bound(&check.check, &check.params, observed)
+        .expect("registered check");
     VerdictRow {
         stage_id: stage.stage_id.clone(),
         check: check.check.clone(),
@@ -168,9 +170,10 @@ fn synthetic(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document_config::{EvalReducer, EvalSplit};
+    use crate::documents::{EvalReducer, EvalSplit};
+    use crate::eval::runner::completion_is_not_evidence;
+    use crate::eval::runner::projection::completion;
     use crate::eval::runner::scripted::ScriptedExecutor;
-    use crate::eval::runner::{completion, completion_is_not_evidence};
     use crate::eval::{
         case_trial_score, classify, CaseTrialScore, EvidenceClass, OutcomeKind, ProviderReason,
         VerdictView,

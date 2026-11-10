@@ -2,9 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 
-use crate::config_client::ConfigRead;
-use crate::document_config::{Agent, AgentContext, Tools};
-use crate::graphql::escape_graphql_string;
+use crate::documents::{Agent, AgentContext, Tools};
+use crate::store::config_client::ConfigRead;
+use crate::store::graphql::escape_graphql_string;
 
 /// Check the surviving document graph before retiring plugin files. Pack
 /// removal calls this inside its transaction after proposed document deletions;
@@ -24,11 +24,11 @@ where
     for (agent, tools, reference) in selected_plugin_references(access, owner).await? {
         anyhow::ensure!(
             !removed.contains(&reference.plugin),
-            "cannot remove plugin {}: agent {:?} still selects it through Tools {:?}; remove that reference first with `gents pack wire {} --agent {} --remove --home <node-home>`",
+            "cannot remove plugin {}: agent {:?} still selects it through Tools {:?}; remove that reference first with `gents config pack wire {} --agent {} --remove --home <node-home>`",
             reference.plugin, agent, tools, reference.plugin, agent
         );
     }
-    Ok(())
+    Err(super::PackRemovalError::ReferenceInventoryUnavailable.into())
 }
 
 pub(crate) async fn ensure_replaced_plugins_match<R>(
@@ -60,13 +60,13 @@ where
 async fn selected_plugin_references<R>(
     access: &R,
     owner: &str,
-) -> Result<Vec<(String, String, crate::document_config::PluginToolRef)>>
+) -> Result<Vec<(String, String, crate::documents::PluginToolRef)>>
 where
     R: ConfigRead + ?Sized,
 {
     let owner = escape_graphql_string(owner);
     let response = access.execute_read(&format!(r#"{{
-        Agent(filter: {{node_did: {{_eq: "{owner}"}}}}) {{agent_id node_did context_id inference_profile_id}}
+        Agent(filter: {{node_did: {{_eq: "{owner}"}}}}) {{agent_did creation_nonce node_did context_id inference_profile_id}}
         AgentContext(filter: {{node_did: {{_eq: "{owner}"}}}}) {{context_id node_did tools_id}}
         Tools(filter: {{node_did: {{_eq: "{owner}"}}}}) {{tools_id node_did integrations}}
     }}"#)).await?;
@@ -98,7 +98,7 @@ where
             continue;
         };
         let context = contexts.get(context_id).with_context(|| format!(
-            "cannot verify plugin removal: agent {:?} references missing context {context_id:?}", agent.agent_id
+            "cannot verify plugin removal: agent {:?} references missing context {context_id:?}", agent.agent_did
         ))?;
         let Some(tools_id) = context.tools_id.as_ref() else {
             continue;
@@ -113,7 +113,7 @@ where
             .unwrap_or_default()
         {
             references.push((
-                agent.agent_id.clone(),
+                agent.agent_did.clone(),
                 tools.tools_id.clone(),
                 reference.clone(),
             ));

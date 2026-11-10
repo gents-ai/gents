@@ -26,7 +26,8 @@ export function RowMenu({
   children,
 }: {
   name: string;
-  base: Extract<Route, { name: "agent" }>;
+  /** where its rows open: a configuration section, or the Automations page */
+  base: Extract<Route, { name: "agent" }> | { name: "automations" };
   id: string;
   enabled?: {
     checked: boolean;
@@ -38,7 +39,8 @@ export function RowMenu({
   warning?: string;
   children?: React.ReactNode;
 }) {
-  const noun = NOUNS[base.section] ?? "item";
+  const noun =
+    base.name === "automations" ? "automation" : (NOUNS[base.section] ?? "item");
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState(false);
   const toggle = async (next: boolean) => {

@@ -1,0 +1,206 @@
+use super::support::*;
+use super::*;
+
+const READINESS_DEADLOCK_GUARD: Duration = Duration::from_secs(30);
+
+async fn wait_for_agent_state(
+    node: &defra_node::Node,
+    node_did: &str,
+    agent_did: &str,
+    state: AgentReadinessState,
+    reason: Option<AgentReadinessUnavailableReason>,
+) -> NodeReadinessSnapshot {
+    let deadline = tokio::time::Instant::now() + READINESS_DEADLOCK_GUARD;
+    loop {
+        let readiness = fetch_node_readiness(node, node_did).await;
+        if readiness.agents.iter().any(|entry| {
+            entry.agent_did == agent_did && entry.state == state && entry.reason == reason
+        }) {
+            return readiness;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for {agent_did} to reach {state:?}/{reason:?}; last readiness: {readiness:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
+fn install_fixture_plugin(plugin_home: &std::path::Path) -> crate::pack::PackIdentity {
+    let (_pack_guard, pack_root) =
+        crate::test_support::fixture_pack_copy("bind_plugin_fixture", &serde_json::json!({}));
+    let (pack_bytes, _) = crate::pack::archive::pack_dir(&pack_root).unwrap();
+    let archive = crate::pack::archive::PackArchive::from_bytes(&pack_bytes).unwrap();
+    let installed = crate::plugin::install::install_pack_plugins(
+        plugin_home,
+        archive.manifest(),
+        archive.digest(),
+        |path| archive.asset(path),
+        false,
+    )
+    .unwrap();
+    crate::pack::PackIdentity::new(
+        archive.manifest(),
+        archive.digest(),
+        installed
+            .iter()
+            .map(|plugin| crate::pack::InstalledPackPlugin {
+                name: plugin.name.clone(),
+                digest: plugin.digest.clone(),
+            })
+            .collect(),
+    )
+}
+
+#[tokio::test]
+async fn missing_and_removed_plugins_demote_then_readmit_the_agent() {
+    let endpoint = MockModelEndpoint::start("default").unwrap();
+    let fixture = plugin_runtime_fixture(
+        "plugin-readmission",
+        "backend-plugin-readmit",
+        endpoint.endpoint(),
+    )
+    .await
+    .unwrap();
+    let node = fixture.node.clone();
+    let identity = fixture.runtime.clone();
+    let plugin_home = tempfile::tempdir().unwrap();
+    let agent = crate::Gents::from_default_agent_documents(
+        node.clone(),
+        identity.clone(),
+        crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
+            tool_ceiling: ToolCeiling::meta_only(),
+            plugin_home: Some(plugin_home.path().to_path_buf()),
+            retry_policy: crate::runtime::agent::retry::RetryPolicy {
+                max_retries: 3,
+                base_delay_ms: 5,
+                max_delay_ms: 10,
+            },
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let node_did = identity.did().to_string();
+    let agent_did = agent.default_agent_did().to_string();
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let run = tokio::spawn(agent.run(shutdown_rx));
+    wait_for_runtime_process_state(node.as_ref(), &node_did, "ready").await;
+
+    let tools: Tools = serde_json::from_value(serde_json::json!({
+        "tools_id": format!("{agent_did}:tools"),
+        "node_did": node_did,
+        "integrations": {"plugins": [{"plugin": "fixture/list_files"}]},
+    }))
+    .unwrap();
+    crate::documents::write_tools_document(&fixture.user_access, &tools)
+        .await
+        .unwrap();
+    let demoted = wait_for_agent_state(
+        node.as_ref(),
+        &node_did,
+        &agent_did,
+        AgentReadinessState::Unavailable,
+        Some(AgentReadinessUnavailableReason::ToolSurfaceUnavailable),
+    )
+    .await;
+    assert_eq!(
+        demoted.process_state,
+        NodeReadinessProcessState::Ready,
+        "a demoted Agent degrades readiness without stopping the process"
+    );
+
+    let pack = install_fixture_plugin(plugin_home.path());
+    crate::pack::record_plugin_store_change_as_with_node_binding(
+        &fixture.agent_access,
+        &node_did,
+        fixture
+            .agent_access
+            .actor_did()
+            .map(identity::Did::new)
+            .transpose()
+            .unwrap(),
+        plugin_home.path(),
+        &pack.coordinate,
+        Some(&pack),
+        Some(&fixture.node_binding),
+    )
+    .await
+    .unwrap();
+
+    let readmitted = wait_for_agent_state(
+        node.as_ref(),
+        &node_did,
+        &agent_did,
+        AgentReadinessState::Ready,
+        None,
+    )
+    .await;
+    assert!(
+        readmitted.active_generation >= 3,
+        "the Tools write and the install each applied a generation: {readmitted:?}"
+    );
+
+    crate::plugin::store::remove_record(plugin_home.path(), "fixture", "list_files").unwrap();
+    crate::pack::record_plugin_store_change_as_with_node_binding(
+        &fixture.agent_access,
+        &node_did,
+        fixture
+            .agent_access
+            .actor_did()
+            .map(identity::Did::new)
+            .transpose()
+            .unwrap(),
+        plugin_home.path(),
+        &pack.coordinate,
+        None,
+        Some(&fixture.node_binding),
+    )
+    .await
+    .unwrap();
+    let removed = wait_for_agent_state(
+        node.as_ref(),
+        &node_did,
+        &agent_did,
+        AgentReadinessState::Unavailable,
+        Some(AgentReadinessUnavailableReason::ToolSurfaceUnavailable),
+    )
+    .await;
+    assert_eq!(removed.process_state, NodeReadinessProcessState::Ready);
+    assert!(removed.active_generation > readmitted.active_generation);
+
+    let pack = install_fixture_plugin(plugin_home.path());
+    crate::pack::record_plugin_store_change_as_with_node_binding(
+        &fixture.agent_access,
+        &node_did,
+        fixture
+            .agent_access
+            .actor_did()
+            .map(identity::Did::new)
+            .transpose()
+            .unwrap(),
+        plugin_home.path(),
+        &pack.coordinate,
+        Some(&pack),
+        Some(&fixture.node_binding),
+    )
+    .await
+    .unwrap();
+    let restored = wait_for_agent_state(
+        node.as_ref(),
+        &node_did,
+        &agent_did,
+        AgentReadinessState::Ready,
+        None,
+    )
+    .await;
+    assert!(restored.active_generation > removed.active_generation);
+
+    let _ = shutdown_tx.send(true);
+    tokio::time::timeout(READINESS_DEADLOCK_GUARD, run)
+        .await
+        .expect("agent task should join")
+        .expect("run task should join")
+        .expect("agent run should return ok");
+}

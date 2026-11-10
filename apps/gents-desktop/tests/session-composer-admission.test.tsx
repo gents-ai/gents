@@ -24,6 +24,7 @@ import { deployment } from "./config-panel-wiring/fixtures";
 import { MemoryNavProvider } from "@gents/shell";
 import { writeSession } from "../src/hooks/sessionStore";
 import { composerText, typeInComposer, typeText } from "./composer-field";
+import { goalControl, observedGoal } from "./goal-state-fixture";
 
 const navigate = vi.hoisted(() => vi.fn());
 const markdownRender = vi.hoisted(() => vi.fn());
@@ -59,7 +60,7 @@ function heldSession(over: Partial<DesktopSessionSnapshot> = {}) {
   return {
     sessionId: "session",
     nodeDid: NODE,
-    agentId: "default",
+    agentDid: "default",
     title: "Session",
     turnState: "interrupted",
     timelineItems: [],
@@ -132,8 +133,9 @@ describe("SessionScreen canonical composer admission", () => {
             content: "Stable transcript",
             reasoning: null,
             timestamp: null,
+            reconstruction: { state: "ready" },
           },
-        ] as DesktopSessionSnapshot["timelineItems"],
+        ] satisfies DesktopSessionSnapshot["timelineItems"],
       }),
     });
     markdownRender.mockClear();
@@ -188,17 +190,18 @@ describe("SessionScreen canonical composer admission", () => {
       const deployment = {
         nodeDid: "did:key:agent",
         dialSucceeded: true,
+        runtimeConnection: "connected",
         chatSafe: true,
-        node: { nodeDid: "did:key:agent", defaultAgentId: "default" },
+        node: { nodeDid: "did:key:agent", defaultAgentDid: "default" },
         agents: [
           {
-            agentId: "default",
+            agentDid: "default",
             displayName: "Default",
             enabled: true,
             isDefault: true,
           },
           {
-            agentId: "selected",
+            agentDid: "selected",
             displayName: "Selected",
             enabled: true,
             isDefault: false,
@@ -211,17 +214,17 @@ describe("SessionScreen canonical composer admission", () => {
           updatedAt: "2026-09-15T00:00:00Z",
           agents: [
             defaultReady
-              ? { state: "ready", agentId: "default" }
+              ? { state: "ready", agentDid: "default" }
               : {
                   state: "unavailable",
-                  agentId: "default",
+                  agentDid: "default",
                   reason: "backend_disabled",
                 },
             selectedReady
-              ? { state: "ready", agentId: "selected" }
+              ? { state: "ready", agentDid: "selected" }
               : {
                   state: "unavailable",
-                  agentId: "selected",
+                  agentDid: "selected",
                   reason: "backend_disabled",
                 },
           ],
@@ -266,7 +269,7 @@ describe("SessionScreen canonical composer admission", () => {
     expect(sendChatMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         content: "hello",
-        agentId: "default",
+        agentDid: "default",
         sessionId: expect.any(String),
       }),
     );
@@ -300,10 +303,12 @@ describe("SessionScreen canonical composer admission", () => {
   });
 
   it("preserves a canonical blocker for a non-empty local draft", () => {
-    const { app, sendChatMessage } = screenApp({ nodeOverrides: { chatSafe: false } });
+    const { app, sendChatMessage } = screenApp({
+      nodeOverrides: { runtimeConnection: "connecting" },
+    });
     renderScreen(app);
     const status = app.view.getState().shellProjection.nonEmptyContentSendStatus;
-    expect(status.kind).toBe("disabled");
+    expect(status).toMatchObject({ kind: "disabled", reason: "runtimeNotConnected" });
 
     typeInComposer(screen.getByLabelText("Message"), "hello");
     const send = screen.getByRole("button", { name: "Send" });
@@ -388,7 +393,7 @@ const queuedTurn = (requestId: string, content: string) => ({
   requestId,
   content,
   selectedSkillIds: [],
-  lifecycleState: "pending",
+  lifecycleState: "pending" as const,
   foldedIntoRequestId: null,
   origin: null,
   createdAt: "2026-10-07T12:00:00Z",
@@ -577,7 +582,7 @@ describe("SessionScreen automated inputs", () => {
           },
           {
             kind: "automatedInput",
-            origin: { kind: "backgroundCompletion" },
+            origin: { kind: "backgroundCompletion", notification: true },
             content: "<agent-notification>done</agent-notification>",
             ...durable("background", 5),
           },
@@ -593,13 +598,16 @@ describe("SessionScreen automated inputs", () => {
     renderScreen(app);
     const items = screen.getAllByTestId("automated-input");
     expect(items.map((item) => item.textContent)).toEqual([
-      expect.stringContaining("Message from another session"),
+      expect.stringContaining("From another session"),
       expect.stringContaining("Schedule · nightly"),
-      expect.stringContaining("Background activity"),
+      expect.stringContaining("<agent-notification>done</agent-notification>"),
       expect.stringContaining("Goal continuation · 2"),
     ]);
     const text = screen.getByTestId("transcript-panel").textContent ?? "";
-    expect(text.indexOf("started")).toBeLessThan(text.indexOf("Message from"));
+    expect(text.indexOf("started")).toBeLessThan(text.indexOf("From another"));
+    expect(
+      within(items[0]!).getByRole("link", { name: "another session" }),
+    ).toHaveAttribute("href", expect.stringContaining("sender-session"));
     expect(within(items[0]!).getByTestId("automated-input-body")).toHaveTextContent(
       "please review the diff",
     );
@@ -610,19 +618,267 @@ describe("SessionScreen automated inputs", () => {
       "write the nightly report",
     );
     expect(within(items[2]!).queryByTestId("automated-input-body")).toBeNull();
-    expect(within(items[0]!).getByTestId("automated-input-content")).not.toBeVisible();
-    await user.click(within(items[0]!).getByText("Model input"));
+    expect(within(items[3]!).queryByTestId("automated-input-body")).toBeNull();
+    expect(within(items[0]!).queryByTestId("automated-input-content")).toBeNull();
+    const show = within(items[0]!).getByRole("button", { name: "Show model input" });
+    expect(show).toHaveAttribute("aria-expanded", "false");
+    await user.click(show);
+    expect(
+      within(items[0]!).getByRole("button", { name: "Hide model input" }),
+    ).toHaveAttribute("aria-expanded", "true");
     expect(within(items[0]!).getByTestId("automated-input-content")).toBeVisible();
     expect(within(items[0]!).getByTestId("automated-input-content").textContent).toBe(
       "[message source envelope]\n\nplease review the diff\nit is in src/",
     );
-    await user.click(within(items[2]!).getByText("Model input"));
+    await user.click(
+      within(items[2]!).getByRole("button", {
+        name: "Show model input: <agent-notification>done</agent-notification>",
+      }),
+    );
     expect(within(items[2]!).getByTestId("automated-input-content")).toBeVisible();
     expect(within(items[2]!).getByTestId("automated-input-content").textContent).toBe(
       "<agent-notification>done</agent-notification>",
     );
-    await user.click(within(items[3]!).getByText("Model input"));
+    await user.click(
+      within(items[3]!).getByRole("button", { name: /^Show model input/ }),
+    );
     expect(within(items[3]!).getByTestId("automated-input-content")).toBeVisible();
+  });
+
+  it("reads a message without its routing line when it has no friendly body", () => {
+    const routed =
+      "[message agent:default session:5c1d node:did:key:z6Mk · at:2026-11-01T13:53:39Z · cause:9a7e]\n\nthe build is green";
+    const { app } = screenApp({
+      session: heldSession({
+        timelineItems: [
+          {
+            kind: "automatedInput",
+            origin: {
+              kind: "sessionMessage",
+              senderNodeDid: "did:key:elsewhere",
+              senderSessionId: null,
+              senderRequestId: null,
+            },
+            content: routed,
+            ...durable("routed", 1),
+          },
+        ] as DesktopSessionSnapshot["timelineItems"],
+      }),
+    });
+    renderScreen(app);
+    const item = screen.getByTestId("automated-input");
+    expect(item).toHaveTextContent("From another node");
+    expect(within(item).queryByRole("link")).toBeNull();
+    expect(within(item).getByTestId("automated-input-body").textContent?.trim()).toBe(
+      "the build is green",
+    );
+  });
+
+  it("folds background results that arrive together into one line", async () => {
+    const user = userEvent.setup();
+    const completion = (id: string, status: string) =>
+      `<tool-completion tool_call_id="${id}" tool_name="bash" status="${status}">\n  <result>ok</result>\n</tool-completion>`;
+    const { app } = screenApp({
+      session: heldSession({
+        timelineItems: [
+          {
+            kind: "toolGroup",
+            itemKey: "tools",
+            messageSequence: 1,
+            tools: [
+              {
+                itemKey: "tool-test",
+                toolName: "bash",
+                toolCallId: "call-test",
+                statusKind: "success",
+                awaitMode: "background",
+                reconstruction: { state: "ready" },
+                presentation: {
+                  kind: "command",
+                  command: "cargo test -p gents",
+                  exitCode: 0,
+                  timedOut: false,
+                  failed: false,
+                  durationMs: 1,
+                  cwd: null,
+                  executionMode: "read_only",
+                  networkMode: "disabled",
+                  stdout: "",
+                  stderr: "",
+                  fallbackOutput: null,
+                },
+              },
+              {
+                itemKey: "tool-worker",
+                toolName: "agent_new",
+                toolCallId: "call-worker",
+                statusKind: "success",
+                awaitMode: "background",
+                reconstruction: { state: "ready" },
+                presentation: {
+                  kind: "agent",
+                  action: "start",
+                  name: "engineer",
+                  sessionId: "session-worker",
+                  description: null,
+                  output: null,
+                },
+              },
+            ],
+          },
+          {
+            kind: "automatedInput",
+            origin: { kind: "backgroundCompletion", notification: true },
+            content: completion("call-test", "completed"),
+            ...durable("first", 2),
+          },
+          {
+            kind: "automatedInput",
+            origin: { kind: "backgroundCompletion", notification: true },
+            content: completion("call-worker", "completed"),
+            ...durable("worker", 3),
+          },
+          {
+            kind: "automatedInput",
+            origin: { kind: "backgroundCompletion", notification: true },
+            content: completion("call-elsewhere", "failed"),
+            ...durable("second", 4),
+          },
+        ] as DesktopSessionSnapshot["timelineItems"],
+      }),
+    });
+    renderScreen(app);
+    const run = screen.getByTestId("background-results");
+    const fold = within(run).getByRole("button", { name: "3 background results" });
+    expect(fold).toHaveAttribute("aria-expanded", "false");
+    expect(within(run).queryAllByTestId("automated-input")).toHaveLength(0);
+    await user.click(fold);
+    const items = within(run).getAllByTestId("automated-input");
+    expect(items.map((item) => item.getAttribute("aria-label"))).toEqual([
+      "cargo test -p gents finished",
+      "engineer finished",
+      "bash failed",
+    ]);
+    expect(items[0]!.querySelector(".lucide-terminal")).not.toBeNull();
+    expect(items[2]!.querySelector(".lucide-clock")).not.toBeNull();
+    const worker = within(items[1]!).getByRole("link", { name: "engineer" });
+    expect(worker).toHaveAttribute("href", expect.stringContaining("session-worker"));
+    const stay = (event: Event) => event.preventDefault();
+    document.addEventListener("click", stay);
+    await user.click(worker);
+    document.removeEventListener("click", stay);
+    expect(
+      within(items[1]!).getByRole("button", {
+        name: "Show model input: engineer finished",
+      }),
+    ).toHaveAttribute("aria-expanded", "false");
+    await user.click(within(items[2]!).getByText("failed"));
+    expect(
+      within(items[2]!).getByRole("button", { name: "Hide model input: bash failed" }),
+    ).toHaveAttribute("aria-expanded", "true");
+    expect(within(items[2]!).getByTestId("automated-input-content").textContent).toBe(
+      completion("call-elsewhere", "failed"),
+    );
+  });
+
+  it("reads the wake prompt with the result it follows, and alone as a request to review", async () => {
+    const user = userEvent.setup();
+    const wake =
+      "Review the new background completion results and continue the task if needed.";
+    const completion = `<tool-completion tool_call_id="call-x" tool_name="bash" status="completed">\n  <result>ok</result>\n</tool-completion>`;
+    const background = (key: string, sequence: number, content: string) => ({
+      kind: "automatedInput",
+      origin: { kind: "backgroundCompletion", notification: content !== wake },
+      content,
+      ...durable(key, sequence),
+    });
+    const { app } = screenApp({
+      session: heldSession({
+        timelineItems: [
+          background("result", 1, completion),
+          background("wake", 2, wake),
+          {
+            kind: "assistantMessage",
+            content: "ok",
+            reasoning: null,
+            ...durable("a", 3),
+          },
+          background("alone", 4, wake),
+        ] as DesktopSessionSnapshot["timelineItems"],
+      }),
+    });
+    renderScreen(app);
+    expect(screen.queryByTestId("background-results")).toBeNull();
+    const [result, alone] = screen.getAllByTestId("automated-input");
+    expect(screen.getAllByTestId("automated-input")).toHaveLength(2);
+    expect(result).toHaveAccessibleName("bash finished");
+    await user.click(
+      within(result!).getByRole("button", { name: "Show model input: bash finished" }),
+    );
+    expect(within(result!).getByTestId("automated-input-content").textContent).toBe(
+      `${completion}\n\n${wake}`,
+    );
+    expect(alone).toHaveAccessibleName("Asked to review background results");
+    expect(alone!.querySelector(".lucide-clock")).not.toBeNull();
+    await user.click(
+      within(alone!).getByRole("button", {
+        name: "Show model input: Asked to review background results",
+      }),
+    );
+    expect(within(alone!).getByTestId("automated-input-content").textContent).toBe(
+      wake,
+    );
+  });
+
+  it("draws the sender's agent and session, from its routing line when the origin lacks it", () => {
+    const shortNode =
+      NODE.length > 20 ? `${NODE.slice(0, 16)}..${NODE.slice(-4)}` : NODE;
+    const message = (itemKey: string, sequence: number, session: string) => ({
+      kind: "automatedInput",
+      origin: {
+        kind: "sessionMessage",
+        senderNodeDid: NODE,
+        senderSessionId: null,
+        senderRequestId: `cause-${itemKey}`,
+      },
+      content: `[message agent:default session:${session} node:${shortNode} · at:2026-11-01T13:53:39Z · cause:cause-${itemKey}]\n\nthe build is green`,
+      ...durable(itemKey, sequence),
+    });
+    const { app } = screenApp({
+      nodeOverrides: {
+        sessions: [
+          {
+            sessionId: "session-reviewer",
+            nodeDid: NODE,
+            title: "Review the parser change",
+            agentDid: "default",
+            tags: [],
+          },
+        ],
+      },
+      session: heldSession({
+        timelineItems: [
+          message("known", 1, "session-reviewer"),
+          {
+            kind: "assistantMessage",
+            content: "ok",
+            reasoning: null,
+            ...durable("a", 2),
+          },
+          message("unknown", 3, "session-unlisted"),
+        ] as DesktopSessionSnapshot["timelineItems"],
+      }),
+    });
+    renderScreen(app);
+    const [known, unknown] = screen.getAllByTestId("automated-input");
+    expect(known).toHaveAccessibleName("From Review the parser change");
+    expect(
+      within(known!).getByRole("link", { name: "Review the parser change" }),
+    ).toHaveAttribute("href", expect.stringContaining("session-reviewer"));
+    expect(known!.querySelector(".lucide-bot")).toBeNull();
+    expect(unknown).toHaveAccessibleName("From another session");
+    expect(within(unknown!).queryByRole("link")).toBeNull();
+    expect(unknown!.querySelector(".lucide-bot")).not.toBeNull();
   });
 
   it("says why an input is unavailable instead of expanding to nothing", async () => {
@@ -646,26 +902,111 @@ describe("SessionScreen automated inputs", () => {
     expect(screen.getByTestId("automated-input-unavailable")).toHaveTextContent(
       "This input is not shared with this device.",
     );
-    expect(screen.queryByText("Model input")).toBeNull();
+    expect(screen.queryByRole("button", { name: /model input/ })).toBeNull();
+  });
+
+  it("says why a person's message is unavailable instead of drawing it empty", () => {
+    const unavailable = (state: "loading" | "denied" | "invalid", n: number) => ({
+      kind: "userMessage",
+      itemKey: `authored:doc-${n}:prompt`,
+      requestId: `doc-${n}`,
+      ownsTurn: true,
+      sequence: n,
+      content: null,
+      timestamp: null,
+      reconstruction: { state },
+    });
+    const { app } = screenApp({
+      session: heldSession({
+        timelineItems: [
+          unavailable("loading", 1),
+          unavailable("denied", 2),
+          unavailable("invalid", 3),
+        ] as DesktopSessionSnapshot["timelineItems"],
+      }),
+    });
+    renderScreen(app);
+    expect(
+      screen
+        .getAllByTestId("user-input-unavailable")
+        .map((reason) => reason.textContent),
+    ).toEqual([
+      "Still syncing this input.",
+      "This input is not shared with this device.",
+      "This input could not be read.",
+    ]);
+  });
+
+  it("draws a message of only captured context or only attachments without an empty bubble", () => {
+    const { app } = screenApp({
+      session: heldSession({
+        timelineItems: [
+          {
+            kind: "userMessage",
+            itemKey: "authored:doc-context:prompt",
+            requestId: "doc-context",
+            ownsTurn: true,
+            sequence: 1,
+            content: null,
+            timestamp: null,
+            capturedContext: [
+              {
+                kind: "selection",
+                source: "editor",
+                capturedAt: "2026-10-30T00:00:00Z",
+                uri: "file:///work/src/main.rs",
+                terminalName: null,
+                workspaceUri: null,
+                version: null,
+                unsaved: false,
+                range: {
+                  start: { line: 11, character: 0 },
+                  end: { line: 19, character: 4 },
+                },
+                content: "fn main() {}",
+              },
+            ],
+            reconstruction: { state: "ready" },
+          },
+          {
+            kind: "userMessage",
+            itemKey: "authored:doc-file:prompt",
+            requestId: "doc-file",
+            ownsTurn: true,
+            sequence: 2,
+            content: null,
+            timestamp: null,
+            attachments: [
+              { name: "notes.txt", mediaType: "text/plain", digest: "hash", size: 2 },
+            ],
+            reconstruction: { state: "ready" },
+          },
+        ] as DesktopSessionSnapshot["timelineItems"],
+      }),
+    });
+    renderScreen(app);
+    const bubbles = document.querySelectorAll('[data-slot="user-message"]');
+    expect(bubbles).toHaveLength(1);
+    expect(
+      within(bubbles[0] as HTMLElement).getByTestId("sent-context"),
+    ).toHaveTextContent("main.rs:12–20");
+    expect(screen.getByText("notes.txt")).toBeVisible();
   });
 });
 
 describe("SessionScreen goal label", () => {
-  const goal = (status: string, wrapupCompleted: boolean) => ({
-    goalId: "g",
-    status,
-    objective: "Unfinished work",
-    wrapupRequested: true,
-    wrapupCompleted,
-    tokensUsed: 1000,
-    tokenBudget: 1000,
-    consecutiveBlockedAudits: 0,
-    activeTimeSeconds: 12,
-    continuationSequence: 1,
-    lastBlockedReason: null,
-    lastFailure: null,
-    completionEvidence: null,
-  });
+  const goal = (status: string, wrapupCompleted: boolean) =>
+    observedGoal(
+      goalControl(status, {
+        objective: "Unfinished work",
+        wrapupRequested: true,
+        wrapupCompleted,
+        tokensUsed: "1000",
+        tokenBudget: "1000",
+        activeTimeSeconds: "12",
+        continuationSequence: "1",
+      }),
+    );
 
   it("does not report a wrapped-up budget-limited goal as met", () => {
     const { app } = screenApp({
@@ -782,11 +1123,11 @@ it("does not clear the replacement history draft when an earlier client's reply 
     finish();
     await pending;
   });
-  await waitFor(() =>
-    expect(app.stores.chat.getState().chatRequestsInFlight.size).toBe(0),
-  );
+  await waitFor(() => expect(app.stores.chat.getState().chatDrafts).toEqual([]));
   expect(composerText(screen.getByLabelText("Message"))).toBe(
     "same text in another history",
   );
-  expect(app.stores.chat.getState().chatDrafts[0].clientDid).toBe("test-client");
+  // Confirmed under its original client: the runtime holds it, so the
+  // payload is released (Lean `ClientOptimisticSend`).
+  expect(app.stores.chat.getState().chatDrafts).toEqual([]);
 });

@@ -20,7 +20,7 @@ const session = (overrides: Partial<SessionSummary>): SessionSummary => ({
   title: "Lead",
   previewText: null,
   status: "processing",
-  agentId: null,
+  agentDid: null,
   taskId: null,
   taskName: null,
   triggerId: null,
@@ -66,18 +66,34 @@ describe("the started sessions button", () => {
       worker("c", "completed"),
     ]);
     const button = screen.getByRole("button", {
-      name: "3 started sessions, 1 running",
+      name: "3 started sessions · 1 running",
     });
     expect(button).toHaveTextContent("3");
     expect(screen.getByTestId("started-sessions-running")).toBeInTheDocument();
   });
 
+  it("says when a session under it failed or was stopped, and marks the failure", () => {
+    renderWith([
+      session({}),
+      worker("a", "running"),
+      worker("b", "failed"),
+      worker("c", "interrupted"),
+    ]);
+    expect(
+      screen.getByRole("button", {
+        name: "3 started sessions · 1 running · 1 failed · 1 stopped",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("started-sessions-failed")).toBeInTheDocument();
+    expect(screen.queryByTestId("started-sessions-running")).toBeNull();
+  });
+
   it("shows each started session's agent once", () => {
     renderWith([
       session({}),
-      { ...worker("a", "completed"), agentId: "writer" },
-      { ...worker("b", "completed"), agentId: "writer" },
-      { ...worker("c", "completed"), agentId: "reviewer" },
+      { ...worker("a", "completed"), agentDid: "writer" },
+      { ...worker("b", "completed"), agentDid: "writer" },
+      { ...worker("c", "completed"), agentDid: "reviewer" },
     ]);
     const button = screen.getByRole("button", { name: "3 started sessions" });
     expect(button.querySelectorAll("span.rounded-full.border")).toHaveLength(2);

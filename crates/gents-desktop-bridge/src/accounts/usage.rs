@@ -42,12 +42,12 @@ pub(crate) async fn account_usage_views(
     node_did: &str,
     reads: Option<&gents_server::accounts::UsageReads>,
 ) -> anyhow::Result<Vec<AccountUsageView>> {
-    use gents::usage_observation::{account_usage::UsageSource, UsageRead};
+    use gents::inference::usage_observation::{account_usage::UsageSource, UsageRead};
 
     let backends = access
         .transact_readonly("desktop.usage_views", |txn| {
             Box::pin(async move {
-                gents::config_client::list_inference_backends_in_txn(txn, node_did).await
+                gents::store::config_client::list_inference_backends_in_txn(txn, node_did).await
             })
         })
         .await?;
@@ -109,11 +109,11 @@ pub async fn read(
     let node_did = request.node_did.trim();
     let access = core
         .operator_access(node_did)
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        .map_err(BridgeError::classify_transport_error)?;
     let trigger = if request.refresh {
-        gents::usage_observation::UsageTrigger::Refresh
+        gents::inference::usage_observation::UsageTrigger::Refresh
     } else {
-        gents::usage_observation::UsageTrigger::Open
+        gents::inference::usage_observation::UsageTrigger::Open
     };
     let reads = async {
         let signer = core.operator_signer(node_did)?;
@@ -139,9 +139,9 @@ pub async fn read(
             );
             None
         }
-        Err(error) => return Err(BridgeError::untyped(error.to_string())),
+        Err(error) => return Err(BridgeError::classify_transport_error(error)),
     };
     account_usage_views(&access, node_did, reads.as_ref())
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))
+        .map_err(BridgeError::classify_transport_error)
 }

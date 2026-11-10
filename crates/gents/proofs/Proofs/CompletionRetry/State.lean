@@ -15,6 +15,10 @@ inductive FailureClass
   this class never backs off or resamples; one forced reduction of the
   provider input, budgeted from the provider's own limit, may make it fit. -/
   | contextOverflow
+  /-- The provider refused this account's quota while the account rotation
+  (`AccountRotation.attempt`) holds another eligible account. The next attempt
+  goes to that account at once: no backoff, no transport budget. -/
+  | accountLimited
   | permanent
   deriving DecidableEq, Repr
 
@@ -29,6 +33,7 @@ inductive FailureOrigin
   local request. This origin applies whether or not a preview item arrived. -/
   | providerStreamMalformed
   | providerReasoningRejected
+  | providerAccountLimited
   deriving DecidableEq, Repr
 
 def FailureOrigin.class : FailureOrigin → FailureClass
@@ -36,11 +41,14 @@ def FailureOrigin.class : FailureOrigin → FailureClass
   | .retryableTransport => .transport
   | .providerStreamMalformed => .transport
   | .providerReasoningRejected => .reasoningRejected
+  | .providerAccountLimited => .accountLimited
 
 structure Budget where
   transportRetries : Nat
   resampleRetries : Nat
   allowRepair : Bool
+  /-- Other eligible accounts when the attempt was issued; one rotation each. -/
+  accountHops : Nat := 0
   deriving DecidableEq, Repr
 
 /-- Retry policy begins before publication. Accepted phases are absorbing
@@ -71,6 +79,7 @@ structure State where
   repairUsed : Bool
   /-- The forced overflow reduction is a one-shot capability per completion. -/
   compactUsed : Bool := false
+  accountUsed : Nat := 0
   lastParseError : Option String
   now : Time
   deadline : Option Time

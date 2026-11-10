@@ -13,11 +13,15 @@ use serde_json::{json, Value};
 use tokio::process::Command;
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
+#[path = "support/homes.rs"]
+mod homes;
+
 #[tokio::test]
 async fn a_retained_editor_cache_miss_stops_before_identity_or_store_startup() {
     let directory = tempfile::tempdir().unwrap();
     let paths = retained_history(directory.path().join("editor client")).await;
     let mut child = Command::new(env!("CARGO_BIN_EXE_gents-client-host"))
+        .envs(homes::ProcessHomes::under(paths.root().parent().unwrap()).env())
         .args(["--stdio", "--editor-store", "--home"])
         .arg(paths.root())
         .stdin(Stdio::piped())
@@ -43,6 +47,7 @@ async fn a_retained_editor_cache_miss_stops_before_identity_or_store_startup() {
     assert!(local::connect(&paths).await.is_err());
     let original_record = std::fs::read(paths.store_encryption_path()).unwrap();
     let mut second = Command::new(env!("CARGO_BIN_EXE_gents-client-host"))
+        .envs(homes::ProcessHomes::under(paths.root().parent().unwrap()).env())
         .args(["--stdio", "--editor-store", "--home"])
         .arg(paths.root())
         .stdin(Stdio::piped())
@@ -128,6 +133,7 @@ async fn cached_editor_key_reopens_keychain_custody_without_a_native_item() {
     let mut identity = None;
     for _ in 0..2 {
         let mut child = Command::new(env!("CARGO_BIN_EXE_gents-client-host"))
+            .envs(homes::ProcessHomes::under(paths.root().parent().unwrap()).env())
             .args(["--serve", "--editor-store", "--home"])
             .arg(paths.root())
             .stdin(Stdio::piped())
@@ -223,6 +229,7 @@ async fn terminating_an_editor_attachment_releases_its_unready_installation() {
     let directory = tempfile::tempdir().unwrap();
     let paths = retained_history(directory.path().join("cancelled editor")).await;
     let mut child = Command::new(env!("CARGO_BIN_EXE_gents-client-host"))
+        .envs(homes::ProcessHomes::under(paths.root().parent().unwrap()).env())
         .args(["--stdio", "--editor-store", "--home"])
         .arg(paths.root())
         .stdin(Stdio::piped())
@@ -248,7 +255,7 @@ async fn terminating_an_editor_attachment_releases_its_unready_installation() {
     );
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
-            match gents::home::lock_store(paths.root(), paths.node_data_dir()) {
+            match gents::store::local::home::lock_store(paths.root(), paths.node_data_dir()) {
                 Ok(guard) => {
                     drop(guard);
                     break;
@@ -279,6 +286,7 @@ async fn closing_editor_input_releases_an_unready_installation() {
     let directory = tempfile::tempdir().unwrap();
     let paths = retained_history(directory.path().join("closed editor")).await;
     let mut child = Command::new(env!("CARGO_BIN_EXE_gents-client-host"))
+        .envs(homes::ProcessHomes::under(paths.root().parent().unwrap()).env())
         .args(["--stdio", "--editor-store", "--home"])
         .arg(paths.root())
         .stdin(Stdio::piped())
@@ -315,7 +323,7 @@ async fn closing_editor_input_releases_an_unready_installation() {
     );
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
-            match gents::home::lock_store(paths.root(), paths.node_data_dir()) {
+            match gents::store::local::home::lock_store(paths.root(), paths.node_data_dir()) {
                 Ok(guard) => {
                     drop(guard);
                     break;
@@ -337,9 +345,10 @@ async fn retained_history(root: PathBuf) -> DesktopPaths {
     let paths = DesktopPaths::from_root(root);
     paths.ensure_root_dirs().await.unwrap();
     {
-        let _store = gents::home::lock_store(paths.root(), paths.node_data_dir()).unwrap();
-        let record = gents::store_key::StoreEncryption::prepare(
-            gents::store_key::StoreKeyCustodyChoice::Keychain,
+        let _store =
+            gents::store::local::home::lock_store(paths.root(), paths.node_data_dir()).unwrap();
+        let record = gents::store::local::store_key::StoreEncryption::prepare(
+            gents::store::local::store_key::StoreKeyCustodyChoice::Keychain,
             paths.store_key_path(),
             paths.node_data_dir(),
         )

@@ -51,12 +51,23 @@ async fn select_default_agent_skills(
     node_did: &str,
     skill_ids: &[&str],
 ) -> Result<()> {
-    let agent_id = escape_graphql_string(&format!("{node_did}:default"));
-    let node_did = escape_graphql_string(node_did);
+    let node = escape_graphql_string(node_did);
+    let default_agent = graphql_query(
+        graphql,
+        &format!(
+            r#"{{ Node(filter: {{node_did: {{_eq: "{node}"}}}}, limit: 1) {{default_agent_did}} }}"#
+        ),
+    )
+    .await?;
+    let agent_did = default_agent
+        .pointer("/data/Node/0/default_agent_did")
+        .and_then(Value::as_str)
+        .context("Node has no default Agent")?;
+    let agent_did = escape_graphql_string(agent_did);
     let agent = graphql_query(
         graphql,
         &format!(
-            r#"{{ Agent(filter: {{node_did: {{_eq: "{node_did}"}}, agent_id: {{_eq: "{agent_id}"}}}}, limit: 1) {{context_id}} }}"#
+            r#"{{ Agent(filter: {{node_did: {{_eq: "{node}"}}, agent_did: {{_eq: "{agent_did}"}}}}, limit: 1) {{context_id}} }}"#
         ),
     )
     .await?;
@@ -72,7 +83,7 @@ async fn select_default_agent_skills(
     graphql_query(
         graphql,
         &format!(
-            r#"mutation {{ update_AgentContext(filter: {{node_did: {{_eq: "{node_did}"}}, context_id: {{_eq: "{}"}}}}, input: {{skill_ids: [{skills}]}}) {{_docID}} }}"#,
+            r#"mutation {{ update_AgentContext(filter: {{node_did: {{_eq: "{node}"}}, context_id: {{_eq: "{}"}}}}, input: {{skill_ids: [{skills}]}}) {{_docID}} }}"#,
             escape_graphql_string(context_id)
         ),
     )
@@ -129,8 +140,9 @@ async fn seed_backend_catalog(
         rows.len() == 1,
         "seed backend catalog must update one backend"
     );
-    let observation = gents::backend_registry::decode_backend_observation(rows[0].clone())
-        .context("seeded backend observation is incoherent")?;
+    let observation =
+        gents::inference::backends::registry::decode_backend_observation(rows[0].clone())
+            .context("seeded backend observation is incoherent")?;
     anyhow::ensure!(
         observation.backend_id == backend_id
             && observation
@@ -156,6 +168,8 @@ mod host_runtime;
 mod live_backend;
 #[path = "cli_codex_shim/model_configuration.rs"]
 mod model_configuration;
+#[path = "cli_codex_shim/relay_end_to_end.rs"]
+mod relay_end_to_end;
 #[path = "cli_codex_shim/remote_client.rs"]
 mod remote_client;
 #[path = "cli_codex_shim/server_lifecycle.rs"]
@@ -174,6 +188,7 @@ mod turn_control;
 mod turn_streaming;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "codex shim is being removed"]
 async fn thread_goal_round_trip_survives_shim_restart() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");

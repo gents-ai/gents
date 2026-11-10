@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use gents::pack_archive::{pack_dir, PackArchive};
+use gents::pack::archive::{pack_dir, PackArchive};
 use gents::NodeIdentity;
 use serde::Serialize;
 use serde_json::json;
@@ -68,7 +68,9 @@ pub(crate) async fn check_dir(dir: &Path) -> CheckReport {
     if manifest.metadata.kind == gents::pack::PackKind::Documents {
         match load_config(&archive) {
             Ok(config) => {
-                if let Err(error) = check_filters(dir, &config, &mut report.problems).await {
+                if let Err(error) =
+                    check_filters(dir, &config.documents, &mut report.problems).await
+                {
                     report.problems.push(format!("{error:#}"));
                 }
             }
@@ -87,13 +89,13 @@ fn read_manifest(dir: &Path) -> Result<gents::pack::PackManifest> {
     gents::pack::authoring::read_manifest(dir)
 }
 
-fn load_config(archive: &PackArchive) -> Result<gents::document_config::PackConfig> {
+fn load_config(archive: &PackArchive) -> Result<gents::pack::AuthoredPackConfig> {
     gents::pack::authoring::load_config(archive)
 }
 
 async fn check_filters(
     dir: &Path,
-    config: &gents::document_config::PackConfig,
+    config: &gents::documents::PackConfig,
     problems: &mut Vec<String>,
 ) -> Result<()> {
     if config
@@ -106,13 +108,13 @@ async fn check_filters(
     let directory = tempfile::tempdir()?;
     let identity = gents::KeyIdentity::load_or_create(directory.path().join("node.key"), None)?;
     let node = std::sync::Arc::new(
-        gents::defra_node::EmbeddedNode::builder()
+        gents::defra_node::Node::builder()
             .with_node_identity_did(identity.did())
             .build()
             .await?,
     );
     gents::ensure_runtime_schemas(node.as_ref()).await?;
-    let access = gents::config_client::ConfigAccess::local(node.clone());
+    let access = gents::store::config_client::ConfigAccess::local(node.clone());
     crate::commands::schema::apply_pack_schemas_if_present(&access, dir).await?;
     for source in &config.event_sources {
         let Some(filter) = source.filter.as_deref() else {
@@ -145,7 +147,7 @@ mod tests {
         let archive = PackArchive::from_bytes(&bytes).unwrap();
         let config = load_config(&archive).unwrap();
         let mut problems = Vec::new();
-        check_filters(&directory, &config, &mut problems)
+        check_filters(&directory, &config.documents, &mut problems)
             .await
             .unwrap();
         assert!(problems.is_empty(), "{problems:#?}");

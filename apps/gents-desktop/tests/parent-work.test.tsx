@@ -23,7 +23,7 @@ const session = (overrides: Partial<SessionSummary>): SessionSummary =>
     title: null,
     previewText: null,
     status: null,
-    agentId: null,
+    agentDid: null,
     latestRequestId: null,
     taskId: null,
     taskName: null,
@@ -38,7 +38,7 @@ const session = (overrides: Partial<SessionSummary>): SessionSummary =>
 const parent = session({
   sessionId: "session-parent",
   title: "Lead",
-  agentId: "default",
+  agentDid: "default",
   turnState: "completed",
 });
 const other = session({ sessionId: "session-other", title: "Reviewer" });
@@ -112,6 +112,7 @@ describe("the sessions that sent work into this one", () => {
       sessionId: "session-parent",
       summary: null,
       agentName: null,
+      agentShared: false,
     });
   });
 

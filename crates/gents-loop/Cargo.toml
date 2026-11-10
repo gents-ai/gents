@@ -9,7 +9,7 @@ description = "The gent's owned completion loop, carved to compile for wasm32-wa
 # `native` turns on rig-core's own `reqwest`/`rustls` features, which is the
 # only way to reach `rig::providers::*` (gated wholesale behind `reqwest`
 # upstream — a coarser cut than "just the network client"; splitting it
-# finer is an upstream ask, not this crate's to make). `gents::provider_input`
+# finer is an upstream ask, not this crate's to make). `gents::turn::provider_input`
 # needs those provider wire DTOs for byte-exact token accounting and enables
 # this feature; the guest's own accounting (`#[cfg(not(feature = "native"))]`
 # in `provider_input.rs`) approximates from the core `CompletionRequest`
@@ -36,6 +36,8 @@ futures = "0.3"
 # An independent version requirement sidesteps inheritance entirely; the
 # root `[patch.crates-io]` still redirects it to the sibling fork.
 gents-protocol = { path = "../gents-protocol", default-features = false }
+# Default features only: the wire model stays I/O-free for wasm32-wasip1.
+gents-claude = { path = "../gents-claude" }
 rand = { workspace = true }
 rig-core = { version = "0.35.0", default-features = false }
 schemars = "1"

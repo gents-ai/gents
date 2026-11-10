@@ -15,9 +15,46 @@ abbrev Target.collectionName (t : Target) := ConfigDocuments.Collection.collecti
 abbrev Target.uniqueField (t : Target) := ConfigDocuments.Collection.uniqueField t
 abbrev Target.category (t : Target) := ConfigDocuments.Collection.category t
 
+/-- Every self-config category. `node` is the agent catalog: the grant that
+reaches another Agent's configuration and shared documents
+(`SelfConfig.requiredCategories`). `policy` exposes the policy resource and is
+held-bounded (`SelfConfig.Grants.policy`). The Engineer holds exactly this list
+(`SelfConfig.engineerGroup`); the Rust `SELF_CONFIG_CATEGORIES` and the
+Engineer preset are checked against it. -/
 def selfConfigCategories : List String :=
-  ["node", "agent", "tools", "profile", "backend", "mcp_service", "automation"]
+  ["node", "agent", "tools", "profile", "backend", "mcp_service", "automation", "policy"]
+/-- The categories an enabled group selects when its list is absent: own
+configuration only, never the catalog or `policy`, so enabling self-config
+without naming categories cannot reach another Agent or delegate grants. -/
 def defaultCategories : List String := ["agent", "tools", "profile"]
+
+theorem default_categories_exclude_catalog_and_policy :
+    "node" ∉ defaultCategories ∧ "policy" ∉ defaultCategories := by decide
+
+/-- The `policy` resource (`get`, `check`, `explain`, `grant`, `revoke`) is
+exposed exactly when its category is selected. Admission of each grant is
+decided by `Identity.GrantSets.policyToolAdmits`, never by the category alone. -/
+def policyResourceExposed (categories : List String) : Bool :=
+  categories.contains "policy"
+
+theorem policy_resource_needs_category :
+    policyResourceExposed ["agent", "tools", "node"] = false := by decide
+
+theorem policy_resource_exposed_with_category :
+    policyResourceExposed ["policy"] = true := by decide
+
+/-- A resource category exposes its read commands. Document access remains
+subject to native authorization for the invoking actor. -/
+def resourceReadExposed (categories : List String) (target : Target) : Bool :=
+  categories.contains target.category
+
+/-- An enabled config tool exposes its own effective read; native document
+authorization still determines which selected documents are visible. -/
+def effectiveReadExposed (_categories : List String) : Bool := true
+
+theorem backend_read_does_not_require_agent_catalog :
+    resourceReadExposed ["backend"] .inferenceBackend = true := by decide
+
 abbrev FieldKey := String
 abbrev allFields := ConfigDocuments.Collection.fields
 
@@ -25,7 +62,8 @@ abbrev allFields := ConfigDocuments.Collection.fields
 references stay editable and raw-key/OAuth-account protection is enforced by
 the Rust `validate` typed auth guard. -/
 def protectedKey (t : Target) (k : FieldKey) : Bool :=
-  (t == .task && k == "agent_id") || k == t.uniqueField || ["node_did", "created_at", "updated_at", "created_by",
+  (t == .task && k == "agent_did") || (t == .agent && k == "creation_nonce") ||
+    k == t.uniqueField || ["node_did", "created_at", "updated_at", "created_by",
     "artifact_bytes", "canonical_args", "signer_did", "provenance"].contains k
 
 def writableFields (t : Target) : List FieldKey :=
@@ -48,6 +86,10 @@ theorem unique_field_protected :
 
 theorem node_did_never_writable :
     ∀ t ∈ allTargets, "node_did" ∉ writableFields t := by decide
+
+theorem agent_creation_nonce_protected :
+    "creation_nonce" ∈ protectedFields .agent ∧
+    "creation_nonce" ∉ writableFields .agent := by decide
 
 theorem auth_reference_editable : "auth" ∈ writableFields .inferenceBackend := by decide
 

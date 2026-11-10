@@ -1,10 +1,11 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type {
   PendingQueueEntryView,
   PendingTurnView,
 } from "@source-inc/gents-desktop-client";
 import { PendingTray } from "../src/ui/screens/PendingTray";
+import { renderIn, testApp } from "./app-fixture";
 import { moveDisabled, moveItem } from "./pending-tray-menu";
 
 const entry = (id: string, group: string | null = "same"): PendingQueueEntryView => ({
@@ -31,7 +32,7 @@ function setup(
   queued = queue.map((row, index) => turn(row, `2026-10-10T00:00:0${index}Z`)),
 ) {
   const onEdit = vi.fn().mockResolvedValue(undefined);
-  render(<PendingTray queued={queued} queue={queue} onEdit={onEdit} />);
+  renderIn(testApp(), <PendingTray queued={queued} queue={queue} onEdit={onEdit} />);
   return onEdit;
 }
 
@@ -39,7 +40,8 @@ describe("pending message controls", () => {
   it("hands a message to the composer to edit, and holds still while it is there", async () => {
     const onBeginEdit = vi.fn();
     const queue = [entry("a"), entry("barrier", null), entry("b")];
-    const view = render(
+    const view = renderIn(
+      testApp(),
       <PendingTray
         queued={queue.map((row) => turn(row, "2026-10-10T00:00:00Z"))}
         queue={queue}
@@ -162,7 +164,8 @@ describe("pending message controls", () => {
   it("steers a message with what is queued before it, and offers no steer past other settings", async () => {
     const queue = [entry("a"), entry("b"), entry("c", "other")];
     const onSteer = vi.fn().mockResolvedValue(undefined);
-    render(
+    renderIn(
+      testApp(),
       <PendingTray
         queued={queue.map((row, index) => turn(row, `2026-10-10T00:00:0${index}Z`))}
         queue={queue}

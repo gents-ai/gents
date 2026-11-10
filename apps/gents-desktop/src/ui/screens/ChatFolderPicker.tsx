@@ -1,5 +1,6 @@
-/* Each message uses this computer's picked path as the tools' working folder;
-   with none, the agent's own folder applies. */
+/* Each message uses this computer's picked path as the tools' working folder,
+   or a session's last one on this computer; with none, the agent's own
+   folder applies. */
 import { ChevronDown, FolderClosed } from "lucide-react";
 import {
   DropdownMenu,
@@ -73,7 +74,9 @@ export function ChatFolderPicker({
           }
         >
           <FolderClosed className="size-3.5 shrink-0" />
-          <span className="truncate">{folder ? pathName(folder) : "No folder"}</span>
+          <span className="truncate">
+            {folder ? pathName(folder) : "Agent's folder"}
+          </span>
           <ChevronDown className="size-3 shrink-0" />
         </DropdownMenuTrigger>
       </Hint>
@@ -134,7 +137,7 @@ export function ChatFolderPicker({
           </DropdownMenuItem>
           <DropdownMenuRadioGroup value={value} onValueChange={pick}>
             <DropdownMenuRadioItem value={NONE} closeOnClick>
-              No folder
+              Agent's folder
             </DropdownMenuRadioItem>
           </DropdownMenuRadioGroup>
         </DropdownMenuGroup>

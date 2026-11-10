@@ -80,7 +80,7 @@ async fn create_fixture_request(
     let request = graphql_query(
         &runtime.graphql,
         &format!(
-            r#"mutation{{create_AgentRequest(input:{{purpose: "normal", request_id:"{}",node_did:"{}",requester_did:null,session_id:"{}",agent_id:"response-test",content:"test request",created_at:"{}",lifecycle_state:"{}"}}){{_docID}}}}"#,
+            r#"mutation{{create_AgentRequest(input:{{purpose: "normal", request_id:"{}",node_did:"{}",requester_did:null,session_id:"{}",agent_did:"response-test",content:"test request",created_at:"{}",lifecycle_state:"{}"}}){{_docID}}}}"#,
             escape_graphql_string(request_id),
             escape_graphql_string(&runtime.node_did),
             escape_graphql_string(session_id),
@@ -101,7 +101,7 @@ async fn stamp_terminal_message(
     message_doc_id: &str,
     lifecycle_state: RequestLifecycleState,
 ) -> Result<()> {
-    use gents::config_client::ConfigAccess;
+    use gents::store::config_client::ConfigAccess;
 
     let selection = serde_json::to_value(TerminalOutput::Message {
         message_doc_id: message_doc_id.to_owned(),
@@ -130,8 +130,8 @@ async fn insert_materialized_response(
     runtime: &ResponseTestRuntime,
     fixture: MaterializedResponse<'_>,
 ) -> Result<String> {
-    use gents::config_client::ConfigAccess;
-    use gents::session::canonical_rows::{
+    use gents::store::config_client::ConfigAccess;
+    use gents_protocol::output::rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
@@ -242,6 +242,7 @@ async fn insert_materialized_response(
         });
     }
     let header = TranscriptMessage {
+        native_request_id: None,
         message_key: gents::session::sequence_message_key(&runtime.node_did, session_id, None, 1),
         session_id: session_id.to_owned(),
         node_did: runtime.node_did.clone(),
@@ -276,6 +277,8 @@ fn response_show(runtime: &ResponseTestRuntime, request_id: &str) -> Result<Valu
     run_cli_json(
         &runtime.home_dir,
         &[
+            "utils",
+            "debug",
             "response",
             "show",
             "--graphql",
@@ -289,6 +292,8 @@ fn response_wait(runtime: &ResponseTestRuntime, request_id: &str) -> Result<Valu
     run_cli_json(
         &runtime.home_dir,
         &[
+            "utils",
+            "debug",
             "response",
             "wait",
             "--graphql",
@@ -310,6 +315,8 @@ fn response_wait_failure(
     run_cli_failure_stderr(
         &runtime.home_dir,
         &[
+            "utils",
+            "debug",
             "response",
             "wait",
             "--graphql",
@@ -371,6 +378,8 @@ async fn response_show_hydrates_materialized_content_like_response_wait() -> Res
     let waited = run_cli_json(
         &runtime.home_dir,
         &[
+            "utils",
+            "debug",
             "response",
             "wait",
             "--graphql",

@@ -7,6 +7,7 @@ import { cn } from "@gents/ui/lib/utils";
 import { InferenceModelControls } from "../inference/InferenceModelControls";
 import { Field } from "./parts";
 import type { SetupEvent, SetupForm } from "./inferenceSetupForm";
+import { SEARCH_FIELD } from "@/lib/textAssist";
 
 export function ModelChoice({
   choice,
@@ -88,6 +89,7 @@ export function ModelChoice({
                   onChange={(event) =>
                     dispatch({ type: "searchEdited", search: event.target.value })
                   }
+                  {...SEARCH_FIELD}
                   placeholder="Search advertised models"
                   aria-label="Search advertised models"
                 />

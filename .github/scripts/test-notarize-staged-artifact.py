@@ -55,8 +55,8 @@ case "$1" in
     else
       echo "CodeDirectory v=20500 size=1 flags=0x10000(runtime) hashes=1+7 location=embedded" >&2
     fi
-    echo "Authority=Developer ID Application: Test (NXJ753WW5X)" >&2
-    echo "TeamIdentifier=${SHIM_TEAM:-NXJ753WW5X}" >&2
+    echo "Authority=Developer ID Application: Test (4LPKFKCXDA)" >&2
+    echo "TeamIdentifier=${SHIM_TEAM:-4LPKFKCXDA}" >&2
     echo "Format=${SHIM_FORMAT:-Mach-O thin (arm64)}" >&2
     echo "CDHash=${SHIM_CDHASH-595a5f783971fe0d9271b8357395d52114f51438}" >&2
     exit 0 ;;
@@ -213,7 +213,7 @@ class Harness(unittest.TestCase):
             "SUBMISSION_ID": submission_id,
             "NOTARY_INBOX_DIR": str(self.inbox),
             "NOTARY_STATE_DIR": str(self.notary_state),
-            "EXPECTED_TEAM_ID": "NXJ753WW5X",
+            "EXPECTED_TEAM_ID": "4LPKFKCXDA",
             "EXPECTED_BUNDLE_ID": "com.source-inc.gents",
             "EXPECTED_LEAF_CERT_SHA256": LEAF_SHA,
             "SHIM_LOG": str(self.state / "calls.log"),
@@ -843,7 +843,14 @@ CLI_CDHASH = "595a5f783971fe0d9271b8357395d52114f51438"
 
 
 class CliTests(Harness):
-    CLI = {"ARTIFACT_KIND": "cli", "SHIM_IDENT": "gents", "EXPECTED_CLI_NAME": "gents", "EXPECTED_CLI_IDENTIFIER": "gents"}
+    CLI = {
+        "ARTIFACT_KIND": "cli",
+        "SHIM_IDENT": "com.source-inc.gents.cli",
+        "EXPECTED_CLI_NAME": "gents",
+        "EXPECTED_CLI_IDENTIFIER": "com.source-inc.gents.cli",
+    }
+    # Exact signature metadata retained for the authentic 039e2299 candidate.
+    HISTORICAL_CLI = {"SHIM_IDENT": "gents", "EXPECTED_CLI_IDENTIFIER": "gents"}
 
     def setUp(self):
         super().setUp()
@@ -879,6 +886,17 @@ class CliTests(Harness):
         verified = json.loads((self.run_dir / "verified.json").read_text())
         self.assertEqual(verified["artifact_kind"], "cli")
         self.assertEqual(verified["cdhash"], CLI_CDHASH)
+
+    def test_historical_cli_requires_its_explicit_identifier_pin(self):
+        result = self.run_cli(SHIM_IDENT="gents", phases=("verify",))
+        self.assertEqual(result.returncode, 5, result.stderr)
+        self.assertIn("does not match expected", result.stderr)
+        self.assert_no_credentials_used()
+        result = self.run_cli(**self.HISTORICAL_CLI, phases=("verify",))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_no_credentials_used()
+        verified = json.loads((self.run_dir / "verified.json").read_text())
+        self.assertEqual(verified["artifact_kind"], "cli")
 
     def test_cli_ticket_not_covering_cdhash_fails_closed(self):
         result = self.run_cli(SHIM_TICKET_CDHASH="f" * 40)
@@ -1003,7 +1021,15 @@ class WorkflowStaticTests(unittest.TestCase):
         for step_id in ("verify", "submit", "complete"):
             self.assertEqual(self.step(step_id)["env"]["ARTIFACT_KIND"], "${{ inputs.artifact_kind }}")
         self.assertEqual(self.wf["env"]["EXPECTED_CLI_NAME"], "gents")
-        self.assertEqual(self.wf["env"]["EXPECTED_CLI_IDENTIFIER"], "gents")
+        self.assertEqual(self.wf["env"]["EXPECTED_CLI_IDENTIFIER"], "com.source-inc.gents.cli")
+
+    def test_cli_identifier_matches_the_release_signing_owner(self):
+        import yaml
+        release = yaml.safe_load((ROOT / ".github/workflows/release-macos.yml").read_text())
+        self.assertEqual(
+            self.wf["env"]["EXPECTED_CLI_IDENTIFIER"],
+            release["env"]["MACOS_CODESIGN_IDENTIFIER"],
+        )
 
     def test_permissions_minimal(self):
         self.assertEqual(self.wf["permissions"], {"contents": "read"})
@@ -1053,10 +1079,10 @@ class WorkflowStaticTests(unittest.TestCase):
             ["self-hosted", "macOS", "ARM64", "studio", "studio-1", "ci-support"],
         )
         env = self.wf["env"]
-        self.assertEqual(env["EXPECTED_TEAM_ID"], "NXJ753WW5X")
+        self.assertEqual(env["EXPECTED_TEAM_ID"], "4LPKFKCXDA")
         self.assertEqual(env["NOTARY_STATE_DIR"], "/Users/admin/gents-notary-state")
         self.assertEqual(
-            env["EXPECTED_LEAF_CERT_SHA256"], "ffe161226e3ba89575fbb2fa4e0ffc2f7b0a7c99de8fc2f696a24fb8d74f1baf"
+            env["EXPECTED_LEAF_CERT_SHA256"], "02d9c8a2b434f50c6298f8aefea8ef9269a0b619d29c3f2eeba96ca04cf00625"
         )
         self.assertFalse(self.wf["concurrency"]["cancel-in-progress"])
 

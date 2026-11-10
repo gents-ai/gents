@@ -12,7 +12,7 @@ fn context() -> RenderedRequestContext {
         request_id: "req-1".to_string(),
         node_did: "did:key:test".to_string(),
         requester_did: "did:key:requester".to_string(),
-        agent_id: "behavior".to_string(),
+        agent_did: "behavior".to_string(),
         session_id: "session".to_string(),
         model_name: "test-model".to_string(),
         provider_family: None,
@@ -76,6 +76,7 @@ fn tool_result_message(id: &str, call_id: Option<&str>, text: &str) -> Message {
 
 fn assistant_with_tool_call(id: Option<&str>, tool_call_id: &str) -> Message {
     Message::Assistant {
+        request_id: None,
         id: id.map(str::to_string),
         content: vec![AssistantContent::ToolCall(ToolCall::new(
             tool_call_id.to_string(),

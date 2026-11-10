@@ -25,6 +25,7 @@ const CHANGES = {
   deleteEventSourceConfig: "delete the event source",
   saveBackendConfig: "save the backend",
   deleteBackendConfig: "delete the backend",
+  setBackendRotation: "change the account rotation",
   saveInferenceProfileConfig: "save the inference profile",
   deleteInferenceProfileConfig: "delete the inference profile",
   saveToolsConfig: "save the tools",
@@ -67,6 +68,7 @@ export function createConfigActions({
 
   return {
     changeConfig,
+    provisionAgentIdentity: (nodeDid: string) => api.provisionAgentIdentity(nodeDid),
     testToolService: (
       request: ToolServiceTestRequest,
     ): Promise<ToolServiceTestResult> => api.testToolService(request),

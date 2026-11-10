@@ -10,9 +10,8 @@ use axum::{
     routing::post,
     Json, Router,
 };
-use gents::defra_node::{EmbeddedNode, StorageBackend};
 use gents::ensure_runtime_schemas;
-use gents::rendered_request::RenderedCompletionRequest;
+use gents::inference::rendered_request::RenderedCompletionRequest;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -57,14 +56,16 @@ async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() 
 
     {
         let node = initialized_trace_node(tempdir.path(), &agent_home).await?;
-        ensure_runtime_schemas(&node).await?;
+        ensure_runtime_schemas(node.node()).await?;
         seed_trace_export_rows(&node).await?;
-        node.shutdown().await;
+        node.shutdown().await?;
     }
 
     let output = run_cli_text(
         tempdir.path(),
         &[
+            "utils",
+            "debug",
             "trace",
             "export",
             "--home",
@@ -309,7 +310,14 @@ fn trace_project_schema_prints_adapter_contracts_without_runtime() -> Result<()>
     for (cli_projection, snapshot_name) in schema_cases {
         let json_schema_output = run_cli_text(
             tempdir.path(),
-            &["trace", "project-schema", "--projection", cli_projection],
+            &[
+                "utils",
+                "debug",
+                "trace",
+                "project-schema",
+                "--projection",
+                cli_projection,
+            ],
         )?;
         let json_schema =
             serde_json::from_str::<Value>(&json_schema_output).context("parsing JSON schema")?;
@@ -324,6 +332,8 @@ fn trace_project_schema_prints_adapter_contracts_without_runtime() -> Result<()>
         let jsonl_schema_output = run_cli_text(
             tempdir.path(),
             &[
+                "utils",
+                "debug",
                 "trace",
                 "project-schema",
                 "--projection",
@@ -345,6 +355,8 @@ fn trace_project_schema_prints_adapter_contracts_without_runtime() -> Result<()>
         let eval_jsonl_schema_output = run_cli_text(
             tempdir.path(),
             &[
+                "utils",
+                "debug",
                 "trace",
                 "project-schema",
                 "--projection",
@@ -367,6 +379,8 @@ fn trace_project_schema_prints_adapter_contracts_without_runtime() -> Result<()>
     let atif_native_schema_output = run_cli_text(
         tempdir.path(),
         &[
+            "utils",
+            "debug",
             "trace",
             "project-schema",
             "--projection",
@@ -400,14 +414,16 @@ async fn trace_timeline_reconstructs_request_events_from_persisted_rows() -> Res
 
     {
         let node = initialized_trace_node(tempdir.path(), &agent_home).await?;
-        ensure_runtime_schemas(&node).await?;
+        ensure_runtime_schemas(node.node()).await?;
         seed_trace_export_rows(&node).await?;
-        node.shutdown().await;
+        node.shutdown().await?;
     }
 
     let output = run_cli_text(
         tempdir.path(),
         &[
+            "utils",
+            "debug",
             "trace",
             "timeline",
             "--home",
@@ -486,14 +502,14 @@ async fn trace_timeline_reconstructs_request_events_from_persisted_rows() -> Res
     Ok(())
 }
 
-async fn seed_rendered_request_rows(node: &EmbeddedNode) -> Result<()> {
+async fn seed_rendered_request_rows(node: &UserSeededHome) -> Result<()> {
     let request_doc_id = exec_doc_id(
         node,
         r#"mutation {
             create_AgentRequest(input: {purpose: "normal", 
                 request_id: "req-cap",
                 node_did: "did:test:amy",
-                agent_id: "amy",
+                agent_did: "amy",
                 session_id: "session-cap",
                 content: "capture me",
 
@@ -510,7 +526,7 @@ async fn seed_rendered_request_rows(node: &EmbeddedNode) -> Result<()> {
     let response = node
         .execute(&format!(
             r#"query {{ _commits(docID: "{}") {{ cid fieldName }} }}"#,
-            gents::graphql::escape_graphql_string(&request_doc_id)
+            gents::store::graphql::escape_graphql_string(&request_doc_id)
         ))
         .await;
     if response.has_errors() {
@@ -532,8 +548,9 @@ async fn seed_rendered_request_rows(node: &EmbeddedNode) -> Result<()> {
         .and_then(Value::as_str)
         .map(str::to_string)
         .context("seeded AgentRequest has no composite commit cid")?;
-    let escaped_request_doc_id = gents::graphql::escape_graphql_string(&request_doc_id);
-    let escaped_request_commit_cid = gents::graphql::escape_graphql_string(&request_commit_cid);
+    let escaped_request_doc_id = gents::store::graphql::escape_graphql_string(&request_doc_id);
+    let escaped_request_commit_cid =
+        gents::store::graphql::escape_graphql_string(&request_commit_cid);
     for (suffix, attempt, call_id, call_seq, created_at) in [
         ("a0", 0, "call-cap-1", 1, "2026-08-07T12:00:02Z"),
         ("a1", 1, "call-cap-2", 2, "2026-08-07T12:00:04Z"),
@@ -574,7 +591,7 @@ async fn seed_rendered_request_rows(node: &EmbeddedNode) -> Result<()> {
                         session_id: "session-cap",
                         node_did: "did:test:amy",
                         requester_did: "",
-                        agent_id: "amy",
+                        agent_did: "amy",
                         capture_scope: "inference.1",
                         turn_index: 0,
                         attempt: {attempt},
@@ -586,8 +603,8 @@ async fn seed_rendered_request_rows(node: &EmbeddedNode) -> Result<()> {
                         created_at: "{created_at}"
                     }}) {{ _docID }}
                 }}"#,
-                request_json = gents::graphql::escape_graphql_string(&request_json),
-                provenance = gents::graphql::escape_graphql_string(&provenance),
+                request_json = gents::store::graphql::escape_graphql_string(&request_json),
+                provenance = gents::store::graphql::escape_graphql_string(&provenance),
                 escaped_request_doc_id = escaped_request_doc_id,
                 escaped_request_commit_cid = escaped_request_commit_cid,
             ),
@@ -597,14 +614,15 @@ async fn seed_rendered_request_rows(node: &EmbeddedNode) -> Result<()> {
     Ok(())
 }
 
-async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
+async fn seed_v2_rendered_request_rows(node: &UserSeededHome) -> Result<()> {
     let mut first_capture_key = String::new();
     for turn in 0..2usize {
         let capture_scope = "inference.1".to_string();
-        let assembly_trace = gents::rendered_request::AssemblyTrace::from_effective_messages(
-            gents::rendered_request::AssemblyBuildPath::Budgeted,
-            Vec::new(),
-        );
+        let assembly_trace =
+            gents::inference::rendered_request::AssemblyTrace::from_effective_messages(
+                gents::inference::rendered_request::AssemblyBuildPath::Budgeted,
+                Vec::new(),
+            );
         let mut payload = serde_json::to_value(&assembly_trace)?;
         payload["threaded_tool_results"] = json!([{
             "tool_call_id": "native-result",
@@ -612,7 +630,7 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
             "padding": "p".repeat(4096 + turn * 512)
         }]);
         let rendered = RenderedCompletionRequest {
-            capture_key: gents::rendered_request::capture_key(
+            capture_key: gents::inference::rendered_request::capture_key(
                 "did:test:amy",
                 "session-cap-v2",
                 "",
@@ -620,7 +638,7 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
                 turn,
                 0,
             )?,
-            capture_version: gents::rendered_request::CAPTURE_VERSION,
+            capture_version: gents::inference::rendered_request::CAPTURE_VERSION,
             request_doc_id: String::new(),
             request_commit_cid: String::new(),
             request_id: "req-cap-v2".into(),
@@ -629,10 +647,11 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
             attempt: 0,
             node_did: "did:test:amy".into(),
             requester_did: String::new(),
-            agent_id: "amy".into(),
+            agent_did: "amy".into(),
             session_id: "session-cap-v2".into(),
             model_name: "test-model".into(),
-            source: gents::rendered_request::RenderedRequestSource::OpenAiChatCompletions,
+            source:
+                gents::inference::rendered_request::RenderedRequestSource::OpenAiChatCompletions,
             request_json: json!({
                 "model":"test-model",
                 "messages":[{"role":"user","content":"x".repeat(8192 + turn * 512)}]
@@ -642,7 +661,7 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
             tool_choice_json: Value::Null,
             sampling_json: Value::Null,
             provenance_json: serde_json::to_value(
-                gents::rendered_request::ProvenanceManifest::captured_only(
+                gents::inference::rendered_request::ProvenanceManifest::captured_only(
                     capture_scope,
                     None,
                     None,
@@ -655,8 +674,9 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
         if turn == 0 {
             first_capture_key = rendered.capture_key.clone();
         }
-        let canonical_provenance =
-            gents::rendered_request::canonical_json_string(&rendered.provenance_payload_json)?;
+        let canonical_provenance = gents::inference::rendered_request::canonical_json_string(
+            &rendered.provenance_payload_json,
+        )?;
         if turn == 0 {
             let container = json!({
                 "gents_capture_json": 1,
@@ -671,17 +691,17 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
                     r#"mutation {{ create_RenderedRequest(input: {{
                         capture_key: "{capture_key}", request_doc_id: "", request_commit_cid: "",
                         request_id: "{request_id}", session_id: "{session_id}",
-                        node_did: "did:test:amy", requester_did: "", agent_id: "amy",
+                        node_did: "did:test:amy", requester_did: "", agent_did: "amy",
                         capture_scope: "inference.1", turn_index: {turn}, attempt: 0,
                         capture_version: 2, model_name: "test-model", source: "openai_chat_completions",
                         request_json: "{request_json}", provenance_json: "{provenance}",
                         created_at: "2026-10-07T00:00:0{turn}Z"
                     }}) {{ _docID }} }}"#,
-                    capture_key = gents::graphql::escape_graphql_string(&rendered.capture_key),
-                    request_id = gents::graphql::escape_graphql_string(&rendered.request_id),
-                    session_id = gents::graphql::escape_graphql_string(&rendered.session_id),
-                    request_json = gents::graphql::escape_graphql_string(&container.to_string()),
-                    provenance = gents::graphql::escape_graphql_string(&canonical_provenance),
+                    capture_key = gents::store::graphql::escape_graphql_string(&rendered.capture_key),
+                    request_id = gents::store::graphql::escape_graphql_string(&rendered.request_id),
+                    session_id = gents::store::graphql::escape_graphql_string(&rendered.session_id),
+                    request_json = gents::store::graphql::escape_graphql_string(&container.to_string()),
+                    provenance = gents::store::graphql::escape_graphql_string(&canonical_provenance),
                 ),
             )
             .await?;
@@ -690,7 +710,7 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
         let first_row = node
             .execute(&format!(
                 r#"{{RenderedRequest(filter:{{capture_key:{{_eq:"{}"}}}},limit:1){{_docID}}}}"#,
-                gents::graphql::escape_graphql_string(&first_capture_key)
+                gents::store::graphql::escape_graphql_string(&first_capture_key)
             ))
             .await;
         anyhow::ensure!(!first_row.has_errors(), "{:?}", first_row.errors);
@@ -701,7 +721,7 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
         let base_cid = node
             .execute(&format!(
                 r#"{{_commits(docID:"{}"){{cid fieldName}}}}"#,
-                gents::graphql::escape_graphql_string(&first_doc_id)
+                gents::store::graphql::escape_graphql_string(&first_doc_id)
             ))
             .await;
         anyhow::ensure!(!base_cid.has_errors(), "{:?}", base_cid.errors);
@@ -751,17 +771,17 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
                 r#"mutation {{ create_RenderedRequest(input: {{
                     capture_key: "{capture_key}", request_doc_id: "", request_commit_cid: "",
                     request_id: "{request_id}", session_id: "{session_id}",
-                    node_did: "did:test:amy", requester_did: "", agent_id: "amy",
+                    node_did: "did:test:amy", requester_did: "", agent_did: "amy",
                     capture_scope: "inference.1", turn_index: {turn}, attempt: 0,
                     capture_version: 2, model_name: "test-model", source: "openai_chat_completions",
                     request_json: "{request_json}", provenance_json: "{provenance}",
                     created_at: "2026-10-07T00:00:0{turn}Z"
                 }}) {{ _docID }} }}"#,
-                capture_key = gents::graphql::escape_graphql_string(&rendered.capture_key),
-                request_id = gents::graphql::escape_graphql_string(&rendered.request_id),
-                session_id = gents::graphql::escape_graphql_string(&rendered.session_id),
-                request_json = gents::graphql::escape_graphql_string(&container.to_string()),
-                provenance = gents::graphql::escape_graphql_string(&canonical_provenance),
+                capture_key = gents::store::graphql::escape_graphql_string(&rendered.capture_key),
+                request_id = gents::store::graphql::escape_graphql_string(&rendered.request_id),
+                session_id = gents::store::graphql::escape_graphql_string(&rendered.session_id),
+                request_json = gents::store::graphql::escape_graphql_string(&container.to_string()),
+                provenance = gents::store::graphql::escape_graphql_string(&canonical_provenance),
             ),
         )
         .await?;
@@ -769,10 +789,17 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
     Ok(())
 }
 
-async fn seed_manifest_rendered_request_row(node: &Arc<EmbeddedNode>) -> Result<()> {
+/// Captures a manifest request as the runtime's sink does: a managed Agent
+/// signs it into its own session, which the home's User then reads.
+async fn seed_manifest_rendered_request_row(node: &UserSeededHome) -> Result<()> {
+    let session_id = "session-cap-manifest";
+    let agent = node
+        .managed_agent_session("Trace capture agent", session_id)
+        .await?;
+    let (node_did, agent_did) = (node.node_did().to_owned(), agent.did().to_owned());
     let capture_scope = "inference.1".to_string();
-    let assembly_trace = gents::rendered_request::AssemblyTrace::from_effective_messages(
-        gents::rendered_request::AssemblyBuildPath::Budgeted,
+    let assembly_trace = gents::inference::rendered_request::AssemblyTrace::from_effective_messages(
+        gents::inference::rendered_request::AssemblyBuildPath::Budgeted,
         Vec::new(),
     );
     let mut provenance_payload = serde_json::to_value(&assembly_trace)?;
@@ -781,29 +808,32 @@ async fn seed_manifest_rendered_request_row(node: &Arc<EmbeddedNode>) -> Result<
         "native_tool_output": {"ok": true, "exit_code": 3},
         "padding": "q".repeat(6 * 1024)
     }]);
-    let sink = gents::rendered_request::DefraRenderedRequestSink::new(Arc::clone(node));
+    let sink = gents::inference::rendered_request::DefraRenderedRequestSink::new_managed(
+        Arc::clone(node.node()),
+        agent.as_ref(),
+    )?;
     sink.capture(RenderedCompletionRequest {
-        capture_key: gents::rendered_request::capture_key(
-            "did:test:amy",
-            "session-cap-manifest",
-            "",
+        capture_key: gents::inference::rendered_request::capture_key(
+            &node_did,
+            session_id,
+            &agent_did,
             &capture_scope,
             0,
             0,
         )?,
-        capture_version: gents::rendered_request::CAPTURE_VERSION,
+        capture_version: gents::inference::rendered_request::CAPTURE_VERSION,
         request_doc_id: String::new(),
         request_commit_cid: String::new(),
         request_id: "req-cap-manifest".into(),
         capture_scope: capture_scope.clone(),
         turn_index: 0,
         attempt: 0,
-        node_did: "did:test:amy".into(),
-        requester_did: String::new(),
-        agent_id: "amy".into(),
-        session_id: "session-cap-manifest".into(),
+        node_did: node_did.clone(),
+        requester_did: agent_did.clone(),
+        agent_did: agent_did.clone(),
+        session_id: session_id.into(),
         model_name: "test-model".into(),
-        source: gents::rendered_request::RenderedRequestSource::OpenAiChatCompletions,
+        source: gents::inference::rendered_request::RenderedRequestSource::OpenAiChatCompletions,
         request_json: json!({
             "model": "test-model",
             "messages": [{"role": "user", "content": "manifest capture"}]
@@ -813,7 +843,7 @@ async fn seed_manifest_rendered_request_row(node: &Arc<EmbeddedNode>) -> Result<
         tool_choice_json: Value::Null,
         sampling_json: Value::Null,
         provenance_json: serde_json::to_value(
-            gents::rendered_request::ProvenanceManifest::captured_only(
+            gents::inference::rendered_request::ProvenanceManifest::captured_only(
                 capture_scope,
                 None,
                 None,
@@ -834,17 +864,19 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
 
     {
         let node = initialized_trace_node(tempdir.path(), &agent_home).await?;
-        ensure_runtime_schemas(&node).await?;
+        ensure_runtime_schemas(node.node()).await?;
         seed_rendered_request_rows(&node).await?;
         seed_v2_rendered_request_rows(&node).await?;
         seed_manifest_rendered_request_row(&node).await?;
-        node.shutdown().await;
+        node.shutdown().await?;
     }
     let home = agent_home.to_str().context("agent home utf8")?;
 
     let output = run_cli_text(
         tempdir.path(),
         &[
+            "utils",
+            "debug",
             "trace",
             "capture",
             "--home",
@@ -880,6 +912,8 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
     let output = run_cli_text(
         tempdir.path(),
         &[
+            "utils",
+            "debug",
             "trace",
             "capture",
             "--home",
@@ -916,6 +950,8 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
     let output = run_cli_text(
         tempdir.path(),
         &[
+            "utils",
+            "debug",
             "trace",
             "capture",
             "--home",
@@ -943,6 +979,8 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
     let output = run_cli_text(
         tempdir.path(),
         &[
+            "utils",
+            "debug",
             "trace",
             "capture",
             "--home",
@@ -971,6 +1009,8 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
     let output = run_cli_text(
         tempdir.path(),
         &[
+            "utils",
+            "debug",
             "trace",
             "capture",
             "--home",
@@ -995,6 +1035,8 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
     let stderr = run_cli_failure_stderr(
         tempdir.path(),
         &[
+            "utils",
+            "debug",
             "trace",
             "capture",
             "--home",
@@ -1011,6 +1053,8 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
     let output = run_cli_text(
         tempdir.path(),
         &[
+            "utils",
+            "debug",
             "trace",
             "timeline",
             "--home",
@@ -1052,9 +1096,9 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
 
     {
         let node = initialized_trace_node(tempdir.path(), &agent_home).await?;
-        ensure_runtime_schemas(&node).await?;
+        ensure_runtime_schemas(node.node()).await?;
         seed_trace_export_rows(&node).await?;
-        node.shutdown().await;
+        node.shutdown().await?;
     }
 
     let home = agent_home.to_str().context("agent home utf8")?;
@@ -1205,6 +1249,8 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
     let denied_scope = run_cli_failure_stderr(
         tempdir.path(),
         &[
+            "utils",
+            "debug",
             "trace",
             "project",
             "--home",
@@ -1352,6 +1398,8 @@ async fn trace_project_graphql_enforces_acp_read_filter_with_real_cli() -> Resul
         run_cli_text(
             &cwd,
             &[
+                "utils",
+                "debug",
                 "trace",
                 "project",
                 "--graphql",
@@ -1460,6 +1508,8 @@ fn trace_project_json_with_extra_args(
     extra_args: &[&str],
 ) -> Result<Value> {
     let mut args = vec![
+        "utils",
+        "debug",
         "trace",
         "project",
         "--home",
@@ -1487,6 +1537,8 @@ fn trace_project_jsonl_lines(
     let output = run_cli_text(
         cwd,
         &[
+            "utils",
+            "debug",
             "trace",
             "project",
             "--home",
@@ -1518,6 +1570,8 @@ fn trace_project_eval_jsonl_lines(
     let output = run_cli_text(
         cwd,
         &[
+            "utils",
+            "debug",
             "trace",
             "project",
             "--home",
@@ -1545,42 +1599,15 @@ fn trace_project_eval_jsonl_lines(
 async fn initialized_trace_node(
     cwd: &std::path::Path,
     agent_home: &std::path::Path,
-) -> Result<Arc<EmbeddedNode>> {
-    let home = agent_home.to_str().context("agent home utf8")?;
-    let init = run_init_json(
-        cwd,
-        &[
-            "--identity-only",
-            "--node-name",
-            "trace-test",
-            "--home",
-            home,
-        ],
-    )?;
-    let node_did = node_did_from_init(&init)?;
-    let key_path = init
-        .get("key_path")
-        .and_then(Value::as_str)
-        .context("identity-only init output missing key_path")?;
-    let _identity = gents::KeyIdentity::load_or_create(key_path, None)
-        .context("loading initialized trace identity")?;
-
-    let data = agent_home.join("data");
-    gents::store_key::open_home_store_key(agent_home, &data)
-        .await?
-        .encrypt(
-            EmbeddedNode::builder()
-                .data_path(&data)
-                .with_storage_backend(StorageBackend::Regolith),
-        )
-        .with_node_identity_did(node_did)
-        .build()
-        .await
-        .context("opening initialized embedded node")
-        .map(Arc::new)
+) -> Result<UserSeededHome> {
+    UserSeededHome::open(cwd, agent_home, "trace-test").await
 }
 
-async fn exec_doc_id(node: &EmbeddedNode, query: &str, collection: &str) -> Result<String> {
+async fn exec(node: &UserSeededHome, query: &str) -> Result<()> {
+    user_exec(node, query).await
+}
+
+async fn exec_doc_id(node: &UserSeededHome, query: &str, collection: &str) -> Result<String> {
     let response = node.execute(query).await;
     if response.has_errors() {
         anyhow::bail!("GraphQL mutation failed: {:?}", response.errors);
@@ -1607,23 +1634,20 @@ async fn exec_doc_id(node: &EmbeddedNode, query: &str, collection: &str) -> Resu
 }
 
 async fn exec_variables_doc_id(
-    node: &EmbeddedNode,
+    node: &UserSeededHome,
     query: &str,
     variables: Value,
     collection: &str,
 ) -> Result<String> {
-    let response = node
-        .execute_request(gents::defra_node::QueryRequest::new(query).with_variables(variables))
-        .await;
+    let response = node.execute_with_variables(query, variables).await;
     anyhow::ensure!(!response.has_errors(), "{:?}", response.errors);
-    gents::graphql::single_mutation_document(&response, &format!("create_{collection}"))?
-        .and_then(|row| row["_docID"].as_str().map(ToOwned::to_owned))
+    gents::store::graphql::created_doc_id(&json!({"data": response.data}), collection)
         .with_context(|| format!("{collection} mutation omitted document"))
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn seed_canonical_trace_tool(
-    node: &EmbeddedNode,
+    node: &UserSeededHome,
     request_doc_id: &str,
     request_id: &str,
     session_id: &str,
@@ -1636,7 +1660,7 @@ async fn seed_canonical_trace_tool(
     result: Option<&str>,
     failure_class: Option<&str>,
 ) -> Result<String> {
-    use gents::session::canonical_rows::{
+    use gents_protocol::output::rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
@@ -1702,6 +1726,7 @@ async fn seed_canonical_trace_tool(
     )
     .await?;
     let header = TranscriptMessage {
+        native_request_id: None,
         message_key: format!("trace:{session_id}:{sequence}"),
         session_id: session_id.into(),
         node_did: node_did.into(),
@@ -1773,6 +1798,7 @@ async fn seed_canonical_trace_tool(
         )
         .await?;
         let delivery = TranscriptMessage {
+            native_request_id: None,
             message_key: format!("trace-delivery:{tool_doc_id}"),
             session_id: session_id.into(),
             node_did: node_did.into(),
@@ -1813,14 +1839,14 @@ async fn seed_canonical_trace_tool(
 }
 
 async fn seed_canonical_terminal_text(
-    node: &EmbeddedNode,
+    node: &UserSeededHome,
     request_doc_id: &str,
     session_id: &str,
     node_did: &str,
     sequence: u32,
     text: &str,
 ) -> Result<()> {
-    use gents::session::canonical_rows::{
+    use gents_protocol::output::rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
@@ -1867,6 +1893,7 @@ async fn seed_canonical_terminal_text(
     )
     .await?;
     let header = TranscriptMessage {
+        native_request_id: None,
         message_key: format!("trace-terminal:{request_doc_id}"),
         session_id: session_id.into(),
         node_did: node_did.into(),
@@ -1898,17 +1925,17 @@ async fn seed_canonical_terminal_text(
     )
     .await?;
     let terminal = serde_json::to_value(TerminalOutput::Message { message_doc_id })?;
-    let response = node.execute_request(gents::defra_node::QueryRequest::new(r#"mutation($id: String!, $terminal: JSON!) { update_AgentRequest(filter: {_docID: {_eq: $id}}, input: {terminal_output: $terminal}) {_docID} }"#).with_variables(json!({"id": request_doc_id, "terminal": terminal}))).await;
+    let response = node.execute_with_variables(r#"mutation($id: String!, $terminal: JSON!) { update_AgentRequest(filter: {_docID: {_eq: $id}}, input: {terminal_output: $terminal}) {_docID} }"#, json!({"id": request_doc_id, "terminal": terminal})).await;
     anyhow::ensure!(!response.has_errors(), "{:?}", response.errors);
     Ok(())
 }
 
-async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
+async fn seed_trace_export_rows(node: &UserSeededHome) -> Result<()> {
     exec(
         node,
         r#"mutation {
             create_Agent(input: {
-                agent_id: "amy",
+                agent_did: "amy",
                 node_did: "did:test:amy",
                 display_name: "Amy",
                 enabled: true,
@@ -1923,7 +1950,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
             create_AgentSession(input: {
                 session_id: "session-1",
                 node_did: "did:test:amy",
-                agent_id: "amy",
+                agent_did: "amy",
                 title: { text: "Trace export test", source: "user" },
                 created_at: "2026-05-04T12:00:00Z",
                 observation: { last_activity_at: "2026-05-04T12:00:05Z", preview: "Inspect the repo" }
@@ -1937,7 +1964,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
             create_AgentRequest(input: {purpose: "normal", 
                 request_id: "req-1",
                 node_did: "did:test:amy",
-                agent_id: "amy",
+                agent_did: "amy",
                 session_id: "session-1",
                 content: "Inspect the repo and show README.md",
                 lifecycle_state: "completed",
@@ -1950,7 +1977,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
         "AgentRequest",
     )
     .await?;
-    let observed = gents::graphql::escape_graphql_string(&root_request_doc_id);
+    let observed = gents::store::graphql::escape_graphql_string(&root_request_doc_id);
     let commit_response = node
         .execute(&format!(
             r#"{{ _commits(docID: "{observed}") {{cid fieldName}} }}"#
@@ -1971,8 +1998,8 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
     let commit = escape_graphql_string(commit);
     let rendered_body = escape_graphql_string(&json!({"model":"baa-ai/GLM-5.1-RAM-420GB-MLX", "messages":[{"role":"user","content":"Inspect the repo and show README.md"}]}).to_string());
     exec(node, &format!(r#"mutation {{
-        create_InferenceCall(input: {{call_id: "trace-inference", request_id: "req-1", request_doc_id: "{observed}", node_did: "did:test:amy", agent_id: "amy", backend_id: "studios-cluster", call_seq: 0, attempt: 0, call_kind: "primary", call_state: "completed", queued_at: "2026-05-04T12:00:02Z"}}) {{_docID}}
-        create_RenderedRequest(input: {{capture_key: "trace-model", request_commit_cid: "{commit}", request_json: "{rendered_body}", request_id: "req-1", request_doc_id: "{observed}", session_id: "session-1", node_did: "did:test:amy", requester_did: "", agent_id: "amy", model_name: "baa-ai/GLM-5.1-RAM-420GB-MLX", capture_scope: "inference.0", turn_index: 0, attempt: 0, capture_version: 1, source: "openai_chat_completions", created_at: "2026-05-04T12:00:02Z"}}) {{_docID}}
+        create_InferenceCall(input: {{call_id: "trace-inference", request_id: "req-1", request_doc_id: "{observed}", node_did: "did:test:amy", agent_did: "amy", backend_id: "studios-cluster", call_seq: 0, attempt: 0, call_kind: "primary", call_state: "completed", queued_at: "2026-05-04T12:00:02Z"}}) {{_docID}}
+        create_RenderedRequest(input: {{capture_key: "trace-model", request_commit_cid: "{commit}", request_json: "{rendered_body}", request_id: "req-1", request_doc_id: "{observed}", session_id: "session-1", node_did: "did:test:amy", requester_did: "", agent_did: "amy", model_name: "baa-ai/GLM-5.1-RAM-420GB-MLX", capture_scope: "inference.0", turn_index: 0, attempt: 0, capture_version: 1, source: "openai_chat_completions", created_at: "2026-05-04T12:00:02Z"}}) {{_docID}}
     }}"#)).await?;
     let failed_result = format!(
         "gents_exec: {}\nstdout:\n(empty)\nstderr:\ngrep: invalid option -- P",
@@ -2040,7 +2067,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
             create_AgentSession(input: {
                 session_id: "session-child",
                 node_did: "did:test:reviewer",
-                agent_id: "reviewer",
+                agent_did: "reviewer",
                 title: { text: "Child trace export test", source: "user" },
                 created_at: "2026-05-04T12:00:04Z",
                 observation: { last_activity_at: "2026-05-04T12:00:07Z", preview: "Review the README finding" }
@@ -2055,7 +2082,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
             create_AgentRequest(input: {{purpose: "normal", 
                 request_id: "req-child",
                 node_did: "did:test:reviewer",
-                agent_id: "reviewer",
+                agent_did: "reviewer",
                 session_id: "session-child",
                 content: "Review the README finding",
                 lifecycle_state: "completed",
@@ -2143,7 +2170,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
             create_AgentSession(input: {
                 session_id: "session-2",
                 node_did: "did:test:amy",
-                agent_id: "amy",
+                agent_did: "amy",
                 title: { text: "Trace export deadline test", source: "user" },
                 created_at: "2026-05-04T13:00:00Z",
                 observation: { last_activity_at: "2026-05-04T13:00:10Z", preview: "Read a file then deadline" }
@@ -2157,7 +2184,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
             create_AgentRequest(input: {purpose: "normal", 
                 request_id: "req-deadline",
                 node_did: "did:test:amy",
-                agent_id: "amy",
+                agent_did: "amy",
                 session_id: "session-2",
                 content: "Read README.md but the request later times out",
                 lifecycle_state: "failed",
@@ -2414,7 +2441,7 @@ fn projection_mock_root_request() -> Value {
         "request_id": "req-acp",
         "node_did": "did:test:amy",
         "requester_did": null,
-        "agent_id": "amy",
+        "agent_did": "amy",
         "session_id": "session-acp",
         "content": "root visible request",
         "input": null,
@@ -2438,7 +2465,7 @@ fn projection_mock_child_request() -> Value {
         "request_id": "req-acp-child",
         "node_did": "did:test:reviewer",
         "requester_did": null,
-        "agent_id": "reviewer",
+        "agent_did": "reviewer",
         "session_id": "session-acp",
         "content": "child private request",
         "input": null,
@@ -2462,7 +2489,7 @@ fn projection_mock_forged_child_request() -> Value {
         "request_id": "req-forged-child",
         "node_did": "did:test:reviewer",
         "requester_did": null,
-        "agent_id": "reviewer",
+        "agent_did": "reviewer",
         "session_id": "session-forged-child",
         "content": "forged child request",
         "input": null,
@@ -2486,6 +2513,7 @@ fn projection_mock_agent_messages(query: &str) -> Value {
         PayloadRef, PresentedPayload, ToolResultPart, TranscriptMessage,
     };
     let root_tool = TranscriptMessage {
+        native_request_id: None,
         message_key: "acp-root-tool".into(),
         session_id: "session-acp".into(),
         node_did: "did:test:amy".into(),
@@ -2513,6 +2541,7 @@ fn projection_mock_agent_messages(query: &str) -> Value {
         created_at: "2026-06-05T18:00:01Z".into(),
     };
     let root_result = TranscriptMessage {
+        native_request_id: None,
         message_key: "acp-root-result".into(),
         session_id: "session-acp".into(),
         node_did: "did:test:amy".into(),
@@ -2575,6 +2604,7 @@ fn canonical_text_header(
         PayloadRef, PresentedPayload, TranscriptMessage,
     };
     TranscriptMessage {
+        native_request_id: None,
         message_key: message_key.into(),
         session_id: "session-acp".into(),
         node_did: if request_doc_id == "doc-request-child" {
@@ -2630,7 +2660,7 @@ fn filter_projection_mock_headers(query: &str, rows: Vec<Value>) -> Value {
     for session_id in ["session-acp", "session-forged-child"] {
         let predicate = format!(
             r#"session_id: {{ _eq: "{}" }}"#,
-            gents::graphql::escape_graphql_string(session_id)
+            gents::store::graphql::escape_graphql_string(session_id)
         );
         if query.contains(&predicate) {
             rows.retain(|row| row["session_id"].as_str() == Some(session_id));
@@ -2642,7 +2672,7 @@ fn filter_projection_mock_headers(query: &str, rows: Vec<Value>) -> Value {
         for requester_did in ["did:test:amy", "did:test:reviewer"] {
             let predicate = format!(
                 r#"requester_did: {{ _eq: "{}" }}"#,
-                gents::graphql::escape_graphql_string(requester_did)
+                gents::store::graphql::escape_graphql_string(requester_did)
             );
             if query.contains(&predicate) {
                 rows.retain(|row| row["requester_did"].as_str() == Some(requester_did));
@@ -2882,7 +2912,7 @@ fn projection_mock_tool_calls(query: &str) -> Value {
 fn projection_mock_session() -> Value {
     json!({
         "_docID": "doc-session", "session_id": "session-acp",
-        "node_did": "did:test:amy", "agent_id": "amy",
+        "node_did": "did:test:amy", "agent_did": "amy",
         "created_at": "2026-06-05T18:00:00Z",
         "title": {"text": "ACP projection test", "source": "user"},
         "observation": {

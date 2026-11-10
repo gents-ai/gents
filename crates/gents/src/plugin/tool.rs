@@ -3,16 +3,18 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::job::DataWrite;
 
 use super::data::DataCaller;
 use super::executor::PluginExecutor;
 use super::store::InstalledPlugin;
 use super::PluginVerdict;
-use crate::document_config::{PluginToolRef, WriteToolField};
-use crate::llm::tool::{BoxFuture, ToolDefinition, ToolDispatchResult, ToolDyn, ToolError};
-use crate::tool_call_lifecycle::delivery::PluginToolWrites;
+use crate::documents::{PluginToolRef, WriteToolField};
+use crate::inference::llm::tool::{
+    BoxFuture, ToolDefinition, ToolDispatchResult, ToolDyn, ToolError,
+};
+use crate::tools::call::lifecycle::delivery::PluginToolWrites;
 use gents_loop::live_output::DeferredToolWrites;
 use gents_loop::tool_call_lifecycle::runtime::current_tool_runtime_context;
 
@@ -31,9 +33,8 @@ pub struct PluginTool {
     root: Option<PathBuf>,
     input_fields: Vec<WriteToolField>,
     tool_calls: bool,
-    /// The node a data-declaring plugin's `data_calls` read and whose
-    /// terminal commits its writes; absent, the plugin gets no data session.
-    data_node: Option<Arc<EmbeddedNode>>,
+    data_caller: Option<DataCaller>,
+    model_actor: Option<identity::Did>,
 }
 
 impl PluginTool {
@@ -67,20 +68,33 @@ impl PluginTool {
             root,
             input_fields: plugin.input_fields.clone(),
             tool_calls: plugin.tool_calls,
-            data_node: None,
+            data_caller: None,
+            model_actor: None,
         })
     }
 
-    /// Offers `node` as the data store of a plugin that declares `data`.
-    pub fn with_data_node(mut self, node: Arc<EmbeddedNode>) -> Self {
-        self.data_node = Some(node);
-        self
-    }
-
-    /// The `data_calls` caller for this tool call: the invoking node's DID.
-    fn data_caller(&self) -> Option<DataCaller> {
-        let node_did = current_tool_runtime_context()?.node_did?;
-        DataCaller::new(self.data_node.clone()?, &node_did).ok()
+    pub fn with_agent_data(
+        mut self,
+        node: Arc<EmbeddedNode>,
+        node_did: &str,
+        agent_did: Option<&str>,
+    ) -> Result<Self> {
+        if let Some(agent_did) = agent_did {
+            if self.record.model_binding.is_some() {
+                anyhow::ensure!(
+                    agent_did != node_did && node.node_identity_did() != Some(agent_did),
+                    "plugin model requires a distinct selected Agent"
+                );
+            }
+            self.model_actor = Some(identity::Did::new(agent_did)?);
+        }
+        if self.record.data_grant().is_some() {
+            let agent_did = agent_did.ok_or_else(|| {
+                anyhow::anyhow!("plugin data requires the selected agent identity")
+            })?;
+            self.data_caller = Some(DataCaller::for_agent(node, node_did, agent_did)?);
+        }
+        Ok(self)
     }
 
     /// Takes the `writes` a data-declaring plugin returned beside its output
@@ -112,6 +126,12 @@ impl PluginTool {
             return Err(tool_error("plugin writes commit with a persisted tool call, and this call has none; call the tool from a session"));
         }
         Ok(Some(DeferredToolWrites::new(PluginToolWrites {
+            actor: self
+                .data_caller
+                .as_ref()
+                .and_then(DataCaller::actor)
+                .cloned()
+                .ok_or_else(|| tool_error("plugin writes require the selected agent identity"))?,
             grant,
             writes,
         })))
@@ -133,16 +153,17 @@ impl ToolDyn for PluginTool {
 
     fn call_with_receipt<'a>(&'a self, args: String) -> BoxFuture<'a, ToolDispatchResult> {
         Box::pin(async move {
-            let mut input: serde_json::Value = match crate::llm::tool::parse_tool_args(&args) {
-                Ok(input) => input,
-                Err(error) => {
-                    return ToolDispatchResult {
-                        result: Err(error),
-                        plugin_receipt: None,
-                        deferred_writes: None,
-                    };
-                }
-            };
+            let mut input: serde_json::Value =
+                match crate::inference::llm::tool::parse_tool_args(&args) {
+                    Ok(input) => input,
+                    Err(error) => {
+                        return ToolDispatchResult {
+                            result: Err(error),
+                            plugin_receipt: None,
+                            deferred_writes: None,
+                        };
+                    }
+                };
             if let Err(error) = fill_inputs(&mut input, &self.input_fields) {
                 return ToolDispatchResult {
                     result: Err(tool_error(format!("{error:#}"))),
@@ -152,12 +173,13 @@ impl ToolDyn for PluginTool {
             }
             let (call, receipt) = self
                 .executor
-                .call_data_bound_with_receipt_for(
+                .call_data_bound_with_receipt_as(
                     &self.record,
                     input,
                     self.root.as_deref(),
                     self.tool_calls,
-                    self.data_caller(),
+                    self.data_caller.clone(),
+                    self.model_actor.clone(),
                 )
                 .await;
             let mut deferred_writes = None;
@@ -196,7 +218,7 @@ fn bound_schema(
     let mut seen = std::collections::BTreeSet::new();
     for field in fields {
         anyhow::ensure!(
-            crate::graphql::validate_graphql_name(&field.name).is_ok()
+            crate::store::graphql::validate_graphql_name(&field.name).is_ok()
                 && field.fill.is_some()
                 && !field.required
                 && seen.insert(&field.name),
@@ -230,8 +252,13 @@ fn fill_inputs(input: &mut serde_json::Value, fields: &[WriteToolField]) -> Resu
         .ok_or_else(|| anyhow::anyhow!("plugin input must be an object"))?;
     let mut resolved = Vec::new();
     for field in fields {
-        crate::defra_write::validate_field_input("String", false, true, object.get(&field.name))
-            .map_err(|error| anyhow::anyhow!("plugin input {:?}: {error}", field.name))?;
+        crate::tools::builtin::defra_write::validate_field_input(
+            "String",
+            false,
+            true,
+            object.get(&field.name),
+        )
+        .map_err(|error| anyhow::anyhow!("plugin input {:?}: {error}", field.name))?;
         let fill = field
             .fill
             .as_ref()
@@ -248,7 +275,7 @@ fn fill_inputs(input: &mut serde_json::Value, fields: &[WriteToolField]) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document_config::WriteToolFieldFill;
+    use crate::documents::WriteToolFieldFill;
     use serde_json::json;
 
     fn fields() -> Vec<WriteToolField> {

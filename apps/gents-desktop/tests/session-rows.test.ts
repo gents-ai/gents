@@ -4,6 +4,7 @@ import { sessionKeyOf } from "../src/hooks/fleetStore";
 import { OPENED_SHOWN, sessionRows, type SessionRow } from "../src/ui/lib/session-rows";
 import { stateOf } from "../src/ui/lib/session-filter";
 import { turnLabel } from "../src/ui/lib/live";
+import { startedCount } from "../src/ui/screens/StartedCount";
 
 const session = (sessionId: string, turnState: string | null = "completed") =>
   ({
@@ -111,6 +112,27 @@ describe("the sessions list's rows", () => {
     ]);
     expect(both.rows[0]).toMatchObject({ running: 1 });
     expect(both.rows[1]).toMatchObject({ running: 0 });
+  });
+
+  it("lifts a failure or a stop under a session to its row, but not a replaced turn", () => {
+    const top = session("top");
+    const done = session("done");
+    const deep = session("deep", "failed");
+    const halted = session("halted", "interrupted");
+    const replaced = session("replaced", "superseded");
+    const under: Record<string, SessionSummary> = {
+      done: top,
+      deep: done,
+      halted: top,
+      replaced: top,
+    };
+    const { rows } = sessionRows({
+      sessions: [top, done, deep, halted, replaced],
+      parentOf: (s) => under[s.sessionId] ?? null,
+      under: null,
+      matches: null,
+    });
+    expect(rows[0]).toMatchObject({ started: 3, running: 0, failed: 1, stopped: 1 });
   });
 
   it("hides everything under a closed session and keeps what is open below it", () => {
@@ -318,5 +340,14 @@ describe("a session's state", () => {
       ["stopped", "Superseded"],
       ["finished", null],
     ]);
+  });
+});
+
+describe("a started count's label", () => {
+  it("names what is running, failed and stopped under the session", () => {
+    expect(startedCount({ started: 3, running: 1, failed: 1, stopped: 1 })).toBe(
+      "3 started sessions · 1 running · 1 failed · 1 stopped",
+    );
+    expect(startedCount({ started: 1, running: 0 })).toBe("1 started session");
   });
 });

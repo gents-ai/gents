@@ -1,0 +1,635 @@
+use std::sync::Arc;
+use std::time::Duration;
+
+use anyhow::{anyhow, Context, Result};
+use tokio::sync::{watch, OwnedRwLockReadGuard, RwLock};
+
+use crate::request::lifecycle::{ExecutionOrigin, RequestLifecycle};
+use crate::request::watcher::{DefraWatcher, Watcher};
+use crate::runtime::agent::RuntimeSnapshotObserver;
+use crate::runtime::snapshot::{
+    effective_agent_admission, ActiveRuntimeSnapshot, EffectiveAgentAdmission,
+};
+use crate::runtime::status::RuntimeStatusHandle;
+use gents_protocol::row::AgentRequest;
+
+use super::context::AgentResolution;
+
+pub(in crate::runtime::agent) mod configuration_admission;
+use configuration_admission::{
+    routed_configuration_admission, ConfigurationAdmission, DeferredRequests,
+};
+
+#[derive(Clone)]
+pub(in crate::runtime::agent) struct RuntimeAdmissionGate {
+    state: Arc<RwLock<bool>>,
+    changed: watch::Sender<bool>,
+    #[cfg(test)]
+    entered: Arc<tokio::sync::Notify>,
+    #[cfg(test)]
+    dispatch_attempted: Option<tokio::sync::mpsc::UnboundedSender<()>>,
+}
+
+impl RuntimeAdmissionGate {
+    pub(in crate::runtime::agent) fn closed() -> Self {
+        let (changed, _) = watch::channel(false);
+        Self {
+            state: Arc::new(RwLock::new(false)),
+            changed,
+            #[cfg(test)]
+            entered: Arc::new(tokio::sync::Notify::new()),
+            #[cfg(test)]
+            dispatch_attempted: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn closed_with_dispatch_probe(
+        dispatch_attempted: Option<tokio::sync::mpsc::UnboundedSender<()>>,
+    ) -> Self {
+        let mut gate = Self::closed();
+        gate.dispatch_attempted = dispatch_attempted;
+        gate
+    }
+
+    pub(in crate::runtime::agent) async fn open(&self) {
+        *self.state.write().await = true;
+        self.changed.send_replace(true);
+    }
+
+    pub(in crate::runtime::agent) async fn close(&self) {
+        // Announce closure before waiting for in-progress routing admissions;
+        // a blocked executor-queue send selects on this watch.
+        self.changed.send_replace(false);
+        *self.state.write().await = false;
+    }
+
+    async fn wait_open(&self, shutdown: &mut watch::Receiver<bool>) -> bool {
+        let mut changed = self.changed.subscribe();
+        loop {
+            if *changed.borrow_and_update() {
+                return true;
+            }
+            tokio::select! {
+                biased;
+                _ = shutdown.changed() => return false,
+                result = changed.changed() => {
+                    if result.is_err() {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+
+    async fn enter(&self) -> Option<OwnedRwLockReadGuard<bool>> {
+        let guard = self.state.clone().read_owned().await;
+        if !*guard {
+            return None;
+        }
+        #[cfg(test)]
+        self.entered.notify_one();
+        Some(guard)
+    }
+
+    pub(super) fn subscribe(&self) -> watch::Receiver<bool> {
+        self.changed.subscribe()
+    }
+
+    #[cfg(test)]
+    pub(super) async fn is_open(&self) -> bool {
+        *self.state.read().await
+    }
+
+    #[cfg(test)]
+    pub(super) async fn wait_for_entry_for_test(&self) {
+        self.entered.notified().await;
+    }
+}
+
+pub(super) async fn run_router(
+    node: Arc<defra_node::Node>,
+    node_did: String,
+    active_snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
+    mut shutdown: watch::Receiver<bool>,
+    admission_gate: RuntimeAdmissionGate,
+    runtime_status: RuntimeStatusHandle,
+    runtime_snapshot_observer: Option<Arc<dyn RuntimeSnapshotObserver>>,
+) -> Result<()> {
+    if *shutdown.borrow() {
+        return Ok(());
+    }
+    if !admission_gate.wait_open(&mut shutdown).await {
+        return Ok(());
+    }
+    let watcher = DefraWatcher::for_agents(node.clone(), &node_did, Vec::new())?;
+    let result = run_router_with_watcher(RouterInputs {
+        node,
+        node_did,
+        watcher,
+        active_snapshot_rx,
+        shutdown,
+        admission_gate: admission_gate.clone(),
+        runtime_status,
+        runtime_snapshot_observer,
+    })
+    .await;
+    if result.is_err() {
+        // Close locally before reporting: no concurrent watcher may dispatch
+        // against a readiness row whose acknowledgement failed.
+        admission_gate.close().await;
+    }
+    result
+}
+
+pub(in crate::runtime::agent) struct RouterInputs<W> {
+    pub(in crate::runtime::agent) node: Arc<defra_node::Node>,
+    pub(in crate::runtime::agent) node_did: String,
+    pub(in crate::runtime::agent) watcher: W,
+    pub(in crate::runtime::agent) active_snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
+    pub(in crate::runtime::agent) shutdown: watch::Receiver<bool>,
+    pub(in crate::runtime::agent) admission_gate: RuntimeAdmissionGate,
+    pub(in crate::runtime::agent) runtime_status: RuntimeStatusHandle,
+    pub(in crate::runtime::agent) runtime_snapshot_observer:
+        Option<Arc<dyn RuntimeSnapshotObserver>>,
+}
+
+pub(in crate::runtime::agent) async fn run_router_with_watcher<W>(
+    inputs: RouterInputs<W>,
+) -> Result<()>
+where
+    W: Watcher,
+{
+    let RouterInputs {
+        node,
+        node_did,
+        mut watcher,
+        mut active_snapshot_rx,
+        mut shutdown,
+        admission_gate,
+        runtime_status,
+        runtime_snapshot_observer,
+    } = inputs;
+    let mut active_snapshot = active_snapshot_rx.borrow().clone();
+    let mut admission_changed = admission_gate.subscribe();
+    let mut readiness_changed = runtime_status.readiness().subscribe_observation();
+    let mut pending_request = None;
+    let mut deferred = DeferredRequests::default();
+
+    loop {
+        let Some((request, routed_snapshot, admission_observation)) =
+            wait_for_next_request_with_latest_snapshot(
+                &node_did,
+                &mut watcher,
+                RouterWaitState {
+                    active_snapshot: &mut active_snapshot,
+                    active_snapshot_rx: &mut active_snapshot_rx,
+                    admission_gate: &admission_gate,
+                    admission_changed: &mut admission_changed,
+                    readiness_changed: &mut readiness_changed,
+                    pending_request: &mut pending_request,
+                    deferred: &mut deferred,
+                },
+                &mut shutdown,
+                Some(&runtime_status),
+                runtime_snapshot_observer.as_deref(),
+            )
+            .await?
+        else {
+            return Ok(());
+        };
+        deferred.forget(&request.request_id);
+
+        let Some(_admission) = admission_gate.enter().await else {
+            return Ok(());
+        };
+
+        let resolution = match resolve_agent_for_request(&node, &request).await {
+            Ok(Some(resolution)) => resolution,
+            Ok(None) => {
+                tracing::warn!(request_id = %request.request_id, session_id = %request.session_id,
+                    agent_did = %request.agent_did, "session selection unavailable; leaving request pending");
+                continue;
+            }
+            Err(error) => {
+                tracing::warn!(request_id = %request.request_id, session_id = %request.session_id,
+                    agent_did = %request.agent_did, error = %error, "session selection lookup failed; leaving request pending");
+                continue;
+            }
+        };
+        if let Some(reason) = resolution.rejection_reason.as_deref() {
+            tracing::warn!(
+                request_id = %request.request_id,
+                session_id = %request.session_id,
+                agent_did = %resolution.agent_did,
+                reason = %reason,
+                "rejecting request before dispatch"
+            );
+            fail_routed_request_from_snapshot(
+                &routed_snapshot,
+                node.clone(),
+                node_did.as_str(),
+                request,
+                resolution.agent_did.as_str(),
+                reason,
+            )
+            .await?;
+            continue;
+        }
+
+        let startup_diagnostic = admission_observation.demotion_reason(&resolution.agent_did);
+        match effective_agent_admission(
+            routed_snapshot
+                .dispatchers
+                .contains_key(&resolution.agent_did),
+            routed_snapshot
+                .unavailable_agents
+                .get(&resolution.agent_did),
+            startup_diagnostic,
+        ) {
+            EffectiveAgentAdmission::Ready => {
+                let configuration = routed_snapshot
+                    .agents
+                    .get(&resolution.agent_did)
+                    .map(|agent| &agent.configuration);
+                match routed_configuration_admission(configuration).await {
+                    Ok(ConfigurationAdmission::Claim) => {}
+                    Ok(ConfigurationAdmission::AwaitNewerGeneration) => {
+                        tracing::warn!(
+                            request_id = %request.request_id,
+                            session_id = %request.session_id,
+                            agent_did = %resolution.agent_did,
+                            generation = routed_snapshot.generation,
+                            "routed generation's selected configuration is not visible to its agent; deferring request to a newer generation"
+                        );
+                        deferred.defer(routed_snapshot.generation, request);
+                        continue;
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            request_id = %request.request_id,
+                            session_id = %request.session_id,
+                            agent_did = %resolution.agent_did,
+                            error = %error,
+                            "selected configuration read failed; leaving request pending"
+                        );
+                        continue;
+                    }
+                }
+                let dispatcher = routed_snapshot
+                    .dispatchers
+                    .get(&resolution.agent_did)
+                    .expect("effective admission verified the dispatcher");
+                tracing::info!(
+                    request_id = %request.request_id,
+                    session_id = %request.session_id,
+                    agent_did = %resolution.agent_did,
+                    "dispatching request to agent executor"
+                );
+                #[cfg(test)]
+                if let Some(dispatch_attempted) = &admission_gate.dispatch_attempted {
+                    let _ = dispatch_attempted.send(());
+                }
+                let permit = tokio::select! {
+                    biased;
+                    changed = admission_changed.changed() => {
+                        if changed.is_err() || !*admission_changed.borrow_and_update() {
+                            return Ok(());
+                        }
+                        pending_request = Some(request);
+                        continue;
+                    }
+                    changed = shutdown.changed() => {
+                        if changed.is_err() || *shutdown.borrow_and_update() {
+                            return Ok(());
+                        }
+                        pending_request = Some(request);
+                        continue;
+                    }
+                    changed = active_snapshot_rx.changed() => {
+                        if changed.is_err() {
+                            return Ok(());
+                        }
+                        pending_request = Some(request);
+                        continue;
+                    }
+                    permit = dispatcher.reserve() => permit,
+                };
+                let permit = permit.map_err(|_| {
+                    anyhow!(
+                        "executor queue for agent {} closed unexpectedly",
+                        resolution.agent_did
+                    )
+                })?;
+                if active_snapshot_rx.has_changed().unwrap_or(false) {
+                    pending_request = Some(request);
+                    continue;
+                }
+                permit.send(request);
+            }
+            EffectiveAgentAdmission::Unavailable {
+                public_reason,
+                diagnostic,
+            } => {
+                tracing::warn!(
+                    request_id = %request.request_id,
+                    session_id = %request.session_id,
+                    agent_did = %resolution.agent_did,
+                    public_reason = ?public_reason,
+                    diagnostic = %diagnostic,
+                    "agent unavailable for request"
+                );
+                fail_routed_request_from_snapshot(
+                    &routed_snapshot,
+                    node.clone(),
+                    node_did.as_str(),
+                    request,
+                    resolution.agent_did.as_str(),
+                    public_reason.public_message(),
+                )
+                .await?;
+            }
+            EffectiveAgentAdmission::Unassigned => {
+                tracing::warn!(
+                    request_id = %request.request_id,
+                    session_id = %request.session_id,
+                    agent_did = %resolution.agent_did,
+                    node_did = %node_did,
+                    "agent is not assigned to the active runtime"
+                );
+                fail_routed_request_from_snapshot(
+                    &routed_snapshot,
+                    node.clone(),
+                    node_did.as_str(),
+                    request,
+                    resolution.agent_did.as_str(),
+                    gents_protocol::row::BEHAVIOR_NOT_ASSIGNED_MESSAGE,
+                )
+                .await?;
+            }
+        }
+    }
+}
+
+pub(super) struct RouterWaitState<'a> {
+    pub(super) active_snapshot: &'a mut Arc<ActiveRuntimeSnapshot>,
+    pub(super) active_snapshot_rx: &'a mut watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
+    pub(super) admission_gate: &'a RuntimeAdmissionGate,
+    pub(super) admission_changed: &'a mut watch::Receiver<bool>,
+    pub(super) readiness_changed: &'a mut watch::Receiver<
+        crate::runtime::node_readiness_publisher::AgentAdmissionObservation,
+    >,
+    pub(super) pending_request: &'a mut Option<AgentRequest>,
+    pub(super) deferred: &'a mut DeferredRequests,
+}
+
+pub(super) async fn wait_for_next_request_with_latest_snapshot<W>(
+    node_did: &str,
+    watcher: &mut W,
+    wait_state: RouterWaitState<'_>,
+    shutdown: &mut watch::Receiver<bool>,
+    runtime_status: Option<&RuntimeStatusHandle>,
+    runtime_snapshot_observer: Option<&dyn RuntimeSnapshotObserver>,
+) -> Result<
+    Option<(
+        AgentRequest,
+        Arc<ActiveRuntimeSnapshot>,
+        crate::runtime::node_readiness_publisher::AgentAdmissionObservation,
+    )>,
+>
+where
+    W: Watcher,
+{
+    let RouterWaitState {
+        active_snapshot,
+        active_snapshot_rx,
+        admission_gate,
+        admission_changed,
+        readiness_changed,
+        pending_request,
+        deferred,
+    } = wait_state;
+    loop {
+        let routed_snapshot = active_snapshot_rx.borrow_and_update().clone();
+        watcher.set_agent_identities(routed_snapshot.watcher_identities()?)?;
+        let readiness_observation = readiness_changed.borrow_and_update().clone();
+        *active_snapshot = routed_snapshot.clone();
+        let readiness_aligned =
+            readiness_observation.source_generation() == routed_snapshot.generation;
+        if !readiness_aligned {
+            tokio::select! {
+                biased;
+
+                _ = shutdown.changed() => return Ok(None),
+                changed = admission_changed.changed() => {
+                    if changed.is_err() || !*admission_changed.borrow_and_update() {
+                        return Ok(None);
+                    }
+                }
+                changed = active_snapshot_rx.changed() => {
+                    if changed.is_err() {
+                        return Ok(None);
+                    }
+                }
+                changed = readiness_changed.changed() => {
+                    if changed.is_err() {
+                        return Ok(None);
+                    }
+                }
+            }
+            continue;
+        }
+        if let Some(runtime_status) = runtime_status {
+            if let Err(error) = runtime_status
+                .publish_router_generation(routed_snapshot.generation)
+                .await
+                .with_context(|| {
+                    format!(
+                        "durably acknowledge router generation {}",
+                        routed_snapshot.generation
+                    )
+                })
+            {
+                admission_gate.close().await;
+                return Err(error);
+            }
+            if let Some(observer) = runtime_snapshot_observer {
+                observer.on_router_generation_activated(
+                    routed_snapshot.generation,
+                    &routed_snapshot.configuration_fingerprint(),
+                );
+            }
+        }
+        if pending_request.is_none() {
+            *pending_request = deferred.release(routed_snapshot.generation);
+        }
+        if let Some(request) = pending_request.take() {
+            if !watcher.retains_agent(&request.agent_did) {
+                continue;
+            }
+            return Ok(Some((request, routed_snapshot, readiness_observation)));
+        }
+        let request = tokio::select! {
+            biased;
+
+            _ = shutdown.changed() => return Ok(None),
+            changed = admission_changed.changed() => {
+                if changed.is_err() || !*admission_changed.borrow_and_update() {
+                    return Ok(None);
+                }
+                continue;
+            }
+            changed = active_snapshot_rx.changed() => {
+                if changed.is_err() {
+                    return Ok(None);
+                }
+                *active_snapshot = active_snapshot_rx.borrow_and_update().clone();
+                continue;
+            }
+            changed = readiness_changed.changed() => {
+                if changed.is_err() {
+                    return Ok(None);
+                }
+                continue;
+            }
+            req = watcher.next_request() => {
+                match req {
+                    Some(Ok(req)) => req,
+                    Some(Err(error)) => {
+                        tracing::error!(node_did = %node_did, error = %error, "watcher error, retrying");
+                        continue;
+                    }
+                    None => return Ok(None),
+                }
+            }
+        };
+        *pending_request = Some(request);
+    }
+}
+
+pub(super) async fn resolve_agent_for_request(
+    node: &Arc<defra_node::Node>,
+    request: &AgentRequest,
+) -> Result<Option<AgentResolution>> {
+    let agent_did = request.agent_did.clone();
+    let actor = identity::Did::new(&agent_did)?;
+    let Some(session_agent_did) = crate::session::load_session_agent_selection(
+        node,
+        &actor,
+        &request.node_did,
+        &request.session_id,
+        request.requester_did.as_deref(),
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+    let rejection_reason = (session_agent_did != agent_did).then(|| {
+        format!(
+            "session {} is pinned to agent {} and cannot switch to {}",
+            request.session_id, session_agent_did, agent_did
+        )
+    });
+    Ok(Some(AgentResolution {
+        agent_did,
+        rejection_reason,
+    }))
+}
+
+async fn fail_routed_request_from_snapshot(
+    snapshot: &ActiveRuntimeSnapshot,
+    node: Arc<defra_node::Node>,
+    node_did: &str,
+    request: AgentRequest,
+    agent_did: &str,
+    error_message: &str,
+) -> Result<()> {
+    let identities = snapshot.watcher_identities()?;
+    let Some(identity) = identities
+        .into_iter()
+        .find(|identity| identity.did() == agent_did)
+    else {
+        tracing::warn!(request_id = %request.request_id, agent_did, "routed request Agent identity unavailable; leaving request pending");
+        return Ok(());
+    };
+    let actor = identity::Did::new(agent_did)?;
+    if let Err(error) =
+        crate::ConfigAccess::local_managed_agent(node.clone(), actor, identity.as_ref())
+    {
+        tracing::warn!(request_id = %request.request_id, agent_did, %error, "routed request Agent signing capability unavailable; leaving request pending");
+        return Ok(());
+    }
+    fail_routed_request(
+        node,
+        node_did,
+        request,
+        agent_did,
+        identity.as_ref(),
+        error_message,
+    )
+    .await
+}
+
+pub(super) async fn fail_routed_request(
+    node: Arc<defra_node::Node>,
+    node_did: &str,
+    request: AgentRequest,
+    agent_did: &str,
+    agent_identity: &dyn crate::store::identity::NodeIdentity,
+    error_message: &str,
+) -> Result<()> {
+    anyhow::ensure!(
+        request.agent_did == agent_did && agent_identity.did() == agent_did,
+        "routed request Agent identity mismatch"
+    );
+    let execution_origin =
+        match ExecutionOrigin::from_persisted(request.execution_origin.as_deref()) {
+            Ok(origin) => origin,
+            Err(error) => {
+                let reason = format!("request admission denied: {error:#}");
+                let outcome = crate::request::admission::terminalize_pending_request_rejection(
+                    &node,
+                    &request.doc_id,
+                    node_did,
+                    agent_did,
+                    agent_identity,
+                    &reason,
+                    "terminalize_invalid_execution_origin_before_route_rejection",
+                )
+                .await?;
+                if outcome == crate::request::admission::PendingRejectionOutcome::NotMatched {
+                    tracing::warn!(
+                        request_id = %request.request_id,
+                        "request rejection did not match a visible pending request"
+                    );
+                }
+                return Ok(());
+            }
+        };
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        node.clone(),
+        request.clone(),
+        Duration::from_secs(30).as_secs(),
+        execution_origin,
+        "",
+    );
+
+    lifecycle.bind_managed_agent(agent_identity)?;
+    lifecycle.reject_admission(error_message).await
+}
+
+pub(in crate::runtime::agent) fn default_hostname() -> String {
+    hostname::get()
+        .map(|host| host.to_string_lossy().to_string())
+        .unwrap_or_else(|_| "unknown".to_string())
+}
+
+pub(super) fn format_pending_visibility_error(details: &[String]) -> String {
+    if details.is_empty() {
+        return "waiting for referenced control documents to become visible".to_string();
+    }
+    format!(
+        "waiting for referenced control documents to become visible: {}",
+        details.join("; ")
+    )
+}

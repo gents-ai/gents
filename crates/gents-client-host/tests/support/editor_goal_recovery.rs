@@ -75,15 +75,15 @@ pub async fn wait_for_source_blocked(
     node: &str,
     session: &str,
 ) -> Result<Value> {
-    let node = gents::graphql::escape_graphql_string(node);
-    let session = gents::graphql::escape_graphql_string(session);
+    let node = gents::store::graphql::escape_graphql_string(node);
+    let session = gents::store::graphql::escape_graphql_string(session);
     let query = format!(
         r#"{{
             Goal(filter: {{node_did: {{_eq: "{node}"}}, session_id: {{_eq: "{session}"}}}}) {{ {} }}
             AgentRequest(filter: {{node_did: {{_eq: "{node}"}}, session_id: {{_eq: "{session}"}}, purpose: {{_eq: "normal"}}}}) {{ {} }}
             AgentToolCall(filter: {{node_did: {{_eq: "{node}"}}, session_id: {{_eq: "{session}"}}, tool_name: {{_eq: "update_goal"}}}}) {{ _docID request_doc_id tool_call_id lifecycle_state }}
         }}"#,
-        gents::goal::GOAL_FIELDS,
+        gents_protocol::goal::GOAL_FIELDS,
         gents::SIGNED_REQUEST_FIELDS,
     );
     tokio::time::timeout(Duration::from_secs(30), async {
@@ -152,12 +152,12 @@ pub async fn verify(
 ) -> Result<Value> {
     let query = format!(
         r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, purpose: {{_eq: "normal"}}}}) {{ {} }} Goal(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}}}) {{ {} }} }}"#,
-        gents::graphql::escape_graphql_string(node),
-        gents::graphql::escape_graphql_string(session),
+        gents::store::graphql::escape_graphql_string(node),
+        gents::store::graphql::escape_graphql_string(session),
         gents::SIGNED_REQUEST_FIELDS,
-        gents::graphql::escape_graphql_string(node),
-        gents::graphql::escape_graphql_string(session),
-        gents::goal::GOAL_FIELDS,
+        gents::store::graphql::escape_graphql_string(node),
+        gents::store::graphql::escape_graphql_string(session),
+        gents_protocol::goal::GOAL_FIELDS,
     );
     let value = tokio::time::timeout(Duration::from_secs(30), async {
         loop {

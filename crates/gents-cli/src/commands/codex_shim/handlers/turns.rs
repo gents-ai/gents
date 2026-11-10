@@ -55,14 +55,18 @@ pub(super) async fn handle_turn_request(
                 }),
             );
             if let Some(thread) = caused.as_ref() {
-                let caller = gents::session_origin::SessionScope {
+                let caller = gents_protocol::session::SessionScope {
                     node_did: state.node_did.to_string(),
                     session_id: thread.root_session_id.clone(),
                     requester_did: Some(state.local_requester_did().to_string()),
                 };
-                if let Some(refusal) =
-                    gents::session_message::interrupt_refusal(&state.node, &caller, &thread.scope())
-                        .await?
+                if let Some(refusal) = gents::session::message::interrupt_refusal(
+                    &state.node,
+                    state.local_requester_did(),
+                    &caller,
+                    &thread.scope(),
+                )
+                .await?
                 {
                     return send_error(outbound, request_id, JSONRPC_INVALID_PARAMS, refusal).await;
                 }

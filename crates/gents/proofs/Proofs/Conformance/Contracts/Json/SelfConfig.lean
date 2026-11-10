@@ -1,6 +1,8 @@
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.SelfConfig.Cases
 import Proofs.SelfConfig.Auth
+import Proofs.SelfConfig.Scope
+import Proofs.Identity.GrantSets
 
 namespace Conformance.Contracts
 
@@ -21,6 +23,34 @@ def selfConfigFieldTableJson (t : Target) : String :=
 
 def selfConfigFieldTablesJson : String :=
   jsonArray (allTargets.map selfConfigFieldTableJson)
+
+def selfConfigResourceReadExposureCasesJson : String :=
+  let cases : List (String × Target × List String) :=
+    [("backend", .inferenceBackend, ["backend"]),
+     ("backend", .inferenceBackend, ["backend", "node"]),
+     ("backend", .inferenceBackend, ["backend", "agent"]),
+     ("backend", .inferenceBackend, ["node"]),
+     ("backend", .inferenceBackend, ["agent"]),
+     ("tools", .tools, ["tools"]),
+     ("profile", .inferenceProfile, ["profile"]),
+     ("automation", .task, ["automation"]),
+     ("automation", .task, ["backend"]),
+     ("effective", .agent, ["backend"]),
+     ("effective", .agent, ["automation"]),
+     ("effective", .agent, ["tools"])]
+  jsonArray (cases.map fun (resource, target, enabled) =>
+    "{\"resource\":" ++ jsonString resource ++
+    ",\"categories\":" ++ jsonStringArray enabled ++
+    ",\"exposed\":" ++ scBool (if resource == "effective" then effectiveReadExposed enabled
+      else resourceReadExposed enabled target) ++ "}")
+
+def policyResourceExposureCasesJson : String :=
+  let cases : List (List String) :=
+    [[], ["policy"], ["agent", "tools", "profile"], ["node", "policy"],
+     ["backend", "mcp_service", "automation", "policy"]]
+  jsonArray (cases.map fun categories =>
+    "{\"categories\":" ++ jsonStringArray categories ++
+    ",\"exposed\":" ++ scBool (policyResourceExposed categories) ++ "}")
 
 def fieldValuePairJson (entry : FieldKey × FieldValue) : String :=
   "{"
@@ -49,7 +79,42 @@ def selfConfigBackendJson (entry : String × String × String) : String :=
   ++ "}"
 
 def selfConfigGrantsJson (g : Grants) : String :=
-  "{\"pack_install\":" ++ scBool g.packInstall ++ "}"
+  "{\"pack_install\":" ++ scBool g.packInstall ++ ",\"policy\":" ++ scBool g.policy ++ "}"
+
+/-- Every combination of the policy grant bit on the candidate, the stored Tools and
+the invoker, with pack installation off. Rust `OperatorGrants::bounded_by` must
+match `Grants.boundedBy` on each row. -/
+def policyGrantBoundCasesJson : String :=
+  let bools := [false, true]
+  jsonArray <| bools.flatMap fun candidate => bools.flatMap fun stored =>
+    bools.map fun held =>
+      let c : Grants := { Grants.bot with policy := candidate }
+      let s : Grants := { Grants.bot with policy := stored }
+      let h : Grants := { Grants.bot with policy := held }
+      "{\"candidate_policy\":" ++ scBool candidate
+        ++ ",\"stored_policy\":" ++ scBool stored
+        ++ ",\"held_policy\":" ++ scBool held
+        ++ ",\"accepted\":" ++ scBool (c.boundedBy s h) ++ "}"
+
+/-- The node permissions a no-lockout Agent keeps against its own revoke, and for
+each permission and change, whether the lockout guard keeps it. Rust
+`policy::keeps_lockout` must agree on every row. -/
+def policyLockoutCasesJson : String :=
+  let permissions := (Identity.GrantSets.lockoutProtected ++ ["patch-collection"]).eraseDups
+  let rows := permissions.flatMap fun p =>
+    [false, true].flatMap fun delete =>
+      [false, true].flatMap fun noLockout =>
+        [false, true].map fun isSelf =>
+          let change : Identity.GrantSets.Change :=
+            ⟨.permission p, delete, true, false⟩
+          "{\"permission\":" ++ jsonString p
+            ++ ",\"delete\":" ++ scBool delete
+            ++ ",\"no_lockout\":" ++ scBool noLockout
+            ++ ",\"is_self\":" ++ scBool isSelf
+            ++ ",\"kept\":"
+            ++ scBool (Identity.GrantSets.selfChangeKeepsLockout noLockout isSelf change) ++ "}"
+  "{\"protected\":" ++ jsonStringArray Identity.GrantSets.lockoutProtected
+    ++ ",\"rows\":" ++ jsonArray rows ++ "}"
 
 def selfConfigSelectionJson : Option (List (FieldKey × FieldValue)) → String
   | none => "null"
@@ -86,10 +151,65 @@ def schemaPublicationCasesJson : String := Id.run do
   for grant in [false, true] do
     for artifact in [false, true] do
       for compatible in [false, true] do
-        rows := rows ++ ["{\"grant\":" ++ scBool grant
-          ++ ",\"artifact\":" ++ scBool artifact
-          ++ ",\"compatible\":" ++ scBool compatible
-          ++ ",\"accepted\":" ++ scBool (SelfConfig.schemaPublicationAllowed grant artifact compatible) ++ "}"]
+        for nativeAllowed in [false, true] do
+          rows := rows ++ ["{\"grant\":" ++ scBool grant
+            ++ ",\"artifact\":" ++ scBool artifact
+            ++ ",\"compatible\":" ++ scBool compatible
+            ++ ",\"native_allowed\":" ++ scBool nativeAllowed
+            ++ ",\"accepted\":" ++ scBool (SelfConfig.schemaPublicationAllowed grant artifact compatible nativeAllowed) ++ "}"]
   return jsonArray rows
+
+/-- Edit authority by category, scope and held self-config categories. -/
+def selfConfigScopeEditCasesJson : String := Id.run do
+  let categorySets : List (String × List String) :=
+    [("none", []), ("agent-only", ["agent"]), ("tools-only", ["tools"]),
+     ("catalog-only", ["node"]), ("catalog-and-agent", ["node", "agent"]),
+     ("catalog-and-tools", ["node", "tools"]), ("agent-and-tools", ["agent", "tools"]),
+     ("engineer", SelfConfig.effectiveCategories SelfConfig.engineerGroup)]
+  let documents := ["agent", "tools", "profile", "backend", "automation", "policy"]
+  let scopes : List (String × SelfConfig.Scope) := [("own", .own), ("foreign", .foreign)]
+  let mut rows : List String := []
+  for (setName, categories) in categorySets do
+    for document in documents do
+      for (scopeName, scope) in scopes do
+        rows := rows ++ ["{\"name\":" ++ jsonString (setName ++ "/" ++ document ++ "/" ++ scopeName)
+          ++ ",\"categories\":" ++ jsonStringArray categories
+          ++ ",\"category\":" ++ jsonString document
+          ++ ",\"scope\":" ++ jsonString scopeName
+          ++ ",\"allowed\":" ++ scBool (SelfConfig.mayEdit categories document scope) ++ "}"]
+  return jsonArray rows
+
+def selfConfigScopeGroupCasesJson : String := Id.run do
+  let groups : List (String × SelfConfig.SelfConfigGroup) :=
+    [("created", SelfConfig.createdGroup), ("clone-of-engineer", SelfConfig.cloneGroup SelfConfig.engineerGroup),
+     ("engineer", SelfConfig.engineerGroup), ("yolo", SelfConfig.yoloGroup),
+     ("enabled-default", ⟨true, none⟩),
+     ("disabled-with-list", ⟨false, some ["node", "tools"]⟩),
+     ("enabled-catalog", ⟨true, some ["node"]⟩)]
+  let rows := groups.map fun (name, g) =>
+    "{\"name\":" ++ jsonString name
+      ++ ",\"enabled\":" ++ scBool g.enabled
+      ++ ",\"categories\":" ++ jsonOptionalStringArray g.categories
+      ++ ",\"effective\":" ++ jsonStringArray (SelfConfig.effectiveCategories g)
+      ++ ",\"may_create_agent\":" ++ scBool (SelfConfig.mayCreateAgent (SelfConfig.effectiveCategories g)) ++ "}"
+  return jsonArray rows
+
+def selfConfigScopeOfCasesJson : String := Id.run do
+  let rows : List (String × String × String × Bool) :=
+    [("self-exclusive", "agent-a", "agent-a", false), ("self-shared", "agent-a", "agent-a", true),
+     ("other-exclusive", "agent-a", "agent-b", false), ("other-shared", "agent-a", "agent-b", true)]
+  return jsonArray (rows.map fun (name, invoking, target, shared) =>
+    "{\"name\":" ++ jsonString name
+      ++ ",\"invoking_agent\":" ++ jsonString invoking
+      ++ ",\"target_agent\":" ++ jsonString target
+      ++ ",\"shared\":" ++ scBool shared
+      ++ ",\"scope\":" ++ jsonString (if SelfConfig.scopeOf invoking target shared == .own then "own" else "foreign") ++ "}")
+
+def selfConfigScopeCasesJson : String :=
+  "{\"categories\":" ++ jsonStringArray SelfConfig.selfConfigCategories
+    ++ ",\"default_categories\":" ++ jsonStringArray SelfConfig.defaultCategories
+    ++ ",\"edit\":" ++ selfConfigScopeEditCasesJson
+    ++ ",\"groups\":" ++ selfConfigScopeGroupCasesJson
+    ++ ",\"scope_of\":" ++ selfConfigScopeOfCasesJson ++ "}"
 
 end Conformance.Contracts

@@ -18,6 +18,10 @@ pub struct ObserverMetrics {
     pub local_write_redundant_fetches: AtomicU64,
     pub fetch_failures: AtomicU64,
     pub transcript_invalidations: AtomicU64,
+    pub transport_failures: AtomicU64,
+    pub subscription_renewals: AtomicU64,
+    /// Sources ended and scheduled to reconnect.
+    pub reconnects: AtomicU64,
 }
 
 #[derive(Debug, Clone)]
@@ -32,6 +36,9 @@ pub struct ObserverMetricsSnapshot {
     pub local_write_redundant_fetches: u64,
     pub fetch_failures: u64,
     pub transcript_invalidations: u64,
+    pub transport_failures: u64,
+    pub subscription_renewals: u64,
+    pub reconnects: u64,
 }
 
 impl ObserverMetrics {
@@ -49,6 +56,9 @@ impl ObserverMetrics {
                 .load(Ordering::Relaxed),
             fetch_failures: self.fetch_failures.load(Ordering::Relaxed),
             transcript_invalidations: self.transcript_invalidations.load(Ordering::Relaxed),
+            transport_failures: self.transport_failures.load(Ordering::Relaxed),
+            subscription_renewals: self.subscription_renewals.load(Ordering::Relaxed),
+            reconnects: self.reconnects.load(Ordering::Relaxed),
         }
     }
 }
@@ -79,16 +89,16 @@ enum ProvenanceUpdate {
     Invalidate,
 }
 
-/// Captures publication ordering: unknown ownership invalidates every scope;
-/// classified changes invalidate only their actual owners.
+/// One family of publication epochs: unknown ownership invalidates every
+/// scope; classified changes invalidate only their actual owners.
 #[derive(Clone, Default)]
-pub(crate) struct StoreReadFence {
+struct Epochs {
     all: Arc<()>,
     shared: Arc<()>,
     nodes: BTreeMap<String, Arc<()>>,
 }
 
-impl StoreReadFence {
+impl Epochs {
     fn accepts(&self, captured: &Self, scope: &StoreScope) -> bool {
         match scope {
             StoreScope::All => Arc::ptr_eq(&self.all, &captured.all),
@@ -118,6 +128,34 @@ impl StoreReadFence {
     }
 }
 
+/// `ClientDataPublication` epochs: publications move `data`, request events
+/// move `events`. A snapshot reload checks `data` only; a patch checks both.
+#[derive(Clone, Default)]
+pub(crate) struct StoreReadFence {
+    data: Epochs,
+    events: Epochs,
+}
+
+impl StoreReadFence {
+    /// `ClientDataPublication.acceptsFor`.
+    fn accepts(&self, captured: &Self, scope: &StoreScope) -> bool {
+        self.accepts_reload(captured, scope) && self.events.accepts(&captured.events, scope)
+    }
+
+    /// `ClientDataPublication.acceptsReloadFor`.
+    fn accepts_reload(&self, captured: &Self, scope: &StoreScope) -> bool {
+        self.data.accepts(&captured.data, scope)
+    }
+
+    fn touch(&mut self, scope: &StoreScope) {
+        self.data.touch(scope);
+    }
+
+    fn touch_events(&mut self, scope: &StoreScope) {
+        self.events.touch(scope);
+    }
+}
+
 enum StoreMutation {
     Replace(ClientStore),
     ReplaceNode(String, ClientStore),
@@ -126,11 +164,36 @@ enum StoreMutation {
 }
 
 impl StoreMutation {
+    /// A node reload publishing only the snapshot's rows for that node.
+    fn replace_node(node: &str, incoming: ClientStore) -> Self {
+        Self::ReplaceNode(node.to_owned(), incoming.node_rows(node))
+    }
+
+    /// The epochs the mutation moves.
     fn scope(&self, current: &ClientStore) -> StoreScope {
         match self {
             Self::Replace(_) => StoreScope::All,
             Self::ReplaceNode(node, incoming) => current.replacement_scope(node, incoming),
             Self::Chat(incoming) | Self::Observer(incoming) => current.merge_scope(incoming),
+        }
+    }
+
+    /// Whether a read captured at `captured` may still publish this mutation:
+    /// a snapshot reload checks the publication epochs of its `reloadCheck`
+    /// scope, a patch also checks the request-event epochs of its footprint.
+    fn accepts(
+        &self,
+        fences: &StoreReadFence,
+        captured: &StoreReadFence,
+        current: &ClientStore,
+        scope: &StoreScope,
+    ) -> bool {
+        match self {
+            Self::Replace(_) => fences.accepts_reload(captured, scope),
+            Self::ReplaceNode(node, incoming) => {
+                fences.accepts_reload(captured, &current.replacement_check_scope(node, incoming))
+            }
+            Self::Chat(_) | Self::Observer(_) => fences.accepts(captured, scope),
         }
     }
 
@@ -151,7 +214,63 @@ impl StoreMutation {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeConnectionStatus {
+    Connecting,
+    Connected,
+    Disconnected,
+    /// The runtime refused this client's credentials; its source keeps
+    /// reconnecting on the backoff.
+    Refused,
+    /// The peer has no operator GraphQL endpoint to observe.
+    NoEndpoint,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuntimeConnectionEvent {
+    SourceStarted,
+    SubscriptionsReady,
+    SnapshotSucceeded,
+    TransportFailed,
+    /// The access owner refused the source's request or read; it reconnects
+    /// and the status names the refusal.
+    Refused,
+    Renewed,
+    EndpointMissing,
+}
+
+impl RuntimeConnectionEvent {
+    /// `RuntimeConnectionObservation.observe`.
+    fn observe(self, status: Option<RuntimeConnectionStatus>) -> Option<RuntimeConnectionStatus> {
+        Some(match self {
+            Self::SourceStarted => RuntimeConnectionStatus::Connecting,
+            Self::SubscriptionsReady => match status {
+                Some(RuntimeConnectionStatus::Refused) => RuntimeConnectionStatus::Refused,
+                _ => RuntimeConnectionStatus::Connecting,
+            },
+            Self::Refused => RuntimeConnectionStatus::Refused,
+            Self::SnapshotSucceeded => RuntimeConnectionStatus::Connected,
+            Self::TransportFailed => RuntimeConnectionStatus::Disconnected,
+            Self::Renewed => return status,
+            Self::EndpointMissing => RuntimeConnectionStatus::NoEndpoint,
+        })
+    }
+}
+
+impl RuntimeConnectionStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Connecting => "connecting",
+            Self::Connected => "connected",
+            Self::Disconnected => "disconnected",
+            Self::Refused => "refused",
+            Self::NoEndpoint => "noEndpoint",
+        }
+    }
+}
+
 struct ObservedState {
+    runtime_connections: BTreeMap<String, RuntimeConnectionStatus>,
     snapshot: SharedClientStore,
     revision: StoreProjectionRevision,
     fences: StoreReadFence,
@@ -184,6 +303,7 @@ impl ObservedStore {
         let (resync_tx, _resync_rx) = watch::channel(0_u64);
         let store = Arc::new(Self {
             state: RwLock::new(ObservedState {
+                runtime_connections: BTreeMap::new(),
                 snapshot: Arc::new(initial_snapshot.into_observer_projection()),
                 revision,
                 fences: StoreReadFence::default(),
@@ -195,6 +315,43 @@ impl ObservedStore {
             pending_resync: StdMutex::new(PendingResync::default()),
         });
         (store, version_rx)
+    }
+
+    pub fn runtime_connection(&self, node_did: &str) -> Option<RuntimeConnectionStatus> {
+        self.state
+            .read()
+            .expect("store snapshot lock poisoned")
+            .runtime_connections
+            .get(node_did)
+            .copied()
+    }
+
+    pub(crate) fn observe_runtime_connection(&self, node_did: &str, event: RuntimeConnectionEvent) {
+        if let Some(status) = event.observe(self.runtime_connection(node_did)) {
+            self.set_runtime_connection(node_did, Some(status));
+        }
+    }
+
+    pub(crate) fn set_runtime_connection(
+        &self,
+        node_did: &str,
+        status: Option<RuntimeConnectionStatus>,
+    ) {
+        let changed = {
+            let mut state = self.state.write().expect("store snapshot lock poisoned");
+            match status {
+                Some(status) => {
+                    state
+                        .runtime_connections
+                        .insert(node_did.to_owned(), status)
+                        != Some(status)
+                }
+                None => state.runtime_connections.remove(node_did).is_some(),
+            }
+        };
+        if changed {
+            self.invalidate_projection(false);
+        }
     }
 
     pub fn snapshot(&self) -> SharedClientStore {
@@ -235,6 +392,17 @@ impl ObservedStore {
 
     pub(crate) fn subscribe_resync_requests(&self) -> watch::Receiver<u64> {
         self.resync_tx.subscribe()
+    }
+
+    /// A refused read drops the node's cached rows, which this client may no
+    /// longer read, and asks the observer for its own authenticated read,
+    /// which owns the node's connection status.
+    pub fn clear_node_after_refused_read(&self, node_did: &str) {
+        let _ = self.update_if(
+            None,
+            StoreMutation::replace_node(node_did, ClientStore::default()),
+        );
+        self.request_resync(Some(node_did));
     }
 
     /// Coalesces stale async publishers into the observer's bounded
@@ -337,6 +505,7 @@ impl ObservedStore {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn merge_observer_patch_at_read(
         &self,
         captured: &StoreReadFence,
@@ -357,7 +526,7 @@ impl ObservedStore {
     ) -> bool {
         let incoming = incoming.into_observer_projection();
         let mutation = match node_did {
-            Some(node) => StoreMutation::ReplaceNode(node.to_owned(), incoming),
+            Some(node) => StoreMutation::replace_node(node, incoming),
             None => StoreMutation::Replace(incoming),
         };
         self.update_if(Some(captured), mutation).is_some()
@@ -365,12 +534,14 @@ impl ObservedStore {
 
     /// Publish a structural database change without retaining its transcript
     /// payload; consumers reconcile with a bounded DefraDB projection for the
-    /// selected session. Tool-call changes also invalidate lineage.
+    /// selected session (`ClientDataPublication.transcriptInvalidation`). A
+    /// tool-call change also invalidates lineage and rejects every patch read
+    /// before it (`ClientDataPublication.provenanceInvalidation`).
     pub fn invalidate_projection(&self, provenance_changed: bool) -> u64 {
         let notice = {
             let mut state = self.state.write().expect("store snapshot lock poisoned");
             if provenance_changed {
-                state.fences.touch(&StoreScope::All);
+                state.fences.touch_events(&StoreScope::All);
             }
             state.revision = StoreProjectionRevision {
                 store_version: state.revision.store_version.saturating_add(1),
@@ -394,7 +565,19 @@ impl ObservedStore {
     pub(crate) fn observe_request_event(&self, doc_id: Option<&str>) -> u64 {
         let mut state = self.state.write().expect("store snapshot lock poisoned");
         let scope = state.snapshot.request_event_scope(doc_id);
-        state.fences.touch(&scope);
+        Self::record_request_event(&mut state, &scope)
+    }
+
+    /// `ClientDataPublication.observerEvent`: a change delivered on
+    /// `node_did`'s subscription, whose observer reads only that node's rows.
+    pub(crate) fn observe_node_event(&self, node_did: &str) -> u64 {
+        let mut state = self.state.write().expect("store snapshot lock poisoned");
+        let scope = state.snapshot.node_event_scope(node_did);
+        Self::record_request_event(&mut state, &scope)
+    }
+
+    fn record_request_event(state: &mut ObservedState, scope: &StoreScope) -> u64 {
+        state.fences.touch_events(scope);
         state.revision.request_event_version =
             state.revision.request_event_version.saturating_add(1);
         state.revision.request_event_version
@@ -455,7 +638,9 @@ impl ObservedStore {
         let notice = {
             let mut state = self.state.write().expect("store snapshot lock poisoned");
             let scope = mutation.scope(&state.snapshot);
-            if captured.is_some_and(|captured| !state.fences.accepts(captured, &scope)) {
+            if captured.is_some_and(|captured| {
+                !mutation.accepts(&state.fences, captured, &state.snapshot, &scope)
+            }) {
                 return None;
             }
             let store_version = state.revision.store_version.saturating_add(1);
@@ -522,717 +707,4 @@ fn same_provenance_inputs(before: &ClientStore, after: &ClientStore) -> bool {
 }
 
 #[cfg(test)]
-mod reload_tests {
-    use super::*;
-    use crate::client::store::ClientStoreRows;
-    use gents_protocol::row::AgentRequestRow;
-
-    fn requests(ids: &[&str]) -> ClientStore {
-        ClientStore::from_rows(ClientStoreRows {
-            requests: ids
-                .iter()
-                .map(|id| AgentRequestRow {
-                    request_id: (*id).into(),
-                    node_did: Some("did:test:reload".into()),
-                    session_id: Some("session".into()),
-                    purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
-                    ..Default::default()
-                })
-                .collect(),
-            ..Default::default()
-        })
-    }
-
-    #[test]
-    fn generated_notice_delivery_never_regresses_watchers() {
-        let contract = gents_lean_contract::load_contract_snapshot::<serde_json::Value>()
-            .expect("executed Lean publication contract");
-        let fixture = &contract["client_data_publication_cases"];
-        let case = &fixture["notice_delivery"];
-        let decode = |value: &serde_json::Value| StoreUpdateNotice {
-            revision: StoreProjectionRevision {
-                store_version: value["version"].as_u64().expect("store version"),
-                provenance_version: value["provenance"].as_u64().expect("provenance version"),
-                request_event_version: value["request_event"]
-                    .as_u64()
-                    .expect("request event version"),
-            },
-        };
-        let (store, versions) = ObservedStore::new(ClientStore::default());
-        let changes = store.change_tx.subscribe();
-        store.publish_notice(decode(&case["initial"]));
-        for delivery in case["deliveries"].as_array().expect("notice deliveries") {
-            store.publish_notice(decode(&delivery["incoming"]));
-            let expected = decode(&delivery["expected"]);
-            assert_eq!(*versions.borrow(), expected.revision.store_version);
-            assert_eq!(*changes.borrow(), expected);
-        }
-    }
-
-    #[test]
-    fn provenance_revision_ignores_transcript_and_lease_but_tracks_remote_completion() {
-        use gents_protocol::request_lifecycle::RequestLifecycleState;
-
-        let mut initial = requests(&["parent", "remote-child"]);
-        initial.requests[0].doc_id = Some("parent-doc".into());
-        initial.requests[1].node_did = Some("did:test:remote".into());
-        initial.requests[1].caused_by_parent_request_doc_id = Some("parent-doc".into());
-        initial.requests[1].lifecycle_state = Some(RequestLifecycleState::Processing);
-        let (store, _) = ObservedStore::new(initial);
-        let original = store.projection_revision();
-        for _ in 0..50 {
-            store.invalidate_projection(false);
-        }
-        assert_eq!(
-            store.projection_revision().provenance_version,
-            original.provenance_version
-        );
-        assert_eq!(
-            store.projection_revision().store_version,
-            original.store_version + 50
-        );
-
-        let mut renewed = store.snapshot().as_ref().clone();
-        renewed.requests[1].execution_lease_expires_at = Some("later".into());
-        store.merge_observer_patch(renewed);
-        assert_eq!(
-            store.projection_revision().provenance_version,
-            original.provenance_version
-        );
-
-        let mut completed = store.snapshot().as_ref().clone();
-        completed.requests[1].lifecycle_state = Some(RequestLifecycleState::Completed);
-        store.merge_observer_patch(completed);
-        assert_eq!(
-            store.projection_revision().provenance_version,
-            original.provenance_version + 1
-        );
-        let settled = store.projection_revision();
-        store.merge_observer_patch(store.snapshot().as_ref().clone());
-        assert_eq!(
-            store.projection_revision().provenance_version,
-            settled.provenance_version
-        );
-    }
-
-    #[test]
-    fn accepted_reload_refreshes_unretained_lineage_but_rejected_reload_does_not() {
-        let (store, _) = ObservedStore::new(requests(&["parent"]));
-        let captured = store.capture_read();
-        store.invalidate_projection(true);
-        let current = store.projection_revision();
-        assert!(!store.replace_reloaded_snapshot_at_read(&captured, None, requests(&["parent"]),));
-        assert_eq!(store.projection_revision(), current);
-        let current_snapshot = store.capture_read();
-        assert!(store.replace_reloaded_snapshot_at_read(
-            &current_snapshot,
-            None,
-            requests(&["parent"]),
-        ));
-        assert_eq!(
-            store.projection_revision().provenance_version,
-            current.provenance_version + 1
-        );
-    }
-
-    #[test]
-    fn late_reload_cannot_erase_a_request_refreshed_after_capture() {
-        for scope in [None, Some("did:test:reload")] {
-            let (store, _) = ObservedStore::new(requests(&["accounted"]));
-            let captured = store.capture_read();
-            let old_database_read = requests(&["accounted"]);
-            store.merge_chat_patch(requests(&["pending"]));
-            let refreshed = store.projection_revision();
-            assert!(!store.replace_reloaded_snapshot_at_read(&captured, scope, old_database_read,));
-            assert_eq!(store.projection_revision(), refreshed);
-            assert!(store
-                .snapshot()
-                .requests
-                .iter()
-                .any(|row| row.request_id == "pending"));
-            let refreshed_snapshot = store.capture_read();
-            assert!(store.replace_reloaded_snapshot_at_read(
-                &refreshed_snapshot,
-                scope,
-                requests(&["pending"]),
-            ));
-            assert_eq!(store.snapshot().requests.len(), 1);
-            assert_eq!(store.snapshot().requests[0].request_id, "pending");
-        }
-    }
-
-    #[test]
-    fn physical_request_owner_replacement_fences_both_scopes() {
-        let rows = |owner: &str| {
-            ClientStore::from_rows(ClientStoreRows {
-                requests: vec![AgentRequestRow {
-                    doc_id: Some("physical".into()),
-                    request_id: "request".into(),
-                    node_did: Some(owner.into()),
-                    purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            })
-        };
-        let (store, _) = ObservedStore::new(rows("did:old"));
-        let read = store.capture_read();
-        store.merge_observer_patch(rows("did:new"));
-        assert!(!store.replace_reloaded_snapshot_at_read(&read, Some("did:old"), rows("did:old")));
-        assert_eq!(
-            store.snapshot().requests[0].node_did.as_deref(),
-            Some("did:new")
-        );
-    }
-
-    #[test]
-    fn captured_patch_rejects_newer_data_and_request_event_but_not_transcript_notice() {
-        let (store, _) = ObservedStore::new(requests(&["old"]));
-        let captured = store.capture_read();
-        store.invalidate_projection(false);
-        assert!(store
-            .merge_chat_patch_at_read(&captured, requests(&["valid"]))
-            .is_some());
-
-        let stale_snapshot = store.capture_read();
-        store.replace_snapshot(requests(&[]));
-        assert!(store
-            .merge_chat_patch_at_read(&stale_snapshot, requests(&["old"]),)
-            .is_none());
-        assert!(!store
-            .snapshot()
-            .requests
-            .iter()
-            .any(|row| row.request_id == "old"));
-
-        let uncached_snapshot = store.capture_read();
-        store.observe_request_event(None);
-        assert!(store
-            .merge_chat_patch_at_read(&uncached_snapshot, requests(&["deleted-before-read"]),)
-            .is_none());
-        assert!(!store
-            .snapshot()
-            .requests
-            .iter()
-            .any(|row| row.request_id == "deleted-before-read"));
-    }
-
-    #[test]
-    fn generated_data_publication_cases_match_observed_store() {
-        let fixture: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../gents/tests/fixtures/client_data_publication.json"
-        ))
-        .expect("generated ClientDataPublication cases");
-        for case in fixture["publication"]
-            .as_array()
-            .expect("publication cases")
-        {
-            let name = case["name"].as_str().expect("case name");
-            let expected = case["accepted"].as_bool().expect("model decision");
-            let initial_ids: Vec<String> = case["initial_request_ids"]
-                .as_array()
-                .expect("modeled initial request IDs")
-                .iter()
-                .map(|id| id.as_str().expect("request ID").to_owned())
-                .collect();
-            let initial_refs: Vec<&str> = initial_ids.iter().map(String::as_str).collect();
-            let publish_ids: Vec<String> = case["publish_request_ids"]
-                .as_array()
-                .expect("modeled publication request IDs")
-                .iter()
-                .map(|id| id.as_str().expect("request ID").to_owned())
-                .collect();
-            let publish_refs: Vec<&str> = publish_ids.iter().map(String::as_str).collect();
-            let (store, _) = ObservedStore::new(requests(&initial_refs));
-            let captured = store.capture_read();
-            for action in case["actions"].as_array().expect("modeled actions") {
-                match action.as_str().expect("publication action") {
-                    "request_event" => {
-                        store.observe_request_event(None);
-                    }
-                    "transcript_invalidation" => {
-                        store.invalidate_projection(false);
-                    }
-                    "replace_requests" => {
-                        store.replace_snapshot(requests(&[]));
-                    }
-                    other => panic!("unrecognized modeled publication action {other}"),
-                }
-            }
-            let published = store
-                .merge_chat_patch_at_read(&captured, requests(&publish_refs))
-                .is_some();
-            assert_eq!(published, expected, "modeled case {name}");
-        }
-    }
-
-    #[test]
-    fn generated_scoped_replacement_case_matches_client_store_ownership() {
-        let fixture: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../gents/tests/fixtures/client_data_publication.json"
-        ))
-        .expect("generated ClientDataPublication cases");
-        for case in fixture["scoped_replacement"]
-            .as_array()
-            .expect("modeled scoped replacement cases")
-        {
-            let did = |owner: u64| format!("did:scope:{owner}");
-            let configs = |rows: &[serde_json::Value]| {
-                rows.iter()
-                    .map(|row| {
-                        let owner = row["owner"].as_u64().expect("config owner");
-                        serde_json::from_value(serde_json::json!({
-                            "session_id": row["key"],
-                            "node_did": did(owner),
-                            "requester_did": null,
-                            "agent_id": "agent",
-                            "created_at": "2026-01-01T00:00:00Z",
-                            "title": {"text": row["value"], "source": "user"}
-                        }))
-                        .expect("modeled session row")
-                    })
-                    .collect::<Vec<gents_protocol::session::AgentSession>>()
-            };
-            let tool_calls = |rows: &[serde_json::Value]| {
-                rows.iter()
-                    .map(|row| {
-                        let owner = row["owner"].as_u64().expect("tool-call owner");
-                        serde_json::from_value(serde_json::json!({
-                            "tool_call_key": row["key"],
-                            "node_did": did(owner),
-                            "session_id": row["key"],
-                            "tool_name": row["value"]
-                        }))
-                        .expect("modeled tool-call row")
-                    })
-                    .collect::<Vec<gents_protocol::row::AgentToolCallRow>>()
-            };
-            let observations = |rows: &[serde_json::Value]| {
-                rows.iter()
-                    .map(|row| {
-                        serde_json::from_value(serde_json::json!({
-                            "trigger_id": row["key"],
-                            "last_attempt_at": "2026-01-01T00:00:00Z",
-                            "last_fired_source_doc_id": null,
-                            "last_status": row["value"],
-                            "last_error": null,
-                            "fire_count": 1
-                        }))
-                        .expect("modeled trigger observation")
-                    })
-                    .collect::<Vec<gents::document_config::TriggerObservation>>()
-            };
-            let observation_sources = |rows: &[serde_json::Value]| {
-                rows.iter()
-                    .map(|row| row["source"].as_u64().map(did))
-                    .collect::<Vec<_>>()
-            };
-            let initial = ClientStore::from_rows(crate::client::store::ClientStoreRows {
-                sessions: configs(
-                    case["current_configs"]
-                        .as_array()
-                        .expect("modeled current configs"),
-                ),
-                session_source_node_dids: case["current_configs"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|row| row["source"].as_u64().map(did))
-                    .collect(),
-                tool_calls: tool_calls(case["current_configs"].as_array().unwrap()),
-                tool_call_source_node_dids: case["current_configs"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|row| row["source"].as_u64().map(did))
-                    .collect(),
-                triggers: (1..=3)
-                    .map(|owner| {
-                        serde_json::from_value(serde_json::json!({
-                            "node_did": did(owner),
-                            "trigger_id": "shared-trigger",
-                            "task_id": format!("task-{owner}"),
-                            "source": {"kind": "event", "event_source_id": "source"},
-                            "enabled": true,
-                            "tags": []
-                        }))
-                        .expect("modeled trigger")
-                    })
-                    .collect(),
-                trigger_observations: observations(
-                    case["current_observations"]
-                        .as_array()
-                        .expect("modeled current observations"),
-                ),
-                trigger_observation_source_node_dids: observation_sources(
-                    case["current_observations"]
-                        .as_array()
-                        .expect("modeled current observations"),
-                ),
-                ..Default::default()
-            });
-            let incoming = ClientStore::from_rows(crate::client::store::ClientStoreRows {
-                operator_config_authoritative_node_dids: case["incoming_authoritative_owners"]
-                    .as_array()
-                    .expect("modeled incoming authoritative owners")
-                    .iter()
-                    .map(|owner| did(owner.as_u64().expect("authority owner")))
-                    .collect(),
-                sessions: configs(
-                    case["incoming_configs"]
-                        .as_array()
-                        .expect("modeled incoming configs"),
-                ),
-                session_source_node_dids: case["incoming_configs"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|row| row["source"].as_u64().map(did))
-                    .collect(),
-                tool_calls: tool_calls(case["incoming_configs"].as_array().unwrap()),
-                tool_call_source_node_dids: case["incoming_configs"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|row| row["source"].as_u64().map(did))
-                    .collect(),
-                triggers: case["incoming_trigger_owners"]
-                    .as_array()
-                    .expect("modeled incoming trigger owners")
-                    .iter()
-                    .map(|owner| {
-                        let owner = owner.as_u64().expect("trigger owner");
-                        serde_json::from_value(serde_json::json!({
-                            "node_did": did(owner),
-                            "trigger_id": "shared-trigger",
-                            "task_id": format!("task-{owner}"),
-                            "source": {"kind": "event", "event_source_id": "source"},
-                            "enabled": true,
-                            "tags": []
-                        }))
-                        .expect("modeled incoming trigger")
-                    })
-                    .collect(),
-                trigger_source_node_dids: case["incoming_trigger_owners"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|owner| Some(did(owner.as_u64().unwrap())))
-                    .collect(),
-                trigger_observations: observations(
-                    case["incoming_observations"]
-                        .as_array()
-                        .expect("modeled incoming observations"),
-                ),
-                trigger_observation_source_node_dids: observation_sources(
-                    case["incoming_observations"]
-                        .as_array()
-                        .expect("modeled incoming observations"),
-                ),
-                ..Default::default()
-            });
-            let merged =
-                initial.replace_node_scope(&did(case["scope"].as_u64().unwrap()), incoming);
-            let expected_authority = case["expected_authoritative_owners"]
-                .as_array()
-                .expect("modeled expected authoritative owners")
-                .iter()
-                .map(|owner| did(owner.as_u64().expect("authority owner")))
-                .collect::<rapidhash::RapidHashSet<_>>();
-            assert_eq!(
-                merged.operator_config_authoritative_node_dids,
-                expected_authority
-            );
-            let expected_configs = case["expected_configs"].as_array().unwrap();
-            for expected in expected_configs {
-                let owner_did = did(expected["owner"].as_u64().unwrap());
-                assert!(merged.sessions.iter().any(|row| {
-                    row.node_did == owner_did
-                        && row.session_id == expected["key"].as_str().unwrap()
-                        && row.title.as_ref().map(|title| title.text.as_str())
-                            == Some(expected["value"].as_str().unwrap())
-                }));
-            }
-            assert_eq!(merged.sessions.len(), expected_configs.len());
-            for expected in expected_configs {
-                let owner_did = did(expected["owner"].as_u64().unwrap());
-                assert!(merged.tool_calls.iter().any(|row| {
-                    row.node_did.as_deref() == Some(owner_did.as_str())
-                        && row.tool_call_key == expected["key"].as_str().unwrap()
-                        && row.tool_name.as_deref() == expected["value"].as_str()
-                }));
-            }
-            assert_eq!(merged.tool_calls.len(), expected_configs.len());
-
-            for expected in case["expected_observations"].as_array().unwrap() {
-                let source = expected["source"].as_u64().map(did);
-                assert!(merged
-                    .trigger_observations
-                    .iter()
-                    .enumerate()
-                    .any(|(index, row)| {
-                        row.trigger_id == expected["key"].as_str().unwrap()
-                            && row.last_status.as_deref() == expected["value"].as_str()
-                            && merged.trigger_observation_source_node_dids.get(index)
-                                == Some(&source)
-                    }));
-            }
-            assert_eq!(
-                merged.trigger_observations.len(),
-                case["expected_observations"].as_array().unwrap().len()
-            );
-            for lookup in case["lookups"].as_array().unwrap() {
-                let owner = lookup["owner"].as_u64().unwrap();
-                let observed = merged
-                    .recent_runs_for_task(&format!("task-{owner}"))
-                    .last_status;
-                assert_eq!(
-                    observed.as_deref(),
-                    lookup["value"].as_str(),
-                    "modeled scoped lookup for owner {owner}"
-                );
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn generated_scoped_publications_preserve_independent_nodes_during_a_blocked_read() {
-        let fixture: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../gents/tests/fixtures/client_data_publication.json"
-        ))
-        .expect("generated ClientDataPublication cases");
-        let did = |owner: u64| format!("did:scope:{owner}");
-        let sessions = |values: &[serde_json::Value]| {
-            ClientStore::from_rows(ClientStoreRows {
-                sessions: values
-                    .iter()
-                    .map(|row| {
-                        serde_json::from_value(serde_json::json!({
-                            "node_did": did(row["owner"].as_u64().unwrap()),
-                            "session_id": row["key"],
-                            "agent_id": "agent",
-                            "created_at": "2026-01-01T00:00:00Z",
-                            "title": {"text": row["value"], "source": "user"}
-                        }))
-                        .expect("modeled session")
-                    })
-                    .collect(),
-                ..Default::default()
-            })
-        };
-        for case in fixture["scoped_publication"].as_array().unwrap() {
-            let name = case["name"].as_str().unwrap();
-            let mut initial = sessions(case["initial"].as_array().unwrap()).to_rows();
-            initial.requests = case["initial"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|row| {
-                    let owner = row["owner"].as_u64().unwrap();
-                    AgentRequestRow {
-                        doc_id: Some(format!("document-{owner}")),
-                        request_id: format!("request-{owner}"),
-                        node_did: Some(did(owner)),
-                        session_id: row["key"].as_str().map(str::to_owned),
-                        purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
-                        ..Default::default()
-                    }
-                })
-                .collect();
-            let (store, _) = ObservedStore::new(ClientStore::from_rows(initial));
-            let read = store.capture_read();
-            let incoming = sessions(case["incoming"].as_array().unwrap());
-            let merge = case["merge"].as_bool().unwrap();
-            let scope = if merge {
-                None
-            } else {
-                case["owners"].as_array().map(|owners| {
-                    assert_eq!(owners.len(), 1, "a replacement has one modeled owner");
-                    did(owners[0].as_u64().unwrap())
-                })
-            };
-            let (finish_read, blocked_read) = tokio::sync::oneshot::channel::<()>();
-            let publisher = Arc::clone(&store);
-            let publication = tokio::spawn(async move {
-                blocked_read.await.expect("release modeled database read");
-                if merge {
-                    let read_accepted = publisher.accepts_chat_patch_read(&read, &incoming);
-                    let published = publisher
-                        .merge_observer_patch_at_read(&read, incoming)
-                        .is_some();
-                    assert_eq!(read_accepted, published);
-                    published
-                } else {
-                    publisher.replace_reloaded_snapshot_at_read(&read, scope.as_deref(), incoming)
-                }
-            });
-            for action in case["actions"].as_array().unwrap() {
-                match action["op"].as_str().unwrap() {
-                    "merge" => {
-                        store.merge_observer_patch(sessions(action["rows"].as_array().unwrap()));
-                    }
-                    "request" => {
-                        let doc = action["owner"]
-                            .as_u64()
-                            .map(|owner| format!("document-{owner}"));
-                        store.observe_request_event(doc.as_deref());
-                    }
-                    "unknown_observation" => {
-                        store.merge_observer_patch(ClientStore::from_rows(ClientStoreRows {
-                            trigger_observations: vec![serde_json::from_value(serde_json::json!({
-                                "trigger_id": "unknown-source",
-                                "last_attempt_at": null,
-                                "last_fired_source_doc_id": null,
-                                "last_status": null,
-                                "last_error": null,
-                                "fire_count": 0
-                            }))
-                            .unwrap()],
-                            ..Default::default()
-                        }));
-                    }
-                    "replace_all" => {
-                        store.replace_snapshot(sessions(action["rows"].as_array().unwrap()));
-                    }
-                    "transcript" => {
-                        store.invalidate_projection(false);
-                    }
-                    other => panic!("unknown modeled publication action {other}"),
-                }
-            }
-            finish_read
-                .send(())
-                .expect("complete modeled database read");
-            let accepted = publication.await.expect("publication task");
-            assert_eq!(accepted, case["accepted"].as_bool().unwrap(), "{name}");
-            let actual = store.snapshot();
-            let mut actual: Vec<_> = actual
-                .sessions
-                .iter()
-                .map(|row| {
-                    (
-                        row.node_did.clone(),
-                        row.session_id.clone(),
-                        row.title.as_ref().unwrap().text.clone(),
-                    )
-                })
-                .collect();
-            let mut expected: Vec<_> = case["expected"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|row| {
-                    (
-                        did(row["owner"].as_u64().unwrap()),
-                        row["key"].as_str().unwrap().to_owned(),
-                        row["value"].as_str().unwrap().to_owned(),
-                    )
-                })
-                .collect();
-            actual.sort();
-            expected.sort();
-            assert_eq!(actual, expected, "{name}: retained current unrelated facts");
-        }
-    }
-
-    #[tokio::test]
-    async fn generated_recovery_cases_preserve_scopes_without_self_waking() {
-        let fixture: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../gents/tests/fixtures/client_data_publication.json"
-        ))
-        .expect("generated ClientDataPublication cases");
-        for case in fixture["recovery"].as_array().expect("recovery cases") {
-            let name = case["name"].as_str().expect("case name");
-            let expected_scopes: Vec<String> = case["pending_scopes"]
-                .as_array()
-                .expect("modeled pending scopes")
-                .iter()
-                .map(|scope| format!("scope-{}", scope.as_u64().expect("scope id")))
-                .collect();
-            let expected_generation = case["generation"].as_u64().expect("model generation");
-            let expected_full = case["full"].as_bool().expect("modeled full-reload state");
-            let retry_scheduled = case["retry_scheduled"]
-                .as_bool()
-                .expect("modeled retry deadline state");
-            assert_eq!(case["initial"]["full"].as_bool(), Some(false));
-            assert!(case["initial"]["pending_scopes"]
-                .as_array()
-                .expect("modeled initial scopes")
-                .is_empty());
-            assert_eq!(case["initial"]["generation"].as_u64(), Some(0));
-            assert_eq!(case["initial"]["retry_scheduled"].as_bool(), Some(false));
-            let (store, _) = ObservedStore::new(ClientStore::default());
-            let mut wake = store.subscribe_resync_requests();
-            assert_eq!(
-                *wake.borrow(),
-                case["initial"]["generation"].as_u64().unwrap()
-            );
-            let mut in_flight = Vec::new();
-            let mut observed_generation = 0;
-            let mut batch_taken = false;
-            let mut retry_not_before = None;
-            let now = tokio::time::Instant::now();
-            for action in case["actions"]
-                .as_array()
-                .expect("modeled recovery actions")
-            {
-                match action["op"].as_str().expect("recovery action op") {
-                    "request_scope" if batch_taken => {
-                        let scope =
-                            format!("scope-{}", action["scope"].as_u64().expect("modeled scope"));
-                        store.request_resync(Some(&scope));
-                        assert!(wake.has_changed().expect("watch remains open"));
-                        observed_generation = *wake.borrow_and_update();
-                    }
-                    "request_scope" => {
-                        let scope =
-                            format!("scope-{}", action["scope"].as_u64().expect("modeled scope"));
-                        store.request_resync(Some(&scope));
-                    }
-                    "take_batch" => {
-                        wake.changed().await.expect("initial batch notification");
-                        let (full, batch) = store.take_resync_requests();
-                        assert_eq!(full, case["initial"]["full"].as_bool().unwrap());
-                        in_flight = batch;
-                        observed_generation = *wake.borrow_and_update();
-                        batch_taken = true;
-                    }
-                    "fail_batch" => {
-                        let failed_scopes =
-                            action["scopes"].as_array().expect("modeled failed scopes");
-                        for scope in failed_scopes {
-                            let scope =
-                                format!("scope-{}", scope.as_u64().expect("modeled failed scope"));
-                            assert!(in_flight.contains(&scope), "failed scope was not in flight");
-                            store.enqueue_resync_request(Some(&scope));
-                        }
-                        assert!(!wake.has_changed().expect("watch remains open"));
-                        assert_eq!(*wake.borrow(), observed_generation);
-                        retry_not_before = Some(now + std::time::Duration::from_millis(1));
-                    }
-                    "retry_timer" => {
-                        retry_not_before = None;
-                    }
-                    other => panic!("unrecognized modeled recovery action {other}"),
-                }
-            }
-            assert_eq!(
-                *wake.borrow(),
-                expected_generation,
-                "model generation {name}"
-            );
-            assert_eq!(
-                super::super::resync_retry_ready(retry_not_before, now),
-                !retry_scheduled,
-                "observer retry gate for modeled recovery actions {name}"
-            );
-            if retry_scheduled {
-                let deadline = retry_not_before.expect("failed batch has a retry deadline");
-                assert!(super::super::resync_retry_ready(Some(deadline), deadline));
-            }
-            let (full, pending) = store.take_resync_requests();
-            assert_eq!(full, expected_full);
-            assert_eq!(pending, expected_scopes, "modeled recovery case {name}");
-        }
-    }
-}
+mod reload_tests;

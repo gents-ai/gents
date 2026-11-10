@@ -7,6 +7,7 @@ import {
   installUxHost,
   isGentsUxPlugin,
   UndeclaredContributionError,
+  type UxCaller,
   type UxHost,
 } from "@/contrib/plugin";
 import { registry } from "@/contrib/registry";
@@ -17,11 +18,17 @@ import {
   TRANSCRIPT_DIRECTIVE_AREA,
 } from "@/contrib/types";
 
-function fakeHost(): UxHost & { sent: string[]; calls: Array<[string, unknown]> } {
+function fakeHost(): UxHost & {
+  sent: string[];
+  callers: UxCaller[];
+  calls: Array<[string, unknown]>;
+} {
   const sent: string[] = [];
+  const callers: UxCaller[] = [];
   const calls: Array<[string, unknown]> = [];
   return {
     sent,
+    callers,
     calls,
     shell: {
       route: () => ({ name: "sessions" }),
@@ -29,8 +36,9 @@ function fakeHost(): UxHost & { sent: string[]; calls: Array<[string, unknown]> 
       deployments: () => [],
       selectedDeployment: () => null,
       selectedSessionId: () => null,
-      send: async (content) => {
+      send: async (content, caller) => {
         sent.push(content);
+        callers.push(caller);
       },
     },
     plugin: async (listing, name, input) => ({ listing, name, input }),
@@ -62,6 +70,47 @@ afterEach(() => {
 });
 
 describe("ux plugin context", () => {
+  it("binds a data call to the expected runtime before dispatch", async () => {
+    let node = "did:key:a";
+    host.shell.selectedDeployment = () => ({ nodeDid: node }) as never;
+    const call = vi.fn(async () => ({ kind: "create" as const, output: {} }));
+    host.data = { call, surfaces: async () => [] };
+    const ctx = createUxContext("docs", {
+      onDispose: (dispose) => collected.push(dispose),
+      listing: "gents/docs/docs",
+    });
+    expect(ctx.data.supportsExpectedNode).toBe(true);
+    node = "did:key:b";
+    await expect(ctx.data.call("docs", "save", {}, "did:key:a")).rejects.toThrow(
+      "selected runtime changed",
+    );
+    expect(call).not.toHaveBeenCalled();
+    await ctx.data.call("docs", "save", {}, "did:key:b");
+    expect(call).toHaveBeenCalledWith(
+      "gents/docs/docs",
+      "did:key:b",
+      "docs",
+      "save",
+      {},
+    );
+    let finish!: (value: { kind: "create"; output: object }) => void;
+    call.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    const pending = ctx.data.call("docs", "save", {}, "did:key:b");
+    node = "did:key:c";
+    finish({ kind: "create", output: {} });
+    await pending;
+    expect(call).toHaveBeenLastCalledWith(
+      "gents/docs/docs",
+      "did:key:b",
+      "docs",
+      "save",
+      {},
+    );
+  });
   it("namespaces ids and stamps provenance", () => {
     const ctx = createUxContext("acme", { onDispose: (d) => collected.push(d) });
     ctx.register({ id: "row", area: SESSION_HEADER_ACTIONS_AREA, render: () => null });
@@ -93,6 +142,87 @@ describe("ux plugin context", () => {
     expect(ticked).not.toHaveBeenCalled();
     window.dispatchEvent(new Event("resize"));
     expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("releases stopped watches without accumulating plugin disposers", async () => {
+    const disposers: Array<() => void> = [];
+    const stop = vi.fn();
+    host.shell.selectedDeployment = () => ({ nodeDid: "did:key:node" }) as never;
+    host.data = {
+      call: async () => ({ kind: "query", output: {} }),
+      surfaces: async () => [],
+      watch: async () => stop,
+    };
+    const ctx = createUxContext("board", {
+      listing: "example/pack/board",
+      onDispose: (dispose) => disposers.push(dispose),
+    });
+    for (let i = 0; i < 200; i++) {
+      const close = await ctx.data.watch("board", "list", {}, () => {});
+      close();
+      close();
+    }
+    expect(stop).toHaveBeenCalledTimes(200);
+    expect(disposers).toHaveLength(1);
+    const active = await ctx.data.watch("board", "list", {}, () => {});
+    disposers[0]();
+    active();
+    expect(stop).toHaveBeenCalledTimes(201);
+    const afterUnload = await ctx.data.watch("board", "list", {}, () => {});
+    afterUnload();
+    expect(stop).toHaveBeenCalledTimes(202);
+    expect(disposers).toHaveLength(1);
+  });
+
+  it("stops the remaining watches if one cleanup fails", async () => {
+    const disposers: Array<() => void> = [];
+    const bad = vi.fn(() => {
+      throw new Error("cleanup failed");
+    });
+    const good = vi.fn();
+    host.shell.selectedDeployment = () => ({ nodeDid: "did:key:node" }) as never;
+    host.data = {
+      call: async () => ({ kind: "query", output: {} }),
+      surfaces: async () => [],
+      watch: vi.fn().mockResolvedValueOnce(bad).mockResolvedValueOnce(good),
+    };
+    const ctx = createUxContext("board", {
+      listing: "example/pack/board",
+      onDispose: (dispose) => disposers.push(dispose),
+    });
+    await ctx.data.watch("board", "list", {}, () => {});
+    await ctx.data.watch("board", "list", {}, () => {});
+    expect(() => disposers[0]()).toThrow("cleanup failed");
+    expect(bad).toHaveBeenCalledOnce();
+    expect(good).toHaveBeenCalledOnce();
+  });
+
+  it("stops a watch whose startup completes after the context is retired", async () => {
+    let retired = false;
+    let complete: ((stop: () => void) => void) | undefined;
+    const stop = vi.fn();
+    host.shell.selectedDeployment = () => ({ nodeDid: "did:key:node" }) as never;
+    host.data = {
+      call: async () => ({ kind: "query", output: {} }),
+      surfaces: async () => [],
+      watch: () =>
+        new Promise((resolve) => {
+          complete = resolve;
+        }),
+    };
+    const disposers: Array<() => void> = [];
+    const ctx = createUxContext("board", {
+      listing: "example/pack/board",
+      onDispose: (dispose) => (retired ? dispose() : disposers.push(dispose)),
+    });
+    const pending = ctx.data.watch("board", "list", {}, () => {});
+    retired = true;
+    complete!(stop);
+    const close = await pending;
+    expect(stop).toHaveBeenCalledOnce();
+    close();
+    expect(stop).toHaveBeenCalledOnce();
+    expect(disposers).toHaveLength(0);
   });
 
   it("refuses a contribution into an undeclared area, by name", () => {
@@ -150,6 +280,19 @@ describe("ux plugin context", () => {
     });
   });
 
+  it("sends as the plugin it was made for, through ctx.send and ctx.shell.send alike", async () => {
+    const named = createUxContext("board", { name: "Task Board" });
+    await named.send("from ctx");
+    await named.shell.send("from shell");
+    await createUxContext("unnamed").send("no name");
+    expect(host.sent).toEqual(["from ctx", "from shell", "no name"]);
+    expect(host.callers).toEqual([
+      { id: "board", name: "Task Board" },
+      { id: "board", name: "Task Board" },
+      { id: "unnamed", name: "unnamed" },
+    ]);
+  });
+
   it("offers no raw bridge verb: the host's names are the whole surface", () => {
     const ctx = createUxContext("acme", { onDispose: (d) => collected.push(d) });
     expect("bridge" in ctx).toBe(false);
@@ -157,6 +300,7 @@ describe("ux plugin context", () => {
       [
         "addEventListener",
         "data",
+        "notify",
         "onDispose",
         "onEvent",
         "os",

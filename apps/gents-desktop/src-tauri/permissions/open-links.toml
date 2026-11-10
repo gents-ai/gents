@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "open-links"
+description = "Allow the main view to take the gents: links the system opened the app with, to follow them."
+commands.allow = ["desktop_take_links"]

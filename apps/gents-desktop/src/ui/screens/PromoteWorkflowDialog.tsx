@@ -1,5 +1,5 @@
 /* Promote one completed dynamic run into an installed tool: the run's script,
-   children and result as `gents job promote` would read them, and a tool
+   children and result as `gents automation job promote` would read them, and a tool
    name. The bridge folds a refusal into one message, its code first. */
 import { useEffect, useState } from "react";
 import { Button } from "@gents/ui/components/button";
@@ -67,7 +67,7 @@ export function PromoteWorkflowDialog({
   const collapsed = !showAll && lines.length > SCRIPT_LINES;
   return (
     <Dialog open onOpenChange={(open) => !open && onClose(promoted ?? undefined)}>
-      <DialogContent aria-modal="true" className="sm:max-w-2xl">
+      <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>Promote {run?.view.handle ?? "workflow"}</DialogTitle>
           <DialogDescription>Installs this run's script as a tool.</DialogDescription>

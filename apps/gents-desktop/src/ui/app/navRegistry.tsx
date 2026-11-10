@@ -52,6 +52,8 @@ function isRoute(value: unknown): value is Route {
     case "mailbox":
     case "nodes":
     case "agents":
+    case "automations":
+    case "packs":
       return true;
     case "session":
       return route.sessionId === null || typeof route.sessionId === "string";
