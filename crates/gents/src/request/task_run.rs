@@ -8,7 +8,9 @@ use gents_protocol::row::AgentRequestRow;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::documents::template::{render_template, task_node_ctx, TemplateScope};
+use crate::documents::template::{
+    render_manual_template, render_template, task_node_ctx, TemplateScope,
+};
 use crate::documents::{Agent, Task};
 use crate::goal::{
     load_canonical_goal_in_txn, prepare_client_goal_input, task_assignment_goal_id,
@@ -181,8 +183,7 @@ pub async fn enqueue_task_run(
         node: node_scope,
         ctx: ctx_scope,
     };
-    let content = render_template(&prompt_template, &scope)
-        .map_err(|e| anyhow!("render manual template for task {}: {e}", task_id))?;
+    let content = render_manual_template(&task_id, &prompt_template, &scope)?;
     let rendered_goal_objective = goal_objective_template
         .as_deref()
         .map(|template| {

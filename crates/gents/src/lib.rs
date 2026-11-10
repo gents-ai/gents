@@ -646,8 +646,8 @@ pub use documents::automation::{
     MAX_EVENT_TRIGGER_GROUP_DOCS,
 };
 pub use documents::template::{
-    check_template_vocabulary, parse_template_for_validation, render_template, TemplateError,
-    TemplateScope, VariableRef,
+    check_template_vocabulary, parse_template_for_validation, render_manual_template,
+    render_template, TemplateError, TemplateScope, VariableRef,
 };
 pub use documents::{
     default_inference_profile_id_for_agent, default_inference_profile_id_for_node,

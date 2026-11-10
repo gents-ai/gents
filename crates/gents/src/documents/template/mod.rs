@@ -82,6 +82,115 @@ pub fn render_template(template: &str, scope: &TemplateScope) -> Result<String, 
     Ok(rendered)
 }
 
+/// A manual run whose template did not render, with what the template reads
+/// and which of it the run does not define. The engine's own error names
+/// neither.
+#[derive(Debug, thiserror::Error)]
+pub struct ManualRenderError {
+    pub task_id: String,
+    /// Variable paths the template reads that the manual scope lacks.
+    pub undefined: Vec<String>,
+    /// Every variable path the template reads.
+    pub reads: Vec<String>,
+    #[source]
+    pub source: TemplateError,
+}
+
+impl std::fmt::Display for ManualRenderError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "render manual template for task {}: {}",
+            self.task_id, self.source
+        )?;
+        if !self.undefined.is_empty() {
+            write!(
+                formatter,
+                ". The template reads {}, which this run does not define",
+                self.undefined.join(", ")
+            )?;
+            let args: Vec<&str> = self
+                .undefined
+                .iter()
+                .filter_map(|path| path.strip_prefix("args."))
+                .map(|rest| rest.split('.').next().unwrap_or(rest))
+                .collect();
+            if !args.is_empty() {
+                let example: serde_json::Map<String, serde_json::Value> = args
+                    .iter()
+                    .map(|name| ((*name).to_owned(), serde_json::json!("VALUE")))
+                    .collect();
+                write!(
+                    formatter,
+                    ". Supply args.* as one JSON object in options.args, e.g. {}",
+                    serde_json::Value::Object(example)
+                )?;
+            }
+            if self.undefined.iter().any(|path| !path.starts_with("args.")) {
+                write!(
+                    formatter,
+                    ". doc.* and group.* exist only when a trigger fires the task with a \
+                     document; options.args cannot supply them. Write a document the trigger's \
+                     source watches so the trigger runs the task, or make the template runnable \
+                     by hand: read args.NAME instead, or guard the read with \
+                     {{% if doc is defined %}}"
+                )?;
+            }
+        }
+        if !self.reads.is_empty() {
+            write!(
+                formatter,
+                ". A manual run defines args.* (from options.args), session.session_id, \
+                 request.request_id, event.*, node.* and ctx.*. The template reads: {}",
+                self.reads.join(", ")
+            )?;
+        }
+        Ok(())
+    }
+}
+
+/// Renders a task's template for a manual run.
+pub fn render_manual_template(
+    task_id: &str,
+    template: &str,
+    scope: &TemplateScope,
+) -> Result<String, ManualRenderError> {
+    render_template(template, scope).map_err(|source| {
+        let context = template_context(scope);
+        let mut reads: Vec<String> = parse_template_for_validation(template)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|reference| !reference.path.is_empty())
+            .map(|reference| reference.path.join("."))
+            .collect();
+        reads.sort();
+        reads.dedup();
+        let undefined = reads
+            .iter()
+            .filter(|path| {
+                let mut value = &context;
+                for segment in path.split('.') {
+                    match value {
+                        serde_json::Value::Object(fields) => match fields.get(segment) {
+                            Some(next) => value = next,
+                            None => return true,
+                        },
+                        _ => return false,
+                    }
+                }
+                false
+            })
+            .cloned()
+            .collect();
+        ManualRenderError {
+            task_id: task_id.to_owned(),
+            undefined,
+            reads,
+            source,
+        }
+    })
+}
+
 fn template_context(scope: &TemplateScope) -> serde_json::Value {
     let mut ctx = serde_json::Map::new();
     ctx.insert("event".to_string(), scope.event.clone());
