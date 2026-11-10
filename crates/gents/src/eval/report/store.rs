@@ -14,21 +14,18 @@ use crate::eval::runner::freeze::snapshot::read_frozen_definition;
 use crate::eval::runner::{freeze_refused, run_dir};
 use crate::eval::{load_run, load_trials, load_verdicts, RunHeader, RunRecord};
 use crate::store::config_client::ConfigAccess;
+use crate::store::graphql::escape_graphql_string;
 
 /// Every run `owner` has, oldest first (`created_at`, then `run_id`).
 pub async fn load_runs(access: &ConfigAccess, owner: &str) -> Result<Vec<RunRecord>> {
-    let rendered = {
-        use gents_protocol::document_query::{
-            fields::eval_run as fields, Filter, Query, Selection,
-        };
-        Query::select(Selection::new().field(fields::RUN_ID))
-            .filter(Filter::eq(fields::OWNER_NODE_DID, owner))
-            .render()
-    };
+    let query = format!(
+        r#"{{ EvalRun(filter: {{ owner_node_did: {{ _eq: "{owner}" }} }}) {{ run_id }} }}"#,
+        owner = escape_graphql_string(owner),
+    );
     let response = access
         .transact_readonly("eval.report.load_runs", |txn| {
-            let rendered = &rendered;
-            Box::pin(async move { txn.run(rendered).await })
+            let query = &query;
+            Box::pin(async move { txn.execute(query).await })
         })
         .await?;
     let mut run_ids: Vec<String> = response["data"]["EvalRun"]

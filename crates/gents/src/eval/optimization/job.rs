@@ -287,13 +287,11 @@ fn decode(row: &Value) -> Result<JobRecord> {
 }
 
 pub(crate) async fn job_ids_in_txn(txn: &ConfigApplyTxn<'_>, owner: &str) -> Result<Vec<String>> {
-    use gents_protocol::document_query::{
-        fields::optimization_job as fields, Filter, Query, Selection,
-    };
-    let query = Query::select(Selection::new().field(fields::JOB_ID))
-        .filter(Filter::eq(fields::OWNER_NODE_DID, owner))
-        .render();
-    let response = txn.run(&query).await?;
+    let query = format!(
+        "{{ OptimizationJob(filter: {{ owner_node_did: {{ _eq: \"{}\" }} }}) {{ job_id }} }}",
+        escape_graphql_string(owner),
+    );
+    let response = txn.execute(&query).await?;
     let mut ids = response["data"]["OptimizationJob"]
         .as_array()
         .into_iter()
@@ -310,14 +308,12 @@ pub(crate) async fn load_job_in_txn(
     owner: &str,
     job_id: &str,
 ) -> Result<Option<JobRecord>> {
-    use gents_protocol::document_query::{
-        fields::optimization_job as fields, Filter, Query, Selection,
-    };
-    let query = Query::select(Selection::owned(JOB_FIELDS))
-        .filter(Filter::eq(fields::OWNER_NODE_DID, owner))
-        .filter(Filter::eq(fields::JOB_ID, job_id))
-        .render();
-    let response = txn.run(&query).await?;
+    let response = txn
+        .execute(&format!(
+            "{{ OptimizationJob(filter: {{ {} }}) {{ {JOB_FIELDS} }} }}",
+            filter(owner, job_id)
+        ))
+        .await?;
     response["data"]["OptimizationJob"]
         .as_array()
         .and_then(|rows| rows.first())
@@ -342,22 +338,22 @@ where
             let owner = owner.clone();
             let fold = std::sync::Arc::clone(&fold);
             Box::pin(async move {
+                let escaped_owner = escape_graphql_string(&owner);
                 let job_ids = job_ids_in_txn(txn, &owner).await?;
 
                 let mut aggregate = T::default();
                 for batch in job_ids.chunks(JOB_BATCH_SIZE) {
                     #[cfg(test)]
                     record_owner_job_batch();
-                    use gents_protocol::document_query::{
-                        fields::optimization_job as fields, Filter, Query, Selection,
-                    };
-                    let query = Query::select(Selection::owned(JOB_FIELDS))
-                        .filter(
-                            Filter::eq(fields::OWNER_NODE_DID, &owner)
-                                .and(Filter::any_of(fields::JOB_ID, batch.iter())),
-                        )
-                        .render();
-                    let response = txn.run(&query).await?;
+                    let ids = batch
+                        .iter()
+                        .map(|id| format!("\"{}\"", escape_graphql_string(id)))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let query = format!(
+                        "{{ OptimizationJob(filter: {{ owner_node_did: {{ _eq: \"{escaped_owner}\" }}, job_id: {{ _in: [{ids}] }} }}) {{ {JOB_FIELDS} }} }}"
+                    );
+                    let response = txn.execute(&query).await?;
                     let Some(rows) = response["data"]["OptimizationJob"].as_array() else {
                         continue;
                     };
@@ -432,16 +428,12 @@ pub(crate) async fn append_in_txn(
         "journal_len": journal.len(),
         "state": derive_state(&journal).label(),
     }});
-    let current = {
-        use gents_protocol::document_query::{
-            fields::optimization_job as fields, Filter, Query, Selection,
-        };
-        let query = Query::select(Selection::doc_id().field(fields::JOURNAL_LEN))
-            .filter(Filter::eq(fields::OWNER_NODE_DID, &job.owner))
-            .filter(Filter::eq(fields::JOB_ID, &job.job_id))
-            .render();
-        txn.run(&query).await?
-    };
+    let current = txn
+        .execute(&format!(
+            "{{ OptimizationJob(filter: {{ {} }}) {{ _docID journal_len }} }}",
+            filter(&job.owner, &job.job_id)
+        ))
+        .await?;
     let row = current["data"]["OptimizationJob"]
         .as_array()
         .and_then(|rows| rows.first())

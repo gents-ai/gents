@@ -198,22 +198,8 @@ pub(super) async fn activity(access: &ConfigAccess) -> Result<LiveSnapshot> {
 }
 
 async fn last_tool_call(access: &ConfigAccess) -> Option<LastToolCall> {
-    use gents_protocol::document_query::{
-        fields::agent_tool_call as fields, Direction, Query, Selection,
-    };
-    let query = Query::select(
-        Selection::doc_id()
-            .field(fields::NODE_DID)
-            .field(fields::SESSION_ID)
-            .field(fields::REQUESTER_DID)
-            .field(fields::TOOL_NAME)
-            .field(fields::LIFECYCLE_STATE),
-    )
-    .order_by(fields::STARTED_AT, Direction::Desc)
-    .limit(1)
-    .render();
-    let response = access
-        .read(&query)
+    let query = r#"{ AgentToolCall(order: { started_at: DESC }, limit: 1) { _docID node_did session_id requester_did tool_name lifecycle_state } }"#;
+    let response = access.execute(query)
         .await
         .map_err(|error| {
             tracing::debug!(error = %format!("{error:#}"), "eval trial last tool call was not read");

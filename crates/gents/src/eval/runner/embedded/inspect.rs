@@ -8,7 +8,6 @@ use gents_protocol::row::AgentRequestRow;
 use super::EmbeddedHome;
 use crate::eval::runner::TrialLocator;
 use crate::store::config_client::ConfigAccess;
-#[cfg(test)]
 use crate::store::graphql::escape_graphql_string;
 
 const MAX_REQUESTS: usize = 1_000;
@@ -105,48 +104,25 @@ async fn read_requests(
     evaluator: identity::Did,
 ) -> Result<Vec<RetainedRequest>> {
     let access = ConfigAccess::local_as(home.node.clone(), evaluator);
-    let query = {
-        use gents_protocol::document_query::{
-            fields::agent_request as fields, Direction, Filter, Query, Selection,
-        };
-        Query::select(
-            Selection::doc_id()
-                .field(fields::REQUEST_ID)
-                .field(fields::PURPOSE)
-                .field(fields::NODE_DID)
-                .field(fields::REQUESTER_DID)
-                .field(fields::AGENT_DID)
-                .field(fields::SESSION_ID)
-                .field(fields::CONTENT)
-                .field(fields::INPUT)
-                .field(fields::LIFECYCLE_STATE)
-                .field(fields::FAILURE_REASON)
-                .field(fields::CREATED_AT)
-                .field(fields::EXECUTION_ORIGIN)
-                .field(fields::RUNTIME_SOURCE_REQUEST_ID)
-                .field(fields::RUNTIME_SOURCE_KIND)
-                .field(fields::RETRY_PARENT_REQUEST)
-                .field(fields::RETRY_PARENT_REQUEST_DOC_ID)
-                .field(fields::RETRY_ROOT_REQUEST)
-                .field(fields::SUPERSEDED_BY_REQUEST)
-                .field(fields::SUPERSEDED_BY_REQUEST_DOC_ID)
-                .field(fields::CAUSED_BY_PARENT_REQUEST_ID)
-                .field(fields::CAUSED_BY_PARENT_REQUEST_DOC_ID)
-                .field(fields::CAUSED_BY_PARENT_TOOL_CALL_ID)
-                .field(fields::CAUSED_BY_PARENT_TOOL_CALL_DOC_ID)
-                .field(fields::CAUSED_BY_TRIGGER_ID)
-                .field(fields::CAUSED_BY_TRIGGER_DOC_ID)
-                .field(fields::CAUSED_BY_TRIGGER_KIND)
-                .field(fields::CAUSED_BY_SOURCE_DOC_ID)
-                .field(fields::CAUSED_BY_CORRELATION)
-                .field(fields::CAUSED_BY_TRIGGER_CONTEXT),
-        )
-        .filter(Filter::eq(fields::NODE_DID, home.did()))
-        .order_by(fields::CREATED_AT, Direction::Asc)
-        .limit((MAX_REQUESTS + 1) as u64)
-        .render()
-    };
-    let response = tokio::time::timeout(READ_TIMEOUT, access.read(&query))
+    let query = format!(
+        r#"{{ AgentRequest(
+            filter: {{ node_did: {{ _eq: "{}" }} }},
+            order: {{ created_at: ASC }}, limit: {}
+        ) {{
+            _docID request_id purpose node_did requester_did agent_did session_id
+            content input lifecycle_state failure_reason created_at execution_origin
+            runtime_source_request_id runtime_source_kind
+            retry_parent_request retry_parent_request_doc_id retry_root_request
+            superseded_by_request superseded_by_request_doc_id
+            caused_by_parent_request_id caused_by_parent_request_doc_id
+            caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id
+            caused_by_trigger_id caused_by_trigger_doc_id caused_by_trigger_kind
+            caused_by_source_doc_id caused_by_correlation caused_by_trigger_context
+        }} }}"#,
+        escape_graphql_string(home.did()),
+        MAX_REQUESTS + 1,
+    );
+    let response = tokio::time::timeout(READ_TIMEOUT, access.execute(&query))
         .await
         .context("retained trial request inspection timed out")??;
     decode_requests(response)
