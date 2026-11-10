@@ -77,13 +77,21 @@ impl ConfigCommandTool {
         let invalid = page.validate().err().map(|error| format!("{error:#}"));
         let admitted = findings.is_empty() && invalid.is_none();
         let listing = ux_page::listing_id(&page.page_id);
+        let renders = crate::observe::ux_preview::renderer_available();
         ordered! {
             "page": page.page_id,
             "admitted": admitted,
             "invalid": invalid,
             "findings": findings,
             "enabled": page.enabled,
-            "next_call": if admitted { json!({"argv":["ux","preview",listing]}) } else { json!({"argv":["help","page","contributions"]}) },
+            "next_call": if !admitted {
+                Some(json!({"argv":["help","page","contributions"]}))
+            } else if renders {
+                Some(json!({"argv":["ux","preview",listing]}))
+            } else {
+                None
+            },
+            "note": (admitted && !renders).then_some("Lint is the check this build has: it has no page renderer, so ux preview renders nothing here. The page is seen in the desktop app."),
         }
         .pretty()
     }

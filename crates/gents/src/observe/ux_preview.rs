@@ -168,6 +168,12 @@ where
     })
 }
 
+/// Whether this build can render a page: an installed build carries no
+/// preview page, so `ux preview` has nothing to load there.
+pub fn renderer_available() -> bool {
+    assets_dir().is_ok()
+}
+
 fn assets_dir() -> Result<PathBuf> {
     if let Some(dir) = std::env::var_os(ASSETS_ENV) {
         return Ok(PathBuf::from(dir));
@@ -178,7 +184,7 @@ fn assets_dir() -> Result<PathBuf> {
         .find(|dir| dir.join(PAGE_ENTRY).is_file())
         .with_context(|| {
             format!(
-                "the ux preview page is not built; run `npm run build:ux-preview` in apps/gents-desktop or point {ASSETS_ENV} at the built directory"
+                "this build has no page renderer, so ux preview renders nothing here and no config call adds one. The available check is page lint ID for a page document, or ux lint PATH for a pack page; the page itself is seen in the desktop app"
             )
         })
 }

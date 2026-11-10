@@ -393,12 +393,12 @@ pub(super) fn page(resource: &str) -> Option<Page> {
             commands: &[
                 "ux lint FILE  the static lint on one plugin.js inside the tool root; page/ID lints a page document",
                 "page lint ID  the static lint on a stored page's module and stylesheet",
-                "ux preview PLUGIN  render page/ID, a listed id or a plugin.js in the real sandbox with this node's data; ux preview --help",
+                "ux preview PLUGIN  render page/ID, a listed id or a plugin.js in the real sandbox with this node's data, on a build with a page renderer; ux preview --help",
                 "ux list  options: limit, cursor; every page on this node with its door, areas and data grants",
                 "ux module ID  the module the desktop receives for a listed id, source capped at 64 KiB",
             ],
             notes: "Each set replaces the whole field. set.enabled false unloads the page and withdraws its data access. A page document registers nav and plugin.pages only. No file or pack is needed; to ship pages in a pack instead, see pack scaffold (options.page true) and pack add page in [\"help\",\"pack\"].",
-            next: "page lint ID, then ux preview page/ID; fix what the report names before saying the page works.",
+            next: "page lint ID, then ux preview page/ID if this build renders (lint says); fix what the reports name before saying the page works.",
         },
         "plugin-source" => Page {
             what: "a plugin's source held on this node as a document: its language, one entry file's text, input schema, data declaration and test cases (tools grant). plugin build NAME compiles, tests and installs it.",
@@ -461,7 +461,7 @@ pub(crate) fn recipes(resource: &str) -> Vec<(&'static str, Vec<Step>)> {
                 (json!({"argv":["page","lint"],"target_id":"notes"}), None),
                 (
                     json!({"argv":["ux","preview","page/notes"]}),
-                    Some("read the report: the visible text, console errors and each data call's rows"),
+                    Some("where this build renders: read the visible text, console errors and each data call's rows"),
                 ),
             ],
         )],
