@@ -89,7 +89,9 @@ impl ConfigCommandTool {
                 home: home.to_owned(),
                 access: self.core.access()?,
                 node_did: self.node_did.clone(),
-                out: home.join("ux-preview").join(slug),
+                out: home
+                    .join(crate::store::local::home::UX_PREVIEW_DIR_NAME)
+                    .join(slug),
                 viewport,
             },
             target,

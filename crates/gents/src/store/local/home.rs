@@ -260,6 +260,9 @@ pub const UX_PLUGINS_DIR_NAME: &str = "ux-plugins";
 /// Scratch pack directories `config plugin build` materializes from
 /// `PluginSource` documents, one per plugin; each is its build's sandbox root.
 pub const PLUGIN_BUILDS_DIR_NAME: &str = "plugin-builds";
+/// Screenshots and `report.json` that `config ux preview` writes, one
+/// directory per previewed page; each preview replaces its own.
+pub const UX_PREVIEW_DIR_NAME: &str = "ux-preview";
 
 pub const RUNTIME_HOME_ENTRIES: &[&str] = &[
     DATA_DIR_NAME,
@@ -281,6 +284,7 @@ pub const RUNTIME_HOME_ENTRIES: &[&str] = &[
     PACK_INSTALLS_DIR_NAME,
     UX_PLUGINS_DIR_NAME,
     PLUGIN_BUILDS_DIR_NAME,
+    UX_PREVIEW_DIR_NAME,
 ];
 
 /// Lock files stay in place when state is retired: replacing a held lock file
