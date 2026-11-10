@@ -283,6 +283,12 @@ async fn compiling_plugin_source_needs_the_authority_grant() {
         directory.contains("has plugin source (tool_a)") && directory.contains("build it"),
         "{directory}"
     );
+    let checked = config_json(&tools, &["pack", "check", "tool_a"]).await;
+    assert_eq!(
+        checked["next_call"]["argv"],
+        json!(["pack", "build", "tool_a"]),
+        "an unbuilt pack points at the build this agent can call: {checked}"
+    );
 }
 
 /// The build runs through the command sandbox: a builder that tries to write

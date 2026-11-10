@@ -15,6 +15,9 @@ pub struct CheckReport {
     pub digest: Option<String>,
     pub problems: Vec<String>,
     pub unverified: Vec<&'static str>,
+    /// Plugins whose source has no built artifact yet.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unbuilt: Vec<String>,
 }
 
 pub async fn check_dir(dir: &Path) -> CheckReport {
@@ -24,6 +27,7 @@ pub async fn check_dir(dir: &Path) -> CheckReport {
         digest: None,
         problems: Vec::new(),
         unverified: Vec::new(),
+        unbuilt: Vec::new(),
     };
     let manifest = match read_manifest(dir) {
         Ok(manifest) => manifest,
@@ -46,11 +50,12 @@ pub async fn check_dir(dir: &Path) -> CheckReport {
         }
         if manifest.metadata.kind != PackKind::Plugins {
             report.problems.push(format!(
-                "build the plugins ({}) with gents pack build before checking its configuration",
+                "build the plugins ({}) with pack build before checking its configuration",
                 unbuilt.join(", ")
             ));
         }
         check_readme(dir, &mut report.problems);
+        report.unbuilt = unbuilt;
         return report;
     }
 

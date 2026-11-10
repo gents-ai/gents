@@ -365,13 +365,15 @@ impl ConfigCommandTool {
         let dir = context.resolve_existing_dir(dir)?;
         let report = check_dir(&dir).await;
         let (validated, note) = check_outcome_fields(&report);
+        let relative = context.display_path(&report.dir);
         ordered! {
             "pack": report.pack,
-            "dir": context.display_path(&report.dir),
+            "dir": relative,
             "digest": report.digest,
             "problems": report.problems,
             "unverified": report.unverified,
             "validated": validated,
+            "next_call": (!report.unbuilt.is_empty()).then(|| json!({"argv":["pack","build",relative]})),
             "note": note,
         }
         .pretty()
@@ -633,6 +635,7 @@ mod tests {
             digest: Some("sha256:x".into()),
             problems,
             unverified,
+            unbuilt: Vec::new(),
         };
         let (validated, note) = check_outcome_fields(&report(Vec::new(), Vec::new()));
         assert!(validated);
