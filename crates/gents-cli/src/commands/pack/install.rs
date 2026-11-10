@@ -76,20 +76,18 @@ pub(super) fn reused_variable_preview(
         let field = parts.next().unwrap_or_default();
         let next = parts.next();
         if field == "node" {
-            let resolved = installed.pointer(&entry.path).cloned();
-            return json!({"path": entry.path, "variables": entry.variables.keys().collect::<Vec<_>>(), "document": {"collection": "Node", "id": config.node.node_did}, "resolved": resolved});
+            return json!({"path": entry.path, "variables": installed_variables(&entry), "document": {"collection": "Node", "id": config.node.node_did}});
         }
         let index = next.and_then(|value| value.parse::<usize>().ok());
         let suffix = parts.next().map(|part| format!("/{part}")).unwrap_or_default();
-        let found = index.and_then(|index| {
+        let document = index.and_then(|index| {
             let collection = gents::Collection::ALL.iter().copied().find(|collection| collection.dir_name() == Some(field))?;
             let authored_id = authored.get(field)?.get(index)?.get(collection.unique_field())?.as_str()?;
             if authored_id.contains('$') { return None; }
-            let row = installed.get(field)?.as_array()?.iter().find(|row| row.get(collection.unique_field()).and_then(serde_json::Value::as_str) == Some(authored_id))?;
-            Some((json!({"collection": collection.graphql_type(), "id": authored_id}), row.pointer(&suffix)?.clone()))
+            installed.get(field)?.as_array()?.iter().find(|row| row.get(collection.unique_field()).and_then(serde_json::Value::as_str) == Some(authored_id) && row.pointer(&suffix).is_some())?;
+            Some(json!({"collection": collection.graphql_type(), "id": authored_id}))
         });
-        let (document, resolved) = found.map_or((None, None), |(document, value)| (Some(document), Some(value)));
-        json!({"path": entry.path, "variables": entry.variables.keys().collect::<Vec<_>>(), "document": document, "resolved": resolved})
+        json!({"path": entry.path, "variables": installed_variables(&entry), "document": document})
     }).collect::<Vec<_>>();
     let runtime_environment = pack.manifest().metadata.plugins.iter().map(|plugin| {
         let manifold = gents::plugin::authority::declared_manifold(plugin)?;
@@ -100,17 +98,45 @@ pub(super) fn reused_variable_preview(
     )
 }
 
+/// One install variable as a preview names it: where its value comes from and
+/// whether one is present, never the value or the literal it resolves to. A
+/// variable without a value resolves through its `${NAME:-default}`.
+fn named_variable(name: &str, value: Option<&str>, supplied: &str) -> serde_json::Value {
+    let present = value.is_some_and(|value| !value.is_empty());
+    let source = if name == "GENTS_PACK_NODE_DID" {
+        "runtime"
+    } else if present {
+        supplied
+    } else {
+        "default"
+    };
+    json!({"name": name, "source": source, "present": present})
+}
+
+/// The variables of a use the installed record already resolved.
+fn installed_variables(
+    entry: &gents::pack::interpolate::InstallVariableUse,
+) -> Vec<serde_json::Value> {
+    entry
+        .variables
+        .keys()
+        .map(|name| named_variable(name, Some("installed"), "installed"))
+        .collect()
+}
+
 pub(super) fn install_variable_preview(
     pack: &PackSource,
     owner: &str,
 ) -> Result<serde_json::Value> {
-    install_variable_preview_with(pack, owner, &|name| std::env::var(name).ok())
+    install_variable_preview_with(pack, owner, &|name| {
+        std::env::var(name).ok().map(|value| (value, "environment"))
+    })
 }
 
 fn install_variable_preview_with(
     pack: &PackSource,
     owner: &str,
-    lookup: &dyn Fn(&str) -> Option<String>,
+    lookup: &dyn Fn(&str) -> Option<(String, &'static str)>,
 ) -> Result<serde_json::Value> {
     let path = pack
         .manifest()
@@ -123,7 +149,7 @@ fn install_variable_preview_with(
         if name == "GENTS_PACK_NODE_DID" {
             Some(owner.to_owned())
         } else {
-            lookup(name)
+            lookup(name).map(|(value, _)| value)
         }
     };
     let uses = gents::pack::interpolate::inspect_install_variables(&authored, &environment)
@@ -136,7 +162,15 @@ fn install_variable_preview_with(
     let uses = uses
         .into_iter()
         .map(|entry| {
-            let mut value = serde_json::to_value(&entry)?;
+            let variables = entry
+                .variables
+                .iter()
+                .map(|(name, value)| {
+                    let supplied = lookup(name).map_or("environment", |(_, source)| source);
+                    named_variable(name, value.as_deref(), supplied)
+                })
+                .collect::<Vec<_>>();
+            let mut value = json!({"path": entry.path, "variables": variables});
             let mut segments = entry.path.trim_start_matches('/').split('/');
             let collection_name = segments.next().unwrap_or_default();
             let document = if collection_name == "node" {
@@ -383,10 +417,16 @@ async fn install_documents_pack_resolved_inner(
                 &|path| Ok(pack.asset(path)?.to_vec()),
                 &|name| std::env::var(name).ok(),
             )?;
-            return review(
-                super::review::authored_documents(&authored)?,
+            let variables = vec![install_variable_preview(pack, owner)?];
+            let mut preview = review(
+                super::review::authored_documents(
+                    &authored,
+                    &super::review::VariableFields::of(&variables),
+                )?,
                 super::review::inference_needs(&packs),
-            );
+            )?;
+            preview["install_variables"] = json!(variables);
+            return Ok(preview);
         }
         Err(refusal) => return Err(refusal),
     };
@@ -409,11 +449,9 @@ async fn install_documents_pack_resolved_inner(
                 } else if let Some(config) = prepared.reused_dependency_config(&coordinate) {
                     reused_variable_preview(source, config)
                 } else if let Some(values) = overrides.get(&coordinate) {
-                    install_variable_preview_with(source, owner, &|name| {
-                        values
-                            .get(name)
-                            .cloned()
-                            .unwrap_or_else(|| std::env::var(name).ok())
+                    install_variable_preview_with(source, owner, &|name| match values.get(name) {
+                        Some(value) => value.clone().map(|value| (value, "provided")),
+                        None => std::env::var(name).ok().map(|value| (value, "environment")),
                     })
                 } else {
                     install_variable_preview(source, owner)
@@ -428,7 +466,11 @@ async fn install_documents_pack_resolved_inner(
             .map(|(manifest, preview)| super::review::PackInference::bound(manifest, preview))
             .collect();
         let mut preview = review(
-            super::review::documents_by_slot(&prepared.config, &prepared.agent_bindings)?,
+            super::review::documents_by_slot(
+                &prepared.config,
+                &prepared.agent_bindings,
+                &super::review::VariableFields::of(&variables),
+            )?,
             super::review::inference_needs(&packs),
         )?;
         preview["inference"] = json!(inference);

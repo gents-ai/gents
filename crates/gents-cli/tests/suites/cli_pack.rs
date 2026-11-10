@@ -1003,6 +1003,34 @@ fn pack_install_preview_reports_the_review_and_writes_nothing() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn pack_install_preview_names_variables_without_their_values() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let home = temp.path().join("node");
+    run_init_json(
+        temp.path(),
+        &["--node-name", "pack-review", "--home", dir_arg(&home)],
+    )?;
+    let pack = documents_fixture_with_secret_variable(temp.path())?;
+    let secret = "preview-secret-7f3a9c";
+    let preview = run_cli_json_with_env(
+        temp.path(),
+        &[
+            "config",
+            "pack",
+            "install",
+            dir_arg(&pack),
+            "--home",
+            dir_arg(&home),
+            "--registry",
+            UNROUTABLE_REGISTRY,
+            "--preview",
+        ],
+        &[("PACK_PREVIEW_SECRET", secret)],
+    )?;
+    assert_preview_hides_the_secret(&preview, secret)
+}
+
 /// `dependee_fixture` copied to `dir` with a second required slot, `checker`,
 /// for a second agent, so the install can't choose either binding by itself.
 fn two_slot_dependee(dir: &std::path::Path) -> Result<std::path::PathBuf> {

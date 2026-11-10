@@ -174,6 +174,7 @@ pub(super) fn identity_and_authority(
 pub(super) fn documents_by_slot(
     config: &gents::documents::PackConfig,
     bindings: &gents::pack::PackAgentBindings,
+    variables: &VariableFields,
 ) -> Result<Vec<Value>> {
     let slots: std::collections::BTreeMap<&str, &str> = bindings
         .iter()
@@ -194,7 +195,7 @@ pub(super) fn documents_by_slot(
             _ => {}
         }
     }
-    let mut documents = documents(config)?;
+    let mut documents = documents(config, variables)?;
     for document in &mut documents {
         by_slot(document, &slots);
     }
@@ -204,8 +205,11 @@ pub(super) fn documents_by_slot(
 /// The documents an authored pack declares before its agent slots are bound
 /// to Agent DIDs, as a preview with unbound inference shows them: each agent
 /// by its slot, since its DID is minted only when it is installed.
-pub(super) fn authored_documents(config: &gents::pack::AuthoredPackConfig) -> Result<Vec<Value>> {
-    let mut documents = documents(&config.documents)?;
+pub(super) fn authored_documents(
+    config: &gents::pack::AuthoredPackConfig,
+    variables: &VariableFields,
+) -> Result<Vec<Value>> {
+    let mut documents = documents(&config.documents, variables)?;
     for agent in config
         .value
         .get("agents")
@@ -214,11 +218,19 @@ pub(super) fn authored_documents(config: &gents::pack::AuthoredPackConfig) -> Re
         .flatten()
     {
         let slot = agent.get("agent_slot").and_then(Value::as_str);
+        let masked = variables.fields_of(gents::Collection::Agent, slot, &[]);
+        let mut content = agent.clone();
+        mask_variable_fields(&mut content, &masked);
+        let name = content
+            .get("display_name")
+            .and_then(Value::as_str)
+            .or(slot)
+            .map(str::to_owned);
         documents.push(json!({
             "collection": "Agent",
             "id": slot,
-            "name": agent.get("display_name").and_then(Value::as_str).or(slot),
-            "content": agent,
+            "name": name,
+            "content": content,
         }));
     }
     Ok(documents)
@@ -229,19 +241,37 @@ pub(super) fn authored_documents(config: &gents::pack::AuthoredPackConfig) -> Re
 /// the install writes, without the fields it leaves unset), and for a data
 /// tool surface the tools it declares. The node document is the install's
 /// owner, not something the pack adds.
-pub(super) fn documents(config: &gents::documents::PackConfig) -> Result<Vec<Value>> {
+pub(super) fn documents(
+    config: &gents::documents::PackConfig,
+    variables: &VariableFields,
+) -> Result<Vec<Value>> {
     let plan = gents::store::config_client::DesiredStateApplyPlan::from_pack_config(config)?;
+    let ids = |collection: gents::Collection| -> Vec<&str> {
+        plan.documents()
+            .iter()
+            .filter(|document| document.collection == collection)
+            .filter_map(|document| {
+                document
+                    .add
+                    .get(collection.unique_field())
+                    .and_then(Value::as_str)
+            })
+            .collect()
+    };
     plan.documents()
         .iter()
         .filter(|document| document.collection != gents::Collection::Node)
         .map(|document| {
             let field = |key: &str| document.add.get(key).and_then(Value::as_str);
             let id = field(document.collection.unique_field());
+            let masked = variables.fields_of(document.collection, id, &ids(document.collection));
+            let content = content(document.collection, &document.add, &masked)?;
+            let shown = |key: &str| content.get(key).and_then(Value::as_str);
             let mut item = json!({
                 "collection": document.collection.graphql_type(),
                 "id": id,
-                "name": field("display_name").or_else(|| field("name")),
-                "content": content(document.collection, &document.add)?,
+                "name": shown("display_name").or_else(|| shown("name")),
+                "content": content,
             });
             if let Some((field, readers)) =
                 gents::pack::declared_readers(document.collection, &document.add)
@@ -282,11 +312,99 @@ pub(super) fn declared_access(documents: &[Value]) -> Value {
         .collect()
 }
 
-/// A document's set fields, with a backend's stored secret replaced: a pack
-/// may carry the secret its backend authenticates with, which the review
-/// shows only by kind.
-fn content(collection: gents::Collection, document: &Value) -> Result<Value> {
+/// What a review shows in place of a value it does not reveal.
+const REDACTED: &str = "[redacted]";
+
+/// The document fields install variables set, by the authored path of each
+/// use (`/<collection dir>/<index>/<field...>`) and the document it resolved
+/// to. A variable may carry a secret, so a review names variables and where
+/// their values come from, and shows the fields they set only as redacted.
+#[derive(Debug, Default)]
+pub(super) struct VariableFields(Vec<(gents::Collection, Option<String>, String)>);
+
+impl VariableFields {
+    /// From the `uses` of install-variable previews.
+    pub(super) fn of(previews: &[Value]) -> Self {
+        let mut fields = Vec::new();
+        for entry in previews
+            .iter()
+            .filter_map(|preview| preview["uses"].as_array())
+            .flatten()
+        {
+            let Some(path) = entry["path"].as_str() else {
+                continue;
+            };
+            let mut segments = path.trim_start_matches('/').splitn(3, '/');
+            let dir = segments.next().unwrap_or_default();
+            let Some(collection) = gents::Collection::ALL
+                .iter()
+                .copied()
+                .find(|collection| collection.dir_name() == Some(dir))
+            else {
+                continue;
+            };
+            let _index = segments.next();
+            let pointer = segments
+                .next()
+                .map(|rest| format!("/{rest}"))
+                .unwrap_or_default();
+            let id = entry["document"]["id"].as_str().map(str::to_owned);
+            fields.push((collection, id, pointer));
+        }
+        Self(fields)
+    }
+
+    /// The pointers set by variables in the document `id` of `collection`.
+    /// A use whose document is unknown, or names none of `ids`, could be any
+    /// document of its collection, so it applies to each.
+    fn fields_of(
+        &self,
+        collection: gents::Collection,
+        id: Option<&str>,
+        ids: &[&str],
+    ) -> Vec<String> {
+        self.0
+            .iter()
+            .filter(|(of, named, _)| {
+                *of == collection
+                    && named
+                        .as_deref()
+                        .is_none_or(|named| Some(named) == id || !ids.contains(&named))
+            })
+            .map(|(_, _, pointer)| pointer.clone())
+            .collect()
+    }
+}
+
+/// Replaces each field an install variable set; a pointer the document does
+/// not resolve redacts its whole top-level field.
+fn mask_variable_fields(content: &mut Value, masked: &[String]) {
+    for pointer in masked {
+        if pointer.is_empty() {
+            continue;
+        }
+        if let Some(value) = content.pointer_mut(pointer) {
+            *value = json!(REDACTED);
+            continue;
+        }
+        let top = pointer
+            .trim_start_matches('/')
+            .split('/')
+            .next()
+            .unwrap_or_default();
+        if let Some(value) = content.get_mut(top) {
+            *value = json!(REDACTED);
+        }
+    }
+}
+
+/// A document's set fields, with a backend's stored secret and every field an
+/// install variable set replaced: a pack may carry the secret its backend
+/// authenticates with, which the review shows only by kind, and a variable's
+/// value is not shown.
+fn content(collection: gents::Collection, document: &Value, masked: &[String]) -> Result<Value> {
     let mut content = document.clone();
+    mask_variable_fields(&mut content, masked);
     let fields = content
         .as_object_mut()
         .context("a configuration document is an object")?;
@@ -299,7 +417,7 @@ fn content(collection: gents::Collection, document: &Value) -> Result<Value> {
                 if let Some(auth) = auth.as_object_mut() {
                     for (key, value) in auth.iter_mut() {
                         if key != "kind" {
-                            *value = json!("[redacted]");
+                            *value = json!(REDACTED);
                         }
                     }
                 }
@@ -392,7 +510,7 @@ mod tests {
             &|_| None,
         )
         .unwrap();
-        let documents = authored_documents(&config).unwrap();
+        let documents = authored_documents(&config, &VariableFields::default()).unwrap();
         let named: Vec<Value> = documents.iter().map(without_content).collect();
         assert!(named.contains(
             &json!({"collection": "Agent", "id": "fixture-worker", "name": "Fixture worker"})
@@ -430,7 +548,7 @@ mod tests {
             &|_| None,
         )
         .unwrap();
-        let documents = authored_documents(&config).unwrap();
+        let documents = authored_documents(&config, &VariableFields::default()).unwrap();
         assert_eq!(
             declared_access(&documents),
             json!([{
@@ -463,6 +581,7 @@ mod tests {
         let redacted = content(
             gents::Collection::InferenceBackend,
             &backend(json!({"kind": "api_key", "key": "sk-live-secret"})),
+            &[],
         )
         .unwrap();
         assert_eq!(
@@ -475,12 +594,13 @@ mod tests {
             &backend(json!({
                 "kind": "aws_credentials", "access_key_id": "AKIA", "secret_access_key": "s",
             })),
+            &[],
         )
         .unwrap();
         assert!(!aws.to_string().contains("AKIA"));
         let named = backend(json!({"kind": "environment", "variable": "HOSTED_KEY"}));
         assert_eq!(
-            content(gents::Collection::InferenceBackend, &named).unwrap()["auth"],
+            content(gents::Collection::InferenceBackend, &named, &[]).unwrap()["auth"],
             named["auth"]
         );
     }
@@ -500,7 +620,7 @@ mod tests {
             &|_| None,
         )
         .unwrap();
-        let documents = documents(&config).unwrap();
+        let documents = documents(&config, &VariableFields::default()).unwrap();
         assert_eq!(
             documents.iter().map(without_content).collect::<Vec<_>>(),
             vec![json!({

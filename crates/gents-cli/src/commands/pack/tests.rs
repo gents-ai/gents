@@ -198,14 +198,13 @@ fn document_pack_preview_shows_the_install_variable_and_its_target() {
     let preview = super::install::install_variable_preview(&source, "did:key:node").unwrap();
     assert_eq!(preview["kind"], "install_literal");
     assert_eq!(preview["uses"][0]["path"], "/node/node_did");
-    assert_eq!(preview["uses"][0]["resolved"], "did:key:node");
     assert_eq!(
         preview["uses"][0]["document"],
         json!({"collection": "Node", "id": "did:key:node"})
     );
     assert_eq!(
-        preview["uses"][0]["variables"]["GENTS_PACK_NODE_DID"],
-        "did:key:node"
+        preview["uses"][0]["variables"],
+        json!([{"name": "GENTS_PACK_NODE_DID", "source": "runtime", "present": true}])
     );
     let task = preview["uses"]
         .as_array()
@@ -217,7 +216,13 @@ fn document_pack_preview_shows_the_install_variable_and_its_target() {
         task["document"],
         json!({"collection": "Task", "id": "research"})
     );
-    assert_eq!(task["resolved"], "fallback");
+    assert_eq!(
+        task["variables"],
+        json!([{"name": "GENTS_TEST_3317_UNSET", "source": "default", "present": false}])
+    );
+    for item in preview["uses"].as_array().unwrap() {
+        assert!(item.get("resolved").is_none(), "{item}");
+    }
 }
 
 #[test]
@@ -245,15 +250,21 @@ fn dependency_preview_reads_installed_literals_instead_of_the_current_environmen
         .iter()
         .find(|item| item["path"] == "/node/node_did")
         .unwrap();
-    assert_eq!(node["resolved"], "did:key:node");
+    assert!(node.get("resolved").is_none(), "{node}");
     let target = preview["uses"]
         .as_array()
         .unwrap()
         .iter()
         .find(|item| item["path"] == "/tools/0/display_name")
         .unwrap();
-    assert_eq!(target["resolved"], "installed value");
-    assert_eq!(target["variables"], json!(["DISPLAY_LABEL"]));
+    assert_eq!(
+        target["variables"],
+        json!([{"name": "DISPLAY_LABEL", "source": "installed", "present": true}])
+    );
+    assert!(
+        !preview.to_string().contains("installed value"),
+        "a preview shows an installed variable's value: {preview}"
+    );
     assert_eq!(
         target["document"],
         json!({"collection": "Tools", "id": "demo-tools"})

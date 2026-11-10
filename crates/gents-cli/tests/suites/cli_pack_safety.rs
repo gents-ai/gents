@@ -388,3 +388,45 @@ async fn plugin_only_pack_installs_through_reviewed_user_session() -> Result<()>
     assert!(graph.to_string().contains("fixture/job_plugin_fixture"));
     Ok(())
 }
+
+/// The hosted install route previews with the runtime's own environment; a
+/// preview it answers names that environment's variables without their values.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hosted_pack_install_preview_names_variables_without_their_values() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let home = temp.path().join("home");
+    std::fs::create_dir_all(&home)?;
+    let endpoint = MockModelEndpoint::start("pack-preview")?;
+    let init = run_init_json(
+        &home,
+        &[
+            "--node-name",
+            "pack-preview",
+            "--model-name",
+            "pack-preview",
+            "--inference-url",
+            endpoint.endpoint(),
+        ],
+    )?;
+    let owner = node_did_from_init(&init)?;
+    let secret = "hosted-preview-secret-51be0d";
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let mut server = spawn_server_with_env(&home, port, &[], &[("PACK_PREVIEW_SECRET", secret)])?;
+    wait_for_port(port, &mut server)?;
+    wait_for_runtime_ready(&graphql, &owner, Duration::from_secs(30)).await?;
+    let pack = documents_fixture_with_secret_variable(temp.path())?;
+    let preview = run_cli_json(
+        &home,
+        &[
+            "config",
+            "pack",
+            "install",
+            pack.to_str().context("pack path")?,
+            "--graphql",
+            &graphql,
+            "--preview",
+        ],
+    )?;
+    assert_preview_hides_the_secret(&preview, secret)
+}
