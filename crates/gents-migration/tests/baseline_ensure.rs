@@ -812,6 +812,7 @@ async fn added_route_and_reader_columns_preserve_existing_rows() {
             &[
                 ("enrollment_member_did", false),
                 ("enrollment_sequence", false),
+                ("enrollment_network_id", false),
             ][..],
         ),
     ] {

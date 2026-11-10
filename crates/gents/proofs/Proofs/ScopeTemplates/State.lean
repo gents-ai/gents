@@ -170,7 +170,12 @@ so pairing it could carry data its sources' policies protect.
 A collection a document pack created is application data like any other
 (decision, 2026-11-10): it is refused when it carries a document policy and is
 otherwise pairable only by this explicit opt-in. Installing a pack never pairs
-its collections. -/
+its collections. Consequence, stated plainly: packs declare no document policy on
+their collections today, so every pack collection is pairable, and any enabled
+Agent holding P2P mutation can send all of a pack's data (for example security
+findings a pack records) to any peer enrolled in this node's network, where
+every local actor can read it. Whether a pack must instead declare its
+collections pairable is an open decision for the user. -/
 def decideAppCollection (facts : AppCollectionFacts) : Option AppCollectionRefusal :=
   if facts.managed then some .managed
   else if facts.isView then some .view

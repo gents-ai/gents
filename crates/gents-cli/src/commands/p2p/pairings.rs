@@ -96,7 +96,9 @@ pub(super) async fn pairing_reader_targets(args: P2pAccessArgs) -> Result<()> {
 
 pub(super) async fn application_pairings(args: P2pPairingsListArgs) -> Result<()> {
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-    let pairings = access.list_application_pairings().await?;
+    let pairings =
+        gents::runtime::agent::p2p_reconcile::overlay_binding::operator_pairing_statuses(&access)
+            .await?;
     match args.output {
         OutputFormat::Json | OutputFormat::Ndjson => print_json(&json!({"pairings": pairings})),
         OutputFormat::Text | OutputFormat::Table | OutputFormat::Tree => {
@@ -117,8 +119,13 @@ pub(super) async fn application_pairings(args: P2pPairingsListArgs) -> Result<()
                     .unwrap_or_default();
                 writeln!(
                     out,
-                    "{}\tauthor={}\tcollections={}\tenrollment_sequence={}",
+                    "{}\t{}{}\tauthor={}\tcollections={}\tenrollment_sequence={}",
                     pairing["peer_id"].as_str().unwrap_or("-"),
+                    pairing["status"].as_str().unwrap_or("-"),
+                    pairing["inactive_reason"]
+                        .as_str()
+                        .map(|reason| format!(" ({reason})"))
+                        .unwrap_or_default(),
                     pairing["actor_did"].as_str().unwrap_or("-"),
                     collections,
                     pairing["enrollment_sequence"]

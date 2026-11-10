@@ -576,6 +576,37 @@ mod tests {
     use crate::store::identity::{KeyIdentity, NodeIdentity};
     use serde_json::json;
 
+    /// The operator's delete-only permission for pairing overlays does not
+    /// reach pack plans: create, update, delete and relationship edits that
+    /// name the collection are refused (Lean
+    /// `Identity.Configuration.pairing_overlay_not_in_shared_delete`).
+    #[test]
+    fn pack_plans_cannot_touch_pairing_overlays() {
+        let collection = gents_protocol::schemas::DATA_PLANE_PAIRING_DESIRED_NAME.to_owned();
+        for mutation in [
+            PackMutation::Create {
+                collection: collection.clone(),
+                input: json!({"peer_id": "peer"}),
+            },
+            PackMutation::Update {
+                collection: collection.clone(),
+                doc_id: "bae-overlay".into(),
+                input: json!({"collections": ["Note"]}),
+            },
+            PackMutation::Delete {
+                collection: collection.clone(),
+                doc_id: "bae-overlay".into(),
+            },
+        ] {
+            assert!(matches!(
+                trusted_schema(&mutation),
+                Err(PackEvidenceError::UnsupportedCollection)
+            ));
+        }
+        // Pack relationship edits use the same owner.
+        assert!(super::super::client_signed_agent::trusted_delete_schema(&collection).is_none());
+    }
+
     #[tokio::test]
     async fn hosted_schema_approval_conforms_to_lean() -> anyhow::Result<()> {
         let dir = tempfile::tempdir()?;

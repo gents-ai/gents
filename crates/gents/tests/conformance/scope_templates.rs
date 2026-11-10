@@ -166,7 +166,7 @@ fn runtime_data_has_no_replication_template_or_app_escape() {
 #[test]
 fn overlay_binding_matches_executable_model() {
     use gents::runtime::agent::p2p_reconcile::overlay_binding::{
-        binding_is_current, OverlayBinding, RevisionFact,
+        binding_is_current, CurrentAuthorization, OverlayBinding, RevisionFact,
     };
     let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
     assert!(snapshot.scope_overlay_binding_cases.len() >= 10);
@@ -183,28 +183,30 @@ fn overlay_binding_matches_executable_model() {
             })
             .collect::<Vec<_>>();
         let binding = OverlayBinding {
+            network_id: case["binding_network"].as_str().unwrap().to_owned(),
             member_did: case["binding_member"].as_str().unwrap().to_owned(),
             sequence: case["binding_sequence"].as_u64().unwrap(),
         };
+        let current = CurrentAuthorization {
+            network_id: case["current_network"].as_str().unwrap().to_owned(),
+            member_did: case["current_member"].as_str().unwrap().to_owned(),
+            sequence: case["current_sequence"].as_u64().unwrap(),
+        };
         assert_eq!(
-            binding_is_current(
-                &history,
-                &binding,
-                case["current_member"].as_str().unwrap(),
-                case["current_sequence"].as_u64().unwrap(),
-            ),
+            binding_is_current(&history, &binding, &current),
             case["current"].as_bool().unwrap(),
             "{case}"
         );
     }
 }
 
-/// The order of preconditions and the reason reported are the model's.
+/// The order of preconditions and the reason reported are the model's, through
+/// the same `decide_overlay` the reconciler and the tool call.
 #[test]
 fn overlay_contribution_matches_executable_model() {
     use gents::runtime::agent::p2p_reconcile::overlay_binding::{decide_overlay, OverlayFacts};
     let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
-    assert_eq!(snapshot.scope_overlay_facts_cases.len(), 32);
+    assert_eq!(snapshot.scope_overlay_facts_cases.len(), 128);
     for case in &snapshot.scope_overlay_facts_cases {
         let flag = |name: &str| case[name].as_bool().unwrap();
         let facts = OverlayFacts {
@@ -212,6 +214,8 @@ fn overlay_contribution_matches_executable_model() {
             binding_current: flag("binding_current"),
             author_live_agent: flag("author_live_agent"),
             author_holds_grant: flag("author_holds_grant"),
+            content_owner_written: flag("content_owner_written"),
+            template_valid: flag("template_valid"),
             collections_admitted: flag("collections_admitted"),
         };
         let reason = decide_overlay(facts)

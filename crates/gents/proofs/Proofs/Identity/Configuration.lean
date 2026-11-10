@@ -491,16 +491,22 @@ def clientSignedUpdateSupported (collection : String) : Bool :=
   clientSignedCreateCollection collection
 
 /-- A client signs deletes only for bundled configuration schemas or the
-pack installation, Goal, GoalCreationClaim and application pairing overlay
-records. Native delete permission remains required; session deletion has a
-separate product owner. The overlay is included as the operator stop (security
-review, 2026-11-10): the Node's user owner removes any Agent's pairing through
-the signed client path, and document ACP admits it through the Node parent
-(`pairing_overlay_delete_is_owner_scoped`). -/
+pack installation, Goal and GoalCreationClaim records. Native delete permission
+remains required; session deletion has a separate product owner. Pack evidence
+(create, update, delete) and pack relationship edits share this list. -/
 def clientSignedDeleteCollection (collection : String) : Bool :=
   (clientSignedCreateCollection collection && collection != "InferenceBackend") ||
     ["PackInstallation", "InferenceBackendMetadata", "InferenceBackendObservation",
-      "BackendCredential", "Goal", "GoalCreationClaim", "DataPlanePairingDesired"].contains collection
+      "BackendCredential", "Goal", "GoalCreationClaim"].contains collection
+
+/-- The operator stop (security review, 2026-11-10): the Node's user owner
+deletes any Agent's application pairing overlay through the signed client path,
+and document ACP admits it through the Node parent
+(`pairing_overlay_delete_is_owner_scoped`). This permission is delete-only and
+separate from `clientSignedDeleteCollection`, so pack plans cannot create,
+update, delete or relate an overlay. -/
+def clientSignedOperatorDelete (collection : String) : Bool :=
+  collection == "DataPlanePairingDesired"
 
 theorem client_delete_includes_goal : clientSignedDeleteCollection "Goal" = true := by decide
 
@@ -508,8 +514,18 @@ theorem client_delete_includes_goal_claim : clientSignedDeleteCollection "GoalCr
 
 theorem client_delete_excludes_session : clientSignedDeleteCollection "AgentSession" = false := by decide
 
-theorem client_delete_includes_pairing_overlay :
-    clientSignedDeleteCollection "DataPlanePairingDesired" = true := by decide
+theorem operator_delete_includes_pairing_overlay :
+    clientSignedOperatorDelete "DataPlanePairingDesired" = true := by decide
+
+theorem pairing_overlay_not_in_shared_delete :
+    clientSignedDeleteCollection "DataPlanePairingDesired" = false ∧
+      clientSignedCreateCollection "DataPlanePairingDesired" = false ∧
+      clientSignedUpdateSupported "DataPlanePairingDesired" = false := by decide
+
+/-- The operator delete adds exactly one collection. -/
+theorem operator_delete_is_only_the_overlay (collection : String)
+    (h : clientSignedOperatorDelete collection = true) : collection = "DataPlanePairingDesired" := by
+  simpa [clientSignedOperatorDelete] using h
 
 /-- The legacy inline-secret collection is never selected by the new deletion owner. -/
 theorem client_delete_excludes_legacy_backend : clientSignedDeleteCollection "InferenceBackend" = false := by decide
@@ -1545,6 +1561,19 @@ theorem agent_pairing_overlay_preserves_creator_isolation :
      Household.allowed 5 agentPairingFixture "runtime" "configuration" "overlay" "update",
      Household.allowed 5 agentPairingFixture "sibling" "configuration" "overlay" "read"] =
     [true, true, true, false, false] := by native_decide
+
+/-- Natively, update on a pairing overlay is not owner-only: it sits on the
+`configuration` resource (`update: writer + parent->update`), so the Node's
+user owner may rewrite another Agent's overlay while a sibling Agent may not.
+The reconciler therefore requires content written only by the author
+(`PairingReconcile.OverlayBinding.foreign_write_contributes_nothing`); an
+owner-only update in ACP itself needs a new resource in this policy and a store
+migration, an open decision. -/
+theorem pairing_overlay_update_admits_the_node_owner :
+    [Household.allowed 5 agentPairingFixture "agent" "configuration" "overlay" "update",
+     Household.allowed 5 agentPairingFixture "user" "configuration" "overlay" "update",
+     Household.allowed 5 agentPairingFixture "sibling" "configuration" "overlay" "update"] =
+    [true, true, false] := by native_decide
 
 /-- `delete-document` is node-wide, so document ACP is what confines a pairing
 revoke to the overlay's native owner: a sibling Agent holding the same P2P

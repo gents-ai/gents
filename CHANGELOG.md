@@ -25,13 +25,14 @@ source consistency checks, not a separate runtime compatibility version.
   runtime and credential collections, views and policy-bearing collections are
   refused. A pairing is bound to the enrollment it was applied under: a lease
   renewal keeps it, a revocation or expiry ends it, and a later approval of the
-  same peer restores only discovery. It contributes only while its author is an
-  enabled Agent holding the P2P mutation grant. `gents p2p pairings
-  applications` lists pairings and `gents p2p pairings remove <PEER_ID>` lets
-  the node's User delete any of them. `DataPlanePairingDesired` gains
-  `enrollment_member_did` and `enrollment_sequence`; existing stores take a
-  versioned patch, and a pairing written before it is inactive until applied
-  again.
+  same peer or a re-created network restores only discovery. It contributes
+  only while its author is an enabled Agent holding the P2P mutation grant and
+  only its author has written it. `gents p2p pairings applications` lists
+  pairings with their status and `gents p2p pairings remove <PEER_ID>` lets the
+  node's User delete any of them. `DataPlanePairingDesired` gains
+  `enrollment_member_did`, `enrollment_sequence` and `enrollment_network_id`;
+  existing stores take a versioned patch, and a pairing written before it is
+  inactive until applied again.
 - Breaking: the agent-facing `sync_documents` action and
   `Tools.built_ins.p2p_collections` grant are removed; a Tools document that
   still sets the field is rejected, and `gents pack wire` no longer writes it:

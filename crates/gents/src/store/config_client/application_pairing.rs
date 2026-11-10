@@ -12,7 +12,7 @@ impl ConfigAccess {
         let response = self
             .execute(
                 "{ DataPlanePairingDesired { _docID peer_id node_did actor_did collections template \
-                 enrollment_member_did enrollment_sequence updated_at } }",
+                 enrollment_member_did enrollment_sequence enrollment_network_id updated_at } }",
             )
             .await?;
         Ok(response["data"][OVERLAY]
@@ -44,7 +44,7 @@ impl ConfigAccess {
                     })
                     .unwrap_or_default();
                 for id in &ids {
-                    txn.delete_configuration_document(OVERLAY, id).await?;
+                    txn.delete_application_pairing(id).await?;
                 }
                 Ok::<_, super::ConfigClientError>(ids)
             })

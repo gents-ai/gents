@@ -247,13 +247,23 @@ impl GraphqlPairingStateStore {
                     member_did: entry.endpoint.node_did.clone(),
                     sequence: entry.endpoint.authorization_sequence,
                 };
-                super::super::overlay_binding::evaluate_overlay(
-                    &self.node,
-                    self.identity.as_ref(),
-                    &record,
-                    Some(&current),
-                )
-                .await
+                match self.runtime_access() {
+                    Ok(reader) => {
+                        super::super::overlay_binding::evaluate_overlay(
+                            &reader,
+                            self.identity.did(),
+                            Some(self.identity.as_ref()),
+                            &record,
+                            Some(&current),
+                        )
+                        .await
+                    }
+                    Err(error) => Err(
+                        super::super::overlay_binding::OverlayInactive::Unverifiable(format!(
+                            "{error:#}"
+                        )),
+                    ),
+                }
             }
             (None, _) => Err(
                 super::super::overlay_binding::OverlayInactive::Unverifiable(
@@ -371,6 +381,7 @@ impl PairingStateStore for GraphqlPairingStateStore {
                     source
                     enrollment_member_did
                     enrollment_sequence
+                    enrollment_network_id
                 }}
             }}"#
         );
@@ -470,11 +481,18 @@ impl PairingStateStore for GraphqlPairingStateStore {
             .admitted_overlay(&raw_peer_id, overlays, &entry, network_id.as_deref())
             .await
             .and_then(|row| local_data_plane_row(row, &entry, self.identity.did()))
-            .map(|row| {
+            .and_then(|row| {
+                // A row the overlay owner admitted still must not stall the
+                // peer: a conversion failure is skipped and reported.
                 data_plane_desired_from_pairing_row(row, &entry.endpoint, self.identity.did())
+                    .map_err(|error| {
+                        tracing::warn!(target: "gents::runtime::agent::p2p_reconcile::engine",
+                            peer_id = %raw_peer_id, %error,
+                            "application overlay could not be converted; skipped");
+                    })
+                    .ok()
+                    .flatten()
             })
-            .transpose()?
-            .flatten()
             .filter(|overlay| overlay.template_ids.contains(APP_COLLECTIONS_TEMPLATE));
         Ok(LoadedPairingDesired {
             state: merge_layered_desired(

@@ -241,7 +241,10 @@ pub(crate) enum P2pPairingsCommand {
         about = "List application-collection pairings Agents opted into on this node",
         after_help = "\
 Each row is one Agent's opt-in to replicate application collections toward one \
-enrolled peer. `gents p2p pairings remove <PEER_ID>` deletes one as you."
+enrolled peer, with its status (active, or inactive and why). Judging an \
+author's grant needs permission to explain node grants, which the node's owner \
+holds; without it a row reads `unverifiable`. \
+`gents p2p pairings remove <PEER_ID>` deletes one as you."
     )]
     Applications(P2pPairingsListArgs),
     #[command(
@@ -249,7 +252,9 @@ enrolled peer. `gents p2p pairings remove <PEER_ID>` deletes one as you."
         after_help = "\
 Deletes the pairing as you, under native document access control: the Node's \
 user owner may remove any Agent's pairing. New data stops at the next \
-reconcile; documents already delivered stay on the peer."
+reconcile; documents already delivered stay on the peer. An author that still \
+holds the P2P mutation grant can apply the pairing again, so a durable stop \
+also withdraws that Agent's grant (its Tools `enable_p2p_mutations`)."
     )]
     Remove(P2pPairingsRemoveArgs),
 }

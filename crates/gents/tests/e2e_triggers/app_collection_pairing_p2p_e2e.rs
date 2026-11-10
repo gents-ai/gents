@@ -532,7 +532,7 @@ async fn wait_for_status(tool: &P2pTool, peer: &str, reason: Option<&str>) {
 
 /// The peer's current authorization in this node's network: member DID and
 /// sequence, as `pairings_apply` binds them.
-async fn current_authorization(db: &TestDb, peer: &str) -> (String, u64) {
+async fn current_authorization(db: &TestDb, peer: &str) -> (String, u64, String) {
     let projection = GraphqlEnrollmentStore::new(db.node.clone(), db.node_identity.clone())
         .load_projection()
         .await
@@ -545,13 +545,20 @@ async fn current_authorization(db: &TestDb, peer: &str) -> (String, u64) {
     (
         active.request.candidate_did.clone(),
         active.revision.sequence,
+        active.revision.network_id.clone(),
     )
 }
 
 /// Writes an overlay directly as `agent`, parented to the Node, without the
 /// tool's admission: the reconciler must still refuse what it names.
-async fn write_direct_overlay(db: &TestDb, agent: &PairingAgent, peer: &str, collection: &str) {
-    let (member, sequence) = current_authorization(db, peer).await;
+async fn write_direct_overlay(
+    db: &TestDb,
+    agent: &PairingAgent,
+    peer: &str,
+    collection: &str,
+    template: &str,
+) {
+    let (member, sequence, network) = current_authorization(db, peer).await;
     let runtime = gents::ConfigAccess::local_as(
         db.node.clone(),
         identity::Did::new(db.node_identity.did()).expect("runtime DID"),
@@ -568,12 +575,14 @@ async fn write_direct_overlay(db: &TestDb, agent: &PairingAgent, peer: &str, col
         .expect("Node document")
         .to_owned();
     let create = format!(
-        r#"mutation {{ create_DataPlanePairingDesired(input: {{peer_id: "{}", node_did: "{}", actor_did: "{}", collections: ["{}"], replicator_addresses: ["direct"], template: "app-collections", source: "engineer", enrollment_member_did: "{}", enrollment_sequence: {sequence}}}) {{ _docID }} }}"#,
+        r#"mutation {{ create_DataPlanePairingDesired(input: {{peer_id: "{}", node_did: "{}", actor_did: "{}", collections: ["{}"], replicator_addresses: ["direct"], template: "{}", source: "engineer", enrollment_member_did: "{}", enrollment_sequence: {sequence}, enrollment_network_id: "{}"}}) {{ _docID }} }}"#,
         escape_graphql_string(peer),
         escape_graphql_string(db.node_identity.did()),
         escape_graphql_string(agent.identity.did()),
         escape_graphql_string(collection),
+        escape_graphql_string(template),
         escape_graphql_string(&member),
+        escape_graphql_string(&network),
     );
     gents::ConfigAccess::local_managed_agent(
         db.node.clone(),
@@ -1479,7 +1488,7 @@ async fn application_pairing_follows_author_authority_and_enrollment_lease() {
         &addr_b,
     )
     .await;
-    let (_, renewed) = current_authorization(&db_a, &peer_b).await;
+    let (_, renewed, _) = current_authorization(&db_a, &peer_b).await;
     assert!(renewed > 1, "renewal took the next sequence");
     write_change_proposed(db_a.node.as_ref(), "after-renewal", "signup").await;
     wait_for_change(db_b.node.as_ref(), "after-renewal").await;
@@ -1518,10 +1527,88 @@ async fn application_pairing_follows_author_authority_and_enrollment_lease() {
     pairer_a.configure(&db_a, true, true).await;
     wait_for_status(&tool_a, &peer_b, None).await;
 
-    // The User removes the pairing; a direct overlay naming a managed or a
-    // policy-bearing collection is refused by the reconciler itself.
+    // Only the author rewrites the pairing: the User's and a node
+    // administrator's signed updates are refused, and the pairing keeps its
+    // content and stays active. The User still deletes it below.
     let user = load_managed_fixture_user(&db_a).await;
     let operator = db_a.client_access(&user);
+    let rebind = format!(
+        r#"mutation {{ update_DataPlanePairingDesired(filter: {{peer_id: {{_eq: "{}"}}}}, input: {{collections: ["ChangeProposed", "GuardedChange"], enrollment_sequence: 99}}) {{ _docID }} }}"#,
+        escape_graphql_string(&peer_b)
+    );
+    let before = pairing_status(&tool_a, &peer_b).await;
+    let admin =
+        gents::KeyIdentity::load_or_create(db_a.data_path().join("pairing-admin.key"), None)
+            .expect("admin key");
+    gents::ConfigAccess::local_as(
+        db_a.node.clone(),
+        identity::Did::new(db_a.node_identity.did()).expect("runtime DID"),
+    )
+    .grant_node_admin(&identity::Did::new(admin.did()).expect("admin DID"))
+    .await
+    .expect("grant node administration");
+    for (who, access) in [("user", &operator), ("admin", &db_a.client_access(&admin))] {
+        let rewritten = access.write("test.pairing.foreign_update", &rebind).await;
+        assert!(
+            !rewritten
+                .as_ref()
+                .is_ok_and(|value| value["data"]["update_DataPlanePairingDesired"]
+                    .as_array()
+                    .is_some_and(|rows| !rows.is_empty())),
+            "{who}: {rewritten:?}"
+        );
+    }
+    // The fixture User is an enrolled operator; the node's init User is a
+    // native administrator and may explain any identity's node grants. Give
+    // the fixture User that read-only permission so the operator listing can
+    // judge the author's grant (without it the listing reports
+    // `unverifiable`, failing closed).
+    gents::ConfigAccess::local_as(
+        db_a.node.clone(),
+        identity::Did::new(db_a.node_identity.did()).expect("runtime DID"),
+    )
+    .grant_node_permission(
+        &identity::Did::new(user.did()).expect("user DID"),
+        gents::store::config_client::NodePermission::NacStatus,
+    )
+    .await
+    .expect("grant node grant explanation");
+    let after = pairing_status(&tool_a, &peer_b).await;
+    assert_eq!(after["collections"], before["collections"]);
+    assert_eq!(after["enrollment_sequence"], before["enrollment_sequence"]);
+    assert_eq!(after["status"], "active");
+    // The operator listing shows the same status the reconciler acts on.
+    let listed =
+        gents::runtime::agent::p2p_reconcile::overlay_binding::operator_pairing_statuses(&operator)
+            .await
+            .expect("operator listing");
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    assert_eq!(listed[0]["status"], "active", "{listed:?}");
+    // Another Agent may not learn why someone else's pairing is inactive.
+    let observer = pairing_agent(&db_a, "observer-a").await;
+    let observer_tool = pairing_tool(&db_a, Some(observer.identity.clone()), false);
+    pairer_a.configure(&db_a, false, true).await;
+    wait_for_status(&tool_a, &peer_b, Some("author_lacks_grant")).await;
+    let seen = p2p_call(&observer_tool, json!({"action":"pairings_list"}))
+        .await
+        .expect("observer pairings_list");
+    for row in seen["outcome"]["desired"].as_array().unwrap() {
+        assert!(row.get("inactive_reason").is_none(), "{row}");
+        assert!(row.get("inactive_detail").is_none(), "{row}");
+    }
+    let listed =
+        gents::runtime::agent::p2p_reconcile::overlay_binding::operator_pairing_statuses(&operator)
+            .await
+            .expect("operator listing");
+    assert_eq!(
+        listed[0]["inactive_reason"], "author_lacks_grant",
+        "{listed:?}"
+    );
+    pairer_a.configure(&db_a, true, true).await;
+    wait_for_status(&tool_a, &peer_b, None).await;
+
+    // The User removes the pairing; a direct overlay naming a managed or a
+    // policy-bearing collection is refused by the reconciler itself.
     assert_eq!(
         operator
             .remove_application_pairing(&peer_b)
@@ -1530,11 +1617,22 @@ async fn application_pairing_follows_author_authority_and_enrollment_lease() {
             .len(),
         1
     );
-    for collection in ["AgentSession", "GuardedChange"] {
-        write_direct_overlay(&db_a, &pairer_a, &peer_b, collection).await;
-        wait_for_status(&tool_a, &peer_b, Some("collections_refused")).await;
+    for (collection, template, reason) in [
+        ("AgentSession", "app-collections", "collections_refused"),
+        ("GuardedChange", "app-collections", "collections_refused"),
+        ("ChangeProposed", "client", "invalid_template"),
+        ("ChangeProposed", "no-such-template", "invalid_template"),
+    ] {
+        write_direct_overlay(&db_a, &pairer_a, &peer_b, collection, template).await;
+        wait_for_status(&tool_a, &peer_b, Some(reason)).await;
+        // The base route still reconciles: the peer's control route stands.
+        fetch_pairing_applied(&db_a.node, &peer_b)
+            .await
+            .expect("control route stays applied");
         assert_never_carried(&db_a.node, &peer_b, collection).await;
-        refuse_at_transport(&db_a.node, &addr_b, collection).await;
+        if reason == "collections_refused" {
+            refuse_at_transport(&db_a.node, &addr_b, collection).await;
+        }
         operator
             .remove_application_pairing(&peer_b)
             .await

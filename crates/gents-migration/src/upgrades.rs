@@ -92,10 +92,14 @@ pub(crate) fn include_existing_by_version(
         (
             "DataPlanePairingDesired",
             "bafyreiex7t6xtyuyodmeueehwh7xdimgcjnpfoobcgsi3vbgpff7x64mli",
-            "bafyreiaunbekwy2ucuap5uqhqfkafm2cc3m2yabebu3tpaon7djqhqhixi",
+            "bafyreig7t3ofzy6zxh3fr2yjf6v44yub637k4m3lk7qrhtle5ssxghfiuq",
             "data-plane-pairing-add-enrollment-binding",
-            r#"[{"op":"add","path":"/DataPlanePairingDesired/Fields/-","value":{"Name":"enrollment_member_did","Kind":"String"}},{"op":"add","path":"/DataPlanePairingDesired/Fields/-","value":{"Name":"enrollment_sequence","Kind":"Int"}}]"#,
-            &["enrollment_member_did", "enrollment_sequence"][..],
+            r#"[{"op":"add","path":"/DataPlanePairingDesired/Fields/-","value":{"Name":"enrollment_member_did","Kind":"String"}},{"op":"add","path":"/DataPlanePairingDesired/Fields/-","value":{"Name":"enrollment_sequence","Kind":"Int"}},{"op":"add","path":"/DataPlanePairingDesired/Fields/-","value":{"Name":"enrollment_network_id","Kind":"String"}}]"#,
+            &[
+                "enrollment_member_did",
+                "enrollment_sequence",
+                "enrollment_network_id",
+            ][..],
         ),
     ] {
         let Some(current) = get_version(name)? else {

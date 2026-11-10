@@ -10,7 +10,9 @@ mod projection_policy;
 mod runtime_document_projection;
 pub mod storage_backend;
 pub mod store_key;
-pub(crate) mod tool_permission_projection;
+mod tool_permission_projection;
+
+pub(crate) use tool_permission_projection::{selected_tools, tool_source};
 
 pub use projection_policy::{
     ProjectedOperationSource, ProjectedPlugin, ProjectedPluginRef, ToolSourcePolicy,

@@ -34,6 +34,20 @@ impl ConfigApplyTxn<'_> {
         super::delete_confirmation::confirm_configuration_delete(&response, collection, doc_id)
     }
 
+    /// The operator stop's client-signed delete of one application pairing
+    /// overlay (Lean `Identity.Configuration.clientSignedOperatorDelete`). It is
+    /// delete-only and deliberately outside `trusted_delete_schema`, which pack
+    /// evidence and pack relationship edits share, so neither can create,
+    /// update or relate this collection. Native document ACP decides the delete.
+    pub(crate) async fn delete_application_pairing(&self, doc_id: &str) -> Result<()> {
+        self.delete_document_with_schema(
+            gents_protocol::schemas::DATA_PLANE_PAIRING_DESIRED_NAME,
+            doc_id,
+            gents_protocol::schemas::DATA_PLANE_PAIRING_DESIRED,
+        )
+        .await
+    }
+
     /// Delete an explicitly supported bundled document and require native confirmation.
     pub(crate) async fn delete_configuration_document(
         &self,

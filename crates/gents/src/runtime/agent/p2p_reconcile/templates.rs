@@ -240,7 +240,19 @@ pub async fn admit_app_collections(
     node: std::sync::Arc<defra_node::Node>,
     requested: &BTreeSet<String>,
 ) -> Result<ReplicatedSchema, AppCollectionAdmissionError> {
-    let access = crate::store::config_client::ConfigAccess::local(node);
+    admit_app_collections_with(
+        &crate::store::config_client::ConfigAccess::local(node),
+        requested,
+    )
+    .await
+}
+
+/// [`admit_app_collections`] through a caller's access, for a reader that is
+/// not the embedded node (the operator CLI).
+pub async fn admit_app_collections_with(
+    access: &crate::store::config_client::ConfigAccess,
+    requested: &BTreeSet<String>,
+) -> Result<ReplicatedSchema, AppCollectionAdmissionError> {
     let mut schema = ReplicatedSchema::new();
     for collection in requested {
         // A managed name is refused before reading anything, so an
@@ -251,7 +263,7 @@ pub async fn admit_app_collections(
                 refusal: AppCollectionRefusal::Managed,
             });
         }
-        let (identity, is_view) = local_collection_facts(&access, collection)
+        let (identity, is_view) = local_collection_facts(access, collection)
             .await
             .map_err(|source| AppCollectionAdmissionError::Unreadable {
                 collection: collection.clone(),
