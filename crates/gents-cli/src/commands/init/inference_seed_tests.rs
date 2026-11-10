@@ -65,7 +65,7 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
     assert!(!snapshot.initial_inference_cases.is_empty());
     for case in snapshot.initial_inference_cases {
         let args = parse_case(&case);
-        let home = gents::eval::runner::embedded::EmbeddedHome::create_temp("init-seed").await?;
+        let home = gents::runtime::embedded::EmbeddedHome::create_temp("init-seed").await?;
         let identity = home.identity.clone();
         let owner = home.did();
         let node = home.node.clone();
@@ -209,7 +209,7 @@ async fn provider_selection_after_unconfigured_init_uses_the_discovered_limits()
     else {
         panic!("expected init");
     };
-    let home = gents::eval::runner::embedded::EmbeddedHome::create_temp("init-seed").await?;
+    let home = gents::runtime::embedded::EmbeddedHome::create_temp("init-seed").await?;
     let identity = home.identity.clone();
     let owner = home.did();
     let node = home.node.clone();

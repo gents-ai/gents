@@ -4,8 +4,8 @@ use std::io::Write;
 use anyhow::{Context, Result};
 use clap::Parser;
 use futures_util::{stream::FuturesUnordered, StreamExt};
-use gents::eval::report::load_report;
-use gents::eval::runner::{self, TrialBudget};
+use gents_eval::report::load_report;
+use gents_eval::runner::{self, TrialBudget};
 use serde::{Deserialize, Serialize};
 
 use super::{run, write_json, Deps, EvalContext};
@@ -253,7 +253,7 @@ mod tests {
         invalid["args"][0] = json!("missing-definition");
         let args = fixture_args(&fixture, json!([fixture_entry(&fixture, "valid"), invalid]));
         let executor = executor(&[]);
-        let registry = gents::eval::checks::CheckRegistry::builtin();
+        let registry = gents_eval::checks::CheckRegistry::builtin();
         let deps = deps(
             &executor,
             &registry,
@@ -281,7 +281,7 @@ mod tests {
             ]),
         );
         let executor = executor(&[]);
-        let registry = gents::eval::checks::CheckRegistry::builtin();
+        let registry = gents_eval::checks::CheckRegistry::builtin();
         let deps = deps(
             &executor,
             &registry,
@@ -314,7 +314,7 @@ mod tests {
             ]),
         );
         let executor = executor(&[]);
-        let registry = gents::eval::checks::CheckRegistry::builtin();
+        let registry = gents_eval::checks::CheckRegistry::builtin();
         let cancel = tokio_util::sync::CancellationToken::new();
         cancel.cancel();
         let cancelled = deps(&executor, &registry, cancel);
@@ -375,7 +375,7 @@ mod tests {
         );
         args.json = false;
         let executor = executor(&[]);
-        let registry = gents::eval::checks::CheckRegistry::builtin();
+        let registry = gents_eval::checks::CheckRegistry::builtin();
         let deps = deps(
             &executor,
             &registry,

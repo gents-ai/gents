@@ -249,7 +249,7 @@ async fn catalog_freshness_reaches_cli_observation_reader() -> anyhow::Result<()
 /// operator grants, publishes the Node through its client-signed endpoint, and
 /// creates managed Agents that sign their own sessions and requests.
 pub(crate) struct ClientHome {
-    pub(crate) home: gents::eval::runner::embedded::EmbeddedHome,
+    pub(crate) home: gents::runtime::embedded::EmbeddedHome,
     pub(crate) user: gents::KeyIdentity,
     /// The User's client-signed access.
     pub(crate) access: gents::store::config_client::ConfigAccess,
@@ -262,7 +262,7 @@ impl ClientHome {
         use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         use gents::NodeIdentity as _;
 
-        let home = gents::eval::runner::embedded::EmbeddedHome::create_temp("cli-client-home")
+        let home = gents::runtime::embedded::EmbeddedHome::create_temp("cli-client-home")
             .await
             .unwrap();
         let user_dir = tempfile::tempdir().unwrap();

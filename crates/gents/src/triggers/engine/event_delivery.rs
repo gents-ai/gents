@@ -478,7 +478,7 @@ fn expected_count(delivery: Delivery<'_>, docs: &[Value]) -> Result<Option<usize
     expected_group_count(delivery.expected()?.as_ref(), docs)
 }
 
-pub(crate) fn expected_group_count(
+pub fn expected_group_count(
     expected: Option<&EventGroupCount>,
     docs: &[Value],
 ) -> Result<Option<usize>> {

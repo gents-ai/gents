@@ -218,7 +218,7 @@ impl ConfigApplyTxn<'_> {
     }
 
     /// Create using the authenticated client's key and an application-owned bundled SDL.
-    pub(crate) async fn execute_client_signed_create(
+    pub async fn execute_client_signed_create(
         &self,
         document: &str,
         variables: &Value,
@@ -268,7 +268,7 @@ impl ConfigApplyTxn<'_> {
 
     /// Execute a client-approved update using an application-owned bundled SDL.
     /// The existing transaction evaluates the complete mutation predicate.
-    pub(crate) async fn execute_client_signed_update(
+    pub async fn execute_client_signed_update(
         &self,
         document: &str,
         variables: &Value,

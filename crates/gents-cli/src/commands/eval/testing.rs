@@ -4,14 +4,14 @@ use std::time::Duration;
 use clap::Parser;
 use gents::documents::apply_desired_state_plan;
 use gents::documents::EvalSplit;
-use gents::eval::checks::CheckRegistry;
-use gents::eval::runner::embedded::EmbeddedHome;
-use gents::eval::runner::{
+use gents::runtime::embedded::EmbeddedHome;
+use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents::{Collection, ConfigAccess, NodeIdentity};
+use gents_eval::checks::CheckRegistry;
+use gents_eval::runner::{
     run, CellRequest, CellSource, RunOptions, RunOutcome, RunRequest, ScriptKey, ScriptedExecutor,
     TrialEvidence, TrialExecutor,
 };
-use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-use gents::{Collection, ConfigAccess, NodeIdentity};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;

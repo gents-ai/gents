@@ -1,12 +1,12 @@
 use std::collections::BTreeMap;
 use std::io::{self, Write};
 
-use gents::eval::report::SlotClass;
-use gents::eval::runner::{
+use gents::eval::OutcomeKind;
+use gents_eval::report::SlotClass;
+use gents_eval::runner::{
     is_fresh, EvidenceRecord, GoalEntry, InFlight, LiveSnapshot, Progress, RunView, SCHEMAS_GOAL,
     STALE_WINDOW,
 };
-use gents::eval::OutcomeKind;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Screen {

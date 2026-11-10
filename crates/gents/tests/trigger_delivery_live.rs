@@ -353,8 +353,7 @@ async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> R
     let lanes = delivery_lanes()?;
     let artifacts = artifact_directory("burst")?;
     let home =
-        gents::eval::runner::embedded::EmbeddedHome::create_retained(&artifacts.join("home"))
-            .await?;
+        gents::runtime::embedded::EmbeddedHome::create_retained(&artifacts.join("home")).await?;
     let db = support::test_db_from_home(home);
     let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
     let owner = identity.did().to_owned();

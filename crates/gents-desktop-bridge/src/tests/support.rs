@@ -164,7 +164,7 @@ pub struct RunningDesktop {
     pub runtime: gents_desktop_core::test_fixtures::ServedRuntimeHome,
     pub lead: gents_protocol::agent_identity::AgentIdentityBinding,
     pub provider: super::streaming_backend::MockStreamingBackend,
-    running: Option<gents::eval::runner::embedded::RunningRuntime>,
+    running: Option<gents::runtime::embedded::RunningRuntime>,
     _directory: TempDir,
 }
 

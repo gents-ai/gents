@@ -26,7 +26,7 @@ pub fn is_restricted_field(collection: &str, field: &str) -> bool {
         .any(|(c, f)| *c == collection && *f == field)
 }
 
-pub(crate) fn collect_filter_field_keys(value: &Value, out: &mut Vec<String>) {
+pub fn collect_filter_field_keys(value: &Value, out: &mut Vec<String>) {
     match value {
         Value::Object(map) => {
             for (key, nested) in map {
