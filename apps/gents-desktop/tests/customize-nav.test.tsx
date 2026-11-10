@@ -147,6 +147,15 @@ const labels = () =>
     .filter((name) => name !== undefined);
 
 describe("customizing the nav", () => {
+  it("exposes the sidebar customization sheet as a modal dialog", () => {
+    panel();
+    act(() => openCustomizeNav());
+    expect(screen.getByRole("dialog", { name: "Customize sidebar" })).toHaveAttribute(
+      "aria-modal",
+      "true",
+    );
+  });
+
   it("draws the default items until the person customizes them", () => {
     panel();
     expect(labels()).toEqual(["New session", "Mailbox", "Sessions"]);

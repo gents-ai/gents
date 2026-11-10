@@ -733,6 +733,8 @@ jobs:
         if: env.SIGNING_ENABLED == 'true'
         env:
           GENTS_SIGNED_UNNOTARIZED_CANDIDATE: ${{ env.NOTARIZATION_ENABLED == 'false' && 'true' || 'false' }}
+          GENTS_UMAMI_ENDPOINT: ${{ vars.GENTS_UMAMI_ENDPOINT }}
+          GENTS_UMAMI_WEBSITE_ID: ${{ vars.GENTS_UMAMI_WEBSITE_ID }}
           APPLE_SIGNING_IDENTITY: ${{ env.SIGNING_IDENTITY_NAME }}
           APPLE_API_KEY: ${{ secrets.MACOS_NOTARY_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}

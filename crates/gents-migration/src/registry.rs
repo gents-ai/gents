@@ -505,6 +505,18 @@ static BASELINE_SCHEMAS: &[BaselineCollection<'static>] = &[
         gents_protocol::schemas::NETWORK_ENROLLMENT_GRANT
     ),
     baseline_entry!(
+        gents_protocol::schemas::ENROLLMENT_RENEWAL_POLICY_NAME,
+        gents_protocol::schemas::ENROLLMENT_RENEWAL_POLICY
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::ENROLLMENT_RENEWAL_INTENT_NAME,
+        gents_protocol::schemas::ENROLLMENT_RENEWAL_INTENT
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::ENROLLMENT_RENEWAL_OFFER_NAME,
+        gents_protocol::schemas::ENROLLMENT_RENEWAL_OFFER
+    ),
+    baseline_entry!(
         gents_protocol::schemas::FILE_INVENTORY_REQUEST_NAME,
         gents_protocol::schemas::FILE_INVENTORY_REQUEST
     ),

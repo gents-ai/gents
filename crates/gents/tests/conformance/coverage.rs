@@ -500,6 +500,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "PackPlacementReaderCases",
         ),
         (
+            !snapshot.agent_target_access_cases.is_empty(),
+            "agent_target_access_cases",
+            "AgentTargetAccessCases",
+        ),
+        (
             !snapshot.native_route_cases.is_empty(),
             "native_route_cases",
             "NativeRouteCases",

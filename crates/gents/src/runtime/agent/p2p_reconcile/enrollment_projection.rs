@@ -1,38 +1,56 @@
 use std::collections::BTreeMap;
 
-use anyhow::{Context, Result};
-use defra_node::QueryResponse;
-use gents::runtime::agent::p2p_reconcile::enrollment::{
+use super::enrollment::{
     DurableEnrollmentDocuments, EnrollmentOffer as PureOffer, EnrollmentRequest as PureRequest,
     NetworkAdminPin as PureAdminPin,
 };
-use gents::store::graphql::rows;
-use gents::NodeIdentity;
+use crate::store::graphql::rows;
+use crate::NodeIdentity;
+use anyhow::{Context, Result};
+use defra_node::QueryResponse;
 use gents_protocol::enrollment::{
     decode_offer, enrollment_schema_fingerprint, EnrollmentDecisionRecord, EnrollmentRequestRecord,
 };
 use p2p::iroh::parse_public_peer_addr;
 use serde_json::Value;
 
-use super::super::super::principal_identity::PrincipalIdentity;
-use super::reconcile::{ApprovedStatusEnrollment, DesktopApprovalProjection};
-use super::rows::{
+use super::enrollment_rows::{
     to_pure_decision, to_pure_offer, to_pure_receipt, to_pure_request, to_pure_revision,
     EnrollmentDecisionRow, EnrollmentRequestRow, EnrollmentRevisionRow, EnrollmentRouteReceiptRow,
 };
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApprovedStatusEnrollment {
+    pub network_id: String,
+    pub request_id: String,
+    pub server_peer: String,
+    pub server_ticket: String,
+    pub admin_did: String,
+    pub owner_node: String,
+    pub request_digest: String,
+    pub authorization_sequence: u64,
+    pub authorization_expires_at: String,
+    pub decided_at: String,
+}
+
+pub enum DesktopApprovalProjection {
+    Routed(Box<ApprovedStatusEnrollment>),
+    CurrentWithoutRoute,
+    Absent,
+}
 
 #[expect(
     clippy::too_many_arguments,
     reason = "the projection reads each enrollment row set separately"
 )]
-pub(super) async fn project_desktop_approval(
+pub async fn project_desktop_approval(
     request_row: &EnrollmentRequestRow,
     request_rows: &[EnrollmentRequestRow],
     decision_rows: &[EnrollmentDecisionRow],
     revision_rows: &[EnrollmentRevisionRow],
     receipt_rows: &[EnrollmentRouteReceiptRow],
     pins: &BTreeMap<String, Vec<String>>,
-    principal: &PrincipalIdentity,
+    principal: &dyn NodeIdentity,
     local_peer_id: &str,
 ) -> Result<DesktopApprovalProjection> {
     let request = request_row.to_record()?;
@@ -163,16 +181,14 @@ pub(super) async fn project_desktop_approval(
 
 // The reconciler and the active-request listing must derive approval from
 // this same assembly, or they can disagree about the same signed documents.
-pub(super) struct DurableEnrollmentProjection {
-    pub(super) documents: DurableEnrollmentDocuments,
-    pub(super) offer: PureOffer,
-    pub(super) request: PureRequest,
-    pub(super) decisions: Vec<(EnrollmentDecisionRecord, bool)>,
+pub struct DurableEnrollmentProjection {
+    pub documents: DurableEnrollmentDocuments,
+    pub offer: PureOffer,
+    pub request: PureRequest,
+    pub decisions: Vec<(EnrollmentDecisionRecord, bool)>,
 }
 
-pub(super) fn listing_revision_rows(
-    response: &QueryResponse,
-) -> Result<Vec<EnrollmentRevisionRow>> {
+pub fn listing_revision_rows(response: &QueryResponse) -> Result<Vec<EnrollmentRevisionRow>> {
     Ok(rows::<Value>(response, "NetworkAuthorizationRevision")?
         .into_iter()
         .filter_map(|raw| {
@@ -186,9 +202,9 @@ pub(super) fn listing_revision_rows(
 // A foreign candidate request that fails to decode or verify must not fail
 // the whole listing; the assembly propagates same-server rows so the
 // reconciler can turn them into per-scope conflicts.
-pub(super) async fn listing_assembly_requests(
+pub async fn listing_assembly_requests(
     request_rows: &[EnrollmentRequestRow],
-    principal: &PrincipalIdentity,
+    principal: &dyn NodeIdentity,
 ) -> Vec<EnrollmentRequestRow> {
     let mut contained = Vec::new();
     for row in request_rows {
@@ -215,14 +231,14 @@ pub(super) async fn listing_assembly_requests(
     clippy::too_many_arguments,
     reason = "the projection reads each enrollment row set separately"
 )]
-pub(super) async fn assemble_durable_enrollment_documents(
+pub async fn assemble_durable_enrollment_documents(
     offer: &gents_protocol::enrollment::EnrollmentOfferRecord,
     request: &EnrollmentRequestRecord,
     admin_did: &str,
     request_rows: &[EnrollmentRequestRow],
     decision_rows: &[EnrollmentDecisionRow],
     revision_rows: &[EnrollmentRevisionRow],
-    principal: &PrincipalIdentity,
+    principal: &dyn NodeIdentity,
     local_peer_id: &str,
 ) -> Result<DurableEnrollmentProjection> {
     let pure_offer = to_pure_offer(offer, true);

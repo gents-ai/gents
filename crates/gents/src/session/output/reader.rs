@@ -41,30 +41,6 @@ pub(crate) async fn load_canonical_message_in_txn(
     .await
 }
 
-/// The resolved header and the exact segment rows its reconstruction consumed.
-pub(crate) async fn load_canonical_message_segments_in_txn(
-    txn: &ConfigApplyTxn<'_>,
-    header_doc_id: &str,
-    node_did: &str,
-    requester_did: Option<&str>,
-) -> Result<(
-    gents_protocol::output::TranscriptMessage,
-    Vec<gents_protocol::output::rows::OutputSegmentRow>,
-)> {
-    let reconstructed = reconstruct_scoped_message_with_facts(
-        ReadAccess::Txn(txn),
-        header_doc_id,
-        node_did,
-        requester_did,
-        &mut ReadCache {
-            source_reads: true,
-            ..ReadCache::default()
-        },
-    )
-    .await?;
-    Ok((reconstructed.header.message, reconstructed.segments))
-}
-
 /// Its cache is a transaction snapshot. A publication that appends exactly
 /// one segment and header may consume it through `load_created_message`,
 /// which reads the two new rows under ACP and invalidates coordinate checks.
@@ -218,6 +194,25 @@ impl<'a, 'txn> TxnCanonicalReader<'a, 'txn> {
         }
         self.observe_headers(std::slice::from_ref(&header));
         self.load_message(header_doc_id).await
+    }
+
+    /// The resolved header and the exact segment rows its reconstruction consumed.
+    pub(crate) async fn load_message_segments(
+        &mut self,
+        header_doc_id: &str,
+    ) -> Result<(
+        gents_protocol::output::TranscriptMessage,
+        Vec<gents_protocol::output::rows::OutputSegmentRow>,
+    )> {
+        let reconstructed = reconstruct_scoped_message_with_facts(
+            ReadAccess::Txn(self.txn),
+            header_doc_id,
+            self.node_did,
+            self.requester_did,
+            &mut self.cache,
+        )
+        .await?;
+        Ok((reconstructed.header.message, reconstructed.segments))
     }
 
     pub(crate) async fn load_message(

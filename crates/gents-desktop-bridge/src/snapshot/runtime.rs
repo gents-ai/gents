@@ -296,6 +296,11 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
             let chat_refusal = peer.chat_refusal();
             let chat_safe = chat_refusal.is_none();
             let pairing_ready = Some(peer.pairing_ready);
+            let lease_expires_at = peer
+                .is_enrollment()
+                .then(|| peer.enrollment_authorization_expires_at.clone())
+                .flatten();
+            let operator_access = peer.operator_graphql().is_some();
             let node_readiness = project_node_readiness(
                 store.node_readiness(&peer.node_did),
                 &peer.node_did,
@@ -315,6 +320,8 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 chat_safe,
                 chat_refusal: chat_refusal.map(Into::into),
                 pairing_ready,
+                lease_expires_at,
+                operator_access,
                 last_error: status.and_then(|status| status.last_error.clone()),
                 node,
                 node_config,
@@ -359,6 +366,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
             &deployment.node_did,
         );
     }
+    super::runtime_tasks::apply_scoped_originating_tasks(&mut deployments);
     deployments.sort_by(|left, right| left.label.cmp(&right.label));
 
     DesktopRuntimeSnapshot {
@@ -378,6 +386,12 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
             (!dids.is_empty()).then_some(dids)
         },
         deployments,
+        ended_access: core
+            .ended_access()
+            .await
+            .into_iter()
+            .map(Into::into)
+            .collect(),
     }
 }
 
@@ -764,6 +778,7 @@ mod agent_environment_tests {
             latest_request_id: None,
             task_id: None,
             task_name: None,
+            task_origin: None,
             trigger_id: None,
             trigger_kind: None,
             created_at: None,

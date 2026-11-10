@@ -11,7 +11,7 @@ use super::compaction_entries::{
     compaction_key, validate_compaction_chain, CompactionGenerationRow,
 };
 use super::history::sequence_message_key;
-use super::output::reader::load_canonical_message_segments_in_txn;
+use super::output::reader::TxnCanonicalReader;
 use super::sessions::ensure_session_in_txn;
 use crate::store::config_client::agent_session::{
     load_agent_session_owner_in_txn, load_agent_session_row_in_txn,
@@ -829,6 +829,21 @@ async fn fork_in_txn(
         &source_compactions,
     )?;
 
+    let mut retained_segments = Vec::with_capacity(retained.len());
+    {
+        let mut reader =
+            TxnCanonicalReader::new(txn, params.caller_node_did, params.caller_requester_did);
+        reader.observe_headers(&headers);
+        for origin in &retained {
+            let (resolved, segments) = reader.load_message_segments(&origin.doc_id).await?;
+            anyhow::ensure!(
+                resolved == origin.message,
+                "fork origin header changed or conflicts during dependency validation"
+            );
+            retained_segments.push(segments);
+        }
+    }
+
     anyhow::ensure!(
         ensure_session_in_txn(
             txn,
@@ -868,19 +883,8 @@ async fn fork_in_txn(
     let mut copied_closures = BTreeSet::new();
     let mut copied_tools = BTreeSet::new();
 
-    for origin in &retained {
+    for (origin, segments) in retained.iter().zip(&retained_segments) {
         copied_tools.extend(message_tool_references(&origin.message));
-        let (resolved, segments) = load_canonical_message_segments_in_txn(
-            txn,
-            &origin.doc_id,
-            params.caller_node_did,
-            params.caller_requester_did,
-        )
-        .await?;
-        anyhow::ensure!(
-            resolved == origin.message,
-            "fork origin header changed or conflicts during dependency validation"
-        );
         let child_header = fork_header(
             origin.doc_id.clone(),
             child,
@@ -912,7 +916,7 @@ async fn fork_in_txn(
             if !copied_closures.insert(logical.clone()) {
                 continue;
             }
-            for record in fork_closure_records(&segments, logical)? {
+            for record in fork_closure_records(segments, logical)? {
                 if let gents_protocol::output::OutputSource::ToolCall { tool_call_doc_id } =
                     &record.segment.source
                 {

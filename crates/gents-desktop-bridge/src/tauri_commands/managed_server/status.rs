@@ -43,7 +43,11 @@ where
     };
     let port = match state.policy.node_home.as_deref() {
         Some(node_home) => {
-            observe_port_readiness(node_home, user_status_signer(state).await.as_ref()).await?
+            observe_port_readiness(
+                node_home,
+                user_status_signer(state, node_home).await.as_ref(),
+            )
+            .await?
         }
         None => PortReadiness::NotListening,
     };
