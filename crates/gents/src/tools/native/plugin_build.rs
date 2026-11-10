@@ -55,7 +55,7 @@ pub async fn run_plugin_build(
         &CommandConstraints {
             allowed_argv_prefixes: Vec::new(),
             forbidden_argv_prefixes: Vec::new(),
-            network_mode: CommandNetworkMode::Inherit,
+            network_mode: CommandNetworkMode::Disabled,
             execution_mode: CommandExecutionMode::WorkspaceWrite,
             sandbox: CommandExecutionMode::WorkspaceWrite,
             deny_all_argv: false,
