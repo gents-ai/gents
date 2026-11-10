@@ -22,6 +22,14 @@ pub trait ToolEffectDispatcher: Send + Sync {
         name: &'a str,
         arguments: &'a str,
     ) -> BoxFuture<'a, Result<ToolOutcome, ToolEffectError>>;
+
+    /// Settle the children the invocation left unfinished once it has stopped
+    /// with `stop`. A stopped invocation drops its in-flight child call, so no
+    /// child reaches its own terminal write; its owner calls this before the
+    /// invocation's own terminal.
+    fn settle_stopped<'a>(&'a self, _stop: &'a ToolOutcome) -> BoxFuture<'a, Result<(), String>> {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 tokio::task_local! {

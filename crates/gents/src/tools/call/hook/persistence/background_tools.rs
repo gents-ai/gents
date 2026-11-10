@@ -228,6 +228,7 @@ impl DefraSessionHook {
         } else {
             None
         };
+        let stopped_children = dispatcher.clone();
 
         let node = self.node.clone();
         let live_outputs = self.background_live_outputs.clone();
@@ -316,6 +317,18 @@ impl DefraSessionHook {
             ))
             .catch_unwind()
             .await;
+
+            // Cancellation, lifetime expiry and a guest failure all drop the
+            // in-flight child call, so its row is settled here, before the
+            // background owner publishes its own terminal.
+            if let Some(children) = stopped_children {
+                let panicked = crate::tools::call::lifecycle::ToolOutcome::Cancelled;
+                let stop = execution.as_ref().unwrap_or(&panicked);
+                if let Err(error) = children.settle_stopped(stop).await {
+                    tracing::warn!(%error, tool_call_id = %lifecycle.tool_call_id(),
+                        "background invocation left an unsettled child");
+                }
+            }
 
             finish_background_execution(
                 lifecycle,

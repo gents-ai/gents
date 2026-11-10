@@ -209,6 +209,88 @@ impl ToolCallLifecycle {
         &self.tool_call_id
     }
 
+    /// Terminalize one child whose invocation stopped before the child reached
+    /// its own terminal write.
+    pub(crate) async fn settle_interrupted_plugin_effect(
+        &mut self,
+        cause: super::CancelCause,
+    ) -> Result<()> {
+        match self.state {
+            ToolCallState::Pending => self.cancel_before_dispatch(cause).await?,
+            ToolCallState::Running
+                if cause == super::CancelCause::Deadline
+                    || self.is_deadline_expired(Utc::now()) =>
+            {
+                self.timeout().await?;
+            }
+            ToolCallState::Running => {
+                self.cancel_during_run(cause).await?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Settle the foreground children this stopped invocation left pending or
+    /// running, returning their internal ids. A stopped invocation drops its
+    /// in-flight child call, and a drop between a child's admission commit and
+    /// its registration leaves a row no in-memory owner knows, so the children
+    /// are read from the durable rows. A background child (an asynchronous
+    /// receipt, an adopted job) keeps its own owner.
+    pub(crate) async fn settle_unfinished_plugin_effects(
+        &self,
+        cause: super::CancelCause,
+    ) -> Result<Vec<String>> {
+        let parent = self
+            .doc_id()
+            .context("stopped plugin parent lacks physical identity")?;
+        let request = self
+            .request_doc_id
+            .as_deref()
+            .context("stopped plugin parent lacks request binding")?;
+        let scope = gents_protocol::session::session_scope_filter(
+            &self.node_did,
+            &self.session_id,
+            self.requester_did.as_deref(),
+        );
+        let rows = self
+            .access()?
+            .execute(&format!(
+                r#"{{ AgentToolCall(filter: {{ {scope}, request_doc_id: {{ _eq: "{}" }},
+                    plugin_parent_tool_call_doc_id: {{ _eq: "{}" }},
+                    lifecycle_state: {{ _in: ["pending", "running"] }},
+                    await_mode: {{ _eq: "foreground" }} }}) {{ _docID }} }}"#,
+                escape_graphql_string(request),
+                escape_graphql_string(parent)
+            ))
+            .await?;
+        let rows = rows["data"]["AgentToolCall"]
+            .as_array()
+            .context("unfinished plugin effect lookup omitted rows")?;
+        let mut settled = Vec::with_capacity(rows.len());
+        for row in rows {
+            let doc = row["_docID"]
+                .as_str()
+                .context("unfinished plugin effect lacks physical identity")?;
+            let Some(mut child) = Self::load_by_doc_id_as(
+                self.node.clone(),
+                self.actor.clone(),
+                doc,
+                &self.node_did,
+                &self.session_id,
+                self.requester_did.as_deref(),
+            )
+            .await?
+            else {
+                continue;
+            };
+            child.inherit_signer(self)?;
+            child.settle_interrupted_plugin_effect(cause).await?;
+            settled.push(child.tool_call_id.clone());
+        }
+        Ok(settled)
+    }
+
     pub(super) async fn start_running_plugin_effect(&mut self) -> Result<()> {
         self.start_running_canonical_with_time(None).await
     }

@@ -2236,19 +2236,7 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
                 }
                 _ => crate::tools::call::lifecycle::CancelCause::Interrupted,
             };
-            match current.state() {
-                crate::tools::call::lifecycle::ToolCallState::Pending => {
-                    current.cancel_before_dispatch(cause).await?
-                }
-                crate::tools::call::lifecycle::ToolCallState::Running => {
-                    if cause == crate::tools::call::lifecycle::CancelCause::Deadline {
-                        current.timeout().await?;
-                    } else {
-                        current.cancel_during_run(cause).await?;
-                    }
-                }
-                _ => {}
-            }
+            current.settle_interrupted_plugin_effect(cause).await?;
             self.in_flight_lifecycles.lock().await.remove(internal_id);
             Ok(())
         }
@@ -2257,6 +2245,38 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
             self.effect_lifecycles.lock().await.remove(internal_id);
         }
         result.map_err(|error| format!("cannot settle plugin effect: {error:#}"))
+    }
+
+    async fn settle_tool_effects(
+        &self,
+        parent_internal_id: &str,
+        stop: &gents_loop::tool_call_lifecycle::ToolOutcome,
+    ) -> Result<(), String> {
+        let Some(parent) = self
+            .in_flight_lifecycles
+            .lock()
+            .await
+            .get(parent_internal_id)
+            .cloned()
+        else {
+            return Ok(());
+        };
+        let cause = match stop {
+            gents_loop::tool_call_lifecycle::ToolOutcome::TimedOut { .. } => {
+                crate::tools::call::lifecycle::CancelCause::Deadline
+            }
+            _ => crate::tools::call::lifecycle::CancelCause::Interrupted,
+        };
+        let settled = parent
+            .settle_unfinished_plugin_effects(cause)
+            .await
+            .map_err(|error| format!("cannot settle plugin effects: {error:#}"))?;
+        for internal_id in settled {
+            self.effect_tool_calls.lock().await.remove(&internal_id);
+            self.effect_lifecycles.lock().await.remove(&internal_id);
+            self.in_flight_lifecycles.lock().await.remove(&internal_id);
+        }
+        Ok(())
     }
 
     async fn pending_steering_inputs(

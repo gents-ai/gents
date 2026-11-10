@@ -1493,7 +1493,7 @@ where
                                 tools: tools.clone(),
                                 hook: hook.clone(),
                                 parent_internal_id: internal_call_id.clone(),
-                                fatal: tokio::sync::Mutex::new(None),
+                                fatal: tokio::sync::Mutex::new(None), composed: Default::default(),
                             })
                         });
                         let execution = if suppressed {

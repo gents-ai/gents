@@ -1619,6 +1619,116 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
     }
 }
 
+struct StoppingParent;
+
+impl ToolDyn for StoppingParent {
+    fn name(&self) -> String {
+        "plugin".into()
+    }
+
+    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
+        Box::pin(async move {
+            ToolDefinition {
+                name: "plugin".into(),
+                description: "stops while its child is in flight".into(),
+                parameters: serde_json::json!({"type": "object"}),
+            }
+        })
+    }
+
+    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+        Box::pin(async move {
+            let dispatcher = gents_loop::tool_effects::current().expect("live dispatcher");
+            // A script that exhausts its own allowance drops the child call it awaits.
+            let stopped = tokio::time::timeout(
+                std::time::Duration::from_millis(200),
+                dispatcher.call(1, "stall", "{}"),
+            )
+            .await;
+            assert!(stopped.is_err(), "the child outlives the script");
+            Err(ToolError::ReportedFailure {
+                class: crate::tools::call::lifecycle::FailureClass::External,
+                text: "the plugin exceeded its wall-clock budget".into(),
+            })
+        })
+    }
+}
+
+struct Stall;
+
+impl ToolDyn for Stall {
+    fn name(&self) -> String {
+        "stall".into()
+    }
+
+    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
+        Box::pin(async move {
+            ToolDefinition {
+                name: "stall".into(),
+                description: "never answers".into(),
+                parameters: serde_json::json!({"type": "object"}),
+            }
+        })
+    }
+
+    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+        Box::pin(std::future::pending())
+    }
+}
+
+#[tokio::test]
+async fn a_script_that_stops_mid_child_settles_the_child_and_the_request_finishes() {
+    let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(StoppingParent), Box::new(Stall)];
+    let stream = run_loop_stream(
+        ScriptedModel::new_turns(plugin_call_then_text_turns()),
+        Some(hook.clone()),
+        TaggedMessage::unassociated(Message::user("compose")),
+        Vec::new(),
+        Arc::new(tools),
+        owned_config(4),
+    );
+    let collected = crate::tools::call::lifecycle::runtime::scope_request_tool_execution(
+        Some(chrono::Utc::now() + chrono::Duration::seconds(60)),
+        tokio_util::sync::CancellationToken::new(),
+        Box::pin(collect_owned_scripted_stream(
+            stream,
+            &hook,
+            &writer,
+            &mut lifecycle,
+            gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+        )),
+    )
+    .await;
+    assert!(collected.error.is_none(), "{:?}", collected.error);
+    assert_eq!(collected.final_text.as_deref(), Some("seen"));
+    let rows = lifecycle
+        .access()
+        .unwrap()
+        .execute("query { AgentToolCall { tool_name lifecycle_state cancel_cause } }")
+        .await
+        .unwrap();
+    let rows = rows["data"]["AgentToolCall"].as_array().unwrap().clone();
+    let state = |name: &str| {
+        rows.iter()
+            .find(|row| row["tool_name"] == name)
+            .map(|row| row["lifecycle_state"].as_str().unwrap().to_owned())
+    };
+    assert_eq!(state("stall").as_deref(), Some("cancelled"), "{rows:?}");
+    assert_eq!(state("plugin").as_deref(), Some("failed"), "{rows:?}");
+    // With the child still running, normal completion is refused with ForegroundRunning.
+    let selection = writer.terminal_output(&lifecycle.request().doc_id).await;
+    lifecycle
+        .terminalize_owned(
+            crate::request::lifecycle::RequestTerminalOutcome::Completed,
+            selection,
+            None,
+        )
+        .await
+        .expect("the request completes once its script's child is settled");
+    node.shutdown().await.expect("node shutdown");
+}
+
 struct ParallelReadProbe {
     gate: Arc<tokio::sync::Barrier>,
     second_finished: Arc<tokio::sync::Notify>,

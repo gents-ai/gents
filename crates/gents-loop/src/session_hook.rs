@@ -85,6 +85,16 @@ pub trait SessionHook: Send + Sync {
         Ok(())
     }
 
+    /// Terminalize every child `parent_internal_id` left pending or running in
+    /// the foreground when it stopped with `stop`.
+    async fn settle_tool_effects(
+        &self,
+        _parent_internal_id: &str,
+        _stop: &ToolOutcome,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
     /// Only writer-acknowledged candidates may enter the provider projection.
     async fn pending_steering_inputs(
         &self,
