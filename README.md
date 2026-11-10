@@ -17,8 +17,10 @@ existing profile (replace `PROFILE_ID` below):
 ```sh
 gents config pack build ./packs/gents/web --out gents.web.pack
 gents config pack install ./gents.web.pack --grant-authority --inference-slot web_researcher=PROFILE_ID
-gents -p "Find the current official guidance on ..." --agent web-researcher
+gents -p "Find the current official guidance on ..." --agent <agent-did>
 ```
+
+The install prints the DID it gave the `web-researcher` agent under `apply.agents`; pass it as `<agent-did>`.
 
 Use a Gents build with plugin HTTP rounds and native pack services. To install a prebuilt artifact, skip the build command. After
 publication, use `gents/web` in place of the archive path. Source builds

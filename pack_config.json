@@ -1,7 +1,7 @@
 {
   "agents": [
     {
-      "agent_id": "web-researcher",
+      "agent_slot": "web-researcher",
       "context_id": "web-researcher-context",
       "display_name": "Web researcher",
       "inference_profile_id": "gents:inference-slot:web_researcher"

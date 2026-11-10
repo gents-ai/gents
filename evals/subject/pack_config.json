@@ -2,7 +2,7 @@
   "node": {},
   "agents": [
     {
-      "agent_id": "browser",
+      "agent_slot": "browser",
       "display_name": "Browser eval subject",
       "context_id": "browser",
       "inference_profile_id": "gents:inference-slot:browser"
