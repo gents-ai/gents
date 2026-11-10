@@ -198,6 +198,22 @@ async fn trusted_ux_create_schema(
     })
 }
 
+/// The schema a page document's create is signed against: the application
+/// collection as the node the page was read from holds it, read again on each
+/// call. A page has no installed pack to verify against, so the node that
+/// supplied the page and its grants also supplies the schema; native
+/// validation of the signed graph refuses one that is not the collection's.
+/// A Gents-managed collection is never signed for a page.
+async fn page_create_schema(access: &ConfigAccess, collection: &str) -> Result<String> {
+    anyhow::ensure!(
+        !crate::store::schema::migration::DEFAULT_REGISTRY
+            .managed_names()
+            .any(|managed| managed == collection),
+        "a page writes application collections only; {collection} is managed by Gents"
+    );
+    crate::pack::authoring::export::collection_sdl(access, collection).await
+}
+
 fn has_runtime_fill(entry: &SurfaceToolDecl) -> bool {
     match entry {
         SurfaceToolDecl::Create(decl) => decl.fields.iter().any(|field| field.fill.is_some()),
@@ -255,7 +271,11 @@ pub async fn call(home: &Path, access: &ConfigAccess, request: UxDataCall) -> Re
                 .declared_by(Some(surface.clone()))
                 .with_visible_surface_owner(node_did.clone());
             if matches!(access, ConfigAccess::Graphql(_)) {
-                let schema = trusted_ux_create_schema(home, &listing, &decl.collection).await?;
+                let schema = if listing.door == crate::plugin::ux::UxDoor::Document {
+                    page_create_schema(access, &decl.collection).await?
+                } else {
+                    trusted_ux_create_schema(home, &listing, &decl.collection).await?
+                };
                 tool = tool.with_ux_client_schema(schema);
             }
             Tool::call(&tool, BoundedWriteParams(args)).await?

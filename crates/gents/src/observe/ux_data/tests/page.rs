@@ -180,3 +180,64 @@ async fn a_page_document_is_read_under_the_callers_own_access() {
     );
     fixture.node.shutdown().await.expect("node shutdown");
 }
+
+#[tokio::test]
+async fn a_page_document_creates_through_the_desktops_remote_access() {
+    let fixture = Fixture::new().await;
+    fixture.write_page(fixture.board_page(true)).await;
+    let page = fixture
+        .access
+        .execute("{ Page(filter: {page_id: {_eq: \"board\"}}) { _docID } }")
+        .await
+        .unwrap();
+    fixture
+        .access
+        .add_actor_relationship(
+            "Page",
+            page["data"]["Page"][0]["_docID"].as_str().unwrap(),
+            "reader",
+            &fixture.client_did,
+        )
+        .await
+        .unwrap();
+    let request = |tool: &str, args: Value| UxDataCall {
+        ux: PAGE.into(),
+        node_did: fixture.node_did.clone(),
+        surface: "board".into(),
+        tool: tool.into(),
+        args,
+    };
+    let created = call(
+        fixture.home.path(),
+        &fixture.client_access,
+        request("add_task", json!({"title": "From the desktop", "lane": "doing"})),
+    )
+    .await
+    .unwrap();
+    assert_eq!(created["kind"], "create");
+    let listed = call(
+        fixture.home.path(),
+        &fixture.client_access,
+        request("list_tasks", json!({})),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        listed["output"]["results"],
+        json!([{"title": "From the desktop", "lane": "doing"}])
+    );
+
+    fixture.write_page(fixture.board_page(false)).await;
+    let disabled = call(
+        fixture.home.path(),
+        &fixture.client_access,
+        request("add_task", json!({"title": "After disable", "lane": "doing"})),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        format!("{disabled:#}").contains("is disabled"),
+        "{disabled:#}"
+    );
+    fixture.node.shutdown().await.expect("node shutdown");
+}
