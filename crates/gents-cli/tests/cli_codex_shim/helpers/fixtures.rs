@@ -424,6 +424,8 @@ impl AgentShim {
     }
 
     /// Clones the default agent with no restart, and returns once it is published.
+    /// A new Agent holds no WorkspaceRoot reader, so the User grants the one the
+    /// clone receipt names, as its `user_command` says.
     pub(super) async fn add_agent(&self, display_name: &str) -> Result<String> {
         let cloned = run_cli_json(
             &self.home_dir,
@@ -444,6 +446,26 @@ impl AgentShim {
             .as_str()
             .context("clone output missing agent_did")?
             .to_string();
+        let access = &cloned["host_root_access"];
+        if access["state"] == "waiting_for_user" {
+            let root = access["published_root"]
+                .as_str()
+                .with_context(|| format!("no published root covers the clone: {cloned}"))?;
+            run_cli_json(
+                &self.home_dir,
+                &[
+                    "config",
+                    "workspace-root",
+                    "grant-reader",
+                    "--graphql",
+                    &self.graphql,
+                    "--path",
+                    root,
+                    "--agent-did",
+                    &agent,
+                ],
+            )?;
+        }
         self.wait_until_runnable(&agent, None).await?;
         Ok(agent)
     }
