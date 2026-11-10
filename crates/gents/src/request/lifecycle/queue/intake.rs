@@ -175,11 +175,16 @@ pub(crate) fn steer_reachable(
     Err(SteerAdmissionRefusal::Blocked)
 }
 
+/// `unanswered` is the claim selection of a head that resumed its retry
+/// parent's durable progress. Lean `CurrentInput.answersSelection`: that head
+/// answers none of it, and `QueuedSteering.boundaryCandidate` keeps later
+/// steers behind the one it leaves queued.
 pub(crate) async fn steering_snapshot(
     node: &std::sync::Arc<EmbeddedNode>,
     head: &AgentRequest,
     verifier: &crate::request::admission::AgentRequestAdmissionVerifier,
     agent_identity: Option<&dyn crate::store::identity::NodeIdentity>,
+    unanswered: &[String],
 ) -> Result<gents_loop::loop_stream::SteeringSnapshot> {
     let rows = crate::store::config_client::ConfigAccess::transact_local_readonly(
         node,
@@ -200,6 +205,9 @@ pub(crate) async fn steering_snapshot(
             break;
         }
         let id = row.doc_id.clone().unwrap_or_default();
+        if unanswered.contains(&id) {
+            break;
+        }
         let request = AgentRequest::try_from(row.clone())?;
         let verified = match agent_identity {
             Some(identity) if identity.did() == head.agent_did => {
@@ -255,10 +263,13 @@ pub(crate) async fn steering_inputs(
     head: &AgentRequest,
     verifier: &crate::request::admission::AgentRequestAdmissionVerifier,
     agent_identity: Option<&dyn crate::store::identity::NodeIdentity>,
+    unanswered: &[String],
 ) -> Result<Vec<gents_loop::loop_stream::FoldedPrompt>> {
-    Ok(steering_snapshot(node, head, verifier, agent_identity)
-        .await?
-        .inputs)
+    Ok(
+        steering_snapshot(node, head, verifier, agent_identity, unanswered)
+            .await?
+            .inputs,
+    )
 }
 
 pub(crate) async fn pending_ids_in_txn(

@@ -39,7 +39,7 @@ The runtime's own records are documents too, so what any agent did is data you c
 
 ## How you build
 
-- Start from the database. An application is usually collections, datastore tools and a page, with a schedule or trigger where it must run on its own. Build it live on this node, testing each piece as you add it and removing what you tried and dropped; put it in a pack once it works. Use an agent where judgment is needed, and write a plugin only for logic the rest can't express.
+- Start from the database. An application is usually collections, datastore tools and a page, with a schedule or trigger where it must run on its own. Build it live on this node, testing each piece as you add it and removing what you tried and dropped; put it in a pack once it works. Use an agent where judgment is needed, and a plugin where logic must be exact: rules, calculations, validation.
 - Give yourself whatever the job needs: tools, packs, agents and access to start them. Drop what you no longer use if your tools get crowded. Tell the user what you added.
 - When a request is open-ended, build a small working version and show it. Ask first only when a choice is the user's to make or a mistake would be costly, and offer alternatives with their costs.
 - Hand off work that stands alone, such as a plugin, a page or an independent check of what you built. Keep the decisions and the final integration yourself.

@@ -1591,6 +1591,7 @@ async fn active_client_steer_rechecks_its_own_author_at_atomic_consumption() {
         lifecycle.request(),
         &verifier,
         Some(agent.as_ref()),
+        &[],
     )
     .await
     .unwrap();
@@ -1612,6 +1613,7 @@ async fn active_client_steer_rechecks_its_own_author_at_atomic_consumption() {
         lifecycle.request(),
         &verifier,
         Some(agent.as_ref()),
+        &[],
     )
     .await
     .unwrap();

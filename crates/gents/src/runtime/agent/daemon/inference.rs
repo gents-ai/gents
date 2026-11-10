@@ -291,6 +291,15 @@ where
                         self.request_admission.clone(),
                         self.agent_config.agent_identity.clone(),
                         lifecycle.natural_finish_allowed(),
+                        if resume_from_history {
+                            lifecycle
+                                .folded_selection()
+                                .iter()
+                                .map(|selected| selected.request_doc_id.clone())
+                                .collect()
+                        } else {
+                            Vec::new()
+                        },
                     );
                     let hook = match &self.job_driver {
                         Some(driver) => hook.with_job_driver(driver.clone()),
