@@ -21,6 +21,7 @@ mod hosted;
 pub(crate) use documents::{prepare_document_pack_archive_with_provisioner, sdl_paths};
 mod removal;
 pub use catalog::{installed_catalog, InstalledCatalogEntry};
+pub use declared_access::declared_readers;
 pub use documents::{
     apply_hosted_document_graph, apply_prepared_dependency_schemas, assemble_document_graph_report,
     document_pack_schema_paths, hosted_document_graph, install_documents_with_plugins,

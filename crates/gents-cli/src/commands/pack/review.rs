@@ -1,8 +1,9 @@
-//! What `pack install --preview` reports so a person can review an install
-//! before it writes: the pack's identity, the documents it would write, the
-//! collections its schemas declare, what its plugins ask of the host and the
-//! inference its slots need. Each is read from its owner; nothing here decides
-//! whether the install may go on.
+//! What `config pack install --preview` reports so a person can review an
+//! install before it writes: the pack's identity, the documents it would
+//! write, the collections its schemas declare, the access policy its documents
+//! declare, what its plugins ask of the host and the inference its slots need.
+//! Each is read from its owner; nothing here decides whether the install may
+//! go on.
 
 use anyhow::{Context, Result};
 use gents::pack::{PackInferenceBindingPreview, PackInferenceBindings, PackManifest};
@@ -242,6 +243,12 @@ pub(super) fn documents(config: &gents::documents::PackConfig) -> Result<Vec<Val
                 "name": field("display_name").or_else(|| field("name")),
                 "content": content(document.collection, &document.add)?,
             });
+            if let Some((field, readers)) =
+                gents::pack::declared_readers(document.collection, &document.add)
+                    .filter(|(_, readers)| !readers.is_empty())
+            {
+                item["declared_access"] = json!({ "field": field, "readers": readers });
+            }
             if document.collection == gents::Collection::DatastoreToolSurface {
                 let tools: Vec<&str> = config
                     .datastore_tool_surfaces
@@ -253,6 +260,24 @@ pub(super) fn documents(config: &gents::documents::PackConfig) -> Result<Vec<Val
                 item["tools"] = json!(tools);
             }
             Ok(item)
+        })
+        .collect()
+}
+
+/// The access policy the pack declares on the documents it would write: for
+/// each document that grants readers, the field and the readers it names, as
+/// the declared-access owner reads them.
+pub(super) fn declared_access(documents: &[Value]) -> Value {
+    documents
+        .iter()
+        .filter_map(|document| {
+            let declared = document.get("declared_access")?;
+            Some(json!({
+                "collection": document["collection"],
+                "id": document["id"],
+                "field": declared["field"],
+                "readers": declared["readers"],
+            }))
         })
         .collect()
 }
@@ -391,6 +416,33 @@ mod tests {
             .unwrap()
             .values()
             .all(|value| !value.is_null()));
+    }
+
+    #[test]
+    fn a_pack_reports_the_access_policy_its_documents_declare() {
+        let archive = fixture("placement_fixture");
+        let config = gents::pack::load_pack_authoring_config(
+            archive.manifest(),
+            &gents::pack::PackInstallOptions {
+                node_did: "did:key:zReviewOwner".into(),
+            },
+            &|path| Ok(archive.asset(path)?.to_vec()),
+            &|_| None,
+        )
+        .unwrap();
+        let documents = authored_documents(&config).unwrap();
+        assert_eq!(
+            declared_access(&documents),
+            json!([{
+                "collection": "RepositoryPlacement",
+                "id": "placement-fixture-repository",
+                "field": "readers",
+                "readers": [
+                    "gents:agent-slot:fixture-writer",
+                    "gents:agent-slot:fixture-reviewer",
+                ],
+            }])
+        );
     }
 
     fn without_content(document: &Value) -> Value {

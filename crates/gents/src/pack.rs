@@ -49,8 +49,8 @@ pub(crate) use inference::{
 pub(crate) use installation::record_plugin_store_change_as_with_node_binding;
 pub use installation::{
     apply_hosted_document_graph, apply_prepared_dependency_schemas, assemble_document_graph_report,
-    document_pack_schema_paths, ensure_plugins_unreferenced, hosted_document_graph,
-    install_documents_with_plugins, install_prepared_document_graph,
+    declared_readers, document_pack_schema_paths, ensure_plugins_unreferenced,
+    hosted_document_graph, install_documents_with_plugins, install_prepared_document_graph,
     install_prepared_document_pack, installed_catalog, installed_pack_documents, installed_packs,
     list_installed_packs, plugin_data_unique_keys, prepare_document_pack_archive,
     prepare_document_pack_archive_with_runtime, prepare_document_pack_install,

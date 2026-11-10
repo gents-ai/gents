@@ -958,6 +958,7 @@ fn pack_install_preview_reports_the_review_and_writes_nothing() -> Result<()> {
     let preview = run_cli_json(
         temp.path(),
         &[
+            "config",
             "pack",
             "install",
             dir_arg(&pack),
@@ -974,7 +975,8 @@ fn pack_install_preview_reports_the_review_and_writes_nothing() -> Result<()> {
             && preview["kind"] == "documents"
             && preview["would_write"] == false
             && preview["collections"] == serde_json::json!(["FixtureJob"])
-            && preview["authority"] == serde_json::json!([]),
+            && preview["authority"] == serde_json::json!([])
+            && preview["declared_access"] == serde_json::json!([]),
         "the preview does not report the review: {preview}"
     );
     let documents = preview["documents"]
@@ -993,7 +995,7 @@ fn pack_install_preview_reports_the_review_and_writes_nothing() -> Result<()> {
         gents::pack::read_home_install(&home, "fixture/documents_fixture")?.is_none(),
         "a preview installed the pack"
     );
-    let shown = run_cli_json(temp.path(), &["pack", "show", dir_arg(&pack)])?;
+    let shown = run_cli_json(temp.path(), &["config", "pack", "show", dir_arg(&pack)])?;
     anyhow::ensure!(
         shown["digest"] == preview["digest"],
         "the previewed digest is not the pack's: {preview} {shown}"
@@ -1065,6 +1067,7 @@ fn pack_install_preview_reports_the_slots_still_to_bind() -> Result<()> {
     let pack = two_slot_dependee(temp.path())?;
     let install = |extra: &[&str]| {
         let mut args = vec![
+            "config",
             "pack",
             "install",
             dir_arg(&pack),
@@ -1165,6 +1168,7 @@ fn pack_install_preview_reports_the_collections_it_shares() -> Result<()> {
     copy_dir_all(&fixture_pack_dir("documents_fixture"), &pack)?;
     let install = |extra: &str| {
         let mut args = vec![
+            "config",
             "pack",
             "install",
             dir_arg(&pack),
@@ -1206,6 +1210,7 @@ fn pack_install_preview_reports_the_binding_it_chooses_itself() -> Result<()> {
     let preview = run_cli_json(
         temp.path(),
         &[
+            "config",
             "pack",
             "install",
             dir_arg(&fixture_pack_dir("documents_fixture")),

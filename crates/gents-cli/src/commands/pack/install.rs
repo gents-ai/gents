@@ -153,6 +153,7 @@ async fn install_documents_pack_resolved_inner(
             "origin_tag": origin_tag,
             "dependencies": pack.manifest().metadata.dependencies,
             "kind": pack.manifest().metadata.kind,
+            "declared_access": super::review::declared_access(&documents),
             "documents": documents,
             "collections": super::review::collections(pack.manifest(), |path| {
                 Ok(pack.asset(path)?.to_vec())
