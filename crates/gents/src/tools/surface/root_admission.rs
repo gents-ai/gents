@@ -310,6 +310,31 @@ pub async fn agent_tool_root_reader(
         .await
 }
 
+/// The agents the installed pack `coordinate` ships whose Tools select host
+/// tools under a published root, each with the root it needs reader on, as
+/// `access`'s actor sees them. A User grants each with
+/// [`grant_workspace_root_reader`](super::grant_workspace_root_reader); an
+/// agent that installed the pack reports [`reader_grant_step`] instead.
+pub async fn pack_agent_root_readers(
+    access: &crate::store::config_client::ConfigAccess,
+    node_did: &str,
+    coordinate: &str,
+) -> Result<Vec<(String, ToolRootReader)>> {
+    let mut readers = Vec::new();
+    for (collection, agent_did) in
+        crate::pack::installed_pack_documents(access, node_did, coordinate).await?
+    {
+        if collection != crate::Collection::Agent {
+            continue;
+        }
+        match agent_tool_root_reader(access, node_did, &agent_did).await? {
+            ToolRootReader::NotNeeded => {}
+            reader => readers.push((agent_did, reader)),
+        }
+    }
+    Ok(readers)
+}
+
 /// The step a Node administrator takes so `agent_did` may run host tools under
 /// a published root. WorkspaceRoot `reader` is managed only by the Node's owner
 /// and administrators (`workspace_roots.reader_manager`), so an Agent creating

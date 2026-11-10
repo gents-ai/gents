@@ -281,6 +281,39 @@ pub(crate) fn requested_authority(
     Ok(super::review::identity_and_authority(manifest, dependencies)?["authority"].take())
 }
 
+/// Grants each agent the installed pack `coordinate` ships with host tools
+/// reader on the published WorkspaceRoot covering its tool root, as the User
+/// holding `access`: a new agent lacks that grant, only a User makes it, and
+/// without it the runtime reports the agent unavailable. Returns what each
+/// agent was granted, or the root nothing published covers.
+pub(crate) async fn grant_pack_root_readers(
+    access: &ConfigAccess,
+    owner: &str,
+    coordinate: &str,
+) -> Result<Vec<Value>> {
+    use gents::tools::surface::ToolRootReader;
+    let mut granted = Vec::new();
+    for (agent, reader) in
+        gents::tools::surface::pack_agent_root_readers(access, owner, coordinate).await?
+    {
+        granted.push(match reader {
+            ToolRootReader::Published(root) => {
+                gents::tools::surface::grant_workspace_root_reader(access, &root, &agent)
+                    .await
+                    .with_context(|| format!("granting {agent} reader on {root}"))?;
+                json!({"agent": agent, "reader_on": root})
+            }
+            ToolRootReader::Unpublished(root) => json!({
+                "agent": agent,
+                "unpublished_root": root,
+                "next": format!("gents config workspace-root set --path {root} --reader-agent {agent}"),
+            }),
+            ToolRootReader::NotNeeded => continue,
+        });
+    }
+    Ok(granted)
+}
+
 /// Attaches the Skill documents the installed pack `coordinate` (archive
 /// `digest`) ships to `agent`'s Context, through the transaction a wire
 /// writes with. Returns the skills the pack ships.

@@ -714,6 +714,14 @@ async fn prepare_document_pack_archive_inputs(
     )
     .await?;
     let root = root.with_variables(captured.into_inner().unwrap_or_else(|e| e.into_inner()));
+    let mut config = loaded.config;
+    default_host_tool_roots(
+        access,
+        owner,
+        provisioner.and_then(|context| context.selected_agent_did),
+        &mut config,
+    )
+    .await?;
     prepare_document_pack_install_inner(
         loaded.installation_doc_id,
         loaded.agent_bindings,
@@ -722,7 +730,7 @@ async fn prepare_document_pack_archive_inputs(
         access,
         owner,
         archive.manifest(),
-        &loaded.config,
+        &config,
         requested,
         dependencies,
         installed_via,
@@ -735,6 +743,78 @@ async fn prepare_document_pack_archive_inputs(
         overrides,
     )
     .await
+}
+
+/// A pack cannot name a folder on the node it will be installed on, so a pack
+/// Tools document that selects host tools without a root takes its
+/// installer's: the tool root of the installing agent, or of the node's
+/// default agent when the node's User installs. The root is still admitted by
+/// the node's WorkspaceRoot policy when the agent runs, and the agent still
+/// needs the User's reader grant on the published root that covers it
+/// ([`crate::tools::surface::pack_agent_root_readers`]). With no such root to
+/// take, the document is left as the pack wrote it.
+async fn default_host_tool_roots(
+    access: &ConfigAccess,
+    owner: &str,
+    installer: Option<&str>,
+    config: &mut PackConfig,
+) -> Result<()> {
+    let mut rootless = Vec::new();
+    for (index, tools) in config.tools.iter().enumerate() {
+        let unset = tools.host.as_ref().is_some_and(|host| {
+            host.root
+                .as_deref()
+                .is_none_or(|root| root.trim().is_empty())
+        });
+        if unset
+            && crate::tools::surface::ResolvedToolSelection::from_document(tools)?
+                .requires_filesystem_root()
+        {
+            rootless.push(index);
+        }
+    }
+    if rootless.is_empty() {
+        return Ok(());
+    }
+    let root = access
+        .transact_readonly("pack.default_tool_root", |txn| {
+            Box::pin(async move {
+                let agent = match installer {
+                    Some(agent) => Some(agent.to_owned()),
+                    None => crate::store::config_client::read_desired_state_record_in_txn(
+                        txn,
+                        crate::Collection::Node,
+                        owner,
+                        owner,
+                    )
+                    .await?
+                    .and_then(|(_, node)| {
+                        node.get("default_agent_did")
+                            .and_then(serde_json::Value::as_str)
+                            .map(ToOwned::to_owned)
+                    }),
+                };
+                let Some(agent) = agent else {
+                    return Ok::<_, anyhow::Error>(None);
+                };
+                Ok(
+                    crate::documents::load_agent_tools_in_txn(txn, owner, &agent)
+                        .await?
+                        .and_then(|tools| tools.host)
+                        .and_then(|host| host.root)
+                        .filter(|root| !root.trim().is_empty()),
+                )
+            })
+        })
+        .await?;
+    if let Some(root) = root {
+        for index in rootless {
+            if let Some(host) = config.tools[index].host.as_mut() {
+                host.root = Some(root.clone());
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The installed root's live configuration, read before an upgrade so the

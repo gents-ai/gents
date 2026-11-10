@@ -220,6 +220,11 @@ async fn install_one(
     .await;
     let attached = async {
         installed?;
+        let host_tool_roots = command::wire::grant_pack_root_readers(&access, &owner, &coordinate)
+            .await
+            .with_context(|| {
+                format!("{pack} is installed, but its agents were not granted their tool root")
+            })?;
         let wired = if wire {
             command::wire_pack_plugins_consenting(
                 &access,
@@ -247,7 +252,7 @@ async fn install_one(
         .with_context(|| {
             format!("{pack} is installed, but its skills were not attached to the Engineer")
         })?;
-        Ok::<_, anyhow::Error>((wired, skills))
+        Ok::<_, anyhow::Error>((wired, skills, host_tool_roots))
     }
     .await;
     if let Some(node) = access.local_node() {
@@ -256,7 +261,7 @@ async fn install_one(
         }
     }
     drop(access);
-    let (wired, skills) = attached?;
+    let (wired, skills, host_tool_roots) = attached?;
     Ok(Outcome::Installed(json!({
         "pack": coordinate,
         "version": source.manifest().version,
@@ -264,6 +269,7 @@ async fn install_one(
         "granted_permissions": if grant { requested } else { json!([]) },
         "wired": wired,
         "skills": skills,
+        "host_tool_roots": host_tool_roots,
     })))
 }
 
@@ -622,7 +628,8 @@ mod tests {
                             "inference_profile_id": "gents:inference-slot:worker"}],
                         "contexts": [{"context_id": "crew-context", "system_prompt": "Work.",
                             "tools_id": "crew-tools"}],
-                        "tools": [{"tools_id": "crew-tools", "display_name": "No tools"}],
+                        "tools": [{"tools_id": "crew-tools", "display_name": "Read-only files",
+                            "host": {"files": {"mode": "ReadOnly"}}}],
                         "agent_targets": [{"agent_did": "gents:agent-slot:crew-worker",
                             "name": "crew-worker", "target_id": "crew-worker",
                             "target_node_did": "${GENTS_PACK_NODE_DID}",
@@ -666,6 +673,49 @@ mod tests {
         let config = engineer_config(&access, &owner, home.path(), &engineer)
             .await
             .unwrap();
+
+        // The pack's agent runs host tools under the Engineer's tool root:
+        // its Tools took that root at install, and reading as itself it finds
+        // the published root that covers it, which is what the runtime's
+        // execution boundary asks for.
+        let engineer_root = initialized["tool_root"].as_str().unwrap();
+        let granted = &report["installed"][0]["host_tool_roots"];
+        assert_eq!(granted.as_array().map(Vec::len), Some(1), "{report}");
+        let worker = granted[0]["agent"].as_str().unwrap().to_owned();
+        let node = access.local_node().unwrap().clone();
+        let stored = crate::home_state::read_init_config(home.path())
+            .unwrap()
+            .unwrap();
+        let runtime =
+            crate::home_state::load_initialized_home_identity(home.path(), &stored).unwrap();
+        let binding =
+            crate::commands::inference_binding::load_bound_agent_binding(&node, &owner, &worker)
+                .await
+                .unwrap();
+        let worker_identity =
+            gents::store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
+        let as_worker = gents::ConfigAccess::local_managed_agent(
+            node,
+            identity::Did::new(&worker).unwrap(),
+            worker_identity.as_ref(),
+        )
+        .unwrap();
+        let reader = gents::tools::surface::agent_tool_root_reader(&as_worker, &owner, &worker)
+            .await
+            .unwrap();
+        let gents::tools::surface::ToolRootReader::Published(published) = reader else {
+            panic!("the pack's agent reads no published root covering its tool root: {reader:?}")
+        };
+        assert_eq!(granted[0]["reader_on"], published.as_str(), "{report}");
+        assert!(
+            std::path::Path::new(engineer_root).starts_with(&published)
+                || std::fs::canonicalize(engineer_root)
+                    .unwrap()
+                    .starts_with(&published),
+            "{engineer_root} is not under {published}"
+        );
+        drop(as_worker);
+
         let call = |call: Value| {
             let config = &config;
             async move {

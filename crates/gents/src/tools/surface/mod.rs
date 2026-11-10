@@ -64,7 +64,7 @@ pub use root_admission::{
     refuse_too_broad_root, resolve_configured_tool_root, TooBroadRoot, WorkspaceRootDocument,
     WorkspaceRootPolicy,
 };
-pub use root_admission::{agent_tool_root_reader, ToolRootReader};
+pub use root_admission::{agent_tool_root_reader, pack_agent_root_readers, ToolRootReader};
 pub(crate) use root_admission::{
     load_workspace_root_policy_in_txn, published_root_covering_in_txn, reader_grant_step,
     resolve_admitted_tool_root, tools_root_reader_in_txn, RootExecutionGuard,

@@ -764,6 +764,21 @@ pub(super) async fn install_documents_command_with_local(
             local.as_ref(),
         )
         .await?;
+        if !args.preview {
+            let readers = wire::grant_pack_root_readers(
+                &access,
+                &owner,
+                &format!(
+                    "{}/{}",
+                    pack.manifest().metadata.namespace,
+                    pack.manifest().name
+                ),
+            )
+            .await?;
+            if !readers.is_empty() {
+                output["host_tool_roots"] = readers.into();
+            }
+        }
         if !args.wire.is_empty() && !args.preview && args.scope.graphql.is_none() {
             output["wired"] = wire_pack_plugins(&access, &owner, &home, pack, &args.wire)
                 .await?

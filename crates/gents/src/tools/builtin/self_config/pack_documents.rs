@@ -106,8 +106,26 @@ impl PackInstaller {
         let (receipt, effective) = packs
             .install_documents(distribution, &dependencies, &prepared, edited)
             .await?;
+        // Reader on a published root is the User's to grant, so an agent the
+        // pack ships with host tools waits for it; the receipt names the step.
+        let host_root_access = crate::tools::surface::pack_agent_root_readers(
+            &access,
+            self.core.node_did(),
+            &distribution.coordinate(),
+        )
+        .await?
+        .into_iter()
+        .map(|(agent, reader)| {
+            let published = match &reader {
+                crate::tools::surface::ToolRootReader::Published(root) => Some(root.as_str()),
+                _ => None,
+            };
+            crate::tools::surface::reader_grant_step(&agent, published, prior.is_none())
+        })
+        .collect::<Vec<_>>();
         ordered! {
             "effect": "The document pack is installed.",
+            "host_root_access": (!host_root_access.is_empty()).then_some(&host_root_access),
             "effective": effective,
             "install": without_empty_lists(serde_json::to_value(&receipt)?),
             "granted_authority": authority,
