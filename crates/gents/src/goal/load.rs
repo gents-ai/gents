@@ -61,17 +61,15 @@ pub async fn load_canonical_goal_in_txn(
     else {
         return Ok(None);
     };
-    let session_doc_id = escape_graphql_string(&session.doc_id);
-    let node_did = escape_graphql_string(node_did);
-    let session_id = escape_graphql_string(session_id);
-    let response = txn
-        .execute(&format!(
-            r#"{{ Goal(filter: {{
-        node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{session_id}" }},
-        session_doc_id: {{ _eq: "{session_doc_id}" }}
-    }}) {{ {GOAL_FIELDS} }} }}"#
-        ))
-        .await?;
+    use gents_protocol::document_query::{fields::goal as fields, Filter, Query, Selection};
+    let rendered = Query::select(Selection::owned(GOAL_FIELDS))
+        .filter(
+            Filter::eq(fields::NODE_DID, node_did)
+                .and(Filter::eq(fields::SESSION_ID, session_id))
+                .and(Filter::eq(fields::SESSION_DOC_ID, &session.doc_id)),
+        )
+        .render();
+    let response = txn.run(&rendered).await?;
     let mut goals: Vec<GoalDocument> = serde_json::from_value(
         response
             .pointer("/data/Goal")

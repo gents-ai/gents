@@ -10,7 +10,6 @@ use crate::request::lifecycle::{
     RequestIdentity, RequestLifecycle, RequestSigner, RequestSpec,
 };
 use crate::store::config_client::ConfigAccess;
-use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::NodeIdentity;
 
 #[derive(Deserialize)]
@@ -34,6 +33,9 @@ pub(super) async fn install(
     evaluator: &dyn NodeIdentity,
     agent_identity: &dyn NodeIdentity,
 ) -> Result<()> {
+    use gents_protocol::document_query::{
+        fields::agent_request as request, Filter, Query, Selection,
+    };
     let trial_did = home.did();
     let fixture: ExpiredClientRequest = serde_json::from_value(document.clone())
         .context("decoding expired client request fixture")?;
@@ -80,11 +82,12 @@ pub(super) async fn install(
         agent_identity,
     )?;
     let response = agent
-        .execute(&format!(
-            "{{ AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}, limit: 2) {{ {} }} }}",
-            escape_graphql_string(&fixture.request_id),
-            crate::SIGNED_REQUEST_FIELDS
-        ))
+        .read(
+            &Query::select(Selection::owned(crate::SIGNED_REQUEST_FIELDS))
+                .filter(Filter::eq(request::REQUEST_ID, &fixture.request_id))
+                .limit(2)
+                .render(),
+        )
         .await?;
     let rows = response["data"]["AgentRequest"]
         .as_array()

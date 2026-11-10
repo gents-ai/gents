@@ -14,7 +14,6 @@ use crate::eval::OutcomeKind;
 use crate::request::lifecycle::{
     build_signed_client_request, ExecutionOrigin, RequestIdentity, RequestSigner, RequestSpec,
 };
-use crate::store::graphql::escape_graphql_string;
 use crate::ConfigAccess;
 
 /// How long a seed stage without its own deadline waits for a trigger to fire
@@ -156,12 +155,15 @@ pub(super) async fn fired_request(
     node_did: &str,
     doc_id: &str,
 ) -> Result<Option<String>> {
-    let query = format!(
-        r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, caused_by_source_doc_id: {{ _eq: "{}" }} }}, order: {{ created_at: ASC }}) {{ request_id }} }}"#,
-        escape_graphql_string(node_did),
-        escape_graphql_string(doc_id)
-    );
-    let response = access.execute(&query).await?;
+    use gents_protocol::document_query::{
+        fields::agent_request as fields, Direction, Filter, Query, Selection,
+    };
+    let query = Query::select(Selection::new().field(fields::REQUEST_ID))
+        .filter(Filter::eq(fields::NODE_DID, node_did))
+        .filter(Filter::eq(fields::CAUSED_BY_SOURCE_DOC_ID, doc_id))
+        .order_by(fields::CREATED_AT, Direction::Asc)
+        .render();
+    let response = access.read(&query).await?;
     Ok(response
         .get("data")
         .and_then(|data| data.get("AgentRequest"))
