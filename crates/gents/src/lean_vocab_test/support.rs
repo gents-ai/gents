@@ -436,6 +436,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) request_lifecycle_operator_ui_cases: Vec<LeanClientShellCase>,
     pub(crate) client_live_delta_cases: Vec<serde_json::Value>,
     pub(crate) runtime_session_selection_cases: Vec<serde_json::Value>,
+    pub(crate) runtime_configuration_admission_cases: Vec<serde_json::Value>,
     pub(crate) runtime_reconcile_cases: Vec<LeanRuntimeReconcileCase>,
     pub(crate) client_agent_readiness_cases: Vec<LeanClientAgentReadinessCase>,
     pub(crate) startup_readiness_cases: Vec<LeanStartupReadinessCase>,
