@@ -164,7 +164,7 @@ pub(super) async fn install(
     .context("installing the trial inference binding")?;
     install_pack_documents(&access, &node_did, &identity, &config, DriftPolicy::Refuse)
         .await
-        .context("installing the trial pack")?;
+        .context(TRIAL_PACK_INSTALL)?;
     access
         .transact_write("eval.trial.grant_self_configuration", |txn| {
             let node_did = &node_did;
@@ -568,6 +568,11 @@ async fn install_session_fixture(
         })
     }).await
 }
+
+/// The trial node is the runner's own, holding only the inference binding
+/// and identities it installed, and the runner takes no drift decision: a
+/// refusal over an existing document is settled in the pack, not by a flag.
+const TRIAL_PACK_INSTALL: &str = "installing the trial pack; the eval runner takes no --overwrite or --keep, so a document the pack ships that the trial node already holds with other content (the runner installs the trial's inference binding itself) must be renamed in or dropped from the pack";
 
 pub(super) async fn install_schema(access: &ConfigAccess, sdl: &str) -> Result<()> {
     let plan = crate::store::config_client::preview_schema_install(access, sdl).await?;
