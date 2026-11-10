@@ -10,7 +10,7 @@ use gents_protocol::enrollment::{
     decode_offer, derive_decision_id, derive_revision_id, derive_route_receipt_id,
     enrollment_schema_fingerprint, AuthorizationRevisionKind as WireRevisionKind,
     AuthorizationRevisionRecord, EnrollmentDecisionKind as WireDecisionKind,
-    EnrollmentDecisionRecord, EnrollmentRequestRecord,
+    EnrollmentDecisionRecord, EnrollmentRenewalPolicy, EnrollmentRequestRecord,
     EnrollmentRouteReceiptDirection as WireReceiptDirection, EnrollmentRouteReceiptRecord,
     DEFAULT_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS, ENROLLMENT_PROTOCOL_VERSION,
 };
@@ -304,12 +304,6 @@ pub struct GraphqlEnrollmentStore {
     identity: Arc<dyn NodeIdentity>,
     decision_lock: Arc<Mutex<()>>,
     fail_closed: Arc<FailClosedLog>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct EnrollmentRenewalPolicy {
-    pub enabled: bool,
-    pub lease_seconds: Option<u64>,
 }
 
 #[derive(Deserialize)]

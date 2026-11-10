@@ -187,7 +187,10 @@ test("a page landing while the reader scrolls is not put back with a write until
     Object.assign(window, { __writes: writes });
   });
 
-  await panel.hover();
+  /* the scroller, not the panel: hovering the panel, taller than the view,
+     scrolls it into view near the top before any wheel, and the page that
+     move asks for lands and is put back before the reader scrolls */
+  await page.locator('[data-slot="scroll-area-viewport"][data-following]').hover();
   for (let i = 0; i < 60; i += 1) {
     await page.mouse.wheel(0, -120);
     await page.waitForTimeout(40);
