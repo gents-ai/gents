@@ -2260,6 +2260,21 @@ async fn ux_preview_explains_itself_and_names_a_missing_plugin() {
     )
     .await;
     assert!(unknown.contains("options.viewport only"), "{unknown}");
+    // A host file outside the agent's tool root is not read as a draft: this
+    // agent has no file tools and no root.
+    let outside = tempfile::tempdir().unwrap();
+    let draft = outside.path().join("plugin.js");
+    std::fs::write(&draft, "export default {}").unwrap();
+    let host_file = refused(
+        &tools,
+        json!({"argv":["ux","preview",draft.to_string_lossy()]}),
+    )
+    .await;
+    assert!(
+        host_file.contains("not a plugin.js this agent may read")
+            && host_file.contains("effective tool root"),
+        "{host_file}"
+    );
 }
 
 #[tokio::test]

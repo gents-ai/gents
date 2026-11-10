@@ -15,7 +15,7 @@ const HELP: &str = r#"ux preview: render a UX plugin's page in the real sandbox 
 
   ux preview PLUGIN [--viewport WxH]
 
-PLUGIN is a listing id (page/ID for a page document), a plugin's or page's name, or a path to a plugin.js; a path previews that file under the grants of the installed plugin with the same id.
+PLUGIN is a listing id (page/ID for a page document), a plugin's or page's name, or a path to a plugin.js inside your tool root (file tools granted); a path previews that file under the grants of the installed plugin with the same id.
 The report names console errors, the visible text, elements clipped or past the viewport, CSS variables the sandbox does not define, low-contrast text, and each data call and its rows or error. It writes PNGs and report.json under the home.
 Example: {"argv":["ux","preview","examples/board_pack/board"]}"#;
 
@@ -52,30 +52,51 @@ impl ConfigCommandTool {
             .plugins
             .home()
             .context("this runtime has no plugin home")?;
-        let page = match ux::page::page_id(plugin) {
-            Some(_) => self.page_named(plugin).await?,
-            None if self.categories.contains("tools")
-                && preview::listing_named(home, plugin)?.is_none()
-                && !std::path::Path::new(plugin).is_file() =>
-            {
-                self.page_named(plugin).await?
-            }
-            None => None,
+        // A name the home lists or a page document needs no file access. Any
+        // other target is a draft file, read only inside the calling agent's
+        // effective tool root and only with its file-read grant, as pack
+        // authoring reads its files.
+        let listed =
+            ux::page::page_id(plugin).is_none() && preview::listing_named(home, plugin)?.is_some();
+        let page = if listed {
+            None
+        } else if ux::page::page_id(plugin).is_some() || self.categories.contains("tools") {
+            self.page_named(plugin).await?
+        } else {
+            None
+        };
+        let draft = if listed || page.is_some() {
+            None
+        } else {
+            let file = self
+                .authoring_paths("ux preview PATH", false)
+                .await
+                .and_then(|context| context.resolve_existing_file(plugin))
+                .with_context(|| {
+                    format!(
+                        "no ux plugin or page {plugin:?}, and it is not a plugin.js this agent may read: a draft path is read inside your effective tool root with file tools granted. [\"ux\",\"list\"] names the installed plugins and pages"
+                    )
+                })?;
+            Some(file.to_string_lossy().into_owned())
         };
         let target = match page {
             Some(page) => preview::PreviewTarget::page(&page)?,
             None => {
-                preview::resolve_target(home, plugin, |namespace, name| async move {
-                    let coordinate = format!("{namespace}/{name}");
-                    let record = self.plugins.resolve(&coordinate, None)?;
-                    let call = self.plugins.call(&record, producer_input()).await?;
-                    anyhow::ensure!(
-                        matches!(call.outcome.verdict, PluginVerdict::Success),
-                        "the ux producer {coordinate} did not succeed: {}",
-                        call.outcome.diagnostics
-                    );
-                    Ok(call.outcome.output)
-                })
+                preview::resolve_target(
+                    home,
+                    draft.as_deref().unwrap_or(plugin),
+                    |namespace, name| async move {
+                        let coordinate = format!("{namespace}/{name}");
+                        let record = self.plugins.resolve(&coordinate, None)?;
+                        let call = self.plugins.call(&record, producer_input()).await?;
+                        anyhow::ensure!(
+                            matches!(call.outcome.verdict, PluginVerdict::Success),
+                            "the ux producer {coordinate} did not succeed: {}",
+                            call.outcome.diagnostics
+                        );
+                        Ok(call.outcome.output)
+                    },
+                )
                 .await?
             }
         };
