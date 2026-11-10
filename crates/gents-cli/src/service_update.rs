@@ -184,8 +184,11 @@ pub(crate) async fn submit(args: ServiceUpdateArgs) -> Result<()> {
         // helper job. Re-register the same constrained job, never a second plan.
         let copy = plan.clone();
         tokio::task::spawn_blocking(move || {
-            NativeServiceManager::new(service_config(&copy)?)?
-                .register_updater(&operation_dir(&copy.home, copy.id), copy.id)
+            let directory = operation_dir(&copy.home, copy.id);
+            register_unless_helper_runs(&directory, || {
+                NativeServiceManager::new(service_config(&copy)?)?
+                    .register_updater(&directory, copy.id)
+            })
         })
         .await??;
         if receipt.phase == Phase::Registered {
@@ -240,6 +243,22 @@ where
         .await
 }
 
+/// A running helper holds its operation's lock from start through its terminal
+/// cleanup, and owns its registration until then: that cleanup removes the job
+/// definition, so re-registering beside it races the removal (`systemctl start`
+/// of a unit just deleted). Re-register only an operation whose helper is not
+/// running, holding the lock while doing so. Returns whether it registered.
+fn register_unless_helper_runs(
+    directory: &Path,
+    register: impl FnOnce() -> Result<()>,
+) -> Result<bool> {
+    let Ok(_helper) = files::lock(&directory.join("helper.lock")) else {
+        return Ok(false);
+    };
+    register()?;
+    Ok(true)
+}
+
 pub(crate) async fn status(home: Option<PathBuf>, id: uuid::Uuid) -> Result<()> {
     let home = resolve_home_dir(home.as_deref());
     let receipt = tokio::task::spawn_blocking(move || -> Result<Receipt> {
@@ -254,10 +273,9 @@ pub(crate) async fn status(home: Option<PathBuf>, id: uuid::Uuid) -> Result<()> 
                 plan.id == id && plan.home == std::fs::canonicalize(&home)?,
                 "update plan does not match home"
             );
-            if let Ok(_helper) = files::lock(&directory.join("helper.lock")) {
-                NativeServiceManager::new(service_config(&plan)?)?
-                    .register_updater(&directory, id)?;
-            }
+            register_unless_helper_runs(&directory, || {
+                NativeServiceManager::new(service_config(&plan)?)?.register_updater(&directory, id)
+            })?;
         }
         Ok(receipt)
     })

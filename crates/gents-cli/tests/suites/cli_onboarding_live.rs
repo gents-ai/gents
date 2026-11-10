@@ -632,10 +632,15 @@ mod no_model {
         let live = LiveBox::new()?;
         let held = HeldShimPort::serving(b"").await?;
         let folder = live.folder("data");
-        // A file where the store needs a folder stops init after it records key custody.
-        let blocker = folder.join("data/wal");
-        fs::create_dir_all(blocker.parent().context("the blocker has a parent")?)?;
-        fs::write(&blocker, "")?;
+        // An empty store folder nothing can be written into passes init's fresh-store
+        // check (any entry would make it an unknown store init refuses), then stops init
+        // after it records key custody, when the store is first written.
+        let blocker = folder.join("data");
+        fs::create_dir_all(&blocker)?;
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(&blocker, fs::Permissions::from_mode(0o555))?;
+        }
 
         let mut terminal = setup_of(&live, &folder, "midway")?;
         terminal.answer_root_and_server(NO_MODEL_ENDPOINT).await?;
@@ -644,20 +649,33 @@ mod no_model {
         ensure!(
             terminal
                 .transcript()
-                .contains("embedded DefraDB node for init"),
+                .contains("failed to open regolith store"),
             "this must fail after init records its key custody: {}",
             terminal.transcript()
         );
         ensure!(folder.join("init.json").is_file(), "custody is recorded");
         ensure!(!live.plist().exists(), "nothing is installed");
-        fs::remove_file(&blocker)?;
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(&blocker, fs::Permissions::from_mode(0o755))?;
+        }
 
+        // The rerun asks again, but the stop came after init reserved the fresh bootstrap,
+        // so it may not grant again (Lean `Identity.NodeProvisioning.
+        // bootstrap_crash_cannot_replay`): it names the explicit recovery and installs
+        // nothing.
         let mut rerun = setup_of(&live, &folder, "midway-rerun")?;
-        rerun
-            .answer_root_and_inference(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
-            .await?;
-        rerun.expect(ENDPOINT_TEXT, RUNTIME_UP).await?;
-        rerun.expect_exit(1).await?;
+        rerun.answer_root_and_server(NO_MODEL_ENDPOINT).await?;
+        let code = rerun.wait_exit(RUNTIME_UP).await?;
+        ensure!(code != 0, "{}", rerun.transcript());
+        ensure!(
+            rerun.transcript().contains(
+                "fresh home bootstrap was already attempted; explicit recovery is required"
+            ),
+            "a stopped bootstrap is not replayed: {}",
+            rerun.transcript()
+        );
+        ensure!(!live.plist().exists(), "nothing is installed");
 
         held.release().await;
         Ok(())
