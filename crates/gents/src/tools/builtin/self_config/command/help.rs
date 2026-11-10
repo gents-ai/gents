@@ -409,6 +409,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
                 "pack remove PACKAGE",
                 "pack scaffold NAME  options: namespace (default gents), kind (documents|assets|plugins), template, language, page (true adds a page)",
                 "pack add PART ID  options.dir: the pack (default tool root); PART: agent (options.slot), task (options.agent), trigger (options.task, options.on), schema (ID is the collection), skill (options.from), plugin (options.language or options.prebuilt), page",
+                "pack export NAME  options: IDs per kind (agent, context, tools, skill, compaction, datastore, agent-target, task, trigger, event-source, schedule), collection, tag, namespace; writes live documents and what they reference to a new pack at NAME",
                 "pack check [DIR]  every validation an install runs; reports unverified in problems' place, never full success",
                 "pack build [DIR]  compiles plugin source in the command sandbox, then writes the .pack beside DIR",
                 "pack test [DIR]  compiles plugin source and runs its tests/*.json cases in the command sandbox",

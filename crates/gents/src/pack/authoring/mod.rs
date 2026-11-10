@@ -19,6 +19,7 @@ pub use check::{
     CheckReport,
 };
 pub use edit::{PackAddition, PackEdit, PackPart};
+pub use export::{export_pack, selectable_kind, ExportReport, ExportSelection, SELECTABLE_KINDS};
 pub use inspect::{preview_config, verify_pack_file};
 pub use names::{pack_name, to_snake_case, Names};
 pub use scaffold::{scaffold, tool_markdown, write_plugin_source, ScaffoldInput, ScaffoldReport};
