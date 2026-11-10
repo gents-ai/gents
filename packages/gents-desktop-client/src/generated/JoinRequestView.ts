@@ -4,7 +4,7 @@
  * A request to join the node this desktop co-hosts, as its operator API
  * reports it; nothing here is enrollment authority.
  */
-export type JoinRequestView = { requestId: string, networkId: string, candidateDid: string, candidatePeer: string, ownerAgent: string, expiresAt: string,
+export type JoinRequestView = { requestId: string, networkId: string, candidateDid: string, candidatePeer: string, ownerNodeDid: string, expiresAt: string,
 /**
  * Absent from runtimes that predate request profiles.
  */

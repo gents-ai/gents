@@ -557,10 +557,13 @@ pub(in crate::tauri_commands) async fn co_hosted_runtime(
     let Some(node_home) = state.policy.node_home.clone() else {
         return Ok(None);
     };
-    let target = matching_external_server(&node_home, OperatorIdentityInteraction::Prevent)
-        .await?
-        .as_ref()
-        .and_then(pairing::pairing_target);
+    let target = matching_external_server(
+        &node_home,
+        user_status_signer(state, &node_home).await.as_ref(),
+    )
+    .await?
+    .as_ref()
+    .and_then(pairing::pairing_target);
     Ok(target
         .filter(|target| target.node_did == node_did.trim())
         .map(|target| (node_home, target)))

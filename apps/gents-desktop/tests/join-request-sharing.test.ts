@@ -30,7 +30,7 @@ const pending = (overrides: Partial<JoinRequestView> = {}): JoinRequestView => (
   networkId: "network-1",
   candidateDid: "did:key:z6MkCandidateLaptop",
   candidatePeer: "peer-1",
-  ownerAgent: "did:key:z6MkOwnerAgent",
+  ownerNodeDid: "did:key:z6MkOwnerNode",
   expiresAt: "2026-11-05T12:00:00Z",
   profile: "client",
   issuedAt: "2026-11-05T11:55:00Z",

@@ -15,7 +15,7 @@ pub struct JoinRequestView {
     pub network_id: String,
     pub candidate_did: String,
     pub candidate_peer: String,
-    pub owner_agent: String,
+    pub owner_node_did: String,
     pub expires_at: String,
     /// Absent from runtimes that predate request profiles.
     pub profile: Option<String>,
@@ -30,7 +30,7 @@ impl From<ManagedPendingEnrollment> for JoinRequestView {
             network_id: pending.network_id,
             candidate_did: pending.candidate_did,
             candidate_peer: pending.candidate_peer,
-            owner_agent: pending.owner_agent,
+            owner_node_did: pending.owner_node_did,
             expires_at: pending.expires_at,
             profile: pending.profile,
             issued_at: pending.issued_at,
