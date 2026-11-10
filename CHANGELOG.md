@@ -114,8 +114,10 @@ source consistency checks, not a separate runtime compatibility version.
   socket, `gents runtime server` no longer takes `--grok-shim`,
   `--grok-shim-socket-path` or `--grok-shim-agent-id`, and `config client set grok`
   is gone. On a home set to Grok, `gents` and `config client show` stop and name
-  the fix: run `gents config client set shell`, or `codex`. Grok as a model
-  provider, including `accounts login grok`, is unchanged.
+  the fix: run `gents config client set shell`, or `codex`. Agents' `config
+  discovery scan` no longer reads Grok CLI configuration and refuses a `grok`
+  source. Grok as a model provider, including `accounts login grok`, is
+  unchanged.
 - `gents` remembers the home setup chose. This also moves the desktop's default home.
 - The shim answers `config/read` for a directory inside the tool root as trusted, so
   Codex does not ask about it on every open. Outside the tool root Codex still asks.

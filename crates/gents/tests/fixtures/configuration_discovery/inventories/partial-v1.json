@@ -14,15 +14,15 @@
       "format_note": "Parsed subset: settings JSON, CLAUDE.md, MCP JSON, and SKILL.md; Claude precedence and permission semantics are not reproduced."
     },
     {
-      "source_id": "grok-user",
-      "kind": "grok",
+      "source_id": "codex-user",
+      "kind": "codex",
       "scope": "user",
-      "selected_root": "/synthetic/missing-grok",
+      "selected_root": "/synthetic/missing-codex",
       "outcome": "unavailable",
       "observed_files": 0,
       "observed_bytes": 0,
       "emitted_items": 0,
-      "format_note": "Parsed subset: config.toml, AGENTS.md, MCP JSON, and SKILL.md; Grok CLI/environment/managed precedence and permission semantics are not reproduced."
+      "format_note": "Parsed subset: config.toml, AGENTS.md, and SKILL.md; Codex layered configuration, requirements, trust, and policy semantics are not reproduced."
     }
   ],
   "items": [],
@@ -38,7 +38,7 @@
     },
     {
       "code": "missing_root",
-      "source_id": "grok-user",
+      "source_id": "codex-user",
       "relative_source_file": null,
       "safe_message": "selected source root is unavailable",
       "observed": null,
