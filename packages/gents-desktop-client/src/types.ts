@@ -254,6 +254,7 @@ export type { SessionGoalUnknownCause } from "./generated/SessionGoalUnknownCaus
 export type { GoalControlView } from "./generated/GoalControlView.js";
 export type { GoalControlAction } from "./generated/GoalControlAction.js";
 export type { GoalControlRequest } from "./generated/GoalControlRequest.js";
+export type { GoalRevision } from "./generated/GoalRevision.js";
 export type { GoalControlResult } from "./generated/GoalControlResult.js";
 export type { GoalSubmissionQuery } from "./generated/GoalSubmissionQuery.js";
 export type { GoalSubmissionReference } from "./generated/GoalSubmissionReference.js";
