@@ -63,58 +63,53 @@ async fn mcp_register_stores_an_https_endpoint_verbatim_and_refuses_secrets_in_t
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let node_home = tempdir.path().join("node-home");
     let service_id = format!("remote-mcp-{}", Uuid::new_v4().simple());
-    {
-        let node = initialized_node(tempdir.path(), &node_home, "mcp-register-https").await?;
-        ensure_runtime_schemas(&node).await?;
-        node.shutdown().await;
-    }
-    let node_home_text = node_home.to_str().context("node home utf8")?;
+    let fixture = McpFixture::new(tempdir.path(), &node_home, "mcp-register-https").await?;
     for refused in [
         "https://user:secret@mcp.example.com/mcp",
         "https://mcp.example.com/mcp?api_key=secret",
     ] {
-        let stderr = run_cli_failure_stderr(
-            tempdir.path(),
-            &[
+        let output = fixture
+            .run(&[
+                "config",
                 "mcp",
                 "register",
-                "--home",
-                node_home_text,
                 "--endpoint",
                 refused,
                 &service_id,
-            ],
-        )?;
+            ])
+            .await?;
+        assert!(!output.status.success(), "{refused} must be refused");
+        let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains("--endpoint"), "{stderr}");
         assert!(
             !stderr.contains("secret"),
             "the refusal must not echo the secret"
         );
     }
-    run_cli_text(
-        tempdir.path(),
-        &[
+    let output = fixture
+        .run(&[
+            "config",
             "mcp",
             "register",
-            "--home",
-            node_home_text,
             "--endpoint",
             "https://mcp.example.com/mcp",
             &service_id,
-        ],
-    )?;
-
-    let node = initialized_node(tempdir.path(), &node_home, "mcp-register-https-read").await?;
-    let query = format!(
-        r#"{{ ToolServiceRegistry(filter: {{ service_id: {{ _eq: "{service_id}" }} }}) {{
-            endpoint_url hostname lan_ip mcp_port mcp_path
-        }} }}"#
+        ])
+        .await?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
     );
-    let response = node.execute(&query).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
+    let query = format!(
+        r#"{{ ToolServiceRegistry(filter: {{ service_id: {{ _eq: "{}" }} }}) {{
+            endpoint_url hostname lan_ip mcp_port mcp_path
+        }} }}"#,
+        escape_graphql_string(&service_id)
+    );
+    let response = fixture.access.execute(&query).await?;
     let rows = response
-        .data
-        .as_ref()
+        .get("data")
         .and_then(|data| data.get("ToolServiceRegistry"))
         .and_then(Value::as_array)
         .context("registered rows")?;
@@ -130,6 +125,7 @@ async fn mcp_register_stores_an_https_endpoint_verbatim_and_refuses_secrets_in_t
             "{field} must be null"
         );
     }
+    fixture.node.shutdown().await?;
     Ok(())
 }
 

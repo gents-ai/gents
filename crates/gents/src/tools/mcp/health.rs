@@ -2015,6 +2015,7 @@ mod tests {
             lan_ip: String::new(),
             mcp_port: endpoint.port(),
             mcp_path: endpoint.path().into(),
+            endpoint_url: String::new(),
             send_node_did: true,
             updated_at: None,
         };

@@ -72,6 +72,7 @@ async fn mcp_register(args: McpRegisterArgs) -> Result<()> {
     access
         .transact_write("cli.mcp.register", |txn| {
             let node_did = &node_did;
+            let endpoint_url = &endpoint_url;
             Box::pin(async move {
                 use gents::documents::apply_desired_state_plan;
                 use gents::store::config_client::{

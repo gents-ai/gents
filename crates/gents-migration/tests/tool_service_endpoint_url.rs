@@ -45,7 +45,7 @@ async fn endpoint_url_extends_a_registry_created_before_it() {
     assert_eq!(retained["ToolServiceRegistry"][0]["_docID"], document);
     assert_eq!(retained["ToolServiceRegistry"][0]["mcp_port"], 9000);
     assert!(retained["ToolServiceRegistry"][0]["endpoint_url"].is_null());
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -64,5 +64,5 @@ async fn a_fresh_store_registers_the_current_registry_baseline() {
         .find(|entry| entry.name == "ToolServiceRegistry")
         .unwrap();
     assert_eq!(Some(version.version_id.as_str()), expected.expected_version);
-    fresh.shutdown().await;
+    fresh.shutdown().await.expect("shut down test node");
 }
