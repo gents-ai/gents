@@ -840,6 +840,11 @@ impl App {
         self.quit
     }
 
+    /// The session the center pane's tab shows, if it has one yet.
+    pub fn shown_session(&self) -> Option<&str> {
+        self.tabs[self.active].session.as_deref()
+    }
+
     pub fn ctx(&self) -> KeyCtx {
         match self.layers.last().map(|top| top.kind) {
             Some(LayerKind::Jump | LayerKind::Picker | LayerKind::Setup | LayerKind::Form) => {

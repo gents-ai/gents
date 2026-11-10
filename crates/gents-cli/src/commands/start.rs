@@ -64,24 +64,13 @@ pub(crate) async fn run(mut args: StartArgs, runtime: Handle) -> Result<()> {
             PUBLISH_WAIT,
         )
         .await?;
-        let opened_at = chrono::Utc::now();
-        let opened = crate::commands::shell::open(
-            &home,
-            agent.clone(),
-            args.prompt,
-            args.continue_session,
-            runtime,
-        )
-        .await;
-        print_continue_hint(
-            &home,
-            &config.node_did,
-            agent.as_deref(),
-            opened_at,
-            home_given.as_deref(),
-        )
-        .await;
-        return opened;
+        let shown =
+            crate::commands::shell::open(&home, agent, args.prompt, args.continue_session, runtime)
+                .await?;
+        if let Some(hint) = continue_hint(shown.as_deref(), home_given.as_deref()) {
+            eprintln!("{hint}");
+        }
+        return Ok(());
     };
     let graphql = ensure_graphql(&home).await?;
     let agent = chosen_agent(&home, &config, &args).await?;
@@ -131,56 +120,10 @@ fn ignored_client_setting_notice(path: &Path) -> String {
     )
 }
 
-/// Interfaces keep a session's history in Gents, so the newest session the window's opening
-/// agent took a turn in can be reopened with `--continue`. A shell tab on another agent is not
-/// counted. Best effort: a failed read prints nothing.
-async fn print_continue_hint(
-    home: &Path,
-    node_did: &str,
-    agent: Option<&str>,
-    opened_at: chrono::DateTime<chrono::Utc>,
-    home_flag: Option<&Path>,
-) {
-    let Ok(Some(graphql)) = answering_graphql(home).await else {
-        return;
-    };
-    let access = crate::config_writes::ConfigAccess::Graphql(graphql);
-    let agent = match agent {
-        Some(agent) => agent.to_owned(),
-        None => match yolo::default_agent(&access, node_did).await {
-            Ok(agent) => agent,
-            Err(_) => return,
-        },
-    };
-    let latest = crate::graphql_rows(
-        &access,
-        "AgentRequest",
-        &format!(
-            r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{}"}}, agent_did: {{_eq: "{}"}}}}, order: {{created_at: DESC}}, limit: 1) {{ session_id created_at }} }}"#,
-            gents::store::graphql::escape_graphql_string(node_did),
-            gents::store::graphql::escape_graphql_string(&agent)
-        ),
-    )
-    .await;
-    let Ok(rows) = latest else {
-        return;
-    };
-    if let Some(hint) = continue_hint(rows.first(), opened_at, home_flag) {
-        eprintln!("{hint}");
-    }
-}
-
-fn continue_hint(
-    latest: Option<&serde_json::Value>,
-    opened_at: chrono::DateTime<chrono::Utc>,
-    home_flag: Option<&Path>,
-) -> Option<String> {
-    let latest = latest?;
-    let created = chrono::DateTime::parse_from_rfc3339(latest["created_at"].as_str()?).ok()?;
-    if created < opened_at {
-        return None;
-    }
-    let session = shlex::try_quote(latest["session_id"].as_str()?).ok()?;
+/// The shell keeps a session's history in Gents, so the session its center pane showed at quit
+/// can be reopened with `--continue`.
+fn continue_hint(session: Option<&str>, home_flag: Option<&Path>) -> Option<String> {
+    let session = shlex::try_quote(session?).ok()?;
     let mut command = format!("gents --continue {session}");
     if let Some(home) = home_flag {
         command.push_str(&format!(" --home {}", crate::shell_word(home)));
@@ -225,7 +168,11 @@ pub(crate) async fn shell(args: ShellArgs, runtime: Handle) -> Result<()> {
     let (home, config) = ready_home(args.home, args.store_key_custody, true).await?;
     let graphql = ensure_graphql(&home).await?;
     ensure_an_agent_can_run(&graphql, &home, &config.node_did, false, PUBLISH_WAIT).await?;
-    crate::commands::shell::open(&home, None, None, None, runtime).await
+    let shown = crate::commands::shell::open(&home, None, None, None, runtime).await?;
+    if let Some(hint) = continue_hint(shown.as_deref(), None) {
+        eprintln!("{hint}");
+    }
+    Ok(())
 }
 
 /// Setup asks its questions on the terminal, so a home that needs it and has none is refused.
@@ -465,23 +412,16 @@ mod tests {
     }
 
     #[test]
-    fn the_continue_hint_names_the_last_session_since_the_window_opened() {
-        let opened = chrono::DateTime::parse_from_rfc3339("2026-11-05T10:00:00+00:00")
-            .unwrap()
-            .with_timezone(&chrono::Utc);
-        let row = |at: &str| serde_json::json!({"session_id": "s1", "created_at": at});
-        let after = row("2026-11-05T10:00:05.5+00:00");
+    fn the_continue_hint_names_the_session_the_shell_showed() {
         assert_eq!(
-            continue_hint(Some(&after), opened, None).as_deref(),
+            continue_hint(Some("s1"), None).as_deref(),
             Some("Pick this up again with: gents --continue s1")
         );
         assert_eq!(
-            continue_hint(Some(&after), opened, Some(Path::new("/srv/my home"))).as_deref(),
+            continue_hint(Some("s1"), Some(Path::new("/srv/my home"))).as_deref(),
             Some("Pick this up again with: gents --continue s1 --home '/srv/my home'")
         );
-        let before = row("2026-11-05T09:59:59+00:00");
-        assert_eq!(continue_hint(Some(&before), opened, None), None);
-        assert_eq!(continue_hint(None, opened, None), None);
+        assert_eq!(continue_hint(None, None), None);
     }
 
     #[test]

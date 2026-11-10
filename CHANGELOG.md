@@ -80,8 +80,8 @@ source consistency checks, not a separate runtime compatibility version.
   in the built-in shell's first tab, or for one more turn with `-p MESSAGE`,
   which waits for a turn still running in that session. The shell takes no
   PROMPT with it; type the next turn once the session opens. When the shell
-  closes, `gents` prints the `--continue` command for the newest session the
-  agent it opened with took a turn in.
+  closes, `gents` prints the `--continue` command for the session its center
+  pane showed.
 - `gents --yolo` opens the yolo agent, and `gents --yolo -p MESSAGE` messages it:
   a general-purpose agent with a copy of the default agent's tools, The
   Engineer's on a home `gents` set up. The first use makes it, later uses reuse

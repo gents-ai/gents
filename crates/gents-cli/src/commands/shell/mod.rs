@@ -23,14 +23,15 @@ use gents_shell::source::Intent;
 use tokio::runtime::Handle;
 
 /// Runs the shell on `home`'s runtime, over its GraphQL, until the user quits. Its first tab
-/// takes `agent` and sends `prompt`, or opens `session`.
+/// takes `agent` and sends `prompt`, or opens `session`. Returns the session the center pane
+/// showed at quit.
 pub(crate) async fn open(
     home: &Path,
     agent: Option<String>,
     prompt: Option<String>,
     session: Option<String>,
     runtime: Handle,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Option<String>> {
     let home = home.to_path_buf();
     let (reading, saved, setup) = (home.clone(), home.clone(), home.clone());
     let keys = runtime

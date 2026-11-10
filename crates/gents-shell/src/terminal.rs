@@ -83,16 +83,17 @@ impl Drop for TerminalGuard {
 pub fn run(set: KeySet) -> io::Result<()> {
     let (width, height) = terminal::size()?;
     let (sender, receiver) = mpsc::channel();
-    run_app(App::new(set, width, height), sender, receiver)
+    run_app(App::new(set, width, height), sender, receiver).map(|_| ())
 }
 
 /// `sender` and `receiver` are one channel; the source keeps its own clone of `sender`.
+/// Returns the session the center pane showed at quit.
 pub fn run_connected(
     set: KeySet,
     intents: Sender<Intent>,
     sender: Sender<Input>,
     receiver: Receiver<Input>,
-) -> io::Result<()> {
+) -> io::Result<Option<String>> {
     let (width, height) = terminal::size()?;
     run_app(
         App::connected(set, width, height, intents),
@@ -101,7 +102,11 @@ pub fn run_connected(
     )
 }
 
-fn run_app(app: App, sender: Sender<Input>, receiver: Receiver<Input>) -> io::Result<()> {
+fn run_app(
+    app: App,
+    sender: Sender<Input>,
+    receiver: Receiver<Input>,
+) -> io::Result<Option<String>> {
     let mut guard = enter()?;
     // A plain thread, not the runtime's blocking pool: it stays parked in `read` after quit,
     // and the process must not wait for it.
@@ -131,9 +136,13 @@ where
 }
 
 /// Takes every queued input, then renders once if any could change the screen: a render costs
-/// a pass over the transcript, and the terminal reports each mouse move. Ends on quit, or with a
-/// failed terminal read.
-fn run_loop<F>(mut app: App, receiver: &Receiver<Input>, mut render: F) -> io::Result<()>
+/// a pass over the transcript, and the terminal reports each mouse move. Ends on quit with the
+/// session the center pane shows, or with a failed terminal read.
+fn run_loop<F>(
+    mut app: App,
+    receiver: &Receiver<Input>,
+    mut render: F,
+) -> io::Result<Option<String>>
 where
     F: FnMut(&App) -> io::Result<()>,
 {
@@ -156,7 +165,7 @@ where
                 Input::TerminalError(error) => return Err(error),
             }
             if app.should_quit() {
-                return Ok(());
+                return Ok(app.shown_session().map(str::to_owned));
             }
         }
         if changed {
@@ -206,6 +215,33 @@ fn base64(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use crate::keys::KeySet::Vim;
+    use crate::source::Update;
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn ctrl_c() -> Input {
+        Input::Terminal(Event::Key(KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL,
+        )))
+    }
+
+    /// `gents` names the session to pick up again from what the center pane shows at quit.
+    #[test]
+    fn quitting_returns_the_session_the_center_pane_shows() {
+        let quit = |app: App| {
+            let (sender, receiver) = mpsc::channel();
+            sender.send(ctrl_c()).unwrap();
+            sender.send(ctrl_c()).unwrap();
+            run_loop(app, &receiver, |_| Ok(())).expect("ctrl-c twice quits")
+        };
+        let mut shown = App::new(Vim, 80, 24);
+        shown.apply(Update::Continue {
+            session: "s1".to_string(),
+            agent: None,
+        });
+        assert_eq!(quit(shown).as_deref(), Some("s1"));
+        assert_eq!(quit(App::new(Vim, 80, 24)), None);
+    }
 
     #[test]
     fn base64_matches_known_vectors() {
