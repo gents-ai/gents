@@ -22,6 +22,8 @@ const tools = __tools_enabled ? new Proxy(Object.create(null), {
 const input = __input;
 "#;
 
+/// Afterburner's bundled interpreter exposes a fixed host-function set.
+/// This guest embeds QuickJS so its JavaScript can call the generic Gents import.
 pub fn run<F>(request: &Value, host: F) -> Result<Value, String>
 where
     F: Fn(String) -> Result<String, String> + 'static,
