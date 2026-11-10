@@ -160,10 +160,35 @@ async fn yolo_makes_one_agent_with_the_default_agents_tools_and_reuses_it() -> R
         }
         Ok(Value::Object(tools.clone()))
     };
+    // A clone copies its source's tool selection and settings but never its
+    // self-configuration group (`SelfConfig.Scope.clone_inherits_no_self_config`):
+    // the Engineer holds the bundled preset out of the box, the yolo agent holds none.
+    let mut yolo_tools = tools_of(yolo_context)?;
+    let mut default_tools = tools_of(default_context)?;
+    let engineer_self_config = default_tools
+        .as_object_mut()
+        .context("Tools is an object")?
+        .remove("self_config")
+        .context("the default agent's Tools hold self_config")?;
+    let preset: Value = serde_json::from_str(gents_protocol::ENGINEER_SELF_CONFIG_JSON)?;
+    for (field, expected) in preset.as_object().context("preset object")? {
+        assert_eq!(
+            engineer_self_config.get(field),
+            Some(expected),
+            "the default agent's self_config.{field}"
+        );
+    }
+    let yolo_self_config = yolo_tools
+        .as_object_mut()
+        .context("Tools is an object")?
+        .remove("self_config");
+    assert!(
+        matches!(yolo_self_config, None | Some(Value::Null)),
+        "the yolo agent inherits no self-configuration: {yolo_self_config:?}"
+    );
     assert_eq!(
-        tools_of(yolo_context)?,
-        tools_of(default_context)?,
-        "the yolo agent runs with a copy of the default agent's tools"
+        yolo_tools, default_tools,
+        "every other Tools field of the yolo agent is the default agent's"
     );
     assert_ne!(
         yolo_context["system_prompt"],
