@@ -73,11 +73,32 @@ impl From<ToolServiceHealthProjection> for HealthStatus {
     }
 }
 
+/// A registry entry that cannot become a connectable URL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum McpEndpointDefect {
+    #[error("registry entry has invalid endpoint_url")]
+    InvalidEndpointUrl,
+    #[error("registry entry missing mcp_port")]
+    MissingMcpPort,
+    #[error("registry entry missing address fields")]
+    MissingAddressFields,
+}
+
+/// Why the last probe failed, beyond its message.
+#[derive(Debug, Clone)]
+struct ProbeError {
+    message: String,
+    auth_refusal: Option<McpAuthRefusal>,
+    registry_defect: Option<McpEndpointDefect>,
+}
+
 #[derive(Debug, Clone)]
 struct ServiceHealthEntry {
     health: ServiceHealth,
     /// Set when the last probe failed because the server refused authorization.
     auth_refusal: Option<McpAuthRefusal>,
+    /// Set when the last probe failed because the registry entry has no usable endpoint.
+    registry_defect: Option<McpEndpointDefect>,
     model: ServiceModelInternal,
     endpoint: Option<String>,
     tool_count: Option<i64>,
@@ -92,6 +113,7 @@ impl ServiceHealthEntry {
         Self {
             health,
             auth_refusal: None,
+            registry_defect: None,
             model,
             endpoint: None,
             tool_count: None,
@@ -102,19 +124,27 @@ impl ServiceHealthEntry {
     fn from_model(
         model: ServiceModelInternal,
         last_seen: DateTime<Utc>,
-        last_error: Option<(String, Option<McpAuthRefusal>)>,
+        last_error: Option<ProbeError>,
         endpoint: Option<String>,
         tool_count: Option<i64>,
         last_probe_at: DateTime<Utc>,
     ) -> Self {
-        let (last_error, auth_refusal) = last_error.unzip();
+        let (last_error, auth_refusal, registry_defect) = match last_error {
+            Some(error) => (
+                Some(error.message),
+                error.auth_refusal,
+                error.registry_defect,
+            ),
+            None => (None, None, None),
+        };
         Self {
             health: ServiceHealth {
                 status: model.state.project().into(),
                 last_seen,
                 last_error,
             },
-            auth_refusal: auth_refusal.flatten(),
+            auth_refusal,
+            registry_defect,
             model,
             endpoint,
             tool_count,
@@ -178,6 +208,8 @@ pub struct MCPServiceHealthSnapshot {
     pub last_error: Option<String>,
     #[serde(skip)]
     pub auth_refusal: Option<McpAuthRefusal>,
+    #[serde(skip)]
+    pub registry_defect: Option<McpEndpointDefect>,
 }
 
 #[derive(Clone)]
@@ -232,6 +264,7 @@ impl ServiceHealthMap {
                 last_seen: entry.health.last_seen,
                 last_error: entry.health.last_error.clone(),
                 auth_refusal: entry.auth_refusal.clone(),
+                registry_defect: entry.registry_defect,
             })
             .collect()
     }
@@ -351,17 +384,17 @@ impl McpHealthCheckService {
         &self,
         local_hostname: &str,
         local_subnet: Option<&str>,
-    ) -> std::result::Result<String, &'static str> {
+    ) -> std::result::Result<String, McpEndpointDefect> {
         if !self.endpoint_url.trim().is_empty() {
-            return crate::tools::mcp::registry::parse_endpoint_url(&self.endpoint_url)
+            return crate::documents::ToolServiceRegistry::parse_endpoint_url(&self.endpoint_url)
                 .map(String::from)
-                .map_err(|_| "registry entry has invalid endpoint_url");
+                .map_err(|_| McpEndpointDefect::InvalidEndpointUrl);
         }
         let Some(mcp_port) = self.mcp_port.filter(|port| *port != 0) else {
-            return Err("registry entry missing mcp_port");
+            return Err(McpEndpointDefect::MissingMcpPort);
         };
         if self.hostname.is_empty() && self.tailscale_ip.is_empty() && self.lan_ip.is_empty() {
-            return Err("registry entry missing address fields");
+            return Err(McpEndpointDefect::MissingAddressFields);
         }
         Ok(resolve_mcp_url(
             &self.hostname,
@@ -647,6 +680,7 @@ async fn run_health_check_cycle_with_cancel(
                         tool_count: previous_tool_count,
                         error: error.to_string(),
                         auth_refusal: None,
+                        registry_defect: Some(error),
                     },
                     now,
                     options,
@@ -742,6 +776,7 @@ async fn run_health_check_cycle_with_cancel(
                         tool_count: previous_tool_count,
                         error: error.to_string(),
                         auth_refusal: auth_refusal_of(&error),
+                        registry_defect: None,
                     },
                     now,
                     options,
@@ -765,6 +800,7 @@ async fn run_health_check_cycle_with_cancel(
                         tool_count: previous_tool_count,
                         error: "probe timed out".to_string(),
                         auth_refusal: None,
+                        registry_defect: None,
                     },
                     now,
                     options,
@@ -818,6 +854,7 @@ struct ProbeFailure<'a> {
     tool_count: Option<i64>,
     error: String,
     auth_refusal: Option<McpAuthRefusal>,
+    registry_defect: Option<McpEndpointDefect>,
 }
 
 async fn apply_probe_failure(
@@ -835,6 +872,7 @@ async fn apply_probe_failure(
         tool_count,
         error,
         auth_refusal,
+        registry_defect,
     } = failure;
     let next_model = step_service(previous_model, ProbeEvent::ProbeFail, now, options)
         .expect("probeFail must preserve the service model");
@@ -847,7 +885,11 @@ async fn apply_probe_failure(
             ServiceHealthEntry::from_model(
                 next_model,
                 previous_last_seen,
-                Some((error, auth_refusal)),
+                Some(ProbeError {
+                    message: error,
+                    auth_refusal,
+                    registry_defect,
+                }),
                 endpoint,
                 tool_count,
                 now,
@@ -951,11 +993,6 @@ fn classify_last_error(error: &str) -> &'static str {
         "connection_refused"
     } else if lower.contains("no route") || lower.contains("unreachable") {
         "network_unreachable"
-    } else if lower.contains("missing mcp_port")
-        || lower.contains("missing address")
-        || lower.contains("invalid endpoint_url")
-    {
-        "registry_invalid"
     } else if lower.contains("stream closed") || lower.contains("eof") {
         "stream_closed"
     } else {
@@ -1013,6 +1050,7 @@ fn persisted_health_fields(
             .auth_refusal
             .as_ref()
             .map(McpAuthRefusal::class)
+            .or_else(|| entry.registry_defect.map(|_| "registry_invalid"))
             .or_else(|| entry.last_error.as_deref().map(classify_last_error)),
         "last_error_message": entry.last_error,
     })
@@ -1377,6 +1415,7 @@ mod tests {
             last_seen: now,
             last_error: None,
             auth_refusal: None,
+            registry_defect: None,
         };
         super::upsert_persisted_health_state(&context, None, &entry, now).await?;
         let visible = |response: &serde_json::Value| {
@@ -1532,6 +1571,7 @@ mod tests {
             last_seen: now,
             last_error: None,
             auth_refusal: None,
+            registry_defect: None,
         };
         super::persist_health_snapshot(&context, &map, &[entry.clone()], now).await;
         let initial = field_commits(&node).await;
@@ -2153,6 +2193,7 @@ mod tests {
             last_seen: now,
             last_error: Some("connection refused".into()),
             auth_refusal: None,
+            registry_defect: None,
         });
         let map = ServiceHealthMap::new();
         let context = HealthPersistenceContext {
@@ -2303,6 +2344,75 @@ mod tests {
     }
 
     #[test]
+    fn persisted_error_class_comes_from_the_typed_registry_defect() {
+        for (service, defect) in [
+            (
+                McpHealthCheckService {
+                    service_id: "svc".into(),
+                    hostname: String::new(),
+                    tailscale_ip: String::new(),
+                    lan_ip: String::new(),
+                    mcp_port: None,
+                    mcp_path: String::new(),
+                    endpoint_url: "ftp://mcp.example.com".into(),
+                    send_node_did: false,
+                    updated_at: None,
+                },
+                super::McpEndpointDefect::InvalidEndpointUrl,
+            ),
+            (
+                McpHealthCheckService {
+                    service_id: "svc".into(),
+                    hostname: "host".into(),
+                    tailscale_ip: String::new(),
+                    lan_ip: String::new(),
+                    mcp_port: None,
+                    mcp_path: String::new(),
+                    endpoint_url: String::new(),
+                    send_node_did: false,
+                    updated_at: None,
+                },
+                super::McpEndpointDefect::MissingMcpPort,
+            ),
+            (
+                McpHealthCheckService {
+                    service_id: "svc".into(),
+                    hostname: String::new(),
+                    tailscale_ip: String::new(),
+                    lan_ip: String::new(),
+                    mcp_port: Some(8080),
+                    mcp_path: String::new(),
+                    endpoint_url: String::new(),
+                    send_node_did: false,
+                    updated_at: None,
+                },
+                super::McpEndpointDefect::MissingAddressFields,
+            ),
+        ] {
+            assert_eq!(service.endpoint("local", None), Err(defect));
+            let now = chrono::Utc::now();
+            let entry = super::MCPServiceHealthSnapshot {
+                service_id: "svc".into(),
+                endpoint: None,
+                status: "degraded".into(),
+                tool_count: None,
+                failure_count: 1,
+                k_max: 3,
+                backoff_until: None,
+                last_probe_at: now,
+                last_seen: now,
+                last_error: Some(defect.to_string()),
+                auth_refusal: None,
+                registry_defect: Some(defect),
+            };
+            assert_eq!(
+                super::persisted_health_fields(&entry)["last_error_class"],
+                "registry_invalid"
+            );
+        }
+    }
+
+    #[test]
     fn persisted_error_class_comes_from_the_typed_auth_refusal() {
         for refusal in [
             McpAuthRefusal::Required {
@@ -2326,6 +2436,7 @@ mod tests {
                 last_seen: now,
                 last_error: Some("server refused".into()),
                 auth_refusal: Some(refusal.clone()),
+                registry_defect: None,
             };
             assert_eq!(
                 super::persisted_health_fields(&entry)["last_error_class"],

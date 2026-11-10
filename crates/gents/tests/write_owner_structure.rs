@@ -1996,7 +1996,7 @@ const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     // persisted AgentRequest failure_reason
     ("crates/gents/src/eval/runner/embedded/executor/outcome.rs", 2),
     // MCP probe transport/OS error text (metric label)
-    ("crates/gents/src/tools/mcp/health.rs", 10),
+    ("crates/gents/src/tools/mcp/health.rs", 8),
     // display only: appends a next-call hint when absent
     ("crates/gents/src/tools/builtin/p2p.rs", 1),
     // DefraDB SDL parser messages (help page choice)

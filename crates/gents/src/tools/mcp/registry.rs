@@ -116,34 +116,9 @@ pub fn resolve_mcp_service(
     })
 }
 
-/// Validates an operator-supplied MCP endpoint and returns its canonical form.
-/// Credentials and query strings are refused so no secret can travel in the URL
-/// or be echoed back through health rows, which record the endpoint verbatim.
-pub fn parse_endpoint_url(raw: &str) -> anyhow::Result<reqwest::Url> {
-    let url = reqwest::Url::parse(raw.trim())
-        .map_err(|error| anyhow!("endpoint_url must be an absolute URL: {error}"))?;
-    anyhow::ensure!(
-        matches!(url.scheme(), "http" | "https"),
-        "endpoint_url must use http or https"
-    );
-    anyhow::ensure!(
-        url.host_str().is_some_and(|host| !host.is_empty()),
-        "endpoint_url must contain a host"
-    );
-    anyhow::ensure!(
-        url.username().is_empty() && url.password().is_none(),
-        "endpoint_url must not contain credentials"
-    );
-    anyhow::ensure!(
-        url.query().is_none() && url.fragment().is_none(),
-        "endpoint_url must not contain a query string or fragment"
-    );
-    Ok(url)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::parse_endpoint_url;
+    use crate::documents::ToolServiceRegistry;
     use crate::tools::mcp::health::McpHealthCheckService;
 
     fn service(endpoint_url: &str) -> McpHealthCheckService {
@@ -178,20 +153,20 @@ mod tests {
         assert!(without_address.endpoint("local", None).is_ok());
         assert_eq!(
             service("https://host/mcp?key=1").endpoint("local", None),
-            Err("registry entry has invalid endpoint_url")
+            Err(crate::tools::mcp::health::McpEndpointDefect::InvalidEndpointUrl)
         );
     }
 
     #[test]
     fn endpoint_url_accepts_http_and_https_and_canonicalises() {
         assert_eq!(
-            parse_endpoint_url(" https://mcp.linear.app/mcp ")
+            ToolServiceRegistry::parse_endpoint_url(" https://mcp.linear.app/mcp ")
                 .unwrap()
                 .as_str(),
             "https://mcp.linear.app/mcp"
         );
         assert_eq!(
-            parse_endpoint_url("HTTP://127.0.0.1:12799")
+            ToolServiceRegistry::parse_endpoint_url("HTTP://127.0.0.1:12799")
                 .unwrap()
                 .as_str(),
             "http://127.0.0.1:12799/"
@@ -210,7 +185,10 @@ mod tests {
             "https://host/mcp?api_key=secret",
             "https://host/mcp#frag",
         ] {
-            assert!(parse_endpoint_url(bad).is_err(), "{bad} must be refused");
+            assert!(
+                ToolServiceRegistry::parse_endpoint_url(bad).is_err(),
+                "{bad} must be refused"
+            );
         }
     }
 }

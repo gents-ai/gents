@@ -29,7 +29,7 @@ async fn mcp_register(args: McpRegisterArgs) -> Result<()> {
     if service_id.is_empty() {
         anyhow::bail!("SERVICE must be a non-empty service id");
     }
-    let endpoint = gents::tools::mcp::registry::parse_endpoint_url(&args.endpoint)
+    let endpoint = gents::documents::ToolServiceRegistry::parse_endpoint_url(&args.endpoint)
         .map_err(|error| anyhow::anyhow!("--endpoint: {error}"))?;
     let host = endpoint
         .host_str()

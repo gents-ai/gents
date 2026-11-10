@@ -479,7 +479,8 @@ fn project_measured_mcp_services(
             .filter(|value| !value.trim().is_empty())
         {
             // Health rows record the canonical URL the shared resolver produced.
-            if let Ok(url) = crate::tools::mcp::registry::parse_endpoint_url(endpoint_url) {
+            if let Ok(url) = crate::documents::ToolServiceRegistry::parse_endpoint_url(endpoint_url)
+            {
                 expected_endpoints
                     .entry(service.service_id.clone())
                     .or_default()
