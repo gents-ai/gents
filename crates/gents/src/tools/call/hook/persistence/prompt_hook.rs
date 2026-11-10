@@ -17,12 +17,20 @@ pub(crate) enum HookOwnedTool {
 }
 
 impl HookOwnedTool {
-    pub(crate) const ROUTES: [(&'static str, Self); 14] = [
+    pub(crate) const ROUTES: [(&'static str, Self); 16] = [
         (crate::goal::GET_GOAL_TOOL_NAME, Self::GetGoal),
         (crate::goal::UPDATE_GOAL_TOOL_NAME, Self::UpdateGoal),
         (crate::goal::CREATE_GOAL_TOOL_NAME, Self::CreateGoal),
         (
             crate::tools::native::AGENT_INTERRUPT_TOOL_NAME,
+            Self::AgentControl,
+        ),
+        (
+            crate::tools::native::AGENT_STOP_TOOL_NAME,
+            Self::AgentControl,
+        ),
+        (
+            crate::tools::native::AGENT_RESUME_TOOL_NAME,
             Self::AgentControl,
         ),
         (
@@ -553,3 +561,24 @@ impl DefraSessionHook {
         }
     }
 }
+
+#[cfg(test)]
+mod route_tests {
+    use super::HookOwnedTool;
+
+    /// An agent tool's native body only reports that the hook owns it, so a
+    /// name missing from `ROUTES` fails every call.
+    #[test]
+    fn every_agent_tool_is_routed_through_the_hook() {
+        for name in crate::tools::native::AGENT_TOOL_NAMES {
+            assert!(
+                matches!(
+                    HookOwnedTool::of(name),
+                    Some(HookOwnedTool::AgentControl | HookOwnedTool::SessionMessage)
+                ),
+                "{name} has no hook route"
+            );
+        }
+    }
+}
+
