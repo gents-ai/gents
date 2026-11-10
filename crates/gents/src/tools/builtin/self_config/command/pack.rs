@@ -1,5 +1,5 @@
 use super::*;
-use crate::plugin::store;
+use crate::plugin::{store, tool::PluginTool};
 
 impl ConfigCommandTool {
     pub(super) fn plugin(&self, argv: &[String]) -> Result<String> {
@@ -55,8 +55,8 @@ impl ConfigCommandTool {
         }
     }
 
-    /// `plugin run`: call an installed plugin once through the owner
-    /// `gents config pack plugin run` uses, sealed: no bound directory and no data caller.
+    /// `plugin run`: one call of an installed plugin as a tool call of the
+    /// calling agent makes it, through the plugin tool owner.
     pub(super) async fn plugin_run(&self, argv: &[String]) -> Result<String> {
         anyhow::ensure!(
             self.core.held_grants().pack_install || self.categories.contains("tools"),
@@ -76,20 +76,17 @@ impl ConfigCommandTool {
             }
             None => Value::Null,
         };
-        let home = self
-            .plugins
-            .home()
-            .context("this runtime has no plugin home")?;
-        let (namespace, name) = store::parse_coordinate(coordinate)?;
-        let record = store::read_record(home, namespace, name)?;
-        let call = self
-            .plugins
-            .call(&record, input)
-            .await
-            .with_context(|| format!("calling plugin {coordinate}"))?;
-        let output = call.outcome.into_output(coordinate)?;
-        ordered! {"output": output, "plugin": coordinate, "binding_note": call.binding_note}
-            .pretty()
+        let (output, binding_note) =
+            PluginTool::for_run(self.plugins.clone(), coordinate, &self.selected_plugins)?
+                .with_agent_data(
+                    self.node.clone(),
+                    &self.node_did,
+                    Some(self.core.agent_did()),
+                )?
+                .run_once(input)
+                .await
+                .with_context(|| format!("calling plugin {coordinate}"))?;
+        ordered! {"output": output, "plugin": coordinate, "binding_note": binding_note}.pretty()
     }
 
     pub(super) async fn pack(&self, argv: &[String]) -> Result<String> {

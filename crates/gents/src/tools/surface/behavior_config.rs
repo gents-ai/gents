@@ -365,6 +365,7 @@ impl AgentToolSurfaceConfig {
                     bash_mode: ceiling.bash(),
                     root: ceiling.root().map(ToOwned::to_owned),
                 },
+                selected_plugins: Vec::new(),
             },
             agent_policy,
             ceiling_policy,

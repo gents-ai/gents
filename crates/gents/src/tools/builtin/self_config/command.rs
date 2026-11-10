@@ -361,6 +361,8 @@ pub struct ConfigCommandTool {
     pub(super) process_ceiling: crate::tools::surface::SelfConfigProcessCeiling,
     pub(super) execution: Arc<super::execution::ExecutionObservation>,
     pub(super) plugins: Arc<crate::plugin::executor::PluginExecutor>,
+    /// The plugins the calling agent's Tools select for this request.
+    pub(super) selected_plugins: Vec<crate::documents::PluginToolRef>,
 }
 
 impl Tool for ConfigCommandTool {

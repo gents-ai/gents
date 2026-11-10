@@ -147,6 +147,9 @@ pub struct SelfConfigToolConfig {
     pub enable_pack_install: bool,
     pub enable_pack_authority: bool,
     pub process_ceiling: SelfConfigProcessCeiling,
+    /// The request's selected plugin tools, which `config plugin run` calls
+    /// as the agent's own tool call would.
+    pub selected_plugins: Vec<crate::documents::PluginToolRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize)]
@@ -525,7 +528,10 @@ impl ToolSurface {
                 runtime.node_did.clone(),
                 runtime.agent_identity.clone(),
                 runtime.identity.clone(),
-                &self.self_config,
+                &SelfConfigToolConfig {
+                    selected_plugins: self.plugin_tools.clone(),
+                    ..self.self_config.clone()
+                },
                 runtime.plugins.clone(),
                 node_binding,
             ),

@@ -129,6 +129,26 @@ fn asked(calls: &HostCalls, output: &Value) -> Result<Option<Asked>, String> {
     }
 }
 
+/// The service whose request `output` still carries: a plugin that asks a
+/// service the call was not offered gets no further round, so its request
+/// comes back as the output.
+pub(super) fn unserved_request(output: &Value) -> Option<&'static str> {
+    [
+        "model_calls",
+        "http_calls",
+        "tool_calls",
+        "data_calls",
+        "job_calls",
+    ]
+    .into_iter()
+    .find(|service| {
+        output
+            .get(service)
+            .and_then(|asked| asked.get("requests"))
+            .is_some_and(Value::is_array)
+    })
+}
+
 pub(super) async fn drive(
     calls: HostCalls,
     input: Value,

@@ -494,3 +494,71 @@ async fn a_rebuild_moves_the_pins_of_the_tools_that_select_the_plugin() {
         "the plugin stays installed"
     );
 }
+
+/// `plugin run` is one tool call of the plugin: a `data_calls` round is
+/// answered under the calling agent's access and the plugin is re-invoked
+/// with the rows, and a request no round serves is an error naming the
+/// service and the next call, never the plugin's result.
+#[tokio::test]
+async fn plugin_run_drives_the_rounds_a_tool_call_does() {
+    use crate::plugin::tests::executor::{asking_plugin_wat, installed_plugin};
+    let canned = json!({"data_calls": {"requests": [{"id": "notes", "query": {
+        "collection": "Note", "filter": {}, "limit": 5, "fields": ["body"]}}]}});
+    let (home, mut record) = installed_plugin(
+        &asking_plugin_wat("data_calls", "data_results", &canned, false),
+        None,
+    );
+    record.declaration.data = Some(gents_protocol::job::PluginDataDeclaration {
+        collections: vec!["Note".into()],
+        ops: vec!["query".into()],
+        stamped: BTreeMap::new(),
+    });
+    crate::plugin::store::write_record(home.path(), &record).unwrap();
+    let (fixture, tools) = fileless_tool("plugin-run-rounds", home.path()).await;
+    fixture
+        .db
+        .node
+        .add_collection("type Note { body: String }")
+        .await
+        .unwrap();
+    crate::ConfigAccess::transact_local_write(&fixture.db.node, None, "plugin_run_test", |txn| {
+        Box::pin(async move {
+            txn.execute("mutation { add_Note(input: { body: \"kept\" }) { _docID } }")
+                .await
+        })
+    })
+    .await
+    .unwrap();
+    let coordinate = format!("team/{}", record.name);
+
+    let ran = ok(
+        &tools,
+        json!({"argv":["plugin","run",coordinate],"options":{"input":{}}}),
+    )
+    .await;
+    assert_eq!(
+        ran["output"]["data_results"]["notes"]["result"]["rows"],
+        json!([{"body": "kept"}]),
+        "{ran}"
+    );
+    assert!(
+        ran["output"]
+            .get("data_calls")
+            .is_none_or(|asked| asked == true),
+        "{ran}"
+    );
+
+    let unserved = call(
+        &tools,
+        json!({"argv":["plugin","run",coordinate],"options":{"input":{
+            "job_calls": {"requests": [{"id": "a", "child_output": {"slots": ["s"], "offset": 0, "limit": 1}}]}}}}),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        unserved.contains("asked for job_calls and was not re-invoked")
+            && unserved.contains("integrations.plugins")
+            && unserved.contains("in a fresh request"),
+        "{unserved}"
+    );
+}
