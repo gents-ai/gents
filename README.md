@@ -39,8 +39,10 @@ From a terminal:
 
 ```sh
 gents config pack install gents/data_tables --inference-slot data_analyst=<profile>
-gents -p "Which region sold the most in reports/sales.csv?" --agent data-analyst
+gents -p "Which region sold the most in reports/sales.csv?" --agent <agent-did>
 ```
+
+The install prints the DID it gave the `data-analyst` agent under `apply.agents`; pass it as `<agent-did>`.
 
 ## Use it as a model tool
 

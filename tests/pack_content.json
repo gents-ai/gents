@@ -2,7 +2,7 @@
   "jq": [
     {
       "name": "the data-analyst agent is wired to its context and the data_analyst slot",
-      "expr": ".config.agents | map(select(.agent_id == \"data-analyst\" and .context_id == \"data-analyst-context\" and .inference_profile_id == \"gents:inference-slot:data_analyst\")) | length == 1"
+      "expr": ".config.agents | map(select(.agent_slot == \"data-analyst\" and .context_id == \"data-analyst-context\" and .inference_profile_id == \"gents:inference-slot:data_analyst\")) | length == 1"
     },
     {
       "name": "its Tools document grants the one plugin",

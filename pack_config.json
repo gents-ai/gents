@@ -1,7 +1,7 @@
 {
   "agents": [
     {
-      "agent_id": "data-analyst",
+      "agent_slot": "data-analyst",
       "context_id": "data-analyst-context",
       "display_name": "Data analyst",
       "inference_profile_id": "gents:inference-slot:data_analyst"
@@ -10,6 +10,7 @@
   "node": {},
   "callback_bindings": [
     {
+      "agent_did": "gents:agent-slot:data-analyst",
       "binding_id": "data-run",
       "callback_id": "data-run",
       "event_source_id": "data-run",
