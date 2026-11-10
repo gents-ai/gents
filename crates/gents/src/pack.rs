@@ -9,8 +9,9 @@ pub(crate) use agent_bindings::{
 };
 pub mod archive;
 pub use agent_bindings::{
-    agent_did_variable, agent_slot_reference, load_pack_authoring_config, load_pack_install_config,
-    AuthoredPackConfig, BoundPackConfig, PackAgentBindings, AGENT_SLOT_REFERENCE_PREFIX,
+    agent_did_variable, agent_slot_reference, load_pack_authoring_config,
+    load_pack_install_config, AuthoredPackConfig, BoundPackConfig, PackAgentBindings,
+    AGENT_SLOT_REFERENCE_PREFIX,
 };
 pub mod authoring;
 pub mod home_install;
@@ -58,10 +59,11 @@ pub use installation::{
     list_installed_packs, plugin_data_unique_keys, plugin_pin_conflicts,
     prepare_document_pack_archive, prepare_document_pack_archive_with_runtime,
     prepare_document_pack_install, prepare_hosted_document_pack_archive, read_installed_pack,
-    record_plugin_store_change, record_plugin_store_change_as, record_staged_plugin_store_change,
-    referenced_pack_digests, remove_pack, visible_plugin_selections, DependencyVariableOverrides,
-    DriftPolicy, HostedDocumentGraph, HostedPackPreparation, InstallReport, InstalledCatalogEntry,
-    InstalledPack, InstalledPackPlugin, PackDriftError, PackIdentity, PackRemovalError, PackSource,
+    record_plugin_retirement_as, record_plugin_store_change, record_plugin_store_change_as,
+    record_staged_plugin_store_change, referenced_pack_digests, remove_pack,
+    visible_plugin_selections, DependencyVariableOverrides, DriftPolicy, HostedDocumentGraph,
+    HostedPackPreparation, InstallReport, InstalledCatalogEntry, InstalledPack,
+    InstalledPackPlugin, PackDriftError, PackIdentity, PackRemovalError, PackSource,
     PackSourceHistory, PluginPinConflict, PluginSelection, PluginStoreChangeError,
     PreparedDependency, PreparedDocumentPackInstall, RemoveReport, Retained,
 };

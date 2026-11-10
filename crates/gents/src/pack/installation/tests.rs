@@ -766,6 +766,22 @@ async fn a_plugin_store_record_is_not_a_pack_install() {
         rows["data"]["PackInstallation"][0]["installed_at"],
         before["data"]["PackInstallation"][0]["installed_at"]
     );
+
+    // A retirement releases the record a disappearance notice keeps.
+    super::super::record_plugin_retirement_as(&access, OWNER, None, home.path(), "acme/demo")
+        .await
+        .unwrap();
+    let rows = access
+        .execute("{ PackInstallation { _docID } }")
+        .await
+        .unwrap();
+    assert_eq!(
+        !rows["data"]["PackInstallation"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        model["retain_retired_record"].as_bool().unwrap()
+    );
 }
 
 #[tokio::test]
@@ -805,13 +821,6 @@ async fn a_plugin_store_change_keeps_a_documents_install_record() {
             digest: identity("1").digest,
         })
     );
-    let error = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
-        .await
-        .unwrap_err();
-    assert!(matches!(
-        error.downcast_ref::<PackRemovalError>(),
-        Some(PackRemovalError::ReferenceInventoryUnavailable)
-    ));
     let rows = access
         .execute("{ PackInstallation { plugins } }")
         .await
@@ -821,6 +830,16 @@ async fn a_plugin_store_change_keeps_a_documents_install_record() {
         json!([extra])
     );
     assert_eq!(tools_ids(&access).await, vec!["alpha"]);
+    // No Tools selects the plugin, so removing the pack retires it.
+    remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
+        .await
+        .unwrap();
+    assert_eq!(
+        read_installed_pack(&access, OWNER, "acme/demo")
+            .await
+            .unwrap(),
+        None
+    );
 }
 
 #[tokio::test]
@@ -1495,7 +1514,7 @@ async fn an_upgrade_that_drops_a_dependency_releases_its_claim() {
 }
 
 #[tokio::test]
-async fn an_upgrade_keeps_a_plugin_dependency_without_complete_inventory() {
+async fn an_upgrade_retires_the_unselected_plugin_of_a_dependency_it_drops() {
     let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
     let owner = crate::NodeIdentity::did(&runtime);
     install_dependee(&access, &node, &runtime, false).await;
@@ -1518,11 +1537,7 @@ async fn an_upgrade_keeps_a_plugin_dependency_without_complete_inventory() {
     )
     .await
     .unwrap();
-    let before = access
-        .execute("{ PackInstallation { coordinate version required_by plugins } }")
-        .await
-        .unwrap();
-    let error = super::super::install_pack_documents(
+    super::super::install_pack_documents(
         &access,
         owner,
         &demo_identity(vec![]),
@@ -1530,17 +1545,18 @@ async fn an_upgrade_keeps_a_plugin_dependency_without_complete_inventory() {
         DriftPolicy::Refuse,
     )
     .await
-    .unwrap_err();
-    assert!(matches!(
-        error.downcast_ref::<PackRemovalError>(),
-        Some(PackRemovalError::ReferenceInventoryUnavailable)
-    ));
-    assert_eq!(
-        access
-            .execute("{ PackInstallation { coordinate version required_by plugins } }")
-            .await
-            .unwrap(),
-        before
+    .unwrap();
+    let after = access
+        .execute("{ PackInstallation { coordinate } }")
+        .await
+        .unwrap();
+    assert!(
+        after["data"]["PackInstallation"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["coordinate"] != "fixture/dependee_fixture"),
+        "{after}"
     );
 }
 
@@ -3522,23 +3538,19 @@ async fn removing_a_plugin_pack_refuses_surviving_agents_and_rolls_back_document
         })
         .await
         .unwrap();
-    let error = remove_pack(&access, owner, "acme/demo", DriftPolicy::Refuse)
+    // With no agent left selecting the plugin, the removal retires it.
+    remove_pack(&access, owner, "acme/demo", DriftPolicy::Refuse)
         .await
-        .unwrap_err();
-    assert!(matches!(
-        error.downcast_ref::<PackRemovalError>(),
-        Some(PackRemovalError::ReferenceInventoryUnavailable)
-    ));
-    assert_eq!(tools_ids(&access).await, before);
+        .unwrap();
     assert!(read_installed_pack(&access, owner, "acme/demo")
         .await
         .unwrap()
-        .is_some());
+        .is_none());
     node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
-async fn removing_agents_with_their_plugin_pack_requires_complete_inventory() {
+async fn removing_agents_with_their_plugin_pack_retires_its_plugin() {
     let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
     let owner = crate::NodeIdentity::did(&runtime);
     let binding = crate::store::identity::provision_agent_identity(&runtime).unwrap();
@@ -3564,20 +3576,17 @@ async fn removing_agents_with_their_plugin_pack_requires_complete_inventory() {
     )
     .await
     .unwrap();
-    let before = tools_ids(&access).await;
-    let error = remove_pack(&access, owner, "acme/demo", DriftPolicy::Refuse)
+    assert_ne!(tools_ids(&access).await, retained_tools);
+    // The agent that selects the plugin is removed with the pack, so
+    // nothing that survives selects it.
+    remove_pack(&access, owner, "acme/demo", DriftPolicy::Refuse)
         .await
-        .unwrap_err();
-    assert!(matches!(
-        error.downcast_ref::<PackRemovalError>(),
-        Some(PackRemovalError::ReferenceInventoryUnavailable)
-    ));
-    assert_eq!(tools_ids(&access).await, before);
-    assert_ne!(before, retained_tools);
+        .unwrap();
+    assert_eq!(tools_ids(&access).await, retained_tools);
     assert!(read_installed_pack(&access, owner, "acme/demo")
         .await
         .unwrap()
-        .is_some());
+        .is_none());
     node.shutdown().await.expect("node shutdown");
 }
 
@@ -3629,13 +3638,9 @@ async fn plugin_removal_does_not_treat_dangling_scope_as_no_references() {
                 gents_protocol::schemas::AGENT_CONTEXT).await.map(|_| ())
         })
     }).await.unwrap();
-    let error = ensure_plugins_unreferenced(&access, owner, &removed)
+    ensure_plugins_unreferenced(&access, owner, &removed)
         .await
-        .unwrap_err();
-    assert!(matches!(
-        error.downcast_ref::<PackRemovalError>(),
-        Some(PackRemovalError::ReferenceInventoryUnavailable)
-    ));
+        .unwrap();
     node.shutdown().await.expect("node shutdown");
 }
 

@@ -6,10 +6,13 @@ use crate::documents::{Agent, AgentContext, Tools};
 use crate::store::config_client::ConfigRead;
 use crate::store::graphql::escape_graphql_string;
 
-/// Check the surviving document graph before retiring plugin files. Pack
-/// removal calls this inside its transaction after proposed document deletions;
-/// standalone plugin removal calls it before changing the local store. Missing
-/// or malformed reads must refuse removal, never establish non-use.
+/// Check the surviving document graph before retiring plugin files (Lean
+/// `Configuration.pluginRetirementAllowed`): the plugins retire unless a Tools
+/// the actor can read still selects one, and the refusal names every such
+/// Tools. Pack removal calls this inside its transaction after proposed
+/// document deletions; standalone plugin removal calls it before changing the
+/// local store. Missing or malformed reads refuse removal, never establish
+/// non-use.
 pub async fn ensure_plugins_unreferenced<R>(
     access: &R,
     owner: &str,
@@ -21,14 +24,24 @@ where
     if removed.is_empty() {
         return Ok(());
     }
-    for (agent, tools, reference, _) in selected_plugin_references(access, owner).await? {
-        anyhow::ensure!(
-            !removed.contains(&reference.plugin),
-            "cannot remove plugin {}: agent {:?} still selects it through Tools {:?}; remove that reference first with `gents config pack wire {} --agent {} --remove --home <node-home>`",
-            reference.plugin, agent, tools, reference.plugin, agent
-        );
-    }
-    Err(super::PackRemovalError::ReferenceInventoryUnavailable.into())
+    let mut selecting = selected_plugin_references(access, owner)
+        .await?
+        .into_iter()
+        .filter(|(_, _, reference, _)| removed.contains(&reference.plugin))
+        .map(|(agent, tools, reference, _)| (reference.plugin, agent, tools));
+    let Some((plugin, agent, tools)) = selecting.next() else {
+        return Ok(());
+    };
+    let others = selecting
+        .map(|(plugin, agent, tools)| {
+            format!("; Tools {tools:?} of agent {agent:?} selects {plugin}")
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<String>();
+    anyhow::bail!(
+        "cannot remove plugin {plugin}: agent {agent:?} still selects it through Tools {tools:?}{others}; remove that reference first with `gents config pack wire {plugin} --agent {agent} --remove --home <node-home>`"
+    )
 }
 
 pub(crate) async fn ensure_replaced_plugins_match<R>(
@@ -61,8 +74,8 @@ pub struct PluginSelection {
 }
 
 /// The selections of `plugins` the reading actor can see. ACP filters the
-/// read, so an empty answer is not proof that nothing selects them
-/// (Lean `Configuration.pluginRemovalObservedSafe`).
+/// read: a Tools the actor cannot read may still select one
+/// (Lean `Configuration.pluginRetirementAllowed`).
 pub async fn visible_plugin_selections<R>(
     access: &R,
     owner: &str,

@@ -28,7 +28,7 @@ pub(crate) use install::{
     wire_pack_plugins, wire_pack_plugins_consenting,
 };
 pub(crate) use scope::{
-    plugin_notification_scope, record_plugin_store_change, resolve_home_owner_under_plugin_store,
+    plugin_notification_scope, record_plugin_retirement, resolve_home_owner_under_plugin_store,
     resolve_scope_owner, warn_on_unrecorded_removal,
 };
 use serde_json::json;

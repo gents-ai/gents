@@ -790,10 +790,52 @@ mod tests {
 
         let still_wired = refused(json!({"argv": ["pack", "remove", "fixture/crew"]})).await;
         assert!(
-            still_wired.contains(
-                "Deletion would leave a broken reference to AgentTarget \\\"crew-worker\\\""
-            ),
+            still_wired.contains("fixture/crew was not removed")
+                && still_wired.contains("references missing AgentTarget")
+                && still_wired.contains("crew-worker"),
             "{still_wired}"
+        );
+
+        // The Engineer removes the pack it was given. What it made around
+        // the pack is its own to delete first: a target of its own that names
+        // the pack's agent would be left dangling. A plugin its Tools still
+        // select refuses the retirement and names the unwiring call; unwired,
+        // the pack goes with its agent, its target and its plugin.
+        call(
+            json!({"argv": ["tools", "update"], "options": {"allow-drop": "agents"},
+            "set": {"agents": {"enabled": true, "target_ids": ["engineer"]}}}),
+        )
+        .await;
+        let delete =
+            call(json!({"argv": ["agent-target", "preview", "delete", "crew-helper"]})).await;
+        call(delete["apply_with"].clone()).await;
+        let selected = refused(json!({"argv": ["pack", "remove", "fixture/crew"]})).await;
+        assert!(
+            selected.contains("fixture/crew was not removed (fixture/probe): selected by Tools")
+                && selected.contains(r#""argv":["pack","wire","fixture/crew","--remove"]"#),
+            "{selected}"
+        );
+        call(json!({"argv": ["pack", "wire", "fixture/crew", "--remove"]})).await;
+        let removed = call(json!({"argv": ["pack", "remove", "fixture/crew"]})).await;
+        let agents = call(json!({"argv": ["agent", "list"]})).await;
+        assert!(
+            !agents.to_string().contains("Crew worker"),
+            "{removed}\n{agents}"
+        );
+        let targets = call(json!({"argv": ["agent-target", "list"]})).await;
+        assert_eq!(
+            targets["items"].as_array().map(Vec::len),
+            Some(1),
+            "only the Engineer's own target is left: {targets}"
+        );
+        assert!(
+            gents::plugin::store::read_record(home.path(), "fixture", "probe").is_err(),
+            "the retired plugin has no record: {removed}"
+        );
+        assert_eq!(
+            gents::pack::read_home_install(home.path(), "fixture/crew").unwrap(),
+            None,
+            "{removed}"
         );
         drop(config);
         if let Some(node) = access.local_node() {

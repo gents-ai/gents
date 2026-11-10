@@ -1316,19 +1316,11 @@ async fn pack_install_uses_current_node_and_inference_chain() {
         .unwrap()
         .contains("could not be opened"));
     std::fs::write(installed_path, installed_bytes).unwrap();
-    // Retiring the pack's plugin needs a complete reference inventory, which
-    // document ACP never gives an Agent (`ensure_plugins_unreferenced`), so the
-    // removal is refused and the installation remains.
-    let refused = tool
-        .call(json!({"argv": ["pack", "remove", "fixture/plugin_documents_fixture"]}).to_string())
+    // Nothing that survives the removal selects the pack's plugin, so the
+    // pack is removed and its plugin retired (`ensure_plugins_unreferenced`).
+    tool.call(json!({"argv": ["pack", "remove", "fixture/plugin_documents_fixture"]}).to_string())
         .await
-        .expect_err("an Agent cannot retire a pack's plugins");
-    assert!(
-        refused.to_string().contains(
-            "plugin retirement requires a complete native configuration reference inventory"
-        ),
-        "{refused:#}"
-    );
+        .expect("an unselected plugin retires with its pack");
     let response = fixture
         .user_access
         .execute(&format!(
@@ -1342,7 +1334,7 @@ async fn pack_install_uses_current_node_and_inference_chain() {
             .as_array()
             .unwrap()
             .len(),
-        1
+        0
     );
 }
 
@@ -8417,7 +8409,9 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
         .unwrap_err()
         .to_string();
     assert!(
-        removal.contains("cannot remove plugin fixture/native_echo"),
+        removal.contains(
+            "fixture/native_echo_pack was not removed (fixture/native_echo): selected by"
+        ) && removal.contains(r#""argv":["pack","wire","fixture/native_echo_pack","--remove"]"#),
         "{removal}"
     );
     assert_eq!(

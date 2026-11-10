@@ -69,7 +69,7 @@ async fn unconfigured_home_does_not_prove_a_plugin_is_unreferenced() {
     .unwrap_err();
     assert!(matches!(
         error.downcast_ref::<gents::pack::PackRemovalError>(),
-        Some(gents::pack::PackRemovalError::ReferenceInventoryUnavailable)
+        Some(gents::pack::PackRemovalError::NodeUnobserved)
     ));
 }
 
@@ -412,7 +412,7 @@ fn plugin_pack_dir(
 }
 
 #[tokio::test]
-async fn a_plugins_pack_keeps_records_and_bytes_without_complete_inventory() {
+async fn a_plugins_pack_keeps_records_and_bytes_on_a_home_with_no_node() {
     let home = tempfile::tempdir().unwrap();
     let afb = crate::commands::plugin::testing::build_plugin_afb(
         "shared",
@@ -437,7 +437,7 @@ async fn a_plugins_pack_keeps_records_and_bytes_without_complete_inventory() {
         let error = remove_pkg(home.path(), coordinate).await.unwrap_err();
         assert!(matches!(
             error.downcast_ref::<gents::pack::PackRemovalError>(),
-            Some(gents::pack::PackRemovalError::ReferenceInventoryUnavailable)
+            Some(gents::pack::PackRemovalError::NodeUnobserved)
         ));
         assert!(gents::pack::read_home_install(home.path(), coordinate)
             .unwrap()
@@ -665,12 +665,9 @@ async fn referenced_plugin_removal_refuses_before_changing_pack_or_store_records
             .await
             .expect("node shutdown");
         drop(access);
-        let error = remove_pkg(home.path(), "acme/tools").await.unwrap_err();
-        assert!(matches!(
-            error.downcast_ref::<gents::pack::PackRemovalError>(),
-            Some(gents::pack::PackRemovalError::ReferenceInventoryUnavailable)
-        ));
-        assert!(gents::plugin::store::read_record(home.path(), "acme", "shared").is_ok());
+        // Once nothing selects the plugin, the removal retires it.
+        remove_pkg(home.path(), "acme/tools").await.unwrap();
+        assert!(gents::plugin::store::read_record(home.path(), "acme", "shared").is_err());
     }
 }
 
@@ -1026,13 +1023,9 @@ async fn removal_holds_plugin_lock_after_reference_check_until_deletion() {
     assert_eq!(result.is_ok(), allowed, "{result:?}");
     assert!(format!("{:#}", result.unwrap_err()).contains("plugin store is busy"));
     pause.release.notify_one();
-    let error = remover.await.unwrap().unwrap_err();
-    assert!(matches!(
-        error.downcast_ref::<gents::pack::PackRemovalError>(),
-        Some(gents::pack::PackRemovalError::ReferenceInventoryUnavailable)
-    ));
+    remover.await.unwrap().unwrap();
     *super::REMOVAL_TEST_PAUSE.lock().unwrap() = None;
-    assert!(gents::plugin::store::read_record(home.path(), "acme", "shared").is_ok());
+    assert!(gents::plugin::store::read_record(home.path(), "acme", "shared").is_err());
 }
 
 #[tokio::test]
@@ -1044,12 +1037,8 @@ async fn delegated_home_removal_uses_the_existing_store_guard() {
         .await
         .unwrap();
     let guard = gents::plugin::store::try_lock_store(home.path()).unwrap();
-    let error = super::remove_home_install_with_guard(home.path(), "acme/tools", guard)
+    super::remove_home_install_with_guard(home.path(), "acme/tools", guard)
         .await
-        .unwrap_err();
-    assert!(matches!(
-        error.downcast_ref::<gents::pack::PackRemovalError>(),
-        Some(gents::pack::PackRemovalError::ReferenceInventoryUnavailable)
-    ));
-    assert!(gents::plugin::store::read_record(home.path(), "acme", "shared").is_ok());
+        .unwrap();
+    assert!(gents::plugin::store::read_record(home.path(), "acme", "shared").is_err());
 }

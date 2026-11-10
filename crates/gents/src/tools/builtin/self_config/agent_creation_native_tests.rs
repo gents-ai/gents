@@ -943,17 +943,14 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
             .len(),
         1
     );
-    let retirement = crate::pack::ensure_plugins_unreferenced(
+    // A Tools the retirer cannot read does not refuse a retirement
+    // (Lean `Configuration.pluginRetirementAllowed`).
+    crate::pack::ensure_plugins_unreferenced(
         &creator_access,
         runtime.did(),
         &std::collections::BTreeSet::from(["acme/hidden-plugin".to_owned()]),
     )
-    .await
-    .unwrap_err();
-    assert!(matches!(
-        retirement.downcast_ref::<crate::pack::PackRemovalError>(),
-        Some(crate::pack::PackRemovalError::ReferenceInventoryUnavailable)
-    ));
+    .await?;
     let surface_row = user_access
         .execute(
             "{ DatastoreToolSurface(filter: {surface_id: {_eq: \"fixture/surface\"}}) { _docID } }",
@@ -1691,8 +1688,8 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     assert!(
         crate::pack::read_home_install(plugin_home.path(), "fixture/native_echo_pack")?.is_none()
     );
-    // Without a complete reference inventory the disappearance notice keeps
-    // the installation evidence, refreshed by the Agent (`retainPluginStoreRecord`).
+    // A notice that the files are gone, which is not a retirement, keeps the
+    // installation evidence, refreshed by the Agent (`retainPluginStoreRecord`).
     let retain = tokio::task::spawn_blocking(|| {
         crate::lean_vocab_test::lean_plugin_reference_cases()
             .iter()

@@ -268,6 +268,15 @@ pub fn release_plugin_records(
     Ok(released)
 }
 
+/// Deletes the artifact bytes of `plugins` that no plugin record uses any
+/// more, and returns the digests released.
+pub fn release_plugin_bytes(home: &Path, plugins: &[InstalledPackPlugin]) -> Result<Vec<String>> {
+    store::release_unreferenced_bytes(
+        home,
+        &plugins.iter().map(|plugin| plugin.digest.clone()).collect(),
+    )
+}
+
 pub struct LocalPackRemoval {
     pub record: HomePackInstall,
     pub plugins: Vec<InstalledPackPlugin>,

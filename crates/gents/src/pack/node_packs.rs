@@ -229,8 +229,9 @@ pub struct PackListing {
 /// Why an assets or plugins pack was not removed.
 #[derive(Debug, thiserror::Error)]
 pub enum HomePackRemovalError {
-    /// The pack's plugins were not retired. `selections` are the Tools the
-    /// actor can see selecting them, or `None` when that read failed.
+    /// The pack's plugins were not retired: Tools the actor can read still
+    /// select them. `selections` are those Tools, or `None` when reading
+    /// them failed.
     #[error("{cause:#}")]
     PluginsNotRetired {
         plugins: BTreeSet<String>,
@@ -747,6 +748,7 @@ impl NodePacks<'_> {
                     super::PluginStageContext {
                         node_binding: node_binding.as_ref(),
                         changes: Some(&changes),
+                        retired: false,
                     },
                 )
                 .await
@@ -841,15 +843,17 @@ impl NodePacks<'_> {
     }
 
     /// Removes an assets or plugins pack: its home record and the plugin
-    /// records it owns, released together by the local removal owner, then
-    /// the node is told as `actor`. Its plugins are retired only when
-    /// [`super::ensure_plugins_unreferenced`] allows it.
+    /// records it owns, released together by the local removal owner, with
+    /// the plugin bytes no other record uses; then the node is told as
+    /// `actor` and releases its record. The plugins retire unless a Tools the
+    /// actor can read still selects one ([`super::ensure_plugins_unreferenced`]).
+    /// Returns the removal and the digests of the bytes it deleted.
     pub async fn remove_home_pack(
         &self,
         coordinate: &str,
         record: HomePackInstall,
         actor: Option<::identity::Did>,
-    ) -> Result<plugin_lifecycle::LocalPackRemoval, HomePackRemovalError> {
+    ) -> Result<(plugin_lifecycle::LocalPackRemoval, Vec<String>), HomePackRemovalError> {
         let home = self
             .home
             .context("assets and plugins packs live in the node home")?;
@@ -886,20 +890,17 @@ impl NodePacks<'_> {
                 },
                 |()| Ok(()),
             )
+            .and_then(|removal| {
+                let bytes = plugin_lifecycle::release_plugin_bytes(&local_home, &removal.plugins)?;
+                Ok((removal, bytes))
+            })
         })
         .await
         .context("pack removal task did not finish")??;
-        if !removal.plugins.is_empty() {
-            super::record_plugin_store_change_as(
-                self.access,
-                self.node_did,
-                actor,
-                home,
-                coordinate,
-                None,
-            )
-            .await
-            .map_err(anyhow::Error::from)?;
+        if !removal.0.plugins.is_empty() {
+            super::record_plugin_retirement_as(self.access, self.node_did, actor, home, coordinate)
+                .await
+                .map_err(anyhow::Error::from)?;
         }
         Ok(removal)
     }
@@ -915,12 +916,16 @@ impl NodePacks<'_> {
         let report = super::remove_pack(self.access, self.node_did, coordinate, edited).await?;
         if let Some(home) = self.home {
             super::forget_home_install(home, coordinate)?;
+            // The removal transaction retired these plugins (Lean
+            // `Configuration.pluginRetirementAllowed`), so their records go
+            // and so do the bytes no other record uses.
             for removed in std::iter::once(&report).chain(&report.dependencies) {
-                plugin_lifecycle::release_plugin_records(
+                let released = plugin_lifecycle::release_plugin_records(
                     home,
                     &removed.pack,
                     &removed.documents.plugins,
                 )?;
+                plugin_lifecycle::release_plugin_bytes(home, &released)?;
             }
         }
         Ok(report)
