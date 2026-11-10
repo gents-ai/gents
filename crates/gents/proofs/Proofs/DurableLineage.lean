@@ -36,36 +36,51 @@ list holds every session `sessionTargetAllowed` admits and, besides them, the
 caller's starter: the scope `AgentSession.observedStarter` reads from the
 caller's own session row. A starter is requested by another actor (a User's
 client key, or the Agent that started it), so it lies outside the caller's
-requester scope: its entry is built from the caller's verified creation
-receipt alone, reads none of the starter's documents, and grants neither a
-send nor an interrupt. A session with neither link is unlisted. -/
+requester scope: its entry exists only when `verifiedStarterReceipt` holds,
+that is, when the caller's own creation receipt verifies and names the
+starter; it reads none of the starter's documents and grants neither a send
+nor an interrupt. A session with neither link is unlisted. -/
 structure ListedSession where
   canMessage : Bool
   canInterrupt : Bool
   deriving DecidableEq, Repr
 
-def listedSession (targetAllowed callerStarter interruptAllowed : Bool) :
+def listedSession
+    (sameRequester sameNode caused allowedTarget verifiedStarterReceipt interruptAllowed : Bool) :
     Option ListedSession :=
-  if targetAllowed then some ⟨true, interruptAllowed⟩
-  else if callerStarter then some ⟨false, false⟩
+  if sessionTargetAllowed sameRequester sameNode caused allowedTarget then
+    some ⟨true, interruptAllowed⟩
+  else if verifiedStarterReceipt then some ⟨false, false⟩
   else none
 
-theorem unlinked_session_unlisted (interruptAllowed : Bool) :
-    listedSession false false interruptAllowed = none := rfl
+theorem unverified_untargeted_session_unlisted
+    (sameNode caused allowedTarget interruptAllowed : Bool) :
+    listedSession false sameNode caused allowedTarget false interruptAllowed = none := rfl
 
-theorem starter_listed_without_authority (interruptAllowed : Bool) :
-    listedSession false true interruptAllowed = some ⟨false, false⟩ := rfl
+theorem starter_listed_without_authority
+    (sameNode caused allowedTarget interruptAllowed : Bool) :
+    listedSession false sameNode caused allowedTarget true interruptAllowed =
+      some ⟨false, false⟩ := rfl
 
-theorem listed_send_requires_target :
-    ∀ targetAllowed callerStarter interruptAllowed : Bool,
-      (listedSession targetAllowed callerStarter interruptAllowed).any (·.canMessage) =
-        targetAllowed := by
+theorem listed_without_target_requires_verified_receipt :
+    ∀ sameRequester sameNode caused allowedTarget verifiedStarterReceipt interruptAllowed : Bool,
+      sessionTargetAllowed sameRequester sameNode caused allowedTarget = false →
+      (listedSession sameRequester sameNode caused allowedTarget verifiedStarterReceipt
+        interruptAllowed).isSome = verifiedStarterReceipt := by
+  decide
+
+theorem listed_send_is_target_authority :
+    ∀ sameRequester sameNode caused allowedTarget verifiedStarterReceipt interruptAllowed : Bool,
+      (listedSession sameRequester sameNode caused allowedTarget verifiedStarterReceipt
+        interruptAllowed).any (·.canMessage) =
+        sessionTargetAllowed sameRequester sameNode caused allowedTarget := by
   decide
 
 theorem listed_interrupt_requires_target_and_interrupt :
-    ∀ targetAllowed callerStarter interruptAllowed : Bool,
-      (listedSession targetAllowed callerStarter interruptAllowed).any (·.canInterrupt) =
-        (targetAllowed && interruptAllowed) := by
+    ∀ sameRequester sameNode caused allowedTarget verifiedStarterReceipt interruptAllowed : Bool,
+      (listedSession sameRequester sameNode caused allowedTarget verifiedStarterReceipt
+        interruptAllowed).any (·.canInterrupt) =
+        (sessionTargetAllowed sameRequester sameNode caused allowedTarget && interruptAllowed) := by
   decide
 
 structure RawLineage where
