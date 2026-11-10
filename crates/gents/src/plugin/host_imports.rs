@@ -100,7 +100,8 @@ pub(super) fn run_with_imports(
     afb: &afterburner_afb::Afb,
     request: AfbRunRequest,
     session: Arc<Mutex<ImportSession>>,
-    imports: &[crate::pack::HostImport],
+    run_script_enabled: bool,
+    host_call_enabled: bool,
 ) -> Result<AfbRunOutput> {
     let AfbRunRequest {
         stdin,
@@ -124,8 +125,6 @@ pub(super) fn run_with_imports(
     let run_session = session.clone();
     let host_session = session.clone();
     let read_session = session;
-    let run_script_enabled = imports.contains(&crate::pack::HostImport::RunScript);
-    let host_call_enabled = imports.contains(&crate::pack::HostImport::HostCall);
     let module = vm
         .compile(wasm_bytes, true, move |linker| {
             if run_script_enabled {

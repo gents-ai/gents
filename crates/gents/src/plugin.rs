@@ -394,7 +394,8 @@ impl PluginRunner {
                     &afb,
                     request,
                     session.clone(),
-                    &self.plugin.host_imports,
+                    self.plugin.imports_run_script(),
+                    self.plugin.imports_host_call(),
                 )
             }
         }

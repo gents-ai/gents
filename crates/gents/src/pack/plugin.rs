@@ -58,6 +58,16 @@ pub enum HostImport {
     HostCall,
 }
 
+impl PackPlugin {
+    pub fn imports_run_script(&self) -> bool {
+        self.host_imports.contains(&HostImport::RunScript)
+    }
+
+    pub fn imports_host_call(&self) -> bool {
+        self.host_imports.contains(&HostImport::HostCall)
+    }
+}
+
 /// For literals that set only the fields they need.
 impl Default for PackPlugin {
     fn default() -> Self {

@@ -671,7 +671,7 @@ impl PluginExecutor {
                 bound.validate_invocation(&coordinate, &record.digest, &json_digest(&input))?;
             }
             let admitted = self.admit(record)?;
-            let budget = if record.declaration.host_imports.contains(&crate::pack::HostImport::HostCall) {
+            let budget = if record.declaration.imports_host_call() {
                 super::host_calls::budget_for_invocation(admitted.budget)
             } else { admitted.budget };
             let mut input = input.clone();
@@ -693,7 +693,7 @@ impl PluginExecutor {
                 data: data::Session::for_call(record.declaration.data.as_ref(), data),
                 jobs: job_calls::Session::for_call(record.declaration.job.0, &coordinate, jobs),
             };
-            let input = if record.declaration.host_imports.contains(&crate::pack::HostImport::HostCall) {
+            let input = if record.declaration.imports_host_call() {
                 super::host_calls::prepare_input(input, &mut calls.tools)?
             } else { input };
             let first_input = if calls.is_empty() {
@@ -883,11 +883,7 @@ async fn drive_with_calls(
     input: serde_json::Value,
     budget: PluginBudget,
 ) -> Result<PluginOutcome> {
-    if runner
-        .definition()
-        .host_imports
-        .contains(&crate::pack::HostImport::HostCall)
-    {
+    if runner.definition().imports_host_call() {
         return super::host_calls::run(runner, bound, input, budget, calls.tools)
             .await
             .map_err(Into::into);
