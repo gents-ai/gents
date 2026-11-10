@@ -497,8 +497,11 @@ fn session_queue_order_matches_native_arrival_model_after_claim() {
     }
 }
 
+/// Only the Agent's verified observation shows a Goal (Lean
+/// `SessionObservation.no_goal_only_from_verified_absence`), so a readable
+/// Goal row never reaches the snapshot projection.
 #[test]
-fn session_snapshot_projects_durable_goal_state() {
+fn session_snapshot_never_projects_goal_rows() {
     let goal = GoalRow {
         goal_id: "goal-1".into(),
         creation_key: None,
@@ -535,19 +538,7 @@ fn session_snapshot_projects_durable_goal_state() {
         None,
     )
     .expect("snapshot");
-    let goal = snapshot.goal.expect("goal");
-    assert_eq!(
-        goal.objective.as_deref(),
-        Some("Ship the durable controller")
-    );
-    assert_eq!(
-        (
-            goal.tokens_used,
-            goal.consecutive_blocked_audits,
-            goal.continuation_sequence
-        ),
-        (1_200, 2, 3)
-    );
+    assert!(snapshot.goal.is_none(), "{:?}", snapshot.goal);
 }
 
 #[test]

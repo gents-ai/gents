@@ -11,6 +11,128 @@ use tokio_util::sync::CancellationToken;
 use super::support::served_desktop;
 use crate::host::{protocol, ClientHost};
 
+/// The session snapshot shows a Goal only as the Agent's verified signed
+/// observation shows it (Lean `SessionObservation.view`), never from the Goal
+/// document the User can also read over the same signed runtime endpoint: no
+/// Goal while the projection is missing, then the projected Goal, which a
+/// later unprojected Goal change does not replace.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn session_snapshot_goal_is_only_the_verified_observation() {
+    let desktop = served_desktop().await;
+    let runtime = &desktop.runtime;
+    let node_did = runtime.node_did().to_owned();
+    let user_did = desktop.core.node_identity().did().to_owned();
+    runtime
+        .agent_session(&desktop.agent, "chat", &user_did)
+        .await;
+    let agent_access = runtime.agent_access(&desktop.agent).await;
+    let agent =
+        gents::store::identity::resolve_agent_identity(runtime.runtime().as_ref(), &desktop.agent)
+            .unwrap();
+    let snapshot_goal = async || {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                match crate::commands::session_snapshot(
+                    &desktop.core,
+                    "chat".into(),
+                    Some(node_did.clone()),
+                    None,
+                    Some(40),
+                )
+                .await
+                {
+                    Ok(Some(snapshot)) => break snapshot.goal,
+                    Ok(None) => {}
+                    Err(error)
+                        if error.code == crate::error::BridgeErrorCode::ProjectionPending => {}
+                    Err(error) => panic!("session snapshot: {error}"),
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the session snapshot reached its runtime")
+    };
+    let user_reads_goal_status = async || {
+        let access = gents::store::config_client::ConfigAccess::Graphql(
+            desktop
+                .core
+                .operator_observation_graphql(&node_did)
+                .unwrap(),
+        );
+        let rows = access
+            .execute(&format!(
+                r#"{{ Goal(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "chat" }} }}) {{ status }} }}"#,
+                gents::store::graphql::escape_graphql_string(&node_did)
+            ))
+            .await
+            .unwrap();
+        rows["data"]["Goal"].clone()
+    };
+
+    let goal = gents::goal::set_goal_from_access(
+        &agent_access,
+        &node_did,
+        "chat",
+        Some("Finish the hosted work"),
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        user_reads_goal_status().await,
+        json!([{"status": "active"}])
+    );
+    let unprojected = snapshot_goal().await;
+    assert!(
+        unprojected.is_none(),
+        "a readable Goal document without a verified projection is not a shown Goal: {unprojected:?}"
+    );
+
+    gents::goal::project_session_goal(
+        runtime.node(),
+        runtime.runtime(),
+        &agent,
+        "chat",
+        Some(&user_did),
+    )
+    .await
+    .unwrap();
+    let observed = snapshot_goal().await.expect("the verified Goal");
+    assert_eq!(observed.goal_id, goal.goal_id);
+    assert_eq!(observed.status.as_deref(), Some("active"));
+    assert_eq!(
+        observed.objective.as_deref(),
+        Some("Finish the hosted work")
+    );
+
+    gents::goal::set_goal_from_access(
+        &agent_access,
+        &node_did,
+        "chat",
+        None,
+        Some(GoalStatus::Paused),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        user_reads_goal_status().await,
+        json!([{"status": "paused"}])
+    );
+    let still_observed = snapshot_goal().await.expect("the verified Goal");
+    assert_eq!(
+        still_observed.status.as_deref(),
+        Some("active"),
+        "an unprojected Goal change must not replace the verified observation"
+    );
+
+    desktop.shutdown().await;
+}
+
 /// The Agent's signed Goal projection reaches the session's User through the
 /// editor host wire (`desktop_session_goal`, a User-signed HTTP read of the
 /// runtime) as the three-state `SessionGoalState`, through start, pause and
