@@ -426,7 +426,7 @@ async fn outcome_published(txn: &ConfigApplyTxn<'_>, fire: &TriggerFire) -> Resu
         };
         txn.run(
             &Query::select(Selection::new().field(fields::HANDOFF_ID))
-                .filter(Filter::eq(fields::HANDOFF_ID, &fire.identity.outcome_id()))
+                .filter(Filter::eq(fields::HANDOFF_ID, fire.identity.outcome_id()))
                 .render(),
         )
         .await?
