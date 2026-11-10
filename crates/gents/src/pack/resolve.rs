@@ -246,6 +246,7 @@ mod tests {
             coordinate: "gents/resolve_fixture_c".to_owned(),
             version: older.version.clone(),
             digest: older.digest.clone(),
+            source: None,
         }];
         let options = ResolveOptions {
             home: Some(home.path()),
@@ -274,6 +275,7 @@ mod tests {
             coordinate: "gents/resolve_fixture_d".to_owned(),
             version: "0.9.0".to_owned(),
             digest: format!("sha256:{}", "0".repeat(64)),
+            source: None,
         }];
         let options = ResolveOptions {
             home: Some(home.path()),

@@ -38,6 +38,7 @@ const HISTORY_LIMIT: usize = 32;
 
 /// Portable description of how an operator obtained a pack archive.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PackSource {
     Local {
@@ -1396,6 +1397,19 @@ pub struct InstalledPack {
     pub coordinate: String,
     pub version: String,
     pub digest: String,
+    /// Where the installed archive came from; `None` when the record
+    /// predates recorded sources.
+    pub source: Option<PackSource>,
+}
+
+fn installed_pack_row(row: &Value, owner: &str) -> Result<InstalledPack> {
+    let coordinate = required_record_field_str(row, "coordinate")?;
+    Ok(InstalledPack {
+        coordinate: coordinate.to_owned(),
+        version: required_record_field_str(row, "version")?.to_owned(),
+        digest: required_record_field_str(row, "digest")?.to_owned(),
+        source: decode_record_field(row, "source", owner, coordinate)?,
+    })
 }
 
 pub async fn list_installed_packs(
@@ -1404,7 +1418,7 @@ pub async fn list_installed_packs(
 ) -> Result<Vec<InstalledPack>> {
     let response = access
         .execute(&format!(
-            r#"{{ {RECORD}(filter: {{ node_did: {{ _eq: "{}" }} }}, order: {{ coordinate: ASC }}) {{ _docID coordinate version digest plugin_store }} }}"#,
+            r#"{{ {RECORD}(filter: {{ node_did: {{ _eq: "{}" }} }}, order: {{ coordinate: ASC }}) {{ _docID coordinate version digest source plugin_store }} }}"#,
             escape_graphql_string(owner)
         ))
         .await?;
@@ -1413,13 +1427,7 @@ pub async fn list_installed_packs(
         .context("reading the pack installation records")?
         .iter()
         .filter(|row| !is_plugin_store_row(row))
-        .map(|row| {
-            Ok(InstalledPack {
-                coordinate: required_record_field_str(row, "coordinate")?.to_owned(),
-                version: required_record_field_str(row, "version")?.to_owned(),
-                digest: required_record_field_str(row, "digest")?.to_owned(),
-            })
-        })
+        .map(|row| installed_pack_row(row, owner))
         .collect()
 }
 
@@ -1430,7 +1438,7 @@ pub async fn read_installed_pack(
 ) -> Result<Option<InstalledPack>> {
     let response = access
         .execute(&format!(
-            r#"{{ {RECORD}(filter: {{ node_did: {{ _eq: "{}" }}, coordinate: {{ _eq: "{}" }} }}, limit: 2) {{ _docID coordinate version digest plugin_store }} }}"#,
+            r#"{{ {RECORD}(filter: {{ node_did: {{ _eq: "{}" }}, coordinate: {{ _eq: "{}" }} }}, limit: 2) {{ _docID coordinate version digest source plugin_store }} }}"#,
             escape_graphql_string(owner),
             escape_graphql_string(coordinate)
         ))
@@ -1444,13 +1452,7 @@ pub async fn read_installed_pack(
     );
     rows.first()
         .filter(|row| !is_plugin_store_row(row))
-        .map(|row| {
-            Ok(InstalledPack {
-                coordinate: required_record_field_str(row, "coordinate")?.to_owned(),
-                version: required_record_field_str(row, "version")?.to_owned(),
-                digest: required_record_field_str(row, "digest")?.to_owned(),
-            })
-        })
+        .map(|row| installed_pack_row(row, owner))
         .transpose()
 }
 
@@ -1500,6 +1502,7 @@ pub async fn installed_packs(
                     coordinate: record.coordinate,
                     version: record.version,
                     digest: record.digest,
+                    source: record.source,
                 },
             );
         }

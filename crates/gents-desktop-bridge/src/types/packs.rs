@@ -17,6 +17,11 @@ pub struct InstalledPackView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub digest: Option<String>,
+    /// Where the installed archive came from: a file, the pack store or the
+    /// registry. Absent when its install record predates recorded sources.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub source: Option<gents::pack::PackSource>,
     pub latest: Option<String>,
     pub outdated: Option<bool>,
     pub error: Option<String>,
