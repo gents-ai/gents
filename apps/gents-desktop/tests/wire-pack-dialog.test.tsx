@@ -47,9 +47,9 @@ describe("enabling a pack's plugin for an agent", () => {
         /can’t be enabled from the app while this node is running/,
       ),
     ).toBeInTheDocument();
-    expect(screen.getByText(/gents config pack wire 'demo\/hello_plugin'/)).toHaveTextContent(
-      "--targets-from 'demo/targets'",
-    );
+    expect(
+      screen.getByText(/gents config pack wire 'demo\/hello_plugin'/),
+    ).toHaveTextContent("--targets-from 'demo/targets'");
     expect(screen.queryByText(/through GraphQL/)).toBeNull();
   });
 
