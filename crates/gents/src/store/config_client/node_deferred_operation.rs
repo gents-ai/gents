@@ -6,8 +6,9 @@ use defra_node::Node as EmbeddedNode;
 use super::{ConfigAccess, ConfigApplyTxn, ConfigClientError};
 use crate::store::graphql::escape_graphql_string;
 
-const DEFERRED_COLLECTIONS: [&str; 4] = [
+const DEFERRED_COLLECTIONS: [&str; 5] = [
     "EnrollmentOperatorNonce",
+    "EnrollmentRenewalPolicy",
     "NetworkAdminPin",
     "PeerPairingApplied",
     "PeerPairingDesired",
@@ -267,6 +268,7 @@ mod tests {
             .await?;
         for schema in [
             gents_protocol::schemas::ENROLLMENT_OPERATOR_NONCE,
+            gents_protocol::schemas::ENROLLMENT_RENEWAL_POLICY,
             gents_protocol::schemas::NETWORK_ADMIN_PIN,
             gents_protocol::schemas::PEER_PAIRING_APPLIED,
             gents_protocol::schemas::PEER_PAIRING_DESIRED,
@@ -342,6 +344,12 @@ mod tests {
                 "EnrollmentOperatorNonce",
                 Some(
                     r#"mutation { create_EnrollmentOperatorNonce(input: {nonce_key:"nonce", admin_did:"did:test:admin", expires_at:"2027-01-01T00:00:00Z", consumed_at:"2026-01-01T00:00:00Z", parent_linked:false}) {_docID} }"#,
+                ),
+            ),
+            (
+                "EnrollmentRenewalPolicy",
+                Some(
+                    r#"mutation { create_EnrollmentRenewalPolicy(input: {network_id:"network", enabled:true, parent_linked:false}) {_docID} }"#,
                 ),
             ),
             ("NetworkAdminPin", None),

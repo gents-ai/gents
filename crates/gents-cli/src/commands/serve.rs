@@ -908,10 +908,15 @@ async fn serve_foreground(
             "identity {node_identity_did} has no exportable private key, so it cannot own the served node's access control; re-initialize the home with a file or macos-keychain identity to serve it"
         );
     }
-    let http_config = crate::http::access::HttpAuthority::for_endpoint(&graphql_url)
+    let runtime = ServeRuntime::new(executor);
+    let authority = crate::http::access::HttpAuthority::for_endpoint(&graphql_url)
         .with_advertised_endpoint(advertised_graphql_url.as_deref())
-        .with_startup_gate(client_access_ready.clone(), bind_probe_path.clone())
-        .protect_http(defra_node::HttpConfig::with_addr(http_addr).with_extra_routes(extra_routes));
+        .with_startup_gate(client_access_ready.clone(), bind_probe_path.clone());
+    let streams =
+        crate::http::shutdown_streams::ShutdownStreams::new(runtime.shutdown_tx.subscribe());
+    let http_config = defra_node::HttpConfig::with_addr(http_addr)
+        .with_extra_routes(extra_routes)
+        .with_router_transform(Arc::new(move |router| authority.wrap(streams.wrap(router))));
     anyhow::ensure!(
         server_identity.node_identity_did.as_deref() == Some(identity.did()),
         "runtime identity does not match the protected store identity"
@@ -940,8 +945,7 @@ async fn serve_foreground(
         }
     };
     *store_lifetime = Some(store_access.clone());
-    let mut runtime =
-        ServeRuntime::new(executor).retain_shutdown_owner(node.clone(), store_access.clone());
+    let mut runtime = runtime.retain_shutdown_owner(node.clone(), store_access.clone());
     let _metrics_listener = metrics_listener.map(|listener| {
         tracing::info!(
             addr = %listener.addr(),

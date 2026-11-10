@@ -99,8 +99,9 @@ test("compacts invisible action separators before paging without losing the fina
       }
     />,
   );
-  expect(html.match(/class="tool-activity-row/g)).toHaveLength(3);
+  expect(html.match(/class="tool-activity-row/g)).toHaveLength(2);
   expect(html).toContain("Ran 998 actions");
+  expect(html).toContain("Running 2 actions");
   expect(html).toContain("Completed change attachment");
   expect(html).not.toContain("Load older messages");
 });
@@ -349,7 +350,5 @@ test("puts an input submitted to an empty timeline before the arriving live resp
       activity={null}
     />,
   );
-  expect(html.indexOf(pending.content)).toBeLessThan(
-    html.indexOf("New live"),
-  );
+  expect(html.indexOf(pending.content)).toBeLessThan(html.indexOf("New live"));
 });

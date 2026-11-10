@@ -300,6 +300,7 @@ describe("ux plugin context", () => {
       [
         "addEventListener",
         "data",
+        "notify",
         "onDispose",
         "onEvent",
         "os",

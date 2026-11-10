@@ -56,13 +56,15 @@ export function createDesktopApiAdapter(
         peerId,
         label,
       }),
+    dismissEndedAccess: (nodeDid) =>
+      invokeDesktop("desktop_ended_access_dismiss", { nodeDid }),
     fetchPeerStatus: (peerId) =>
       invokeDesktop("desktop_peer_status_fetch", {
         request: { peerId },
       }),
-    requestStatusEnrollment: (serverAddress) =>
+    requestStatusEnrollment: (serverAddress, candidateName) =>
       invokeDesktop("desktop_peer_enroll_status", {
-        request: { serverAddress },
+        request: { serverAddress, ...(candidateName ? { candidateName } : {}) },
       }),
     listWorkspace: (subpath) =>
       invokeDesktop("desktop_workspace_list", {

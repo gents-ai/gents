@@ -209,10 +209,12 @@ describe("buildUxHost: bridge verbs", () => {
   it("exposes no raw bridge verb", () => {
     const host = buildUxHost(testApp(), route);
     expect("bridge" in host).toBe(false);
-    /* data: the declared-surface door; onShellChange: the host's route
-       feed for the frames, never a plugin-facing verb */
+    /* data: the declared-surface door; notify: the plugin notification
+       owner; onShellChange: the host's route feed for the frames, never a
+       plugin-facing verb */
     expect(Object.keys(host).sort()).toEqual([
       "data",
+      "notify",
       "onShellChange",
       "os",
       "plugin",

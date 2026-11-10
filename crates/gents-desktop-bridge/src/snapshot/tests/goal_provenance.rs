@@ -12,7 +12,6 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 struct GoalProvenance {
     runtime: gents_desktop_core::test_fixtures::ServedRuntimeHome,
     access: ConfigAccess,
-    opening_rows: ClientStoreRows,
     opening_doc: String,
     observed: Vec<AgentRequestRow>,
     applied: std::collections::BTreeMap<String, String>,
@@ -76,7 +75,6 @@ async fn goal_provenance_cases() -> GoalProvenance {
         .expect("goal provenance model");
     let mut observed = Vec::new();
     let mut opening_doc = None;
-    let mut opening_rows = None;
     // Every request the model accepts as an applied opening, by document.
     let mut applied = std::collections::BTreeMap::<String, String>::new();
     for (index, root, alter_assignment, omit_receipt, expected) in [
@@ -428,7 +426,6 @@ async fn goal_provenance_cases() -> GoalProvenance {
         if index == 0 {
             super::super::session::goal_provenance::tests::assert_copied_opening(&access, &rows)
                 .await;
-            opening_rows = Some(rows.clone());
         }
         observed.push(rows.requests[0].clone());
         for reload in 0..2 {
@@ -482,7 +479,6 @@ async fn goal_provenance_cases() -> GoalProvenance {
     GoalProvenance {
         runtime,
         access,
-        opening_rows: opening_rows.unwrap(),
         opening_doc: opening_doc.unwrap(),
         observed,
         applied,
@@ -518,15 +514,152 @@ async fn goal_provenance_agrees_before_transcript_publication_and_after_reload()
     runtime.shutdown().await;
 }
 
+/// A Goal opened through the desktop's goal-submission command, followed by
+/// ordinary turns a running runtime executes on its scripted provider, pages
+/// and forks with the opening's Goal marker. Forks copy their content into
+/// destination-owned documents (`SessionFork.publish`); the copied opening
+/// still names its origin, so the marker follows it.
 #[tokio::test]
-#[ignore = "port to the running-runtime fixture: gents-ai/gents#3607"]
 async fn paged_native_forks_follow_goal_provenance() {
-    let cases = goal_provenance_cases().await;
+    use crate::tests::streaming_backend::{StreamPlan, StreamResponse, StreamScript};
+    use crate::types::{GoalControlAction, GoalControlRequest};
+
+    let desktop = crate::tests::support::RunningDesktop::start(vec![
+        StreamPlan::current_authored_user(
+            "GOAL-OPENING",
+            vec![StreamResponse::Stream(StreamScript::paused(
+                "GOAL-OPENING",
+                ["opening answer"],
+            ))],
+        ),
+        StreamPlan::current_authored_user(
+            "ORDINARY-TURN",
+            vec![StreamResponse::completes(
+                "ORDINARY-TURN",
+                ["ordinary answer"],
+            )],
+        ),
+    ])
+    .await;
+    let node = desktop.node_did().to_owned();
+    let control = |action| GoalControlRequest {
+        client_did: None,
+        command_id: None,
+        node_did: node.clone(),
+        session_id: Some("session".into()),
+        session_doc_id: None,
+        expected: None,
+        agent_did: Some(desktop.lead.agent_did.clone()),
+        action,
+        cwd: None,
+        captured_context: None,
+        attachments: None,
+    };
+    let opened = crate::commands::control_goal(
+        &desktop.core,
+        control(GoalControlAction::Create {
+            objective: "GOAL-OPENING".into(),
+            token_budget: None,
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        opened.goal_id,
+        gents_protocol::goal::deterministic_goal_id(&node, "session")
+    );
+    let opening_request = opened.request_id.clone().expect("the opening request");
+    let opening = desktop
+        .wait_for(
+            "the opening turn",
+            &format!(
+                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID lifecycle_state }} }}"#,
+                gents::store::graphql::escape_graphql_string(&opening_request)
+            ),
+            |data| data["AgentRequest"][0]["lifecycle_state"] == "processing",
+        )
+        .await["AgentRequest"][0]["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    desktop
+        .wait_for(
+            "the opening's streamed answer",
+            "{ AgentOutputSegment { payload request_doc_id } }",
+            |data| {
+                data["AgentOutputSegment"].as_array().is_some_and(|rows| {
+                    rows.iter().any(|row| {
+                        row["request_doc_id"] == opening.as_str()
+                            && row["payload"]
+                                .as_str()
+                                .is_some_and(|payload| payload.contains("opening answer"))
+                    })
+                })
+            },
+        )
+        .await;
+    // The User cancels the opening once the runtime holds its answer. An
+    // interrupted turn pauses its Goal (`decide_goal_continuation`), so the
+    // runtime publishes no continuation between the ordinary turns.
+    let interrupted = crate::interrupt::interrupt_request(
+        &desktop.core,
+        &crate::types::DesktopInterruptRequest {
+            request_id: opening_request,
+            node_did: Some(node.clone()),
+            cause: "userCancelled".into(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(interrupted.accepted);
+    desktop
+        .wait_for_request_state(&opening, "interrupted")
+        .await;
+    let mut ordinary = Vec::new();
+    for index in 0..4 {
+        let doc = desktop
+            .send(
+                "session",
+                &format!("ordinary-{index}"),
+                &format!("ORDINARY-TURN {index}"),
+            )
+            .await;
+        desktop.wait_for_request_state(&doc, "completed").await;
+        ordinary.push(doc);
+    }
+
+    let access = desktop.runtime.user_access();
+    let messages = access
+        .execute(&format!(
+            r#"{{ AgentMessage(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "session" }}, role: {{ _eq: "user" }} }}) {{ message_key request_doc_id }} }}"#,
+            gents::store::graphql::escape_graphql_string(&node)
+        ))
+        .await
+        .unwrap();
+    let prompt = |request: &str| {
+        let keys = messages["data"]["AgentMessage"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["request_doc_id"] == request)
+            .map(|row| row["message_key"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(keys.len(), 1, "{request} publishes one prompt: {messages}");
+        keys.into_iter().next().unwrap()
+    };
+    let session = gents_protocol::session::AgentSession {
+        session_id: "session".into(),
+        node_did: node.clone(),
+        requester_did: Some(desktop.user_did()),
+        ..crate::tests::support::fixture_session(&node, "session")
+    };
     super::super::session::goal_provenance::tests::assert_paged_native_forks(
-        &cases.access,
-        &cases.opening_rows,
-        &cases.observed[1],
+        &access,
+        &session,
+        &opened.goal_id,
+        &prompt(&opening),
+        &prompt(&ordinary[0]),
     )
     .await;
-    cases.runtime.shutdown().await;
+    desktop.shutdown().await;
 }

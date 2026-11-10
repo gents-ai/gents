@@ -1,22 +1,26 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::store::graphql::rows;
 use anyhow::Result;
-use gents::store::graphql::rows;
 use serde_json::Value;
 
-use super::super::super::principal_identity::PrincipalIdentity;
-use super::projection::project_desktop_approval;
-use super::reconcile::{
-    ApprovedStatusEnrollment, DesktopApprovalProjection, EnrollmentAuthorityOutcome,
-};
-use super::rows::{
+use super::enrollment_projection::project_desktop_approval;
+use super::enrollment_projection::{ApprovedStatusEnrollment, DesktopApprovalProjection};
+use super::enrollment_rows::{
     EnrollmentDecisionRow, EnrollmentPinRow, EnrollmentRequestRow, EnrollmentRevisionRow,
     EnrollmentRouteReceiptRow, STATUS_ENROLLMENT_QUERY,
 };
+use crate::NodeIdentity;
 
-pub(super) async fn load_status_enrollment_approvals(
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EnrollmentAuthorityOutcome {
+    Current(ApprovedStatusEnrollment),
+    Conflicted { reason: String },
+}
+
+pub async fn load_status_enrollment_approvals(
     node: &std::sync::Arc<defra_node::Node>,
-    principal: &PrincipalIdentity,
+    principal: &dyn NodeIdentity,
     local_peer_id: &str,
 ) -> Result<(
     BTreeMap<String, EnrollmentAuthorityOutcome>,
@@ -24,10 +28,10 @@ pub(super) async fn load_status_enrollment_approvals(
 )> {
     anyhow::ensure!(
         node.node_identity_did() == Some(principal.did()),
-        "desktop enrollment requires its configured local identity"
+        "member enrollment requires its configured local identity"
     );
     let response: defra_node::QueryResponse = serde_json::from_value(
-        gents::store::config_client::ConfigAccess::local_as(
+        crate::store::config_client::ConfigAccess::local_as(
             node.clone(),
             identity::Did::new(principal.did())?,
         )
@@ -37,9 +41,9 @@ pub(super) async fn load_status_enrollment_approvals(
     project_status_enrollment_response(&response, principal, local_peer_id).await
 }
 
-pub(in crate::client::core) async fn load_status_enrollment_approvals_in_txn(
-    txn: &gents::store::config_client::ConfigApplyTxn<'_>,
-    principal: &PrincipalIdentity,
+pub async fn load_status_enrollment_approvals_in_txn(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    principal: &dyn NodeIdentity,
     local_peer_id: &str,
 ) -> Result<(
     BTreeMap<String, EnrollmentAuthorityOutcome>,
@@ -53,7 +57,7 @@ pub(in crate::client::core) async fn load_status_enrollment_approvals_in_txn(
         "NetworkAuthorizationRevision",
         "NetworkEnrollmentRouteReceipt",
     ] {
-        gents::store::graphql::fence_arrivals(txn, collection).await?;
+        crate::store::graphql::fence_arrivals(txn, collection).await?;
     }
     let response: defra_node::QueryResponse =
         serde_json::from_value(txn.execute(STATUS_ENROLLMENT_QUERY).await?)?;
@@ -62,7 +66,7 @@ pub(in crate::client::core) async fn load_status_enrollment_approvals_in_txn(
 
 async fn project_status_enrollment_response(
     response: &defra_node::QueryResponse,
-    principal: &PrincipalIdentity,
+    principal: &dyn NodeIdentity,
     local_peer_id: &str,
 ) -> Result<(
     BTreeMap<String, EnrollmentAuthorityOutcome>,
@@ -361,7 +365,7 @@ fn add_generational_conflict(
     }
 }
 
-pub(super) fn apply_current_generational_conflicts(
+pub fn apply_current_generational_conflicts(
     approved: &[ApprovedStatusEnrollment],
     generational: BTreeMap<String, Vec<(Option<u64>, String)>>,
     conflicts: &mut BTreeMap<String, Vec<String>>,
@@ -389,7 +393,7 @@ pub(super) fn apply_current_generational_conflicts(
     }
 }
 
-pub(super) fn scoped_authority_outcomes(
+pub fn scoped_authority_outcomes(
     mut approved: Vec<ApprovedStatusEnrollment>,
     mut conflicts: BTreeMap<String, Vec<String>>,
 ) -> BTreeMap<String, EnrollmentAuthorityOutcome> {
@@ -473,7 +477,7 @@ fn add_scoped_conflict(
     }
 }
 
-pub(super) fn raw_authority_targets(
+pub fn raw_authority_targets(
     raw: &Value,
     request_scopes: &BTreeMap<String, (String, String)>,
     network_servers: &BTreeMap<String, Vec<String>>,
