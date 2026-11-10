@@ -210,7 +210,10 @@ async fn a_page_document_creates_through_the_desktops_remote_access() {
     let created = call(
         fixture.home.path(),
         &fixture.client_access,
-        request("add_task", json!({"title": "From the desktop", "lane": "doing"})),
+        request(
+            "add_task",
+            json!({"title": "From the desktop", "lane": "doing"}),
+        ),
     )
     .await
     .unwrap();
@@ -231,7 +234,10 @@ async fn a_page_document_creates_through_the_desktops_remote_access() {
     let disabled = call(
         fixture.home.path(),
         &fixture.client_access,
-        request("add_task", json!({"title": "After disable", "lane": "doing"})),
+        request(
+            "add_task",
+            json!({"title": "After disable", "lane": "doing"}),
+        ),
     )
     .await
     .unwrap_err();
