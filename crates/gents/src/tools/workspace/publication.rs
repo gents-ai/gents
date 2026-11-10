@@ -27,8 +27,14 @@ pub(crate) async fn flush_workspace_docs(
                 "workspace publication differs from the frozen Agent selection");
             let existing = workspace_document_id_in_txn(txn, "IsolatedWorkspace", &workspace.workspace_id, &workspace.owner_node_did).await?;
             if let Some(existing_doc) = &existing {
-                let query = format!(r#"{{IsolatedWorkspace(filter: {{_docID: {{_eq: "{}"}}}}, limit: 2) {{lifecycle_state seal_hash}}}}"#, escape_graphql_string(existing_doc));
-                let response = txn.execute(&query).await?;
+                let query = {
+                    use gents_protocol::document_query::{fields::isolated_workspace as fields, Filter, Query, Selection};
+                    Query::select(Selection::new().field(fields::LIFECYCLE_STATE).field(fields::SEAL_HASH))
+                        .filter(Filter::eq(fields::DOC_ID, existing_doc))
+                        .limit(2)
+                        .render()
+                };
+                let response = txn.run(&query).await?;
                 let rows = response["data"]["IsolatedWorkspace"].as_array().context("workspace state query omitted rows")?;
                 let [row] = rows.as_slice() else { anyhow::bail!("workspace state unavailable or ambiguous") };
                 let previous = row["lifecycle_state"].as_str().and_then(crate::tools::native::normalize_workspace_lifecycle_state).context("workspace lifecycle state invalid")?;
@@ -42,15 +48,27 @@ pub(crate) async fn flush_workspace_docs(
                 for (did, doc) in [(&action.writer_agent_did, &action.writer_agent_doc_id), (&action.integrator_agent_did, &action.integrator_agent_doc_id)] {
                     let did = did.as_deref().context("workspace Agent DID missing")?;
                     let doc = doc.as_deref().context("workspace Agent document missing")?;
-                    let query = format!(r#"{{ Agent(filter: {{_docID: {{_eq: "{}"}}}}, limit: 2) {{ _docID node_did agent_did }} }}"#, escape_graphql_string(doc));
-                    let response = txn.execute(&query).await?;
+                    let query = {
+                        use gents_protocol::document_query::{fields::agent as fields, Filter, Query, Selection};
+                        Query::select(Selection::doc_id().field(fields::NODE_DID).field(fields::AGENT_DID))
+                            .filter(Filter::eq(fields::DOC_ID, doc))
+                            .limit(2)
+                            .render()
+                    };
+                    let response = txn.run(&query).await?;
                     let rows = response["data"]["Agent"].as_array().context("workspace Agent query omitted rows")?;
                     anyhow::ensure!(matches!(rows.as_slice(), [row] if row["_docID"] == doc && row["node_did"] == workspace.owner_node_did && row["agent_did"] == did), "frozen workspace Agent is unavailable or changed");
                 }
                 for reader in &action.readers {
                     let doc = reader.agent_doc_id.as_deref().context("workspace reader physical Agent missing")?;
-                    let query = format!(r#"{{ Agent(filter: {{_docID: {{_eq: "{}"}}}}, limit: 2) {{ _docID node_did agent_did enabled }} }}"#, escape_graphql_string(doc));
-                    let response = txn.execute(&query).await?;
+                    let query = {
+                        use gents_protocol::document_query::{fields::agent as fields, Filter, Query, Selection};
+                        Query::select(Selection::doc_id().field(fields::NODE_DID).field(fields::AGENT_DID).field(fields::ENABLED))
+                            .filter(Filter::eq(fields::DOC_ID, doc))
+                            .limit(2)
+                            .render()
+                    };
+                    let response = txn.run(&query).await?;
                     let rows = response["data"]["Agent"].as_array().context("workspace reader Agent query omitted rows")?;
                     anyhow::ensure!(matches!(rows.as_slice(), [row] if row["_docID"] == doc
                         && row["node_did"] == workspace.owner_node_did
@@ -142,12 +160,15 @@ async fn workspace_agent_parent_in_txn(
         txn.actor_did() == Some(agent_did),
         "workspace publication requires its selected Agent actor"
     );
-    let query = format!(
-        r#"{{Agent(filter: {{node_did: {{_eq: "{}"}}, agent_did: {{_eq: "{}"}}}}, limit: 2) {{_docID}}}}"#,
-        escape_graphql_string(node_did),
-        escape_graphql_string(agent_did)
-    );
-    let response = txn.execute(&query).await?;
+    let query = {
+        use gents_protocol::document_query::{fields::agent as fields, Filter, Query, Selection};
+        Query::select(Selection::doc_id())
+            .filter(Filter::eq(fields::NODE_DID, node_did))
+            .filter(Filter::eq(fields::AGENT_DID, agent_did))
+            .limit(2)
+            .render()
+    };
+    let response = txn.run(&query).await?;
     let rows = response["data"]["Agent"]
         .as_array()
         .context("workspace Agent parent query omitted rows")?;
@@ -186,35 +207,97 @@ pub(super) async fn flush_frozen_workspace(
         .filter(|hash| !hash.is_empty())
         .context("frozen workspace seal missing")?;
     let now = chrono::Utc::now().to_rfc3339();
-    access.transact_write("workspace.quickstart.freeze", |txn| {
-        let placement = &placement;
-        let now = &now;
-        Box::pin(async move {
-            let doc = workspace_document_id_in_txn(txn, "IsolatedWorkspace", workspace_id, owner).await?.context("frozen workspace unavailable")?;
-            let placement_doc = workspace_document_id_in_txn(txn, "WorkspacePlacement", workspace_id, owner).await?;
-            let query = format!(r#"{{IsolatedWorkspace(filter: {{_docID: {{_eq: "{}"}}}}, limit: 2) {{lifecycle_state seal_hash}}}}"#, escape_graphql_string(&doc));
-            let response = txn.execute(&query).await?;
-            let rows = response["data"]["IsolatedWorkspace"].as_array().context("frozen state query omitted rows")?;
-            let [row] = rows.as_slice() else { anyhow::bail!("frozen state unavailable or ambiguous") };
-            let state = row["lifecycle_state"].as_str().and_then(crate::tools::native::normalize_workspace_lifecycle_state).context("workspace state invalid")?;
-            if state == "sealed" {
-                anyhow::ensure!(row["seal_hash"].as_str() == Some(seal), "existing workspace seal differs");
-                return Ok(());
-            }
-            anyhow::ensure!(state == "provisioning" && row["seal_hash"].as_str() == Some(seal),
-                "workspace cannot freeze from state {state} or a different reserved seal");
-            let mutation = format!(r#"mutation {{update_IsolatedWorkspace(docID: "{}", input: {{lifecycle_state: "sealed", seal_hash: "{}", binding_revision: "{}"}}) {{_docID}}}}"#,
-                escape_graphql_string(&doc), escape_graphql_string(seal), uuid::Uuid::new_v4());
-            let response = txn.execute(&mutation).await?;
-            anyhow::ensure!(crate::store::graphql::mutation_documents(&response, "update_IsolatedWorkspace")?.is_some_and(|rows| rows.len() == 1), "workspace freeze was not authorized");
-            let response = txn.execute(&workspace_placement_upsert_mutation(placement, now)).await?;
-            let updated = workspace_mutation_document_id(&response, "upsert_WorkspacePlacement")?;
-            if let Some(placement_doc) = placement_doc {
-                anyhow::ensure!(updated == placement_doc, "workspace placement physical identity changed");
-            } else {
-                txn.add_resource_relationship("WorkspacePlacement", &updated, "parent", "workspaces", &doc).await?;
-            }
-            Ok::<_, anyhow::Error>(())
+    access
+        .transact_write("workspace.quickstart.freeze", |txn| {
+            let placement = &placement;
+            let now = &now;
+            Box::pin(async move {
+                let doc =
+                    workspace_document_id_in_txn(txn, "IsolatedWorkspace", workspace_id, owner)
+                        .await?
+                        .context("frozen workspace unavailable")?;
+                let placement_doc =
+                    workspace_document_id_in_txn(txn, "WorkspacePlacement", workspace_id, owner)
+                        .await?;
+                let query = {
+                    use gents_protocol::document_query::{
+                        fields::isolated_workspace as fields, Filter, Query, Selection,
+                    };
+                    Query::select(
+                        Selection::new()
+                            .field(fields::LIFECYCLE_STATE)
+                            .field(fields::SEAL_HASH),
+                    )
+                    .filter(Filter::eq(fields::DOC_ID, &doc))
+                    .limit(2)
+                    .render()
+                };
+                let response = txn.run(&query).await?;
+                let rows = response["data"]["IsolatedWorkspace"]
+                    .as_array()
+                    .context("frozen state query omitted rows")?;
+                let [row] = rows.as_slice() else {
+                    anyhow::bail!("frozen state unavailable or ambiguous")
+                };
+                let state = row["lifecycle_state"]
+                    .as_str()
+                    .and_then(crate::tools::native::normalize_workspace_lifecycle_state)
+                    .context("workspace state invalid")?;
+                if state == "sealed" {
+                    anyhow::ensure!(
+                        row["seal_hash"].as_str() == Some(seal),
+                        "existing workspace seal differs"
+                    );
+                    return Ok(());
+                }
+                anyhow::ensure!(
+                    state == "provisioning" && row["seal_hash"].as_str() == Some(seal),
+                    "workspace cannot freeze from state {state} or a different reserved seal"
+                );
+                let mutation = {
+                    use gents_protocol::document_query::{
+                        fields::isolated_workspace as fields, Input, Update,
+                    };
+                    Update::doc(
+                        &doc,
+                        Input::new()
+                            .set(fields::LIFECYCLE_STATE, "sealed")
+                            .set(fields::SEAL_HASH, seal)
+                            .set(fields::BINDING_REVISION, uuid::Uuid::new_v4().to_string()),
+                    )
+                    .render()
+                };
+                let response = txn.run(&mutation).await?;
+                anyhow::ensure!(
+                    crate::store::graphql::mutation_documents(
+                        &response,
+                        "update_IsolatedWorkspace"
+                    )?
+                    .is_some_and(|rows| rows.len() == 1),
+                    "workspace freeze was not authorized"
+                );
+                let response = txn
+                    .execute(&workspace_placement_upsert_mutation(placement, now))
+                    .await?;
+                let updated =
+                    workspace_mutation_document_id(&response, "upsert_WorkspacePlacement")?;
+                if let Some(placement_doc) = placement_doc {
+                    anyhow::ensure!(
+                        updated == placement_doc,
+                        "workspace placement physical identity changed"
+                    );
+                } else {
+                    txn.add_resource_relationship(
+                        "WorkspacePlacement",
+                        &updated,
+                        "parent",
+                        "workspaces",
+                        &doc,
+                    )
+                    .await?;
+                }
+                Ok::<_, anyhow::Error>(())
+            })
         })
-    }).await
+        .await
 }

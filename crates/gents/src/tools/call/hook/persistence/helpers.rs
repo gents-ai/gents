@@ -115,10 +115,15 @@ pub(crate) async fn reserve_background_slot_in_txn(
     );
     let row = rows.remove(0);
     let next = row["background_admission_sequence"].as_u64().unwrap_or(0) + 1;
-    txn.execute(&format!(
-        r#"mutation {{ update_AgentRequest(docID: "{escaped}", input: {{ background_admission_sequence: {next} }}) {{ _docID }} }}"#
-    ))
-    .await?;
+    {
+        use gents_protocol::document_query::{fields::agent_request as fields, Input, Update};
+        let rendered = Update::doc(
+            request_doc_id,
+            Input::new().set(fields::BACKGROUND_ADMISSION_SEQUENCE, next),
+        )
+        .render();
+        txn.run(&rendered).await?;
+    }
     Ok(row)
 }
 

@@ -1214,32 +1214,24 @@ impl EventSource {
                 )
             })
             .collect::<RapidHashMap<_, _>>();
-        let correlations = correlations
-            .iter()
-            .map(|correlation| {
-                format!(
-                    "\"{}\"",
-                    crate::store::graphql::escape_graphql_string(correlation)
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        let query = format!(
-            r#"query {{
-                AgentRequest(
-                    filter: {{
-                        node_did: {{ _eq: "{node_did}" }},
-                        caused_by_trigger_id: {{ _eq: "{trigger_id}" }},
-                        caused_by_correlation: {{ _in: [{correlations}] }}
-                    }},
-                    limit: {limit}
-                ) {{ caused_by_correlation request_id retry_key }}
-            }}"#,
-            node_did = crate::store::graphql::escape_graphql_string(node_did),
-            trigger_id = crate::store::graphql::escape_graphql_string(&trigger.trigger_id),
-            limit = GROUP_RECOVERY_PAGE_SIZE,
-        );
-        let response = match access.execute(&query).await {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        let query = Query::select(
+            Selection::new()
+                .field(fields::CAUSED_BY_CORRELATION)
+                .field(fields::REQUEST_ID)
+                .field(fields::RETRY_KEY),
+        )
+        .filter(Filter::eq(fields::NODE_DID, node_did))
+        .filter(Filter::eq(
+            fields::CAUSED_BY_TRIGGER_ID,
+            &trigger.trigger_id,
+        ))
+        .filter(Filter::any_of(fields::CAUSED_BY_CORRELATION, correlations))
+        .limit(GROUP_RECOVERY_PAGE_SIZE as u64)
+        .render();
+        let response = match access.read(&query).await {
             Ok(response) => response,
             Err(error) => {
                 tracing::warn!(
@@ -1283,22 +1275,22 @@ impl EventSource {
                 (key, correlation.clone())
             })
             .collect::<RapidHashMap<_, _>>();
-        let keys = keys_to_correlations
-            .keys()
-            .map(|key| format!("\"{}\"", crate::store::graphql::escape_graphql_string(key)))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let query = format!(
-            r#"query {{
-                EventGroupState(
-                    filter: {{ node_did: {{ _eq: "{owner}" }}, group_key: {{ _in: [{keys}] }} }},
-                    limit: {limit}
-                ) {{ group_key quiesced_at }}
-            }}"#,
-            owner = crate::store::graphql::escape_graphql_string(delivery.owner()),
-            limit = GROUP_RECOVERY_PAGE_SIZE,
-        );
-        let response = match access.execute(&query).await {
+        use gents_protocol::document_query::{
+            fields::event_group_state as fields, Filter, Query, Selection,
+        };
+        let query = Query::select(
+            Selection::new()
+                .field(fields::GROUP_KEY)
+                .field(fields::QUIESCED_AT),
+        )
+        .filter(Filter::eq(fields::NODE_DID, delivery.owner()))
+        .filter(Filter::any_of(
+            fields::GROUP_KEY,
+            keys_to_correlations.keys(),
+        ))
+        .limit(GROUP_RECOVERY_PAGE_SIZE as u64)
+        .render();
+        let response = match access.read(&query).await {
             Ok(response) => response,
             Err(error) => {
                 tracing::warn!(

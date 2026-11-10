@@ -302,7 +302,20 @@ pub(crate) async fn agent_session_list(
                 && chrono::DateTime::parse_from_rfc3339(&cursor.created_at).is_ok()
         });
     if let Some(anchor) = &cursor {
-        let response = access.execute(&format!("{{AgentSession(filter: {{_docID: {{_eq: {}}}, requester_did: {{_eq: {}}}}}, limit: 1) {{_docID created_at session_id node_did}}}}", quoted(&anchor.doc_id), quoted(&caller.agent_did))).await?;
+        use gents_protocol::document_query::{
+            fields::agent_session as fields, Filter, Query, Selection,
+        };
+        let rendered = Query::select(
+            Selection::doc_id()
+                .field(fields::CREATED_AT)
+                .field(fields::SESSION_ID)
+                .field(fields::NODE_DID),
+        )
+        .filter(Filter::eq(fields::DOC_ID, &anchor.doc_id))
+        .filter(Filter::eq(fields::REQUESTER_DID, &caller.agent_did))
+        .limit(1)
+        .render();
+        let response = access.read(&rendered).await?;
         let rows = response["data"]["AgentSession"]
             .as_array()
             .context("cursor query omitted session rows")?;

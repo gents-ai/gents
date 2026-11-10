@@ -7,8 +7,6 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use serde::Deserialize;
 
-use crate::store::graphql::escape_graphql_string;
-
 use gents_protocol::output::reconstruction::{reconstruct_stream, ObservedSegment};
 use gents_protocol::output::rows::{
     decode_scoped_request_output_segments, request_output_segments_query,
@@ -124,31 +122,27 @@ pub(crate) async fn handle_list_background_tools_with_access(
     args: ListBackgroundToolsArgs,
 ) -> Result<ListBackgroundToolsResponse> {
     let limit = args.validated_limit() as usize;
-    let escaped_session = escape_graphql_string(&caller.session_id);
-    let query = format!(
-        r#"{{
-            AgentToolCall(
-                filter: {{
-                    session_id: {{ _eq: "{escaped_session}" }},
-                    await_mode: {{ _eq: "background" }}
-                }},
-                order: {{ started_at: ASC }}
-            ) {{
-                _docID
-                tool_call_id
-                tool_name
-                request_doc_id
-                session_id
-                node_did
-                requester_did
-                await_mode
-                lifecycle_state
-                started_at
-                completed_at
-            }}
-        }}"#
-    );
-    let response = access.execute(&query).await?;
+    use gents_protocol::document_query::{
+        fields::agent_tool_call as fields, Direction, Filter, Query, Selection,
+    };
+    let query = Query::select(
+        Selection::doc_id()
+            .field(fields::TOOL_CALL_ID)
+            .field(fields::TOOL_NAME)
+            .field(fields::REQUEST_DOC_ID)
+            .field(fields::SESSION_ID)
+            .field(fields::NODE_DID)
+            .field(fields::REQUESTER_DID)
+            .field(fields::AWAIT_MODE)
+            .field(fields::LIFECYCLE_STATE)
+            .field(fields::STARTED_AT)
+            .field(fields::COMPLETED_AT),
+    )
+    .filter(Filter::eq(fields::SESSION_ID, &caller.session_id))
+    .filter(Filter::eq(fields::AWAIT_MODE, "background"))
+    .order_by(fields::STARTED_AT, Direction::Asc)
+    .render();
+    let response = access.read(&query).await?;
     let rows: Vec<ListBackgroundToolRow> =
         rows_skipping_malformed(response.get("data"), "AgentToolCall")?;
 
@@ -261,32 +255,27 @@ async fn read_tool_output_slice_inner(
         return Ok(ReadToolOutputOutcome::NotAuthorized);
     }
 
-    let escaped_tool_call_id = escape_graphql_string(tool_call_id);
-    let escaped_session = escape_graphql_string(&caller.session_id);
-    let query = format!(
-        r#"{{
-            AgentToolCall(
-                filter: {{
-                    session_id: {{ _eq: "{escaped_session}" }},
-                    tool_call_id: {{ _eq: "{escaped_tool_call_id}" }}
-                }},
-                limit: 1
-            ) {{
-                _docID
-                tool_call_id
-                tool_name
-                request_doc_id
-                session_id
-                node_did
-                requester_did
-                await_mode
-                lifecycle_state
-                started_at
-                completed_at
-            }}
-        }}"#
-    );
-    let data = access.execute(&query).await?.get("data").cloned();
+    use gents_protocol::document_query::{
+        fields::agent_tool_call as fields, Filter, Query, Selection,
+    };
+    let query = Query::select(
+        Selection::doc_id()
+            .field(fields::TOOL_CALL_ID)
+            .field(fields::TOOL_NAME)
+            .field(fields::REQUEST_DOC_ID)
+            .field(fields::SESSION_ID)
+            .field(fields::NODE_DID)
+            .field(fields::REQUESTER_DID)
+            .field(fields::AWAIT_MODE)
+            .field(fields::LIFECYCLE_STATE)
+            .field(fields::STARTED_AT)
+            .field(fields::COMPLETED_AT),
+    )
+    .filter(Filter::eq(fields::SESSION_ID, &caller.session_id))
+    .filter(Filter::eq(fields::TOOL_CALL_ID, tool_call_id))
+    .limit(1)
+    .render();
+    let data = access.read(&query).await?.get("data").cloned();
     let Some(row) = first_row::<ReadToolOutputRow>(data.as_ref(), "AgentToolCall") else {
         return Ok(ReadToolOutputOutcome::NotAuthorized);
     };
@@ -630,21 +619,27 @@ pub async fn request_foreground_backgrounding(
     request_id: &str,
     tool_call_id: &str,
 ) -> Result<bool> {
-    let node = escape_graphql_string(node_did);
-    let session = escape_graphql_string(session_id);
-    let request = escape_graphql_string(request_id);
-    let tool = escape_graphql_string(tool_call_id);
-    let scope = format!(
-        r#"node_did: {{ _eq: "{node}" }}, session_id: {{ _eq: "{session}" }}, request_id: {{ _eq: "{request}" }}, tool_call_id: {{ _eq: "{tool}" }}"#
-    );
-    let response = access
-        .execute(&format!(
-            r#"{{ AgentToolCall(filter: {{{scope}}}, limit: 2) {{
-        _docID request_doc_id tool_name lifecycle_state await_mode plugin_parent_tool_call_doc_id
-        background_requested_at started_at deadline_at
-    }} }}"#
-        ))
-        .await?;
+    use gents_protocol::document_query::{
+        fields::agent_tool_call as fields, Filter, Input, Query, Selection, Update,
+    };
+    let lookup = Query::select(
+        Selection::doc_id()
+            .field(fields::REQUEST_DOC_ID)
+            .field(fields::TOOL_NAME)
+            .field(fields::LIFECYCLE_STATE)
+            .field(fields::AWAIT_MODE)
+            .field(fields::PLUGIN_PARENT_TOOL_CALL_DOC_ID)
+            .field(fields::BACKGROUND_REQUESTED_AT)
+            .field(fields::STARTED_AT)
+            .field(fields::DEADLINE_AT),
+    )
+    .filter(Filter::eq(fields::NODE_DID, node_did))
+    .filter(Filter::eq(fields::SESSION_ID, session_id))
+    .filter(Filter::eq(fields::REQUEST_ID, request_id))
+    .filter(Filter::eq(fields::TOOL_CALL_ID, tool_call_id))
+    .limit(2)
+    .render();
+    let response = access.read(&lookup).await?;
     let rows = response
         .pointer("/data/AgentToolCall")
         .and_then(serde_json::Value::as_array)
@@ -679,26 +674,34 @@ pub async fn request_foreground_backgrounding(
             < gents_protocol::job::MAX_BACKGROUNDED_TOOLS_PER_PARENT,
         "background process limit reached; wait for a background process to finish"
     );
-    let doc = escape_graphql_string(
-        row["_docID"]
-            .as_str()
-            .context("tool missing physical identity")?,
-    );
-    let started = escape_graphql_string(
-        row["started_at"]
-            .as_str()
-            .context("tool missing start time")?,
-    );
-    let deadline = escape_graphql_string(
-        row["deadline_at"]
-            .as_str()
-            .context("tool missing deadline")?,
-    );
-    let now = escape_graphql_string(&Utc::now().to_rfc3339());
-    let result = access.write("tool.request_background", &format!(r#"mutation {{ update_AgentToolCall(
-        docID: "{doc}", filter: {{ _docID: {{ _eq: "{doc}" }}, {scope}, lifecycle_state: {{ _eq: "running" }}, await_mode: {{ _eq: "foreground" }} }},
-        input: {{ background_requested_at: "{now}", started_at: "{started}", deadline_at: "{deadline}" }}
-    ) {{ _docID }} }}"#)).await?;
+    let doc = row["_docID"]
+        .as_str()
+        .context("tool missing physical identity")?;
+    let started = row["started_at"]
+        .as_str()
+        .context("tool missing start time")?;
+    let deadline = row["deadline_at"]
+        .as_str()
+        .context("tool missing deadline")?;
+    let now = Utc::now().to_rfc3339();
+    let update = Update::doc(
+        doc,
+        Input::new()
+            .set(fields::BACKGROUND_REQUESTED_AT, &now)
+            .set(fields::STARTED_AT, started)
+            .set(fields::DEADLINE_AT, deadline),
+    )
+    .filter(Filter::eq(fields::DOC_ID, doc))
+    .filter(Filter::eq(fields::NODE_DID, node_did))
+    .filter(Filter::eq(fields::SESSION_ID, session_id))
+    .filter(Filter::eq(fields::REQUEST_ID, request_id))
+    .filter(Filter::eq(fields::TOOL_CALL_ID, tool_call_id))
+    .filter(Filter::eq(fields::LIFECYCLE_STATE, "running"))
+    .filter(Filter::eq(fields::AWAIT_MODE, "foreground"))
+    .render();
+    let result = access
+        .write_rendered("tool.request_background", &update)
+        .await?;
     Ok(result
         .pointer("/data/update_AgentToolCall")
         .and_then(serde_json::Value::as_array)

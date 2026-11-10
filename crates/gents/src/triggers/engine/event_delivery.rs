@@ -245,16 +245,18 @@ pub(crate) async fn callback_result_ready(
     if collection != "CallbackResult" {
         return Ok(true);
     }
+    use gents_protocol::document_query::{
+        fields::callback_result as fields, Filter, Query, Selection,
+    };
+    let query = Query::select(Selection::new().field(fields::PARENT_LINKED))
+        .filter(Filter::eq(fields::DOC_ID, doc_id))
+        .limit(2)
+        .render();
     let access = crate::store::config_client::ConfigAccess::local_as(
         node.clone(),
         identity::Did::new(actor)?,
     );
-    let response = access
-        .execute(&format!(
-            "{{ CallbackResult(filter: {{_docID: {{_eq: \"{}\"}}}}, limit: 2) {{parent_linked}} }}",
-            escape_graphql_string(doc_id),
-        ))
-        .await?;
+    let response = access.read(&query).await?;
     let rows = response["data"]["CallbackResult"]
         .as_array()
         .context("callback result readiness omitted its rows")?;
@@ -344,7 +346,27 @@ pub(crate) async fn quiesce_group(
     if record.state.quiesced_at.is_some() {
         return Ok(());
     }
-    Ok(access.transact_write("event.quiesce_group", |txn| Box::pin(async move { txn.execute(&format!("mutation{{update_EventGroupState(filter:{{_docID:{{_eq:\"{}\"}},node_did:{{_eq:\"{}\"}}}},input:{{quiesced_at:\"{}\",quiesced_reason:\"{}\"}}){{_docID}}}}",escape_graphql_string(&record.doc_id),escape_graphql_string(&record.state.node_did),escape_graphql_string(&Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true)),escape_graphql_string(reason))).await.map(|_| ()) })).await?)
+    use gents_protocol::document_query::{
+        fields::event_group_state as fields, Filter, Input, Update,
+    };
+    Ok(access
+        .transact_write("event.quiesce_group", |txn| {
+            Box::pin(async move {
+                let rendered = Update::matching(
+                    Filter::eq(fields::DOC_ID, &record.doc_id)
+                        .and(Filter::eq(fields::NODE_DID, &record.state.node_did)),
+                    Input::new()
+                        .set(
+                            fields::QUIESCED_AT,
+                            Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+                        )
+                        .set(fields::QUIESCED_REASON, reason),
+                )
+                .render();
+                txn.run(&rendered).await.map(|_| ())
+            })
+        })
+        .await?)
 }
 
 pub(crate) enum GroupOutcome {
