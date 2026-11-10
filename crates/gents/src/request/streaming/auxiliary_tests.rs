@@ -26,11 +26,19 @@ use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
 use crate::store::config_client::ConfigAccess;
 use gents_protocol::output::rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
 
-#[tokio::test]
-async fn cancelled_title_flush_replays_committed_bytes_before_shutdown_close() {
-    use crate::store::config_client::ConfigApplyTxn;
+struct TitleFixture {
+    _directory: tempfile::TempDir,
+    node: Arc<EmbeddedNode>,
+    identity: crate::store::identity::KeyIdentity,
+    agent: Arc<dyn crate::store::identity::NodeIdentity>,
+    agent_access: ConfigAccess,
+    lifecycle: RequestLifecycle,
+    writer: Arc<DefraStreamWriter>,
+}
+
+/// A claimed title request whose owned execution has begun.
+async fn claimed_title_fixture() -> TitleFixture {
     use crate::store::identity::{KeyIdentity, NodeIdentity};
-    use gents_protocol::output::OutputOutcome;
     use gents_protocol::request_admission::{
         AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
     };
@@ -129,6 +137,32 @@ async fn cancelled_title_flush_replays_committed_bytes_before_shutdown_close() {
         .begin_owned_execution(writer.as_ref())
         .await
         .unwrap();
+    TitleFixture {
+        _directory: directory,
+        node,
+        identity,
+        agent,
+        agent_access,
+        lifecycle,
+        writer,
+    }
+}
+
+#[tokio::test]
+async fn cancelled_title_flush_replays_committed_bytes_before_shutdown_close() {
+    use crate::store::config_client::ConfigApplyTxn;
+    use crate::store::identity::NodeIdentity;
+    use gents_protocol::output::OutputOutcome;
+
+    let TitleFixture {
+        _directory,
+        node,
+        identity,
+        agent,
+        agent_access,
+        lifecycle,
+        writer,
+    } = claimed_title_fixture().await;
     let request = lifecycle.request();
     let scope: CaptureScope = "title.1".parse().unwrap();
     let generation = lifecycle.execution_generation().unwrap();
@@ -246,6 +280,100 @@ async fn cancelled_title_flush_replays_committed_bytes_before_shutdown_close() {
         StreamPayload::Reasoning
     );
     assert_eq!(retained.streams[0].text, "received before shutdown");
+    node.shutdown().await.expect("shut down test node");
+}
+
+#[tokio::test]
+async fn shutdown_close_replays_a_dropped_complete_title_closure() {
+    use crate::store::config_client::ConfigApplyTxn;
+    use gents_loop::stream_processor::AssistantTurnAccumulator;
+    use gents_protocol::output::OutputOutcome;
+
+    let TitleFixture {
+        _directory,
+        node,
+        agent_access,
+        lifecycle,
+        writer,
+        ..
+    } = claimed_title_fixture().await;
+    let request = lifecycle.request();
+    let scope: CaptureScope = "title.1".parse().unwrap();
+    let generation = lifecycle.execution_generation().unwrap();
+    let sink = auxiliary::sink_with_writer(
+        writer,
+        request.clone(),
+        generation.into(),
+        ProviderInputProfile::OpenAiChatCompletions,
+    );
+    let observation = |event| AuxiliaryOutputObservation {
+        capture_scope: scope,
+        turn: 0,
+        attempt: 0,
+        event,
+    };
+    (sink.observe)(observation(AuxiliaryOutputEvent::AttemptStarted))
+        .await
+        .unwrap();
+    (sink.observe)(observation(AuxiliaryOutputEvent::TextDelta(
+        "Sealed workspace".into(),
+    )))
+    .await
+    .unwrap();
+    (sink.flush_pending)(scope, 0, 0).await.unwrap();
+    let mut turn = AssistantTurnAccumulator::default();
+    turn.push_text("Sealed workspace");
+    let message = turn.message_snapshot().expect("received title text");
+
+    // The provider's completed turn closes the source, and shutdown drops that
+    // observation after its closure commits but before it is acknowledged.
+    let committed = Arc::new(tokio::sync::Notify::new());
+    let mut close = Box::pin(ConfigApplyTxn::with_embedded_commit_ack_pause(
+        committed.clone(),
+        (sink.observe)(observation(AuxiliaryOutputEvent::TurnReady { message })),
+    ));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::select! {
+            () = committed.notified() => {},
+            result = &mut close => panic!("closure skipped the commit boundary: {result:?}"),
+        }
+    })
+    .await
+    .expect("title closure reaches its real commit before acknowledgement");
+    drop(close);
+
+    (sink.observe)(observation(AuxiliaryOutputEvent::ClosePartial))
+        .await
+        .expect("shutdown replays the started closure instead of changing its outcome");
+    (sink.observe)(observation(AuxiliaryOutputEvent::ClosePartial))
+        .await
+        .expect("a closed source accepts a repeated shutdown close");
+    let query = format!(
+        "{{AgentOutputSegment(filter: {{request_doc_id: {{_eq: \"{}\"}}}}) {{{AGENT_OUTPUT_SEGMENT_FIELDS}}}}}",
+        crate::store::graphql::escape_graphql_string(&request.doc_id),
+    );
+    let response = agent_access.execute(&query).await.unwrap();
+    let rows = response["data"]["AgentOutputSegment"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(decode_output_segment_row)
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let closures = rows
+        .iter()
+        .filter_map(|row| row.segment.close.as_ref())
+        .collect::<Vec<_>>();
+    assert!(
+        matches!(
+            closures.as_slice(),
+            [SourceClose::Closed {
+                outcome: OutputOutcome::Complete,
+                ..
+            }]
+        ),
+        "the source keeps its single complete closure: {closures:?}"
+    );
     node.shutdown().await.expect("shut down test node");
 }
 
