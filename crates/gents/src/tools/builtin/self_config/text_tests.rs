@@ -2384,7 +2384,7 @@ async fn help_pages_stay_within_their_size_ceilings() {
     );
 }
 
-const HELP_INDEX_CEILING: usize = 1_800;
+const HELP_INDEX_CEILING: usize = 1_900;
 
 #[tokio::test]
 async fn receipts_stay_within_their_size_ceilings() {

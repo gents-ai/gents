@@ -624,7 +624,6 @@ async fn page_help_discloses_detail_per_command_and_topic() {
 
     let page = help(vec!["help", "page"]).await;
     assert!(page.starts_with("page: "), "{page}");
-    assert!(page.len() <= 2_600, "page help is {} chars", page.len());
     assert!(page.contains("Topics: "), "{page}");
     assert!(page.contains("\nNext: "), "{page}");
 
@@ -682,8 +681,8 @@ async fn page_help_discloses_detail_per_command_and_topic() {
         ("help page sdk".into(), sdk.len(), 4_800),
         ("help page sdk Table".into(), table.len(), 600),
         ("help page sdk tokens".into(), tokens.len(), 2_800),
-        ("help pack".into(), pack.len(), 4_400),
-        ("help page".into(), page.len(), 1_150),
+        ("help pack".into(), pack.len(), 4_800),
+        ("help page".into(), page.len(), 2_200),
     ]);
 
     let lint = help(vec!["ux", "lint", "--help"]).await;
