@@ -5,6 +5,7 @@
 //! document and one built from a directory share the compiler, the cases
 //! runner and the manifest shape.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -71,15 +72,19 @@ fn next_version(installed: Option<&str>) -> String {
 
 /// Lays `document` out under `home` for the build owner: refuses what the
 /// manifest would, picks the next version and writes the pack directory.
+/// `schemas` is the SDL of each collection `document.data` names, read from
+/// the node the plugin is built on; the pack carries it as the declaration
+/// the install's data check reads.
 pub fn prepare_plugin_source(
     home: &Path,
     document: &PluginSourceDocument,
+    schemas: &BTreeMap<String, String>,
 ) -> Result<PreparedPluginSource> {
     let installed = crate::pack::read_home_install(home, &document.coordinate())?;
     let version = next_version(installed.as_ref().map(|record| record.version.as_str()));
     let root = plugin_source_build_root(home, &document.plugin_id);
     let dir = root.join(&document.plugin_id);
-    materialize_plugin_source(&dir, document, &version)?;
+    materialize_plugin_source(&dir, document, &version, schemas)?;
     Ok(PreparedPluginSource {
         root,
         dir,
@@ -109,6 +114,7 @@ pub fn materialize_plugin_source(
     dir: &Path,
     document: &PluginSourceDocument,
     version: &str,
+    schemas: &BTreeMap<String, String>,
 ) -> Result<()> {
     document.validate()?;
     let plugin = manifest_entry(document);
@@ -176,7 +182,7 @@ pub fn materialize_plugin_source(
     manifest["plugins"] = json!([entry]);
     manifest["version"] = json!(version);
     manifest["description"] = json!(plugin.description);
-    let assets = manifest["assets"]
+    let mut assets = manifest["assets"]
         .as_array()
         .map(|assets| {
             assets
@@ -190,6 +196,19 @@ pub fn materialize_plugin_source(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    if !schemas.is_empty() {
+        std::fs::create_dir_all(dir.join("schemas")).context("creating the schemas directory")?;
+    }
+    for (index, (collection, sdl)) in schemas.iter().enumerate() {
+        // Collection names differ by case only; the index keeps paths apart.
+        let path = format!(
+            "schemas/{:02}_{}.graphql",
+            index + 1,
+            super::names::to_snake_case(collection)
+        );
+        std::fs::write(dir.join(&path), sdl).with_context(|| format!("writing {path}"))?;
+        assets.push(json!(path));
+    }
     manifest["assets"] = json!(assets);
     if let Some(instructions) = scaffolded["instructions"].as_str() {
         std::fs::write(
@@ -227,7 +246,7 @@ mod tests {
         }));
         std::fs::create_dir_all(dir.join("target/plugins")).unwrap();
         std::fs::write(dir.join("stale.txt"), "old").unwrap();
-        materialize_plugin_source(&dir, &source, "0.1.3").unwrap();
+        materialize_plugin_source(&dir, &source, "0.1.3", &BTreeMap::new()).unwrap();
 
         assert!(!dir.join("stale.txt").exists());
         assert!(
@@ -258,13 +277,13 @@ mod tests {
             ["double"]
         );
 
-        materialize_plugin_source(&dir, &source, "0.1.4").unwrap();
+        materialize_plugin_source(&dir, &source, "0.1.4", &BTreeMap::new()).unwrap();
         assert_eq!(
             crate::pack::authoring::read_manifest(&dir).unwrap().version,
             "0.1.4"
         );
 
-        let prepared = prepare_plugin_source(home.path(), &source).unwrap();
+        let prepared = prepare_plugin_source(home.path(), &source, &BTreeMap::new()).unwrap();
         assert_eq!(prepared.dir, dir);
         assert_eq!(prepared.version, "0.1.0", "nothing is installed yet");
         assert!(!prepared.installed);
@@ -278,7 +297,7 @@ mod tests {
         }));
         let error = format!(
             "{:#}",
-            prepare_plugin_source(home.path(), &cobol).unwrap_err()
+            prepare_plugin_source(home.path(), &cobol, &BTreeMap::new()).unwrap_err()
         );
         assert!(error.contains("supported languages"), "{error}");
         assert!(!plugin_source_build_root(home.path(), "ledger").exists());

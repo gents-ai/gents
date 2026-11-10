@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use crate::documents::{
     references_of, AgentTargetDocument, DatastoreToolSurfaceDocument, EventSource, PageDocument,
-    Tools,
+    PluginSourceDocument, Tools,
 };
 use crate::Collection;
 
@@ -265,6 +265,12 @@ pub(super) fn close(
                         });
                     }
                     queue.push(target_key);
+                }
+            }
+            Collection::PluginSource => {
+                let plugin: PluginSourceDocument = serde_json::from_value(document.clone())?;
+                for name in plugin.data.iter().flat_map(|data| &data.collections) {
+                    pull_collection(name, format!("{source} data.collections"), &mut pulled);
                 }
             }
             Collection::AgentTarget => {

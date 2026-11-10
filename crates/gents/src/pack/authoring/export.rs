@@ -12,5 +12,6 @@ mod tests;
 
 pub use pack::{export_pack, ExportReport, PulledByReference};
 pub use root::{document_handle, write_manifest_root};
+pub(crate) use schema::collection_sdl;
 pub use select::{selectable_kind, ExportSelection, SELECTABLE_KINDS};
 pub use snapshot::{read_owned_config_in_txn, sort_document_rows};

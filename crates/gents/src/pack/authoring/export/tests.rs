@@ -442,6 +442,10 @@ async fn a_page_and_a_plugin_source_export_with_the_surface_the_page_is_granted(
     let owner = origin.node_identity.did().to_owned();
     grant_schema(&origin, &user).await;
     access.add_collection(SDL).await.unwrap();
+    access
+        .add_collection("type DeskTicket { subject: String }")
+        .await
+        .unwrap();
     apply(
         &access,
         vec![
@@ -457,7 +461,7 @@ async fn a_page_and_a_plugin_source_export_with_the_surface_the_page_is_granted(
             ),
             (
                 Collection::PluginSource,
-                json!({"node_did":owner,"plugin_id":"double","language":"js","source":"module.exports = (input) => ({ n: input.n * 2 });\n"}),
+                json!({"node_did":owner,"plugin_id":"double","language":"js","source":"module.exports = (input) => ({ n: input.n * 2 });\n","data":{"collections":["DeskTicket"],"ops":["query"]}}),
             ),
         ],
     )
@@ -490,6 +494,10 @@ async fn a_page_and_a_plugin_source_export_with_the_surface_the_page_is_granted(
         vec![
             ("DatastoreToolSurface/ticket-notes", "Page/notes data"),
             (
+                "collection/DeskTicket",
+                "PluginSource/double data.collections"
+            ),
+            (
                 "collection/TicketNote",
                 "DatastoreToolSurface/ticket-notes tool list_notes"
             ),
@@ -505,4 +513,15 @@ async fn a_page_and_a_plugin_source_export_with_the_surface_the_page_is_granted(
         "ticket-notes"
     );
     assert!(report.check.problems.is_empty(), "{:?}", report.check);
+    assert!(
+        std::fs::read_dir(dir.join("schemas"))
+            .unwrap()
+            .any(|entry| {
+                std::fs::read_to_string(entry.unwrap().path())
+                    .unwrap()
+                    .contains("type DeskTicket")
+            }),
+        "the plugin source's data collection ships its SDL: {:?}",
+        report.schemas
+    );
 }

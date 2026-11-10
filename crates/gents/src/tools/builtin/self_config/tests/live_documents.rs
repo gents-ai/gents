@@ -293,3 +293,70 @@ async fn plugin_build_saves_the_source_and_reports_build_and_case_failures() {
     .unwrap_err();
     assert!(refused.contains("supported languages"), "{refused}");
 }
+
+/// A plugin built from a source document has no pack: its `data.collections`
+/// are application collections on the node, and the build carries their SDL
+/// to the install's data check. Unknown and Gents-managed names are refused
+/// before anything compiles, each by name. The compiler is stubbed with a
+/// prebuilt artifact.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn plugin_build_accepts_data_collections_that_live_on_the_node() {
+    let home = tempfile::tempdir().unwrap();
+    // The command sandbox confines writes to the canonical build root.
+    let home_path = std::fs::canonicalize(home.path()).unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let builder = outside.path().join("builder.sh");
+    let artifact = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/packs/job_plugin_fixture/plugins/job_fixture.afb");
+    std::fs::write(
+        &builder,
+        format!(
+            "#!/bin/sh\ncat {:?} > plugins/probe.afb\nprintf '{{\"cases\":[{{\"plugin\":\"probe\",\"passed\":1,\"failures\":[]}}]}}'\n",
+            artifact
+        ),
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&builder, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let _stub = PLUGIN_BUILDER_STUB.lock().await;
+    let _builder =
+        crate::test_support::EnvVarGuard::set("GENTS_PLUGIN_BUILDER", builder.to_str().unwrap());
+    let (fixture, tools) = fileless_tool("live-plugin-data", &home_path).await;
+    fixture.grant_agent_schema().await;
+    fixture
+        .add_collection("type DeskTicket { subject: String @index(unique: true) status: String }")
+        .await;
+    let build = |collections: Value| {
+        json!({"argv":["plugin","build"],"target_id":"probe","set":{
+            "language":"rust","source":"fn main() {}",
+            "data":{"collections":collections,"ops":["query"]},
+        }})
+    };
+
+    let refused = call(
+        &tools,
+        build(json!(["DeskTicket", "DeskTiket", "AgentRequest"])),
+    )
+    .await
+    .unwrap_err();
+    assert!(refused.contains("Not on this node: DeskTiket"), "{refused}");
+    assert!(refused.contains("cannot use: AgentRequest"), "{refused}");
+    assert!(!refused.contains("schemas/*.graphql"), "{refused}");
+    assert!(
+        crate::plugin::store::read_record(&home_path, "node", "probe").is_err(),
+        "a refused declaration installs nothing"
+    );
+
+    let built = ok(&tools, build(json!(["DeskTicket"]))).await;
+    assert_eq!(built["installed"], true, "{built}");
+    let record = crate::plugin::store::read_record(&home_path, "node", "probe").unwrap();
+    let fields = &record.data_collection_fields["DeskTicket"];
+    assert!(
+        fields.contains(&"status".to_owned()) && fields.contains(&"subject".to_owned()),
+        "the node's collection is the plugin's data declaration: {fields:?}"
+    );
+    assert_eq!(record.data_unique_keys["DeskTicket"], [["subject"]]);
+}

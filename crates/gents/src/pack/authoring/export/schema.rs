@@ -8,7 +8,7 @@ use crate::store::config_client::{preview_schema_install, ConfigAccess};
 /// The SDL of one live application collection, checked to describe exactly
 /// the collection it was read from: a definition this renderer cannot express
 /// (a relation, a default, a view) is refused rather than shipped lossy.
-pub(super) async fn collection_sdl(access: &ConfigAccess, collection: &str) -> Result<String> {
+pub(crate) async fn collection_sdl(access: &ConfigAccess, collection: &str) -> Result<String> {
     let version = access
         .collection_version(collection)
         .await?

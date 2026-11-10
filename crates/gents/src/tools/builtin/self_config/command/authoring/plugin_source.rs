@@ -37,6 +37,63 @@ impl ConfigCommandTool {
             .context("decoding the plugin source document")
     }
 
+    /// The node's SDL for each collection the plugin's `data` names. A plugin
+    /// built from a source document has no pack to declare them, so they must
+    /// be application collections already on this node.
+    async fn plugin_source_data_schemas(
+        &self,
+        id: &str,
+        document: &PluginSourceDocument,
+    ) -> Result<BTreeMap<String, String>> {
+        let Some(data) = &document.data else {
+            return Ok(BTreeMap::new());
+        };
+        let access = self.core.access()?;
+        let mut schemas = BTreeMap::new();
+        let mut managed = Vec::new();
+        let mut absent = Vec::new();
+        for collection in &data.collections {
+            if crate::store::schema::migration::DEFAULT_REGISTRY
+                .managed_names()
+                .any(|name| name == collection)
+            {
+                managed.push(collection.as_str());
+            } else if access
+                .collection_version(collection)
+                .await
+                .with_context(|| format!("plugin {id} was not built: its data.collections names {collection}, and this agent cannot read collection definitions; that takes the schema tool or a datastore tool on its Tools. The source document is saved"))?
+                .is_none()
+            {
+                absent.push(collection.as_str());
+            } else {
+                schemas.insert(
+                    collection.clone(),
+                    collection_sdl(&access, collection).await?,
+                );
+            }
+        }
+        if managed.is_empty() && absent.is_empty() {
+            return Ok(schemas);
+        }
+        let mut reasons = Vec::new();
+        if !absent.is_empty() {
+            reasons.push(format!(
+                "Not on this node: {} (create it with the schema tool, or correct the name)",
+                absent.join(", ")
+            ));
+        }
+        if !managed.is_empty() {
+            reasons.push(format!(
+                "Gents-managed, which a plugin's data calls cannot use: {} (read those documents with config)",
+                managed.join(", ")
+            ));
+        }
+        Err(anyhow!(
+            "plugin {id} was not built: data.collections takes application collections on this node. {}. The source document is saved; set data.collections with [\"plugin\",\"build\",{id:?}] and build again.",
+            reasons.join(". ")
+        ))
+    }
+
     pub(in super::super) async fn plugin_build(&self, argv: &[String]) -> Result<String> {
         self.ensure_resource("tools")?;
         let grants = self.core.held_grants();
@@ -71,9 +128,10 @@ impl ConfigCommandTool {
             .home()
             .context("this runtime has no plugin home")?
             .to_owned();
+        let schemas = self.plugin_source_data_schemas(&id, &document).await?;
         let prepare_home = home.clone();
         let prepared = tokio::task::spawn_blocking(move || {
-            source_pack::prepare_plugin_source(&prepare_home, &document)
+            source_pack::prepare_plugin_source(&prepare_home, &document, &schemas)
         })
         .await
         .context("the plugin source task did not finish")??;

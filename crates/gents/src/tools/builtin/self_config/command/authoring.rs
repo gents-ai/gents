@@ -2,9 +2,9 @@ use std::path::PathBuf;
 
 use super::*;
 use crate::pack::authoring::{
-    check_dir, export_pack, pack_built, pack_name, plugins_with_source, read_manifest, scaffold,
-    selectable_kind, source as source_pack, verify_pack_file, CheckReport, ExportSelection, Kind,
-    PackAddition, PackEdit, ScaffoldInput, Template, SELECTABLE_KINDS,
+    check_dir, export::collection_sdl, export_pack, pack_built, pack_name, plugins_with_source,
+    read_manifest, scaffold, selectable_kind, source as source_pack, verify_pack_file, CheckReport,
+    ExportSelection, Kind, PackAddition, PackEdit, ScaffoldInput, Template, SELECTABLE_KINDS,
 };
 
 mod plugin_source;
