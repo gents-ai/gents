@@ -107,9 +107,9 @@ fn machine_pairing_never_claims_an_unlisted_node() {
 }
 
 #[tokio::test]
-async fn submitted_request_survives_refresh_failure_and_requests_scoped_resync() {
+async fn submitted_request_survives_refresh_failure_left_to_the_refresh_owner() {
     let (store, _version) = ObservedStore::new(ClientStore::default());
-    let mut wake = store.subscribe_resync_requests();
+    let wake = store.subscribe_resync_requests();
     let receipt = SubmittedRequest {
         request_id: "accepted-request".into(),
         session_id: "accepted-session".into(),
@@ -122,12 +122,12 @@ async fn submitted_request_survives_refresh_failure_and_requests_scoped_resync()
     })
     .await;
     assert_eq!(accepted, receipt);
-    assert!(wake.has_changed().unwrap());
-    wake.borrow_and_update();
     assert_eq!(
-        store.take_resync_requests(),
-        (false, vec!["did:test:node".to_owned()])
+        store.focused_request_id().as_deref(),
+        Some("accepted-request")
     );
+    assert!(!wake.has_changed().unwrap());
+    assert_eq!(store.take_resync_requests(), (false, Vec::new()));
     assert_eq!(store.projection_revision(), before);
     assert!(store.snapshot().requests.is_empty());
 }
@@ -153,28 +153,6 @@ fn a_send_replies_at_once_and_hands_the_node_reload_to_the_observer() {
     );
     assert_eq!(store.projection_revision(), before);
     assert!(store.snapshot().requests.is_empty());
-}
-
-#[tokio::test]
-async fn committed_write_survives_refresh_failure_and_requests_scoped_resync() {
-    let (store, _version) = ObservedStore::new(ClientStore::default());
-    let mut wake = store.subscribe_resync_requests();
-    let before = store.projection_revision();
-    observe_committed_write::<u64>(&store, "did:test:node", "save task", async {
-        anyhow::bail!("projection unavailable after commit")
-    })
-    .await;
-    assert!(wake.has_changed().unwrap());
-    wake.borrow_and_update();
-    assert_eq!(
-        store.take_resync_requests(),
-        (false, vec!["did:test:node".to_owned()])
-    );
-    assert_eq!(store.projection_revision(), before);
-
-    observe_committed_write(&store, "did:test:node", "save task", async { Ok(1_u64) }).await;
-    assert!(!wake.has_changed().unwrap());
-    assert_eq!(store.take_resync_requests(), (false, Vec::new()));
 }
 
 #[tokio::test]

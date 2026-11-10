@@ -40,16 +40,12 @@ async fn observe_submitted_request(
     refresh: impl std::future::Future<Output = Result<super::StoreRefresh>>,
 ) -> SubmittedRequest {
     store.set_focused_request_id(Some(receipt.request_id.clone()));
-    if let Err(error) = refresh.await {
-        store.request_resync(Some(&receipt.node_did));
-        tracing::warn!(
-            node_did = %receipt.node_did,
-            session_id = %receipt.session_id,
-            request_id = %receipt.request_id,
-            error = %error,
-            "submitted request awaits local projection refresh"
-        );
-    }
+    observe_committed_write(
+        &receipt.node_did,
+        &format!("submit request {}", receipt.request_id),
+        refresh,
+    )
+    .await;
     receipt
 }
 
@@ -64,21 +60,20 @@ fn acknowledge_submitted_request(store: &ObservedStore, receipt: &SubmittedReque
 
 /// A committed write is reported as saved even when its projection refresh
 /// fails: an error here would present a durable change as failed and invite
-/// the person to repeat it. The observer reloads the node instead.
-async fn observe_committed_write<T>(
-    store: &ObservedStore,
+/// the person to repeat it. The refresh owner has already handed the node to
+/// the observer, or cleared it after a refusal, so this only records it.
+async fn observe_committed_write(
     node_did: &str,
     action: &str,
-    refresh: impl std::future::Future<Output = Result<T>>,
+    refresh: impl std::future::Future<Output = Result<super::StoreRefresh>>,
 ) {
     if let Err(error) = refresh.await {
-        store.request_resync(Some(node_did));
         tracing::warn!(
             target: "gents_desktop_core::writes",
             node_did = %node_did,
             action = %action,
             error = %format!("{error:#}"),
-            "desktop write saved; its refresh failed and the node will resynchronize"
+            "desktop write saved; its refresh failed and the observer owns the node's next read"
         );
     }
 }
@@ -260,24 +255,8 @@ impl ClientCore {
         self.node_identity.did().to_owned()
     }
 
-    /// A superseded node read is not read again here: the observer owns that
-    /// node's next load (`ObserverResync` `RefreshFallback`).
-    async fn refresh_config_source(&self, source_node_did: &str) -> Result<u64> {
-        let refresh = match self.refresh_node(source_node_did).await? {
-            Some(refresh) => refresh,
-            None => self.refresh_store().await?,
-        };
-        Ok(refresh.version())
-    }
-
     async fn observe_committed_config(&self, node_did: &str, action: &str) {
-        observe_committed_write(
-            self.store.as_ref(),
-            node_did,
-            action,
-            self.refresh_config_source(node_did),
-        )
-        .await;
+        observe_committed_write(node_did, action, self.refresh_written_node(node_did)).await;
     }
 
     #[cfg(test)]

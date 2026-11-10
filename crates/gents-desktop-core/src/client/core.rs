@@ -654,7 +654,8 @@ impl ClientCore {
 
     /// Reads the node a write landed on. A write names its node, so it never
     /// reads every routed node, which `refresh_store` does while no single
-    /// window selection names one.
+    /// window selection names one. A superseded read is not repeated: the
+    /// observer owns that node's next load (`ObserverResync` `RefreshFallback`).
     pub(crate) async fn refresh_written_node(&self, node_did: &str) -> Result<StoreRefresh> {
         match self.refresh_node(node_did).await? {
             Some(refresh) => Ok(refresh),

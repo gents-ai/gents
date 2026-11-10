@@ -62,11 +62,6 @@ const FAILURES: [RegExp, string][] = [
     /context (?:length|window)|too long for|maximum context/i,
     "The conversation is too long for this model.",
   ],
-  /* the runtime refused this client, not the provider its credentials */
-  [
-    /\bpermissionDenied\b|access was denied\. check this client/i,
-    "This account doesn't have permission to do that. Ask the node's owner for access.",
-  ],
   [
     /\b401\b|\b403\b|unauthori[sz]ed|forbidden|invalid.{0,20}(?:key|token)|credentials/i,
     "The provider didn't accept the account's credentials.",

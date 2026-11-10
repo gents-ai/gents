@@ -17,6 +17,7 @@ import {
 import { loadChatDrafts } from "../../src/hooks/chatDrafts";
 import {
   deliveryAffordances,
+  resendRefused,
   sendStatus,
   type DeliveryAffordances,
   type SendStatus,
@@ -28,6 +29,7 @@ import { shellStores } from "../shell-fixture";
 type ViewCase = Omit<DeliveryAffordances, "view"> & {
   status: SendStatus;
   mailbox: boolean;
+  refused: boolean;
   view: DeliveryAffordances["view"];
 };
 type Snapshot = {
@@ -119,7 +121,10 @@ async function replay(trace: Trace, mailbox: boolean) {
       status,
       payload: Boolean(draft && !draft.confirmed),
       wire: wire.length,
-      retryOffered: status !== null && deliveryAffordances(status, mailbox).retry,
+      retryOffered:
+        status !== null &&
+        deliveryAffordances(status, mailbox, Boolean(draft && resendRefused(draft)))
+          .retry,
     };
   };
   for (const [index, action] of trace.actions.entries()) {
@@ -198,11 +203,11 @@ async function replay(trace: Trace, mailbox: boolean) {
 
 it("derives the send view and actions from the Lean optimistic send owner", async () => {
   const { views } = await leanCases();
-  expect(views).toHaveLength(8);
-  for (const { status, mailbox, ...expected } of views)
+  expect(views).toHaveLength(16);
+  for (const { status, mailbox, refused, ...expected } of views)
     expect(
-      deliveryAffordances(status, mailbox),
-      `${status} mailbox=${mailbox}`,
+      deliveryAffordances(status, mailbox, refused),
+      `${status} mailbox=${mailbox} refused=${refused}`,
     ).toEqual(expected);
 }, 300_000);
 

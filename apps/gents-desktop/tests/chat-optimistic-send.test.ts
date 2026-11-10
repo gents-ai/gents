@@ -80,7 +80,7 @@ it("shows a failed send with its cause, and Retry resends the same identity and 
   const request = f.send.mock.calls[0][0];
   const [failed] = loadChatDrafts().chatDrafts;
   expect(failed.failure?.message).toBe("Outer reply was lost");
-  expect(deliveryAffordances(sendStatus(failed, Date.now()), false)).toEqual({
+  expect(deliveryAffordances(sendStatus(failed, Date.now()), false, false)).toEqual({
     view: "failed",
     retry: true,
     discard: true,
