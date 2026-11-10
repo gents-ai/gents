@@ -289,7 +289,10 @@ async fn embedded_run_holds_trials_to_the_process_ceiling() {
 
 #[test]
 fn trial_ceiling_holds_only_embedded_trials() {
-    assert_eq!(trial_ceiling(16, Isolation::Embedded), EMBEDDED_TRIAL_CEILING);
+    assert_eq!(
+        trial_ceiling(16, Isolation::Embedded),
+        EMBEDDED_TRIAL_CEILING
+    );
     assert_eq!(trial_ceiling(2, Isolation::Embedded), 2);
     assert_eq!(trial_ceiling(0, Isolation::Embedded), 1);
     assert_eq!(trial_ceiling(16, Isolation::Process), 16);
