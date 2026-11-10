@@ -634,7 +634,7 @@ impl P2pTool {
                         .context("invalid transport peer ID; next call: p2p {\"action\":\"network_list\"}")?;
                 }
                 let filter = peer.map(|peer| format!("{{peer_id: {{_eq: {}}}}}", quoted(peer)));
-                let mut desired = self
+                let desired = self
                     .rows(
                         "DataPlanePairingDesired",
                         filter.as_deref(),
