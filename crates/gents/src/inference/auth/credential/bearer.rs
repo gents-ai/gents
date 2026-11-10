@@ -511,12 +511,16 @@ mod native_access_tests {
                     .await?;
             }
         }
-        runtime_access
-            .grant_node_permission(
-                &identity::Did::new(user.did())?,
-                NodePermission::DacRelationDelete,
-            )
-            .await?;
+        // The User changes relationships over the public route, which requires
+        // `get-collection` as production Users hold it (`GrantSets.operatorUser`).
+        for permission in [
+            NodePermission::DacRelationDelete,
+            NodePermission::CollectionGet,
+        ] {
+            runtime_access
+                .grant_node_permission(&identity::Did::new(user.did())?, permission)
+                .await?;
+        }
         let parent = user_access
             .write(
                 "test.refresh.node",

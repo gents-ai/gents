@@ -287,15 +287,16 @@ async fn session_goal_delete_uses_selected_agent_native_owner() {
     )
     .await
     .unwrap();
-    agent_access
-        .add_actor_relationship(
-            "Goal",
-            &goal.doc_id,
-            "reader",
-            &identity::Did::new(db.node_identity.did()).unwrap(),
-        )
-        .await
-        .unwrap();
+    crate::test_support::relationships::actor_in_txn(
+        &agent_access,
+        "Goal",
+        &goal.doc_id,
+        "reader",
+        &identity::Did::new(db.node_identity.did()).unwrap(),
+        false,
+    )
+    .await
+    .unwrap();
     let runtime_access = crate::ConfigAccess::local_as(
         db.node.clone(),
         identity::Did::new(db.node_identity.did()).unwrap(),

@@ -1697,7 +1697,7 @@ mod tests {
         runtime_did: &str,
         agent: &gents_protocol::agent_identity::AgentIdentityBinding,
     ) {
-        let (node, agent_doc) = access.transact_write("test.client.owned_agent", |txn| Box::pin(async move {
+        access.transact_write("test.client.owned_agent", |txn| Box::pin(async move {
             let node = txn.execute_client_signed_create(
                 "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
                 &serde_json::json!({"input":{"node_did":runtime_did}}),
@@ -1710,30 +1710,12 @@ mod tests {
                 gents_protocol::schemas::AGENT,
             ).await?;
             let agent_doc = crate::store::graphql::created_doc_id(&created, "Agent")?;
-            Ok::<_, anyhow::Error>((node, agent_doc))
+            // The owner links what it created in the creating transaction.
+            txn.add_actor_relationship("Node", &node, "runtime_reader", &identity::Did::new(runtime_did)?).await?;
+            txn.add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &node).await?;
+            txn.add_actor_relationship("Agent", &agent_doc, "executor", &identity::Did::new(&agent.agent_did)?).await?;
+            Ok::<_, anyhow::Error>(())
         })).await.unwrap();
-        access
-            .add_actor_relationship(
-                "Node",
-                &node,
-                "runtime_reader",
-                &identity::Did::new(runtime_did).unwrap(),
-            )
-            .await
-            .unwrap();
-        access
-            .add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &node)
-            .await
-            .unwrap();
-        access
-            .add_actor_relationship(
-                "Agent",
-                &agent_doc,
-                "executor",
-                &identity::Did::new(&agent.agent_did).unwrap(),
-            )
-            .await
-            .unwrap();
     }
 
     /// Serves a fixture node over loopback HTTP. A user's configuration is
@@ -1991,26 +1973,28 @@ mod tests {
             )
             .await
             .unwrap();
-        access
-            .delete_resource_relationship(
-                "AgentRequest",
-                &submitted.doc_id,
-                "parent",
-                "agents",
-                row.agent_doc_id.as_deref().unwrap(),
-            )
-            .await
-            .unwrap();
-        access
-            .delete_resource_relationship(
-                "AgentRequest",
-                &submitted.doc_id,
-                "session",
-                "sessions",
-                row.session_doc_id.as_deref().unwrap(),
-            )
-            .await
-            .unwrap();
+        crate::test_support::relationships::resource_in_txn(
+            &access,
+            "AgentRequest",
+            &submitted.doc_id,
+            "parent",
+            "agents",
+            row.agent_doc_id.as_deref().unwrap(),
+            true,
+        )
+        .await
+        .unwrap();
+        crate::test_support::relationships::resource_in_txn(
+            &access,
+            "AgentRequest",
+            &submitted.doc_id,
+            "session",
+            "sessions",
+            row.session_doc_id.as_deref().unwrap(),
+            true,
+        )
+        .await
+        .unwrap();
         let retry = crate::goal::submit_goal_backed_request_with_identity(
             &node,
             identity::Did::new(agent.did()).unwrap(),
@@ -2715,8 +2699,12 @@ mod tests {
                 "update-document",
                 "add-dac-relation",
                 "delete-dac-relation",
+                // Public relationship routes require `get-collection`, which
+                // production Users hold (`GrantSets.operatorUser`).
+                "get-collection",
             ] {
-                if relation == "delete-dac-relation" && did != user.did() {
+                if matches!(relation, "delete-dac-relation" | "get-collection") && did != user.did()
+                {
                     continue;
                 }
                 let response = node_endpoint

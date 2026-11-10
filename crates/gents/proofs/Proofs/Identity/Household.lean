@@ -670,7 +670,14 @@ theorem grant_survives_failed_marker_and_retry_completes :
 /-- Recovery may authenticate a creator independently of writable row metadata
 and compare it with native ownership. The check binds context; actual relation
 management remains a native ACP1 operation. Missing or conflicting evidence
-cannot select a node or another agent as a substitute actor. -/
+cannot select a node or another agent as a substitute actor.
+
+External premise (defradb.rs #2770): outside a native transaction a
+relationship change also requires node `get-collection`, which an Agent
+creator does not hold. Callback and fork-child repair therefore commit the
+grant and the marker in one native transaction as the creator, so only the
+`grantSucceeded = markSucceeded` outcomes arise there; the unequal outcomes
+remain modeled for children whose grant committed before that premise. -/
 def recoverParent (state : ParentPublication)
     (nativeOwner claimedCreator authenticatedCreator : Option DID)
     (grantSucceeded markSucceeded : Bool) : ParentPublication :=

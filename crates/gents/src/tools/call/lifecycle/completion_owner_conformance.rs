@@ -665,14 +665,28 @@ async fn background_wake_is_visible_to_the_owning_user_and_selected_agent() {
         )
         .await
         .unwrap();
-    worker_access
-        .delete_resource_relationship("AgentRequest", wake_doc, "parent", "agents", agent_doc)
-        .await
-        .unwrap();
-    worker_access
-        .delete_resource_relationship("AgentRequest", wake_doc, "session", "sessions", session_doc)
-        .await
-        .unwrap();
+    crate::test_support::relationships::resource_in_txn(
+        &worker_access,
+        "AgentRequest",
+        wake_doc,
+        "parent",
+        "agents",
+        agent_doc,
+        true,
+    )
+    .await
+    .unwrap();
+    crate::test_support::relationships::resource_in_txn(
+        &worker_access,
+        "AgentRequest",
+        wake_doc,
+        "session",
+        "sessions",
+        session_doc,
+        true,
+    )
+    .await
+    .unwrap();
     let hidden = admission.client.execute(&query).await.unwrap();
     assert!(hidden["data"]["AgentRequest"]
         .as_array()

@@ -119,16 +119,17 @@ async fn watcher_routes_native_private_requests_as_their_selected_agents() {
         runtime.did(), user.did())).await.unwrap();
     let message_doc =
         crate::store::graphql::created_doc_id(&created_message, "AgentMessage").unwrap();
-    agent_access
-        .add_resource_relationship(
-            "AgentMessage",
-            &message_doc,
-            "parent",
-            "sessions",
-            session_doc,
-        )
-        .await
-        .unwrap();
+    crate::test_support::relationships::resource_in_txn(
+        &agent_access,
+        "AgentMessage",
+        &message_doc,
+        "parent",
+        "sessions",
+        session_doc,
+        false,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         crate::session::max_sequence_as(
             &node,
@@ -1081,19 +1082,26 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
             Ok::<_, anyhow::Error>(crate::store::graphql::created_doc_id(&response, "AgentToolControlClaim")?)
         })
     }).await.unwrap();
-    foreign_access
-        .add_actor_relationship("AgentToolControlClaim", &fake, "working_agent", &agent)
-        .await
-        .unwrap();
-    foreign_access
-        .add_actor_relationship(
-            "AgentToolControlClaim",
-            &fake,
-            "reader",
-            &user.did().parse().unwrap(),
-        )
-        .await
-        .unwrap();
+    crate::test_support::relationships::actor_in_txn(
+        &foreign_access,
+        "AgentToolControlClaim",
+        &fake,
+        "working_agent",
+        &agent,
+        false,
+    )
+    .await
+    .unwrap();
+    crate::test_support::relationships::actor_in_txn(
+        &foreign_access,
+        "AgentToolControlClaim",
+        &fake,
+        "reader",
+        &user.did().parse().unwrap(),
+        false,
+    )
+    .await
+    .unwrap();
     let other = identity::Did::new(user.did()).unwrap();
     assert!(claim(&node, &agent_access, &other, &first).await.is_err());
     assert!(

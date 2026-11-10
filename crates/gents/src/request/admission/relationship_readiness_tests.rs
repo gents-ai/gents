@@ -193,16 +193,17 @@ async fn exercise_readiness(same_agent: bool) {
         .unwrap();
     let request_doc = crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
     let session_doc = create.session_doc_id.as_deref().unwrap();
-    author_access
-        .add_resource_relationship(
-            "AgentRequest",
-            &request_doc,
-            "session",
-            "sessions",
-            session_doc,
-        )
-        .await
-        .unwrap();
+    crate::test_support::relationships::resource_in_txn(
+        &author_access,
+        "AgentRequest",
+        &request_doc,
+        "session",
+        "sessions",
+        session_doc,
+        false,
+    )
+    .await
+    .unwrap();
     let agent_access = ConfigAccess::local_as(node.clone(), binding.agent_did.parse().unwrap());
     let rows = agent_access
         .execute(&format!(

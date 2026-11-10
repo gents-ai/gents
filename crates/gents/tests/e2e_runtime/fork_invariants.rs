@@ -90,6 +90,57 @@ impl Fixture {
             .collect()
     }
 
+    /// Every copied child carries its native parent and working-Agent
+    /// relationships, published by the forking Agent; the node's User, which
+    /// does not manage the Agent's children, cannot remove them.
+    async fn assert_children_linked(&self, session: &str) {
+        let escaped = escape_graphql_string(session);
+        let data = self.rows(&format!(r#"{{ AgentSession(filter: {{session_id: {{_eq: "{escaped}"}}}}) {{_docID}} AgentMessage(filter: {{session_id: {{_eq: "{escaped}"}}}}) {{_docID parent_linked}} AgentOutputSegment(filter: {{session_id: {{_eq: "{escaped}"}}}}) {{_docID parent_linked}} }}"#)).await;
+        let session_doc = data["AgentSession"][0]["_docID"].as_str().unwrap();
+        let mut linked = 0;
+        for collection in ["AgentMessage", "AgentOutputSegment"] {
+            for row in data[collection].as_array().unwrap() {
+                assert_eq!(row["parent_linked"], true, "{collection} {row}");
+                let doc = row["_docID"].as_str().unwrap();
+                let relationships = self
+                    .actors
+                    .agent_access
+                    .list_document_relationships(collection, doc)
+                    .await
+                    .unwrap();
+                assert!(
+                    relationships
+                        .iter()
+                        .any(|relationship| relationship.relation == "parent"
+                            && relationship.subject.contains(session_doc)),
+                    "{collection} {doc} lacks its fork parent: {relationships:?}"
+                );
+                assert!(
+                    relationships
+                        .iter()
+                        .any(|relationship| relationship.relation == "working_agent"
+                            && relationship.subject == self.agent_did()),
+                    "{collection} {doc} lacks its working Agent: {relationships:?}"
+                );
+                assert!(self
+                    .actors
+                    .fixture
+                    .access
+                    .delete_resource_relationship(
+                        collection,
+                        doc,
+                        "parent",
+                        "sessions",
+                        session_doc
+                    )
+                    .await
+                    .is_err());
+                linked += 1;
+            }
+        }
+        assert!(linked > 0, "the fork copied no children");
+    }
+
     async fn body(&self, header: &str, requester: &str) -> String {
         let (_, native) = gents::session::load_canonical_message(
             &self.actors.agent_access,
@@ -131,6 +182,7 @@ async fn fork_copies_exact_header_prefix_by_reference() {
         ),
         (2, 0, 0)
     );
+    f.assert_children_linked(&outcome.session_id).await;
     let copied = f.headers(&outcome.session_id).await;
     let unchanged_parent = f.headers("parent").await;
     assert_eq!(unchanged_parent.len(), 3);
@@ -201,6 +253,7 @@ async fn fork_via_http_uses_same_header_contract() {
     assert!(
         matches!(&copied[0].message.publication, MessagePublication::Fork { origin_message_doc_id } if origin_message_doc_id == &source.header)
     );
+    f.assert_children_linked(&outcome.session_id).await;
 }
 
 #[tokio::test]

@@ -244,15 +244,16 @@ async fn modeled_auxiliary_child_repair_requires_signed_exact_parent_and_native_
         let child_doc =
             crate::store::graphql::created_doc_id(&result, "AgentOutputSegment").unwrap();
         if case.name == "foreign_native_owner" {
-            foreign_access
-                .add_actor_relationship(
-                    "AgentOutputSegment",
-                    &child_doc,
-                    "reader",
-                    &agent.did().parse().unwrap(),
-                )
-                .await
-                .unwrap();
+            crate::test_support::relationships::actor_in_txn(
+                &foreign_access,
+                "AgentOutputSegment",
+                &child_doc,
+                "reader",
+                &agent.did().parse().unwrap(),
+                false,
+            )
+            .await
+            .unwrap();
         }
         let child_ids = [child_doc.clone()];
         let owners = agent_access
@@ -275,27 +276,29 @@ async fn modeled_auxiliary_child_repair_requires_signed_exact_parent_and_native_
             case.name
         );
         if case.name == "completed_then_revoked" {
-            agent_access
-                .add_resource_relationship(
-                    "AgentOutputSegment",
-                    &child_doc,
-                    "parent",
-                    "sessions",
-                    &session_doc,
-                )
-                .await
-                .unwrap();
+            crate::test_support::relationships::resource_in_txn(
+                &agent_access,
+                "AgentOutputSegment",
+                &child_doc,
+                "parent",
+                "sessions",
+                &session_doc,
+                false,
+            )
+            .await
+            .unwrap();
             agent_access.write("test.auxiliary_child.mark", &format!(r#"mutation {{ update_AgentOutputSegment(docID: "{}", input: {{ parent_linked: true }}) {{ _docID }} }}"#, escape_graphql_string(&child_doc))).await.unwrap();
-            agent_access
-                .delete_resource_relationship(
-                    "AgentOutputSegment",
-                    &child_doc,
-                    "parent",
-                    "sessions",
-                    &session_doc,
-                )
-                .await
-                .unwrap();
+            crate::test_support::relationships::resource_in_txn(
+                &agent_access,
+                "AgentOutputSegment",
+                &child_doc,
+                "parent",
+                "sessions",
+                &session_doc,
+                true,
+            )
+            .await
+            .unwrap();
         }
         assert!(!visible(&reader_access, &child_doc).await, "{}", case.name);
         recover_agent_session_child_relationships_with_access(

@@ -169,24 +169,16 @@ async fn shared_reader_metadata_preserves_canonical_authorship_and_image_privacy
     for step in 0..4 {
         let permitted = step % 2 == 1;
         if step > 0 {
-            if permitted {
-                tool.access()
-                    .unwrap()
-                    .add_actor_relationship("ToolFileInventory", projection, "reader", &reader_did)
-                    .await
-                    .unwrap();
-            } else {
-                tool.access()
-                    .unwrap()
-                    .delete_actor_relationship(
-                        "ToolFileInventory",
-                        projection,
-                        "reader",
-                        &reader_did,
-                    )
-                    .await
-                    .unwrap();
-            }
+            crate::test_support::relationships::actor_in_txn(
+                &tool.access().unwrap(),
+                "ToolFileInventory",
+                projection,
+                "reader",
+                &reader_did,
+                !permitted,
+            )
+            .await
+            .unwrap();
         }
         let name = if permitted {
             "shared_native_root_read"

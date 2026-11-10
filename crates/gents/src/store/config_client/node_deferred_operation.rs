@@ -297,6 +297,14 @@ mod tests {
                     .await?;
             }
         }
+        // Public relationship routes require `get-collection`, which production
+        // Users hold (`GrantSets.operatorUser`).
+        runtime_access
+            .grant_node_permission(
+                &identity::Did::new(user.did())?,
+                NodePermission::CollectionGet,
+            )
+            .await?;
         let user_access = access(&user)?;
         let actor = identity::Did::new(runtime.did())?;
         let offer = gents_protocol::enrollment::EnrollmentOfferRecord {

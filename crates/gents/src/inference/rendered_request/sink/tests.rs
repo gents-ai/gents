@@ -209,15 +209,16 @@ async fn failed_capture_publication_rolls_back_bound_blocks_and_record() {
         .as_str()
         .unwrap()
         .to_owned();
-    access
-        .add_actor_relationship(
-            "AgentSession",
-            &session,
-            "reader",
-            &root.did().parse().unwrap(),
-        )
-        .await
-        .unwrap();
+    crate::test_support::relationships::actor_in_txn(
+        &access,
+        "AgentSession",
+        &session,
+        "reader",
+        &root.did().parse().unwrap(),
+        false,
+    )
+    .await
+    .unwrap();
     let reader = ConfigAccess::local_as(node.clone(), root.did().parse().unwrap());
     let sibling_access = ConfigAccess::local_managed_agent(
         node.clone(),
