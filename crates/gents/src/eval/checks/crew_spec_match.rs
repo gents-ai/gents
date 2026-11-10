@@ -1,19 +1,24 @@
+mod agents;
+mod documents;
 mod lookup;
 mod params;
+mod rows;
 mod tally;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use serde_json::{json, Value};
 
-use crate::eval::checks::captured_fields_match::test;
 use crate::eval::checks::{
     bounded, graded, graded_reason_codes, grader, Check, CheckDescription, CheckVerdict,
 };
 use crate::eval::runner::executor::{CaptureResult, StageEvidence};
+use agents::check_agents;
+use documents::{check_receipt, check_templates};
 use lookup::{doc_fields, find, is_id, lookup};
 use params::Params;
-use tally::{tests, Tally};
+use rows::{check_presence, check_rows_and_links};
+use tally::Tally;
 
 pub struct CrewSpecMatch;
 
@@ -146,416 +151,22 @@ impl Check for CrewSpecMatch {
             Ok(params) => params,
             Err(error) => return grader("bad_params", error.to_string()),
         };
-        let rows = |name: &str| match stage.captures.get(name) {
-            Some(CaptureResult::Documents { rows }) => Some(rows.as_slice()),
-            _ => None,
-        };
         let mut tally = Tally::default();
 
-        for present in &params.present {
-            if present
-                .min
-                .zip(present.max)
-                .is_some_and(|(min, max)| min > max)
-            {
-                return grader("bad_params", "capture minimum exceeds maximum");
-            }
-            let count = rows(&present.capture).map(<[Value]>::len);
-            tally.record(
-                present.category.as_deref(),
-                count.is_some_and(|n| {
-                    present.min.is_none_or(|min| n >= min) && present.max.is_none_or(|max| n <= max)
-                }),
-                || {
-                    format!(
-                        "capture {} has {:?} rows; expected min {:?}, max {:?}",
-                        present.capture, count, present.min, present.max
-                    )
-                },
-            );
+        if let Err(verdict) = check_presence(&params.present, stage, &mut tally) {
+            return verdict;
         }
-        for spec in params.rows {
-            let category = spec.category.as_deref();
-            let tests = match tests(spec.expect) {
-                Ok(tests) => tests,
-                Err(detail) => return grader("bad_params", detail),
-            };
-            let row = rows(&spec.capture).and_then(|rows| find(rows, &spec.key, &spec.id));
-            let subject = format!("{} {}", spec.capture, spec.id);
-            tally.record(category, row.is_some(), || format!("{subject} absent"));
-            tally.expectations(category, &subject, row, &tests);
-        }
-        for spec in params.links {
-            let tests = match tests(spec.expect) {
-                Ok(tests) => tests,
-                Err(detail) => return grader("bad_params", detail),
-            };
-            let source = if let Some(selector) = spec.source_match {
-                if !spec.key.is_empty() || !spec.id.is_empty() {
-                    return grader("bad_params", "links use either key/id or source_match");
-                }
-                let (field, matcher) = match test(selector) {
-                    Ok(test) => test,
-                    Err(detail) => return grader("bad_params", detail),
-                };
-                rows(&spec.capture).and_then(|rows| {
-                    let mut matches = rows.iter().filter(|row| {
-                        field
-                            .resolve(|path| Some(lookup(row, path)))
-                            .is_some_and(|actual| matcher.holds(&actual))
-                    });
-                    let first = matches.next();
-                    if matches.next().is_some() {
-                        None
-                    } else {
-                        first
-                    }
-                })
-            } else {
-                if spec.key.is_empty() || spec.id.is_empty() {
-                    return grader("bad_params", "links require key/id or source_match");
-                }
-                rows(&spec.capture).and_then(|rows| find(rows, &spec.key, &spec.id))
-            };
-            let reference = source.map(|row| lookup(row, &spec.field));
-            let mut target = reference.as_ref().and_then(Value::as_str).and_then(|id| {
-                rows(&spec.target_capture)
-                    .and_then(|rows| find_link(rows, &spec.target_key, id, spec.exact))
-            });
-            for hop in &spec.via {
-                let reference = target.map(|row| lookup(row, &hop.field));
-                target = reference.as_ref().and_then(Value::as_str).and_then(|id| {
-                    rows(&hop.target_capture)
-                        .and_then(|rows| find_link(rows, &hop.target_key, id, spec.exact))
-                });
-            }
-            let (destination, destination_key) = spec
-                .via
-                .last()
-                .map(|hop| (&hop.target_capture, &hop.target_key))
-                .unwrap_or((&spec.target_capture, &spec.target_key));
-            let source_name = if spec.id.is_empty() {
-                source
-                    .map(|row| lookup(row, "display_name"))
-                    .unwrap_or(Value::Null)
-                    .to_string()
-            } else {
-                spec.id.clone()
-            };
-            let target_name = target
-                .map(|row| lookup(row, destination_key))
-                .unwrap_or(Value::Null);
-            let subject = format!(
-                "{} {} -> {} {}",
-                spec.capture, source_name, destination, target_name
-            );
-            let category = spec.category.as_deref();
-            tally.record(category, target.is_some(), || {
-                format!("{subject}: unresolved reference")
-            });
-            tally.expectations(category, &subject, target, &tests);
-            let final_message = stage
-                .messages
-                .iter()
-                .rev()
-                .find(|m| m.role == "assistant" && !m.content.trim().is_empty())
-                .map(|m| m.content.to_lowercase())
-                .unwrap_or_default();
-            for field in &spec.reported_fields {
-                let value = target.map(|row| lookup(row, field)).unwrap_or(Value::Null);
-                let text = match &value {
-                    Value::String(s) => s.to_lowercase(),
-                    other => other.to_string(),
-                };
-                tally.record(
-                    category,
-                    !value.is_null() && !text.is_empty() && final_message.contains(&text),
-                    || format!("final message does not report {subject}.{field}"),
-                );
-            }
+        if let Err(verdict) = check_rows_and_links(params.rows, params.links, stage, &mut tally) {
+            return verdict;
         }
         if let Some(agent_spec) = params.agents {
-            let agents = rows(&agent_spec.agents).unwrap_or_default();
-            let contexts = rows(&agent_spec.contexts).unwrap_or_default();
-            let tools = rows(&agent_spec.tools).unwrap_or_default();
-            let mut roles = BTreeMap::new();
-            let mut selected = Vec::new();
-            for mut spec in agent_spec.expect {
-                let agent = if let Some(selector) = spec.source_match.take() {
-                    let (field, matcher) = match test(selector) {
-                        Ok(test) => test,
-                        Err(detail) => return grader("bad_params", detail),
-                    };
-                    let mut matches = agents.iter().filter(|row| {
-                        field
-                            .resolve(|path| Some(lookup(row, path)))
-                            .is_some_and(|actual| matcher.holds(&actual))
-                    });
-                    let first = matches.next();
-                    let unique = if matches.next().is_none() {
-                        first
-                    } else {
-                        None
-                    };
-                    let id = unique
-                        .and_then(|row| row.get("agent_did"))
-                        .and_then(Value::as_str);
-                    if roles.insert(spec.agent_did.clone(), id).is_some() {
-                        return grader("bad_params", "duplicate named agent role");
-                    }
-                    unique
-                } else {
-                    find(agents, "agent_did", &spec.agent_did)
-                };
-                selected.push((spec, agent));
-            }
-            let mut counts = BTreeMap::new();
-            for id in roles.values().flatten() {
-                *counts.entry(*id).or_insert(0) += 1;
-            }
-            for id in roles.values_mut() {
-                if id.is_some_and(|id| counts[&id] != 1) {
-                    *id = None;
-                }
-            }
-            for (spec, agent) in selected {
-                let agent =
-                    agent.filter(|_| roles.get(&spec.agent_did).is_none_or(Option::is_some));
-                let category = spec.category.as_deref();
-                let (agent_tests, context_tests, tools_tests) =
-                    match (tests(spec.agent), tests(spec.context), tests(spec.tools)) {
-                        (Ok(b), Ok(c), Ok(t)) => (b, c, t),
-                        (Err(detail), _, _) | (_, Err(detail), _) | (_, _, Err(detail)) => {
-                            return grader("bad_params", detail)
-                        }
-                    };
-                let context = agent
-                    .and_then(|row| row.get("context_id").and_then(Value::as_str))
-                    .and_then(|id| find(contexts, "context_id", id));
-                let no_tools = json!({});
-                let tools_row = context
-                    .and_then(|row| row.get("tools_id").and_then(Value::as_str))
-                    .and_then(|id| find(tools, "tools_id", id))
-                    .or_else(|| {
-                        context
-                            .filter(|row| row.get("tools_id").is_some_and(Value::is_null))
-                            .map(|_| &no_tools)
-                    });
-                let id = &spec.agent_did;
-                tally.record(category, agent.is_some(), || format!("agent {id} absent"));
-                tally.expectations(category, &format!("agent {id}"), agent, &agent_tests);
-                tally.expectations(category, &format!("{id} context"), context, &context_tests);
-                tally.tools_expectations(category, &format!("{id} tools"), tools_row, &tools_tests);
-                if let Some(expected) = spec.datastore {
-                    use crate::documents::{DatastoreToolSurfaceDocument, SurfaceToolDecl};
-                    let selected =
-                        tools_row.map(|t| lookup(t, "datastore.datastore_tool_surface_ids"));
-                    let mut creates = BTreeSet::new();
-                    let mut queries = BTreeSet::new();
-                    let mut called_create = BTreeSet::new();
-                    let mut called_query = BTreeSet::new();
-                    let mut contract_issues = Vec::new();
-                    let mut valid = context.is_some() && tools_row.is_some();
-                    if let Some(Value::Array(ids)) = selected {
-                        for reference in ids {
-                            let surface = reference
-                                .as_str()
-                                .and_then(|reference| {
-                                    rows(&expected.surfaces)
-                                        .and_then(|rows| find(rows, "surface_id", reference))
-                                })
-                                .and_then(|row| {
-                                    let mut document = row.clone();
-                                    document.as_object_mut()?.remove("_docID");
-                                    serde_json::from_value::<DatastoreToolSurfaceDocument>(document)
-                                        .ok()
-                                });
-                            if let Some(surface) = surface.filter(|s| s.enabled) {
-                                for entry in surface.entries.unwrap_or_default() {
-                                    valid &= entry.is_well_formed();
-                                    let called = stage.tool_calls.iter().any(|call| {
-                                        call.tool_name == entry.tool_name()
-                                            && call.status.as_deref() == Some("completed")
-                                            && call.tool_failure_class.is_none()
-                                    });
-                                    match entry {
-                                        SurfaceToolDecl::Create(d) => {
-                                            if let Some(fields) =
-                                                expected.required_fields.get(&d.collection)
-                                            {
-                                                for name in fields {
-                                                    if !d.fields.iter().any(|f| {
-                                                        &f.name == name
-                                                            && (f.required || f.fill.is_some())
-                                                    }) {
-                                                        valid = false;
-                                                        contract_issues.push(format!("{} must write {name}: declare a required caller field or a runtime fill", d.tool_name));
-                                                    }
-                                                }
-                                            }
-                                            if let Some(fields) =
-                                                expected.caller_fields.get(&d.collection)
-                                            {
-                                                let complete = fields.iter().all(|name| {
-                                                    d.fields.iter().any(|f| {
-                                                        &f.name == name
-                                                            && f.required
-                                                            && f.fill.is_none()
-                                                    })
-                                                });
-                                                valid &= complete;
-                                                if !complete {
-                                                    contract_issues.push(format!("{} create fields {fields:?} must be required and caller-supplied", d.tool_name));
-                                                }
-                                            }
-                                            if called {
-                                                called_create.insert(d.collection.clone());
-                                            }
-                                            creates.insert(d.collection);
-                                        }
-                                        SurfaceToolDecl::Query(d) => {
-                                            if let Some(fields) =
-                                                expected.query_fields.get(&d.collection)
-                                            {
-                                                let complete = fields
-                                                    .iter()
-                                                    .all(|field| d.fields.contains(field));
-                                                valid &= complete;
-                                                if !complete {
-                                                    contract_issues.push(format!(
-                                                        "{} must return query fields {fields:?}",
-                                                        d.tool_name
-                                                    ));
-                                                }
-                                            }
-                                            if let Some(key) = &expected.lookup_by {
-                                                let by_key_alone = d.fields.contains(key)
-                                                    && d.filter_fields.iter().any(|f| {
-                                                        &f.name == key && f.fill.is_none()
-                                                    })
-                                                    && d.filter_fields.iter().all(|f| {
-                                                        f.fill.is_none()
-                                                            && (!f.required || &f.name == key)
-                                                    });
-                                                valid &= by_key_alone;
-                                                if !by_key_alone {
-                                                    contract_issues.push(format!("{} query must accept caller-supplied {key} alone: return {key}, remove fills only from this query's filter_fields, and make its other filters optional. Update this query entry; preserve write-tool fills and unrelated entries", d.tool_name));
-                                                }
-                                            }
-                                            if called {
-                                                called_query.insert(d.collection.clone());
-                                            }
-                                            queries.insert(d.collection);
-                                        }
-                                    }
-                                }
-                            } else {
-                                valid = false;
-                            }
-                        }
-                    } else if selected.is_some_and(|v| !v.is_null()) {
-                        valid = false;
-                    }
-                    tally.record(category, valid && creates == expected.create && queries == expected.query && expected.called_create.is_subset(&called_create) && expected.called_query.is_subset(&called_query), || {
-                        format!("{id} selected datastore grants: create {creates:?}, query {queries:?}; expected create {:?}, query {:?}; references valid: {valid}; called create {called_create:?}, query {called_query:?}; field contracts: {contract_issues:?}", expected.create, expected.query)
-                    });
-                }
-                if let Some(expected) = spec.delegates {
-                    let selected = tools_row.map(|t| lookup(t, "agents.target_ids"));
-                    let enabled =
-                        tools_row.map(|t| lookup(t, "agents.enabled")) == Some(json!(true));
-                    let mut actual = BTreeSet::new();
-                    let mut valid = enabled
-                        && expected
-                            .agents
-                            .iter()
-                            .all(|name| roles.get(name).is_none_or(Option::is_some));
-                    if let Some(Value::Array(ids)) = selected {
-                        for reference in ids {
-                            let target = reference.as_str().and_then(|reference| {
-                                rows(&expected.targets)
-                                    .and_then(|rows| find(rows, "target_id", reference))
-                            });
-                            valid &= target.is_some_and(|t| {
-                                t.get("node_did").and_then(Value::as_str).is_some()
-                                    && t.get("target_node_did") == t.get("node_did")
-                            });
-                            if let Some(agent) = target
-                                .and_then(|t| t.get("agent_did"))
-                                .and_then(Value::as_str)
-                            {
-                                if let Some(name) =
-                                    expected.agents.iter().find(|name| match roles.get(*name) {
-                                        Some(Some(id)) => agent == *id,
-                                        Some(None) => false,
-                                        None => is_id(agent, name),
-                                    })
-                                {
-                                    actual.insert(name.clone());
-                                } else {
-                                    valid = false;
-                                    actual.insert(agent.to_string());
-                                }
-                            } else {
-                                valid = false;
-                            }
-                        }
-                    } else {
-                        valid = false;
-                    }
-                    tally.record(category, valid && actual == expected.agents, || {
-                        format!("{id} selected delegates {actual:?}; expected {:?}; references valid: {valid}", expected.agents)
-                    });
-                }
+            if let Err(verdict) = check_agents(agent_spec, stage, &mut tally) {
+                return verdict;
             }
         }
-        for spec in &params.templates {
-            let category = spec.category.as_deref().or(Some("templates"));
-            let row = rows(&spec.capture).and_then(|rows| find(rows, &spec.key, &spec.id));
-            let Some(row) = row else {
-                tally.record(category, false, || {
-                    format!("{} {} absent, no template to check", spec.capture, spec.id)
-                });
-                continue;
-            };
-            for field in &spec.fields {
-                let Some(template) = row.get(field).and_then(Value::as_str) else {
-                    continue;
-                };
-                let unknown: Vec<String> = doc_fields(template)
-                    .into_iter()
-                    .filter(|name| !spec.allowed.contains(name))
-                    .collect();
-                tally.record(category, unknown.is_empty(), || {
-                    format!(
-                        "{} {}.{field} reads doc.{} outside its source collection",
-                        spec.capture,
-                        spec.id,
-                        unknown.join(", doc.")
-                    )
-                });
-            }
-        }
+        check_templates(&params.templates, stage, &mut tally);
         if let Some(receipt) = &params.receipt {
-            let category = receipt.category.as_deref().or(Some("receipt"));
-            let text: String = rows(&receipt.capture)
-                .unwrap_or_default()
-                .iter()
-                .flat_map(|row| {
-                    receipt.fields.iter().filter_map(|field| {
-                        row.get(field).map(|value| match value {
-                            Value::String(text) => text.clone(),
-                            other => other.to_string(),
-                        })
-                    })
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            for id in &receipt.ids {
-                tally.record(category, text.contains(id.as_str()), || {
-                    format!("receipt does not name {id}")
-                });
-            }
+            check_receipt(receipt, stage, &mut tally);
         }
 
         if let Some(continuation) = &params.continuation {
@@ -618,6 +229,12 @@ fn find_link<'a>(rows: &'a [Value], key: &str, id: &str, exact: bool) -> Option<
             .find(|row| lookup(row, key).as_str() == Some(id))
     } else {
         find(rows, key, id)
+    }
+}
+fn capture_rows<'a>(stage: &'a StageEvidence, name: &str) -> Option<&'a [Value]> {
+    match stage.captures.get(name) {
+        Some(CaptureResult::Documents { rows }) => Some(rows.as_slice()),
+        _ => None,
     }
 }
 
