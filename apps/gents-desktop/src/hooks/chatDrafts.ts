@@ -277,6 +277,23 @@ export function chatDraftPayload(
   })();
 }
 
+/** What a discarded send gives back to its composer: its payload with the
+ * attachments while their bytes are still saved, else its text alone, or
+ * null when its input is unreadable. */
+export async function chatDraftHandBack(
+  store: SendAttachmentStore,
+  draft: ChatDraft,
+): Promise<ChatSendRequest | null> {
+  try {
+    return await chatDraftPayload(store, draft);
+  } catch {}
+  try {
+    return { ...chatDraftRequest(draft), attachments: undefined };
+  } catch {
+    return null;
+  }
+}
+
 /** Deletes the kept attachment bytes of a send that is released, discarded
  * or confirmed. A failed delete leaves bytes no saved send refers to,
  * which `pruneChatDraftAttachments` removes, never a send without them. */

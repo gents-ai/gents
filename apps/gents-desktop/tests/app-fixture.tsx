@@ -19,6 +19,7 @@ import type { FlagId } from "../src/ui/lib/flags";
 import { bindNav, type Route } from "../src/ui/lib/router";
 import { resetPreferences } from "../src/ui/preferences";
 import { deployment } from "./config-panel-wiring/fixtures";
+import type { SendAttachmentStore } from "../src/hooks/sendAttachments";
 import { memorySendAttachments } from "./send-attachments-fixture";
 
 export function node(overrides: Record<string, unknown> = {}) {
@@ -46,9 +47,11 @@ export function testApp({
   reportFailure,
   supportsManagedServer,
   sharing,
+  sendAttachments = memorySendAttachments(),
 }: {
   api?: object;
   sharing?: SharingAdapter;
+  sendAttachments?: SendAttachmentStore;
   supportsManagedServer?: boolean;
   snapshot?: unknown;
   reportFailure?: (message: string) => void;
@@ -61,7 +64,7 @@ export function testApp({
     reportFailure,
     supportsManagedServer,
     sharing,
-    sendAttachments: memorySendAttachments(),
+    sendAttachments,
   });
   if (snapshot) publishSnapshot(app, snapshot as DesktopClientSnapshot);
   if (deployments) publish(app, deployments);

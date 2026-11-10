@@ -306,12 +306,7 @@ export function createChatActions({
         },
         selectedSessionId,
         status.kind === "queue",
-        (result, draft) => {
-          // A reply after the deadline confirms the message the error was about.
-          if (stores.chat.getState().submissionError?.requestId === draft.requestId)
-            stores.chat.setState({ submissionError: null });
-          return applyChatResult(result, draft, intent, acceptsView);
-        },
+        (result, draft) => applyChatResult(result, draft, intent, acceptsView),
         undefined,
         (draft) => {
           savedRequestId = draft.requestId;

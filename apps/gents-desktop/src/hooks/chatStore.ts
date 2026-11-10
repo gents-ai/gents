@@ -33,6 +33,8 @@ export type ChatState = {
   goalCommandsInFlight: ReadonlySet<string>;
   chatDrafts: ChatDraft[];
   chatDraftError: string | null;
+  /** when a saved send deadline last passed (`keepSendDeadlineClock`) */
+  sendDeadlineTick: number;
 };
 
 export type SentTurn = { sessionId: string; requestId: string; queued: boolean };
@@ -53,6 +55,7 @@ export function createChatStore(initial: Partial<ChatState> = {}) {
       ...loadGoalDrafts(),
       goalCommandsInFlight: new Set(),
       ...loadChatDrafts(),
+      sendDeadlineTick: 0,
       ...initial,
     })),
   );

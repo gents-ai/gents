@@ -129,7 +129,8 @@ it("drops the kept bytes when a failed send is discarded", async () => {
   await expect(f.submit()).rejects.toThrow();
   const [failed] = loadChatDrafts().chatDrafts;
   expect(await f.kept.get(chatDraftKey(failed))).toHaveLength(2);
-  await f.delivery().discard(failed.requestId);
+  const handed = await f.delivery().discard(failed.requestId);
+  expect(handed?.attachments).toEqual([LARGE, SECOND]);
   expect(loadChatDrafts().chatDrafts).toEqual([]);
   expect(await f.kept.get(chatDraftKey(failed))).toBeUndefined();
 });
@@ -163,6 +164,8 @@ it("fails a retry clearly when the kept bytes are gone or changed, without sendi
   expect(f.send).toHaveBeenCalledTimes(1);
   const [still] = loadChatDrafts().chatDrafts;
   expect(still.failure?.message).toMatch(/Discard it and attach the files again/);
+  const handed = await f.delivery().discard(still.requestId);
+  expect(handed).toMatchObject({ content: "Two files", attachments: undefined });
 });
 
 it("stores no bytes for a send whose draft cannot be saved", async () => {
