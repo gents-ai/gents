@@ -60,11 +60,11 @@ pub async fn exercise(
 ) -> Result<()> {
     let backends = access
         .execute(&format!(
-            r#"{{ InferenceBackend(filter: {{node_did: {{_eq: "{}"}}}}) {{ backend_id }} }}"#,
+            r#"{{ InferenceBackendMetadata(filter: {{node_did: {{_eq: "{}"}}}}) {{ backend_id }} }}"#,
             escape_graphql_string(node_did)
         ))
         .await?;
-    let backend_id = backends["data"]["InferenceBackend"]
+    let backend_id = backends["data"]["InferenceBackendMetadata"]
         .as_array()
         .and_then(|rows| rows.first())
         .and_then(|row| row["backend_id"].as_str())
@@ -88,7 +88,14 @@ pub async fn exercise(
     )
     .await;
     let observed_auth = call(client, id, "client_backend_authentication", auth_args).await;
-    ensure!(observed_auth["authKind"] == "api_key");
+    // A saved raw key becomes an opaque reference to a runtime-private
+    // BackendCredential; the metadata never holds the key itself.
+    ensure!(
+        observed_auth["authKind"] == "credential"
+            && original_auth["authKind"] != "credential"
+            && observed_auth["revision"] != original_auth["revision"],
+        "the saved key must replace the original authentication with a credential reference: {original_auth} -> {observed_auth}"
+    );
     ensure!(!observed_auth
         .to_string()
         .contains("private-native-authentication-fixture"));
