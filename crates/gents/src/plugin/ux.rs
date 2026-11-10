@@ -1,7 +1,7 @@
 //! UX plugins on the runtime side: what is on disk for the desktop to load,
 //! and how one module is produced. The desktop owns the loader, the
 //! contribution registry and enable/disable; this module owns the two
-//! doors it reads from and the static lint `gents pack check` runs.
+//! doors it reads from and the static lint `gents config pack check` runs.
 //!
 //! Two doors, listed by [`list`]:
 //!
@@ -355,7 +355,7 @@ where
 }
 
 /// Lints every UX plugin a pack carries from its materialized directory:
-/// what `gents pack check` and `gents pack build` run. Keys are plugin
+/// what `gents config pack check` and `gents config pack build` run. Keys are plugin
 /// names; a plugin produced by an `.afb` has no file to lint here.
 pub fn lint_pack_dir(
     dir: &Path,

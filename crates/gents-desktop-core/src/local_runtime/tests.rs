@@ -29,7 +29,7 @@ fn sample_summary() -> DesktopInitSummary {
         next_steps: vec![
             "Run `gents-desktop` and leave the desktop app open.".to_string(),
             "Wait for the status bar to show `replication subscriptions armed`.".to_string(),
-            "Then submit prompts from Chat, or run `gents chat` in another terminal.".to_string(),
+            "Then submit prompts from Chat, or run `gents` in another terminal.".to_string(),
         ],
     }
 }

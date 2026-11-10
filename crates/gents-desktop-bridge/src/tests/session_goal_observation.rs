@@ -11,11 +11,14 @@ use tokio_util::sync::CancellationToken;
 use super::support::served_desktop;
 use crate::host::{protocol, ClientHost};
 
-/// The session snapshot shows a Goal only as the Agent's verified signed
-/// observation shows it (Lean `SessionObservation.view`), never from the Goal
-/// document the User can also read over the same signed runtime endpoint: no
-/// Goal while the projection is missing, then the projected Goal, which a
-/// later unprojected Goal change does not replace.
+/// The session snapshot carries the session's Goal state from the one owner
+/// `desktop_session_goal` reads (Lean `SessionObservation.observe`, `view`,
+/// `next`), never from the Goal document the User can also read over the same
+/// signed runtime endpoint: unknown while the Agent's projection is missing,
+/// verified absence once it publishes none, the projected Goal, which a later
+/// unprojected Goal change does not replace. (A chat the runtime does not
+/// hold yields no snapshot at all, so `no_readable_session` reaches the
+/// desktop only through `desktop_session_goal`.)
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn session_snapshot_goal_is_only_the_verified_observation() {
     let desktop = served_desktop().await;
@@ -29,29 +32,38 @@ async fn session_snapshot_goal_is_only_the_verified_observation() {
     let agent =
         gents::store::identity::resolve_agent_identity(runtime.runtime().as_ref(), &desktop.agent)
             .unwrap();
-    let snapshot_goal = async || {
+    let snapshot_goal = async |session_id: &str| -> Value {
+        let mut last = String::new();
         tokio::time::timeout(Duration::from_secs(30), async {
             loop {
                 match crate::commands::session_snapshot(
                     &desktop.core,
-                    "chat".into(),
+                    session_id.into(),
                     Some(node_did.clone()),
                     None,
                     Some(40),
                 )
                 .await
                 {
-                    Ok(Some(snapshot)) => break snapshot.goal,
-                    Ok(None) => {}
+                    Ok(Some(snapshot)) => {
+                        break serde_json::to_value(
+                            snapshot.goal.expect("the snapshot read its Goal state"),
+                        )
+                        .unwrap()
+                    }
+                    Ok(None) => last = "no snapshot".into(),
                     Err(error)
-                        if error.code == crate::error::BridgeErrorCode::ProjectionPending => {}
+                        if error.code == crate::error::BridgeErrorCode::ProjectionPending =>
+                    {
+                        last = error.to_string()
+                    }
                     Err(error) => panic!("session snapshot: {error}"),
                 }
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
         })
         .await
-        .expect("the session snapshot reached its runtime")
+        .unwrap_or_else(|_| panic!("the {session_id} snapshot reached its runtime; last: {last}"))
     };
     let user_reads_goal_status = async || {
         let access = gents::store::config_client::ConfigAccess::Graphql(
@@ -69,6 +81,32 @@ async fn session_snapshot_goal_is_only_the_verified_observation() {
             .unwrap();
         rows["data"]["Goal"].clone()
     };
+    let project = || {
+        gents::goal::project_session_goal(
+            runtime.node(),
+            runtime.runtime(),
+            &agent,
+            "chat",
+            Some(&user_did),
+        )
+    };
+
+    let missing = snapshot_goal("chat").await;
+    assert_eq!(missing["kind"], "unknown", "{missing}");
+    assert_eq!(missing["cause"], "projection_missing", "{missing}");
+    assert_eq!(missing["next"], "await_publication", "{missing}");
+    assert_eq!(
+        missing["reason"],
+        gents::goal::GoalInputRefused::ProjectionMissing.to_string(),
+        "the shown cause is the refusal a send returns: {missing}"
+    );
+
+    project().await.unwrap();
+    let absent = snapshot_goal("chat").await;
+    assert_eq!(absent["kind"], "observed", "{absent}");
+    assert_eq!(absent["next"], "start_goal", "{absent}");
+    assert_eq!(absent["observation"]["sessionId"], "chat", "{absent}");
+    assert!(absent["observation"]["goal"].is_null(), "{absent}");
 
     let goal = gents::goal::set_goal_from_access(
         &agent_access,
@@ -85,28 +123,21 @@ async fn session_snapshot_goal_is_only_the_verified_observation() {
         user_reads_goal_status().await,
         json!([{"status": "active"}])
     );
-    let unprojected = snapshot_goal().await;
-    assert!(
-        unprojected.is_none(),
-        "a readable Goal document without a verified projection is not a shown Goal: {unprojected:?}"
+    let unprojected = snapshot_goal("chat").await;
+    assert_eq!(
+        (&unprojected["kind"], &unprojected["observation"]["goal"]),
+        (&json!("observed"), &Value::Null),
+        "a readable Goal document without a verified projection is not a shown Goal: {unprojected}"
     );
 
-    gents::goal::project_session_goal(
-        runtime.node(),
-        runtime.runtime(),
-        &agent,
-        "chat",
-        Some(&user_did),
-    )
-    .await
-    .unwrap();
-    let observed = snapshot_goal().await.expect("the verified Goal");
-    assert_eq!(observed.goal_id, goal.goal_id);
-    assert_eq!(observed.status.as_deref(), Some("active"));
-    assert_eq!(
-        observed.objective.as_deref(),
-        Some("Finish the hosted work")
-    );
+    project().await.unwrap();
+    let observed = snapshot_goal("chat").await;
+    assert_eq!(observed["kind"], "observed", "{observed}");
+    assert_eq!(observed["next"], "control_goal", "{observed}");
+    let shown = &observed["observation"]["goal"];
+    assert_eq!(shown["goalId"], goal.goal_id.as_str(), "{observed}");
+    assert_eq!(shown["status"], "active", "{observed}");
+    assert_eq!(shown["objective"], "Finish the hosted work", "{observed}");
 
     gents::goal::set_goal_from_access(
         &agent_access,
@@ -123,11 +154,10 @@ async fn session_snapshot_goal_is_only_the_verified_observation() {
         user_reads_goal_status().await,
         json!([{"status": "paused"}])
     );
-    let still_observed = snapshot_goal().await.expect("the verified Goal");
+    let still_observed = snapshot_goal("chat").await;
     assert_eq!(
-        still_observed.status.as_deref(),
-        Some("active"),
-        "an unprojected Goal change must not replace the verified observation"
+        still_observed["observation"]["goal"]["status"], "active",
+        "an unprojected Goal change must not replace the verified observation: {still_observed}"
     );
 
     desktop.shutdown().await;

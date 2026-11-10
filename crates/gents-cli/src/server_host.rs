@@ -46,6 +46,8 @@ pub enum ManagedEnrollmentHistoryState {
     Approved,
     Denied,
     Revoked,
+    /// Approved, but its authorization lease has lapsed: no longer a member.
+    Expired,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
@@ -59,6 +61,9 @@ pub struct ManagedEnrollmentHistoryEntry {
     pub decided_by: String,
     pub revoked_at: Option<String>,
     pub revoked_by: Option<String>,
+    /// When a lapsed lease ended; absent from runtimes before it was reported.
+    #[serde(default)]
+    pub expired_at: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -172,7 +177,7 @@ async fn ensure_standard_home_inner(options: ProvisionOptions) -> Result<()> {
         argv.extend(["--store-key-custody".to_string(), "file".to_string()]);
     }
     let cli = Cli::try_parse_from(argv).context("building standard Gents provision request")?;
-    let Command::Init(args) = cli.command else {
+    let Some(Command::Init(args)) = cli.command else {
         unreachable!("standard provision argv must parse as init")
     };
     crate::commands::init::init(args).await
@@ -218,6 +223,74 @@ pub async fn approve_managed_client_enrollment(
     .await
     .context("approving desktop enrollment on managed runtime")?;
     Ok(())
+}
+
+/// Admit a pending client enrollment, as `gents p2p enrollment grant`
+/// followed by an approval does (Lean `Identity.EnrollmentGrant.applyDecision`
+/// `.approve`): grant the enrollment's derived authority (the Node
+/// `administrator` relation, written by the home's User, and the
+/// `operatorUser` node permissions, written by the runtime's native Node
+/// permission owner; receipt first), then approve it through the
+/// route-admission service. A failed grant approves nothing. A grant whose
+/// approval does not commit stays recorded under the request: approving
+/// again reissues the grant and finishes, and denying withdraws it.
+pub async fn admit_managed_enrollment(
+    home: &Path,
+    graphql: &str,
+    request_id: &str,
+    lease_seconds: u64,
+) -> Result<ManagedEnrollmentDecisionOutcome> {
+    let owner = crate::home_state::home_graphql_endpoint(home, graphql)?;
+    admit_managed_enrollment_as(home, owner, request_id, lease_seconds).await
+}
+
+/// [`admit_managed_enrollment`] with the User's signed endpoint given: the
+/// User that owns the Node writes its `administrator` relation.
+pub async fn admit_managed_enrollment_as(
+    home: &Path,
+    owner: gents::store::config_client::GraphqlEndpoint,
+    request_id: &str,
+    lease_seconds: u64,
+) -> Result<ManagedEnrollmentDecisionOutcome> {
+    let graphql = owner.url().to_owned();
+    let graphql = graphql.as_str();
+    let not_pending = || EnrollmentDecisionRejected {
+        status: reqwest::StatusCode::CONFLICT,
+        message: format!(
+            "enrollment request {request_id} is not pending; nothing was granted or approved"
+        ),
+        code: Some(gents_protocol::enrollment::EnrollmentDecisionRefusalCode::NotPending),
+    };
+    let pending = pending_managed_enrollments(home, graphql)
+        .await?
+        .into_iter()
+        .find(|pending| pending.request_id == request_id)
+        .ok_or_else(not_pending)?;
+    /* only a client enrollment derives authority; another profile's approval
+    admits its route alone */
+    let derives_authority = pending.profile.as_deref() == Some("client");
+    if derives_authority {
+        crate::commands::p2p::enrollment_admin::grant_verified_client(
+            home, owner, request_id, None,
+        )
+        .await
+        .context("granting the enrollment's access before approving it; nothing was approved")?
+        .ok_or_else(not_pending)?;
+    }
+    decide_managed_enrollment(
+        home,
+        graphql,
+        request_id,
+        ManagedEnrollmentDecision::Approve { lease_seconds },
+    )
+    .await
+    .with_context(|| {
+        if derives_authority {
+            "access was granted under this request but its approval did not commit; approve it again to finish, or deny it to withdraw the access"
+        } else {
+            "approving the enrollment"
+        }
+    })
 }
 
 pub async fn pending_managed_enrollments(

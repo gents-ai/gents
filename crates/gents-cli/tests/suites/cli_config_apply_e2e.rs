@@ -91,7 +91,17 @@ async fn config_apply_round_trips_canonical_datastore_surface() -> Result<()> {
     let root = tempdir.path().join("config");
     fs::create_dir_all(&home)?;
     let exported = tempdir.path().join("exported");
-    let init = run_init_json(&home, &["--node-name", "surface-roundtrip"])?;
+    let init = run_init_json(
+        &home,
+        &[
+            "--node-name",
+            "surface-roundtrip",
+            "--inference-url",
+            "http://127.0.0.1:9/v1",
+            "--model-name",
+            "m",
+        ],
+    )?;
     let node_did = node_did_from_init(&init)?;
     let port = allocate_port()?;
     let graphql = graphql_url(port);
