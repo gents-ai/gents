@@ -579,8 +579,12 @@ async fn run_inner(
         })?;
     let report = gents::pack::assemble_document_graph_report(&prepared, reports)
         .map_err(|error| (error, "unconfirmed"))?;
-    let origin_tag = gents::pack::pack_origin_tag(&received.root.manifest().name)
-        .map_err(|error| (error, "unconfirmed"))?;
+    let manifest = received.root.manifest();
+    let origin_tag = gents::pack::pack_origin_tag(&format!(
+        "{}/{}",
+        manifest.metadata.namespace, manifest.name
+    ))
+    .map_err(|error| (error, "unconfirmed"))?;
     let result = json!({"pack":received.root.manifest().name, "source":received.root.label(), "digest":received.root.digest(), "owner":state.node_did, "inference":prepared.inference, "dependency_inference":prepared.dependency_inference, "origin_tag":origin_tag, "dependencies":received.root.manifest().metadata.dependencies, "schemas":schemas, "apply":report});
     send(
         &mut *socket.lock().await,
