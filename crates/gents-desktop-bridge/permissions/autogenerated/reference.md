@@ -2234,32 +2234,6 @@ Denies the desktop_peer_rename command without any pre-configured scope.
 <tr>
 <td>
 
-`gents-desktop-bridge:allow-desktop-peer-status-fetch`
-
-</td>
-<td>
-
-Enables the desktop_peer_status_fetch command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:deny-desktop-peer-status-fetch`
-
-</td>
-<td>
-
-Denies the desktop_peer_status_fetch command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
 `gents-desktop-bridge:allow-desktop-pending-message-steer`
 
 </td>
@@ -3890,7 +3864,7 @@ Request retry
 </td>
 <td>
 
-Peer status (by saved id)
+Node addresses, routes and enrollment requests in the client snapshot
 
 </td>
 </tr>

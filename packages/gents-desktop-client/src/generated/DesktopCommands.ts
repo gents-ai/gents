@@ -96,7 +96,6 @@ import type { PackSearchView } from "./PackSearchView.js";
 import type { PackUpdateView } from "./PackUpdateView.js";
 import type { PackWireRequest } from "./PackWireRequest.js";
 import type { PeerRemoveResponse } from "./PeerRemoveResponse.js";
-import type { PeerStatusFetchRequest } from "./PeerStatusFetchRequest.js";
 import type { PendingMessageSteerRequest } from "./PendingMessageSteerRequest.js";
 import type { PendingQueueEditRequest } from "./PendingQueueEditRequest.js";
 import type { PendingQueueEditResult } from "./PendingQueueEditResult.js";
@@ -240,7 +239,6 @@ export type DesktopCommands = {
   desktop_peer_enroll_status: { args: { request: EnrollmentStatusRequest }; result: EnrollmentRequestView };
   desktop_peer_remove: { args: { peerId: string }; result: PeerRemoveResponse };
   desktop_peer_rename: { args: { peerId: string; label: string }; result: DesktopClientSnapshot };
-  desktop_peer_status_fetch: { args: { request: PeerStatusFetchRequest }; result: JsonValue };
   desktop_pending_message_steer: { args: { request: PendingMessageSteerRequest }; result: PendingQueueEditResult };
   desktop_pending_queue_edit: { args: { request: PendingQueueEditRequest }; result: PendingQueueEditResult };
   desktop_plugin_approval_decide: { args: { id: string; decision: string }; result: void };

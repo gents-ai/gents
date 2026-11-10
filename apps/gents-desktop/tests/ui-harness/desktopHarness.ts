@@ -2362,14 +2362,6 @@ export function createDesktopUiHarness(
         ],
       };
     },
-    async fetchPeerStatus() {
-      return {
-        label: "Bombadil UI Agent",
-        nodeDid: NODE_DID,
-        addr: "/ip4/127.0.0.1/tcp/9292",
-        graphql: "http://127.0.0.1:9181/api/v0/graphql",
-      };
-    },
     async requestStatusEnrollment() {
       const request: EnrollmentRequestView = {
         requestId: "enrollment-request-harness",

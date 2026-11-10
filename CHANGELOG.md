@@ -6,6 +6,12 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Breaking for desktop package consumers: `desktop_peer_status_fetch`,
+  `DesktopApiAdapter.fetchPeerStatus` and `PeerStatusFetchRequest` are
+  removed. A node's connection is checked with `reconnectNode`
+  (`desktop_node_reconnect`), which asks the client's observer and answers
+  with the node's runtime connection; the `fleet-read` grant still governs
+  what the client snapshot shows.
 - Rendered request captures cut the stable request fields (model, tool
   schemas, settings) apart from the message list, and close shared manifest
   groups after four entries at every second content key instead of eight at

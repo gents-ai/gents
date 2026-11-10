@@ -65,14 +65,6 @@ pub struct ManagedServerResetRequest {
     pub disposition: Option<crate::types::HomeResetDisposition>,
 }
 
-/// Fetch peer runtime status by saved peer id only; read grants never accept
-/// arbitrary addresses (SSRF).
-#[derive(Debug, Clone, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct PeerStatusFetchRequest {
-    pub peer_id: String,
-}
-
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct EnrollmentStatusRequest {

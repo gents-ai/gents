@@ -28,10 +28,9 @@ describe("checking a node's connection", () => {
 
   const check = async (answer: string | null) => {
     const reconnectNode = vi.fn().mockResolvedValue(answer);
-    const fetchPeerStatus = vi.fn();
     renderIn(
       testApp({
-        api: { reconnectNode, fetchPeerStatus },
+        api: { reconnectNode },
         deployments: [node(), juno],
         selection: { nodeDid: deployment.nodeDid },
       }),
@@ -42,7 +41,6 @@ describe("checking a node's connection", () => {
     await user.click(await screen.findByRole("menuitem", { name: "Check connection" }));
     await waitFor(() => expect(toast).toHaveBeenCalledTimes(1));
     expect(reconnectNode).toHaveBeenCalledWith(JUNO);
-    expect(fetchPeerStatus).not.toHaveBeenCalled();
     return toast.mock.calls[0]![0];
   };
 

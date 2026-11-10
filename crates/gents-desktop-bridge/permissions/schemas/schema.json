@@ -1315,18 +1315,6 @@
           "markdownDescription": "Denies the desktop_peer_rename command without any pre-configured scope."
         },
         {
-          "description": "Enables the desktop_peer_status_fetch command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-desktop-peer-status-fetch",
-          "markdownDescription": "Enables the desktop_peer_status_fetch command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the desktop_peer_status_fetch command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-desktop-peer-status-fetch",
-          "markdownDescription": "Denies the desktop_peer_status_fetch command without any pre-configured scope."
-        },
-        {
           "description": "Enables the desktop_pending_message_steer command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-pending-message-steer",
@@ -2083,10 +2071,10 @@
           "markdownDescription": "Request retry\n#### This permission set includes:\n\n- `allow-desktop-request-retry`"
         },
         {
-          "description": "Peer status (by saved id)\n#### This permission set includes:\n\n- `allow-desktop-peer-status-fetch`",
+          "description": "Node addresses, routes and enrollment requests in the client snapshot",
           "type": "string",
           "const": "fleet-read",
-          "markdownDescription": "Peer status (by saved id)\n#### This permission set includes:\n\n- `allow-desktop-peer-status-fetch`"
+          "markdownDescription": "Node addresses, routes and enrollment requests in the client snapshot"
         },
         {
           "description": "Workspace browser\n#### This permission set includes:\n\n- `allow-desktop-workspace-list`",

@@ -213,7 +213,6 @@ fn export_all(dir: &Path) -> Result<(), String> {
         ManagedServerRootValidationRequest,
         AgentWorkspaceRootSelectRequest,
         gents_desktop_core::workspace_root::AgentWorkspaceRoot,
-        PeerStatusFetchRequest,
         EnrollmentStatusRequest,
         ChatSendRequest,
         gents_protocol::request_input::AuthoredRequestInput,

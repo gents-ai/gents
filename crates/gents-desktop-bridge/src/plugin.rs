@@ -165,7 +165,6 @@ where
             tauri_commands::peers::desktop_peer_remove,
             tauri_commands::peers::desktop_peer_rename,
             tauri_commands::peers::desktop_ended_access_dismiss,
-            tauri_commands::peers::desktop_peer_status_fetch,
             tauri_commands::peers::desktop_peer_enroll_status,
             tauri_commands::workspace::desktop_workspace_list,
             tauri_commands::lifecycle::desktop_client_snapshot,
