@@ -31,6 +31,7 @@ import {
   writeSession,
   writeSessionGoalRead,
   writeSessionLoad,
+  writeSessionRead,
   type SessionStore,
 } from "./sessionStore";
 
@@ -257,11 +258,10 @@ export function createSessionReads({
       } else {
         const merged = mergeSessionTipSnapshot(held, next);
         /* a read that finds nothing new keeps the held session, so nothing
-           that shows it renders again */
+           that shows it renders again; the signature covers its Goal */
         const kept =
           held && sessionSignature(held) === sessionSignature(merged) ? held : merged;
-        setSession(kept);
-        writeSessionGoalRead(sessionStore, sessionGoalReadOf(next));
+        writeSessionRead(sessionStore, kept, sessionGoalReadOf(next));
         outcome = sessionSignature(kept);
       }
       noteRead(nextSessionId, outcome, started);

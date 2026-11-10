@@ -97,6 +97,26 @@ export function writeSession(
   });
 }
 
+/** One applied read of the selected session: the session and its Goal read in
+    one write. Keeping the held session keeps its Goal, which already folded
+    the same read. */
+export function writeSessionRead(
+  store: SessionStore,
+  session: DesktopSessionSnapshot,
+  read: SessionGoalRead,
+) {
+  store.setState((state) =>
+    session === state.session
+      ? state
+      : {
+          ...state,
+          session,
+          facts: factsOf(state, session),
+          goal: foldSessionGoalRead(state.goal, read),
+        },
+  );
+}
+
 /** Folds one Goal read of the selected session into what the store holds. */
 export function writeSessionGoalRead(store: SessionStore, read: SessionGoalRead) {
   store.setState((state) => ({ goal: foldSessionGoalRead(state.goal, read) }));
