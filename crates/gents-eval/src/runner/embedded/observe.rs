@@ -523,7 +523,7 @@ mod tests {
         )))
         .unwrap();
         assert_eq!(cases.len(), 656);
-        let native_ownership_loss = gents::test_support::ExecutionOwnershipLost.to_string();
+        let native_ownership_loss = gents::test_support::execution_ownership_lost_reason();
         assert!(cases.iter().any(|case| {
             case.request_reason.as_deref() == Some(native_ownership_loss.as_str())
                 && case.outcome.as_deref() == Some("infrastructure")

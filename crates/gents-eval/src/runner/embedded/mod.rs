@@ -7,7 +7,9 @@ pub mod observe;
 
 pub use executor::outcome::provider_reason_from_failure;
 pub use executor::EmbeddedExecutor;
-pub use home::{boot_runtime, wait_for_runtime_ready, EmbeddedHome, RunningRuntime};
+pub use gents::runtime::embedded::{
+    boot_runtime, wait_for_runtime_ready, EmbeddedHome, RunningRuntime,
+};
 pub use inspect::{inspect_retained_requests, RetainedRequest};
 pub use observe::{
     classify_request_outcome, evidence_query, inference_sample_query,

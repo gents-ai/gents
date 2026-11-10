@@ -231,7 +231,7 @@ pub async fn build_signed_pending_agent_request_with_lineage_workspace_and_conve
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn pending_agent_request_spec(
+pub(crate) fn pending_agent_request_spec(
     node_did: &str,
     agent_did: &str,
     content: &str,
@@ -1479,7 +1479,7 @@ pub async fn write_task_delivery_local(
     write_task_delivery(&access, fire, continue_existing, create).await
 }
 
-pub async fn write_trigger_delivery_with_identity(
+pub(crate) async fn write_trigger_delivery_with_identity(
     node: &std::sync::Arc<EmbeddedNode>,
     actor: ::identity::Did,
     prepared: &crate::triggers::engine::durable::PreparedFire,

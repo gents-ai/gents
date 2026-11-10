@@ -37,10 +37,12 @@ pub mod store;
 #[doc(hidden)]
 #[allow(dead_code)]
 pub mod test_support {
-    pub use crate::documents::automation::{event_admission_generation, EventConfigDocIds};
-    pub use crate::documents::event_consumer::checkpoint_prefix;
-    pub use crate::documents::event_trigger::{
-        update_trigger_runtime_fields, TriggerRuntimeUpdate,
+    mod crate_owners;
+    pub use crate_owners::{
+        checkpoint_prefix, event_admission_generation, execution_ownership_lost_reason,
+        pending_agent_request_spec, update_trigger_runtime_fields,
+        write_trigger_delivery_with_identity, EventConfigDocIds, PreparedFire,
+        TriggerRuntimeUpdate,
     };
 
     pub fn tool_policy(
@@ -99,12 +101,6 @@ pub mod test_support {
         lifecycle.set_client_claim_admission(admission);
         Ok(lifecycle)
     }
-
-    pub use crate::request::lifecycle::materialize::{
-        pending_agent_request_spec, write_trigger_delivery_with_identity,
-    };
-    pub use crate::request::lifecycle::ExecutionOwnershipLost;
-    pub use crate::triggers::engine::durable::PreparedFire;
 
     pub(crate) mod acp_policies;
     pub(crate) mod read_observation;

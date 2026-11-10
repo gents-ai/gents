@@ -7,13 +7,13 @@ use crate::store::graphql::escape_graphql_string;
 pub(crate) const TRIGGER_CURSOR_BATCH_SIZE: usize = 64;
 
 #[derive(Debug, Default, Clone)]
-pub struct TriggerRuntimeUpdate {
-    pub next_run_at: Option<String>,
-    pub last_attempt_at: Option<String>,
-    pub last_fired_source_doc_id: Option<String>,
-    pub last_status: Option<String>,
-    pub last_error: Option<String>,
-    pub fire_count_delta: Option<i64>,
+pub(crate) struct TriggerRuntimeUpdate {
+    pub(crate) next_run_at: Option<String>,
+    pub(crate) last_attempt_at: Option<String>,
+    pub(crate) last_fired_source_doc_id: Option<String>,
+    pub(crate) last_status: Option<String>,
+    pub(crate) last_error: Option<String>,
+    pub(crate) fire_count_delta: Option<i64>,
 }
 
 fn render_trigger_runtime_mutation(
@@ -171,7 +171,7 @@ where
     (output, queries.load(std::sync::atomic::Ordering::Relaxed))
 }
 
-pub async fn update_trigger_runtime_fields(
+pub(crate) async fn update_trigger_runtime_fields(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     trigger_id: &str,

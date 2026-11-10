@@ -13,7 +13,7 @@ pub(crate) use recovery::recover_outcomes_in_txn;
 pub(crate) use recovery::recover_outcomes_with_access;
 
 #[derive(Clone)]
-pub struct PreparedFire {
+pub(crate) struct PreparedFire {
     pub receipt: TriggerFire,
     pub target_existing: bool,
     pub replace_prior: bool,

@@ -4607,7 +4607,6 @@ dependencies = [
  "acp",
  "anyhow",
  "async-trait",
- "axum",
  "chrono",
  "db",
  "defra-core",

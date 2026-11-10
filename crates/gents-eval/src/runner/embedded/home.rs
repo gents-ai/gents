@@ -1,4 +1,4 @@
-pub use gents::runtime::embedded::*;
+pub(crate) use gents::runtime::embedded::*;
 
 #[cfg(test)]
 pub(super) fn bind_test_evaluator(home: &mut EmbeddedHome) -> std::sync::Arc<gents::KeyIdentity> {

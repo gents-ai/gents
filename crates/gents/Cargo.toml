@@ -21,7 +21,7 @@ live-e2e = []
 # through dev-dependencies, never by production builds.
 test-home-guard = []
 # Native fixtures for downstream conformance tests; never enabled in production.
-test-fixtures = ["test-home-guard"]
+test-fixtures = ["test-home-guard", "axum/ws"]
 
 # All other test binaries are auto-discovered; this explicit target overrides
 # autodiscovery for e2e_live so the link only happens on live runs

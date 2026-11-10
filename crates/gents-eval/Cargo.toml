@@ -33,7 +33,6 @@ tempfile = "3"
 proptest = "1"
 gents = { path = "../gents", features = ["test-fixtures"] }
 acp.workspace = true
-axum = { version = "0.8", features = ["ws"] }
 gents-lean-contract.workspace = true
 db.workspace = true
 defra-core.workspace = true
