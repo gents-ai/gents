@@ -12,7 +12,7 @@ use gents_protocol::wait_status::WaitLifecycle;
 
 /// Spawned executions have no provider ToolResult header. Their closed physical
 /// ToolOutput source remains the result owner after the live tail stops.
-pub(super) fn terminal_tool_output(
+pub fn terminal_tool_output(
     tool: &AgentToolCallRow,
     rows: &[OutputSegmentRow],
     denied: &[String],
