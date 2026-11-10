@@ -8,11 +8,40 @@ def available (selectedGrant liveDispatcher : Bool) : Bool :=
 theorem requires_grant (liveDispatcher : Bool) :
     available false liveDispatcher = false := by simp [available]
 
-def childDispatcher : Bool := false
+/-- What started an invocation. The model calls a tool directly or backgrounds
+it through its own `spawn_process`; a plugin calls a child, which may itself be
+`spawn_process`. -/
+inductive Origin where
+  | accepted
+  | spawnedByAccepted
+  | pluginChild
+  | spawnedByPluginChild
+  deriving DecidableEq, Repr
+
+/-- Only an invocation the model started receives a tool dispatcher. A child
+receives none, and neither does the background invocation a child spawns:
+with a dispatcher it would compose under a fresh `maxEffects` budget and
+could spawn its like in turn, so delegation would be unbounded in depth. -/
+def dispatcherFor : Origin → Bool
+  | .accepted | .spawnedByAccepted => true
+  | .pluginChild | .spawnedByPluginChild => false
+
+def childDispatcher : Bool := dispatcherFor .pluginChild
 
 theorem children_cannot_delegate (selectedGrant : Bool) :
     available selectedGrant childDispatcher = false := by
-  simp [available, childDispatcher]
+  simp [available, childDispatcher, dispatcherFor]
+
+theorem spawned_by_child_cannot_delegate (selectedGrant : Bool) :
+    available selectedGrant (dispatcherFor .spawnedByPluginChild) = false := by
+  simp [available, dispatcherFor]
+
+/-- Every composing invocation was started by the model, so composition depth
+is one whatever a script spawns. -/
+theorem delegation_requires_model_origin (selectedGrant : Bool) (origin : Origin)
+    (h : available selectedGrant (dispatcherFor origin) = true) :
+    origin = .accepted ∨ origin = .spawnedByAccepted := by
+  cases origin <;> simp_all [available, dispatcherFor]
 
 def maxEffects : Nat := 64
 def maxPayloadBytes : Nat := 1048576

@@ -209,6 +209,15 @@ impl ToolCallLifecycle {
         &self.tool_call_id
     }
 
+    /// Whether the background invocation this `spawn_process` call starts
+    /// receives a tool dispatcher. One that a plugin child spawned does not:
+    /// it would compose with a fresh call budget, and so would whatever it
+    /// spawned in turn, unbounded in depth (Lean
+    /// `ToolPolicy.PluginCalls.dispatcherFor`).
+    pub(crate) fn spawns_composing_invocation(&self) -> bool {
+        spawned_may_compose(self.plugin_effect.is_some())
+    }
+
     /// Terminalize one child whose invocation stopped before the child reached
     /// its own terminal write.
     pub(crate) async fn settle_interrupted_plugin_effect(
@@ -294,6 +303,10 @@ impl ToolCallLifecycle {
     pub(super) async fn start_running_plugin_effect(&mut self) -> Result<()> {
         self.start_running_canonical_with_time(None).await
     }
+}
+
+fn spawned_may_compose(spawner_is_plugin_child: bool) -> bool {
+    !spawner_is_plugin_child
 }
 
 pub(super) async fn validate_parent(
@@ -659,6 +672,19 @@ mod tests {
             .map(|byte| u8::try_from(byte.as_u64().unwrap()).unwrap())
             .collect();
         String::from_utf8(bytes).unwrap()
+    }
+
+    #[test]
+    fn spawned_dispatchers_conform_to_lean() {
+        let cases = &crate::lean_vocab_test::lean_contract_snapshot().plugin_resource_cases
+            ["tool_calls"]["spawned_dispatcher"];
+        for case in cases.as_array().unwrap() {
+            assert_eq!(
+                spawned_may_compose(case["spawner"] == "plugin_child"),
+                case["expected"].as_bool().unwrap(),
+                "{case}"
+            );
+        }
     }
 
     #[tokio::test]

@@ -169,6 +169,10 @@ private def toolCallsJson : Json := Json.mkObj [
     [("live", true), ("absent", false), ("child", PluginCalls.childDispatcher)].map fun (scope, live) =>
       Json.mkObj [("grant", toJson grant), ("dispatcher", toJson scope),
         ("expected", toJson (PluginCalls.available grant live))]),
+  ("spawned_dispatcher", toJson <| [("accepted", PluginCalls.Origin.spawnedByAccepted),
+    ("plugin_child", .spawnedByPluginChild)].map fun (spawner, origin) =>
+      Json.mkObj [("spawner", toJson spawner),
+        ("expected", toJson (PluginCalls.dispatcherFor origin))]),
   ("reservation", toJson <| [0, 1, 63, 64, 65, 1000].map fun used => Json.mkObj [
     ("used", toJson used), ("expected", toJson (PluginCalls.reserve used))]),
   ("result_bytes", toJson <| [0, 1048575, 1048576, 1048577].map fun bytes => Json.mkObj [

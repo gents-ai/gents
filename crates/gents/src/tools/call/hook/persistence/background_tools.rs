@@ -213,7 +213,9 @@ impl DefraSessionHook {
         )?;
         lifecycle.start_running().await?;
 
-        let dispatcher = if let Some(tools) = self.selected_loop_tools.lock().await.clone() {
+        let composes = parent_lifecycle.spawns_composing_invocation();
+        let selected_tools = self.selected_loop_tools.lock().await.clone();
+        let dispatcher = if let Some(tools) = selected_tools.filter(|_| composes) {
             let mut hook = self.clone();
             let mut parents = rapidhash::RapidHashMap::default();
             parents.insert(background_tool_call_id.clone(), lifecycle.clone());
