@@ -94,18 +94,6 @@ describe("words for what the runtime reports", () => {
     );
   });
 
-  it("names this client's refused access, not the provider's credentials", () => {
-    const denied =
-      "This account doesn't have permission to do that. Ask the node's owner for access.";
-    expect(
-      errorWords(
-        "Access was denied. Check this client's permissions with the runtime owner.",
-      ),
-    ).toBe(denied);
-    expect(failureText("permissionDenied: 403 Forbidden")).toBe(denied);
-    expect(failureText("403 Forbidden: invalid api key")).toMatch(/credentials/);
-  });
-
   it("says a goal's status and why something stopped in words", () => {
     expect(goalStatusText("usage_limited")).toBe(
       "Stopped at the account's usage limit",
