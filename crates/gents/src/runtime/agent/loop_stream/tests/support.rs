@@ -874,7 +874,9 @@ async fn owned_test_hook_with_identity_policy(
             spec.input.queue = Some(gents_protocol::request_input::RequestQueue {
                 source: gents_protocol::request_input::QueueSource::User,
                 policy: gents_protocol::request_input::QueuePolicy::Append,
-                delivery: gents_protocol::request_input::QueueDelivery::Queue,
+                // Lean `Session.ordinary_queued_input_never_folds`: a folded
+                // entry is a `queuedUserMessage`, which requires an explicit steer.
+                delivery: gents_protocol::request_input::QueueDelivery::Steer,
                 position: None,
                 key: None,
                 queued_after_request_id: Some(predecessor),

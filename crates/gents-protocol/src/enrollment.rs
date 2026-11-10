@@ -36,7 +36,10 @@ pub use decision::{
     EnrollmentDecisionRefusalCode,
 };
 pub use error::EnrollmentError;
-pub use lease::{AuthorizationLease, AuthorizationLeaseState, ENROLLMENT_RENEWAL_WINDOW_SECONDS};
+pub use lease::{
+    AuthorizationLease, AuthorizationLeaseState, EnrollmentRenewalPolicy,
+    ENROLLMENT_RENEWAL_WINDOW_SECONDS,
+};
 pub use offer::{
     decode_offer, encode_offer, renewal_challenge, renewal_challenge_matches, EnrollmentOfferRecord,
 };
