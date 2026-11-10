@@ -167,12 +167,17 @@ export function chatDraftOf(
   });
 }
 
-/** Saves a new send with `save`, which returns the draft as saved. Its
- * attachment bytes are kept first, so a send whose bytes cannot be kept is
- * refused before it is saved, and the bytes of a send `save` refuses are
- * deleted. A send without attachments is saved in the calling task. */
+/** Saves a new send with `save`, which returns the draft as saved, then
+ * stores its attachment bytes. The draft names each attachment by digest
+ * before any bytes exist, so stored bytes are always referenced. A send whose
+ * bytes cannot be stored is removed and refused before it is dispatched.
+ * Until they are stored the draft is pending, so no window offers Retry
+ * before its deadline; a read in that gap finds no bytes and fails as missing,
+ * never sending without them. A send without attachments is saved in the
+ * calling task. */
 export function saveNewChatDraft(
   store: SendAttachmentStore,
+  chat: ChatStore,
   request: ChatSendRequest,
   selectedSessionId: string | null,
   queued: boolean,
@@ -183,31 +188,29 @@ export function saveNewChatDraft(
   if (!files.length)
     return save(chatDraftOf(request, selectedSessionId, queued, mailbox));
   return (async () => {
-    const draft = chatDraftOf(
-      request,
-      selectedSessionId,
-      queued,
-      mailbox,
-      await Promise.all(files.map(attachmentMetadata)),
+    const saved = save(
+      chatDraftOf(
+        request,
+        selectedSessionId,
+        queued,
+        mailbox,
+        await Promise.all(files.map(attachmentMetadata)),
+      ),
     );
     try {
       await store.put(
-        chatDraftKey(draft),
+        chatDraftKey(saved),
         files.map((file) => file.data),
       );
     } catch (error) {
+      removeChatDraft(chat, saved);
       throw new Error(
         `The attachments could not be saved on this device, so the message was not sent: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
     }
-    try {
-      return save(draft);
-    } catch (error) {
-      await forgetChatDraftAttachments(store, draft);
-      throw error;
-    }
+    return saved;
   })();
 }
 
@@ -275,7 +278,7 @@ export function chatDraftPayload(
 }
 
 /** Deletes the kept attachment bytes of a send that is released, discarded
- * or never saved. A failed delete leaves bytes no saved send refers to,
+ * or confirmed. A failed delete leaves bytes no saved send refers to,
  * which `pruneChatDraftAttachments` removes, never a send without them. */
 export async function forgetChatDraftAttachments(
   store: SendAttachmentStore,
@@ -288,21 +291,12 @@ export async function forgetChatDraftAttachments(
   if (kept) await store.delete(chatDraftKey(draft)).catch(() => {});
 }
 
-/** A send keeps its bytes moments before it is saved, so bytes kept this
- * recently may belong to a send no window has saved yet. */
-const UNSAVED_ATTACHMENTS_MS = 60_000;
-
 /** Deletes the kept attachment bytes no saved send refers to: those of
  * sends released in another window, confirmed by observation, or whose
  * delete failed. Run as the saved sends load; a failed prune leaves them for
  * the next. */
-export async function pruneChatDraftAttachments(
-  store: SendAttachmentStore,
-  now = Date.now(),
-) {
-  await store
-    .prune((key) => localStorage.getItem(key) !== null, now - UNSAVED_ATTACHMENTS_MS)
-    .catch(() => {});
+export async function pruneChatDraftAttachments(store: SendAttachmentStore) {
+  await store.prune((key) => localStorage.getItem(key) !== null).catch(() => {});
 }
 
 /** Each message has its own key, so another window cannot overwrite it. The

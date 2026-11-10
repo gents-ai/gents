@@ -224,6 +224,7 @@ export function createChatDelivery(
       return proceed(
         saveNewChatDraft(
           attachments,
+          stores.chat,
           input,
           selectedSessionId,
           queued,

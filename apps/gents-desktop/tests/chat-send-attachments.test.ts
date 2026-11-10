@@ -9,14 +9,17 @@ import type {
 import { createChatDelivery } from "../src/hooks/chatDelivery";
 import {
   chatDraftKey,
+  chatDraftPayload,
   chatDraftRequest,
   loadChatDrafts,
   pruneChatDraftAttachments,
 } from "../src/hooks/chatDrafts";
+import { sendStatus } from "../src/hooks/chatDeliveryView";
 import { createChatStore } from "../src/hooks/chatStore";
 import type { SendAttachmentStore } from "../src/hooks/sendAttachments";
 import { shellStores } from "./shell-fixture";
 import { acceptedChat } from "./chat-delivery-fixture";
+import { deferred } from "./deferred";
 import { memorySendAttachments } from "./send-attachments-fixture";
 
 /* WebKit refuses a localStorage write once the origin holds about 5 Mi
@@ -162,32 +165,49 @@ it("fails a retry clearly when the kept bytes are gone or changed, without sendi
   expect(still.failure?.message).toMatch(/Discard it and attach the files again/);
 });
 
-it("drops the kept bytes of a send that is refused before it is saved", async () => {
+it("stores no bytes for a send whose draft cannot be saved", async () => {
   const f = fixture();
   const put = vi.spyOn(f.kept, "put");
-  const remove = vi.spyOn(f.kept, "delete");
   vi.spyOn(localStorage, "setItem").mockImplementationOnce(() => {
     throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
   });
   await expect(f.submit()).rejects.toThrow("The quota has been exceeded.");
   expect(f.send).not.toHaveBeenCalled();
-  const [key] = put.mock.calls[0];
-  expect(remove).toHaveBeenCalledWith(key);
-  expect(await f.kept.get(key)).toBeUndefined();
+  expect(put).not.toHaveBeenCalled();
+  expect(loadChatDrafts().chatDrafts).toEqual([]);
 });
 
-it("prunes the bytes no saved send refers to once they are not new", async () => {
-  let at = 1_000_000;
-  const f = fixture(memorySendAttachments(() => at));
+it("saves the draft before its bytes; a read in between fails as missing bytes", async () => {
+  const f = fixture();
+  const stored = deferred<void>();
+  const put = f.kept.put.bind(f.kept);
+  vi.spyOn(f.kept, "put").mockImplementationOnce(async (key, data) => {
+    await stored.promise;
+    await put(key, data);
+  });
+  const sent = f.submit();
+  await vi.waitFor(() => expect(loadChatDrafts().chatDrafts).toHaveLength(1));
+  const [saving] = loadChatDrafts().chatDrafts;
+  expect(sendStatus(saving, Date.now())).toBe("pending");
+  await expect(f.delivery().retry(saving.requestId, async () => true)).rejects.toThrow(
+    "This message is still being sent.",
+  );
+  await expect(chatDraftPayload(f.kept, saving)).rejects.toThrow(
+    /attachments are no longer saved on this device/,
+  );
+  await pruneChatDraftAttachments(f.kept);
+  stored.resolve();
+  await expect(sent).rejects.toThrow("Outer reply was lost");
+  expect(f.send).toHaveBeenCalledTimes(1);
+  expect(f.send.mock.calls[0][0].attachments).toEqual([LARGE, SECOND]);
+});
+
+it("prunes the bytes no saved send refers to", async () => {
+  const f = fixture();
   await expect(f.submit()).rejects.toThrow();
   const [failed] = loadChatDrafts().chatDrafts;
   await f.kept.put("released", [SECOND.data]);
-  await pruneChatDraftAttachments(f.kept, at);
-  expect(await f.kept.get("released")).toHaveLength(1);
-  at += 60_001;
-  await f.kept.put("unsaved", [SECOND.data]);
-  await pruneChatDraftAttachments(f.kept, at);
+  await pruneChatDraftAttachments(f.kept);
   expect(await f.kept.get("released")).toBeUndefined();
-  expect(await f.kept.get("unsaved")).toHaveLength(1);
   expect(await f.kept.get(chatDraftKey(failed))).toHaveLength(2);
 });

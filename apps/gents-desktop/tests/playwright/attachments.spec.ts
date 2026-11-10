@@ -94,21 +94,17 @@ test("keeps a saved send's attachment bytes in IndexedDB, past localStorage's qu
     await store.put("saved", [large, "bm90ZXM="]);
     await store.put("released", ["bm90ZXM="]);
     const read = await store.get("saved");
-    await store.prune(() => false, 0);
-    const recent = await store.get("released");
-    await store.prune((key) => key === "saved", Date.now() + 1);
+    await store.prune((key) => key === "saved");
     const pruned = [await store.get("saved"), await store.get("released")];
     await store.delete("saved");
     return {
       read: read?.map((data) => data.length),
-      recent,
       pruned: pruned.map((data) => data?.length ?? null),
       deleted: (await store.get("saved")) ?? null,
     };
   }, "/src/hooks/sendAttachments.ts");
   expect(kept).toEqual({
     read: [5_592_408, 8],
-    recent: ["bm90ZXM="],
     pruned: [2, null],
     deleted: null,
   });

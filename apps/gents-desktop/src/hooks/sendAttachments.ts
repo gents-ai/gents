@@ -1,18 +1,17 @@
 /** Where a saved send keeps its attachment bytes, one record per send under
- * its draft key, until the send is confirmed or discarded. */
+ * its draft key, until the send is confirmed or discarded. A record is stored
+ * only after its draft is saved. */
 export type SendAttachmentStore = {
   put(key: string, data: readonly string[]): Promise<void>;
   get(key: string): Promise<string[] | undefined>;
   delete(key: string): Promise<void>;
-  /** Deletes each record kept before `keptBefore` (epoch ms) whose key
-   * `referenced` rejects when the record is visited. */
-  prune(referenced: (key: string) => boolean, keptBefore: number): Promise<void>;
+  /** Deletes each record whose key `referenced` rejects when the record is
+   * visited. */
+  prune(referenced: (key: string) => boolean): Promise<void>;
 };
 
 const DATABASE = "gents.chat.sendAttachments";
 const RECORDS = "attachments";
-
-type SendAttachmentRecord = { data: string[]; keptAt: number };
 
 function settled<T>(request: IDBRequest<T>) {
   return new Promise<T>((resolve, reject) => {
@@ -30,15 +29,8 @@ function committed(transaction: IDBTransaction) {
   });
 }
 
-function recordOf(value: unknown): SendAttachmentRecord | undefined {
-  if (value === null || typeof value !== "object") return undefined;
-  const { data, keptAt } = value as Partial<SendAttachmentRecord>;
-  return Array.isArray(data) &&
-    data.every((item) => typeof item === "string") &&
-    typeof keptAt === "number"
-    ? { data, keptAt }
-    : undefined;
-}
+const record = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every((item) => typeof item === "string");
 
 /** WebKit's localStorage refuses a single value over about 5 Mi characters,
  * less than one base64 attachment at the 4 MiB file limit, so the bytes live
@@ -70,32 +62,24 @@ export function indexedDbSendAttachments(): SendAttachmentStore {
     await done;
   }
   return {
-    put: (key, data) =>
-      write((records) => {
-        const record: SendAttachmentRecord = { data: [...data], keptAt: Date.now() };
-        records.put(record, key);
-      }),
+    put: (key, data) => write((records) => records.put([...data], key)),
     async get(key) {
       const value: unknown = await settled(
         (await open()).transaction(RECORDS).objectStore(RECORDS).get(key),
       );
-      return recordOf(value)?.data;
+      return record(value) ? value : undefined;
     },
     delete: (key) => write((records) => records.delete(key)),
-    // `referenced` is asked inside the transaction, so no put lands between
-    // the answer and the delete.
-    prune: (referenced, keptBefore) =>
+    // `referenced` is asked as each record is visited, inside the
+    // transaction: a record stored before it began had its draft saved
+    // first, so only a released send's record is unreferenced.
+    prune: (referenced) =>
       write((records) => {
         const cursor = records.openCursor();
         cursor.onsuccess = () => {
           const at = cursor.result;
           if (!at) return;
-          if (
-            typeof at.key === "string" &&
-            !referenced(at.key) &&
-            (recordOf(at.value)?.keptAt ?? 0) < keptBefore
-          )
-            at.delete();
+          if (typeof at.key === "string" && !referenced(at.key)) at.delete();
           at.continue();
         };
       }),
