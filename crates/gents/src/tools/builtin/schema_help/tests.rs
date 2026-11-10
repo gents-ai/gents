@@ -1229,6 +1229,7 @@ async fn collection_cleanup_refuses_managed_and_referenced_collections() {
                 ux,
                 source: None,
                 source_history: Vec::new(),
+                created_collections: Vec::new(),
             },
         )
         .unwrap();
@@ -1273,30 +1274,93 @@ async fn collection_cleanup_refuses_managed_and_referenced_collections() {
     assert_eq!(users(&refused).len(), 3, "{refused}");
     seed_scratch(&node, "again").await;
 
+    let pack = |created: &[&str]| crate::collection_use::PackCollections {
+        coordinate: "acme/board".into(),
+        declared: ["Scratch", "AgentSession", "Absent"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        created: created.iter().map(|name| (*name).to_owned()).collect(),
+    };
+    let created = pack(&["Scratch", "AgentSession", "Absent"]);
     let kept = crate::collection_use::remove_unused_collections(
         &access,
         Some(home.path()),
         &node_did,
-        [
-            "Scratch".to_owned(),
-            "AgentSession".to_owned(),
-            "Absent".to_owned(),
-        ],
+        &created,
     )
     .await
     .unwrap();
     assert_eq!(kept.len(), 1);
     assert!(!kept[0].removed);
-    assert_eq!(kept[0].kept_for.len(), 3);
+    assert_eq!(kept[0].kept_for.len(), 1, "{kept:?}");
+    assert!(kept[0].kept_for[0].user.contains("datastore surface"));
     assert_eq!(scratch_rows(&node).await, 1);
 
     delete("DatastoreToolSurface", surface).await;
     crate::pack::forget_home_install(home.path(), "acme/board").unwrap();
+
+    // A collection the pack found on the node is not the pack's to remove.
+    let adopted = crate::collection_use::remove_unused_collections(
+        &access,
+        Some(home.path()),
+        &node_did,
+        &pack(&[]),
+    )
+    .await
+    .unwrap();
+    assert!(!adopted[0].removed);
+    assert!(
+        adopted[0].kept_for[0].user.contains("did not create it"),
+        "{adopted:?}"
+    );
+    assert_eq!(scratch_rows(&node).await, 1);
+
+    // A collection that stays and relates to it refuses the removal before
+    // anything is emptied.
+    access
+        .add_collection("type ScratchHolder { note: String scratch: Scratch }")
+        .await
+        .unwrap();
+    let plan = crate::collection_use::collection_cleanup_plan(
+        &access,
+        Some(home.path()),
+        &node_did,
+        &created,
+    )
+    .await
+    .unwrap();
+    assert_eq!(plan.len(), 1);
+    assert!(!plan[0].removable, "{plan:?}");
+    assert_eq!(plan[0].documents, 1);
+    assert!(
+        plan[0].kept_for[0].user.contains("ScratchHolder"),
+        "{plan:?}"
+    );
+    let held = crate::collection_use::remove_unused_collections(
+        &access,
+        Some(home.path()),
+        &node_did,
+        &created,
+    )
+    .await
+    .unwrap();
+    assert!(!held[0].removed);
+    assert_eq!(
+        scratch_rows(&node).await,
+        1,
+        "a refused removal keeps the data"
+    );
+    access
+        .remove_collections(&["ScratchHolder".to_owned()])
+        .await
+        .unwrap();
+
     let cleaned = crate::collection_use::remove_unused_collections(
         &access,
         Some(home.path()),
         &node_did,
-        ["Scratch".to_owned()],
+        &created,
     )
     .await
     .unwrap();

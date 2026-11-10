@@ -214,6 +214,7 @@ fn install_plugin(
             installed_via: Some(via),
             source: None,
             source_history: Vec::new(),
+            created_collections: Vec::new(),
         },
     )
     .unwrap();

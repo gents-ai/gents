@@ -49,7 +49,12 @@ pub(crate) fn declared_collections(
     home: &Path,
     digest: &str,
 ) -> Result<std::collections::BTreeSet<String>> {
-    let archive = crate::pack::store::PackStore::new(home).open(digest)?;
+    archive_declared_collections(&crate::pack::store::PackStore::new(home).open(digest)?)
+}
+
+fn archive_declared_collections(
+    archive: &PackArchive,
+) -> Result<std::collections::BTreeSet<String>> {
     let mut declared = std::collections::BTreeSet::new();
     for path in sdl_paths(archive.manifest()) {
         let sdl = std::str::from_utf8(archive.asset(path)?)
@@ -57,6 +62,22 @@ pub(crate) fn declared_collections(
         declared.extend(query::parse_sdl(sdl)?.into_iter().map(|schema| schema.name));
     }
     Ok(declared)
+}
+
+/// The collections `archive`'s SDL declares that are not on the node yet:
+/// the ones installing it creates. Read before the install applies its
+/// schemas and kept in the pack's home record, it is what later tells a
+/// collection the pack brought from one it found
+/// ([`HomePackInstall::created_collections`]).
+pub async fn collections_install_creates(
+    access: &ConfigAccess,
+    archive: &PackArchive,
+) -> Result<Vec<String>> {
+    let existing = access.collection_names().await?;
+    Ok(archive_declared_collections(archive)?
+        .into_iter()
+        .filter(|collection| !existing.contains(collection))
+        .collect())
 }
 
 /// The fields of a declared collection and the field sets of its unique
@@ -1362,6 +1383,7 @@ pub async fn install_prepared_document_pack(
             leases.push(lease);
         }
     }
+    let created_collections = collections_install_creates(access, archive).await?;
     apply_prepared_dependency_schemas(access, prepared).await?;
     let mut schemas = Vec::new();
     for path in document_pack_schema_paths(archive.manifest())? {
@@ -1422,6 +1444,7 @@ pub async fn install_prepared_document_pack(
             &identity,
             assets,
             dependency_assets,
+            created_collections,
             super::super::installer_provenance(installed_via, grant_authority),
             true,
         )?;
@@ -1438,6 +1461,7 @@ pub(super) fn record_home_install(
     identity: &PackIdentity,
     assets: String,
     dependency_assets: Vec<(String, String)>,
+    created_collections: Vec<String>,
     installed_via: InstalledVia,
     explicit: bool,
 ) -> Result<()> {
@@ -1456,6 +1480,7 @@ pub(super) fn record_home_install(
             installed_via: Some(installed_via),
             source: None,
             source_history: Vec::new(),
+            created_collections,
         },
         installed_via,
         explicit,

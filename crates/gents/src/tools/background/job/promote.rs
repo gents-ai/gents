@@ -856,6 +856,7 @@ mod tests {
                 installed_via: None,
                 source: None,
                 source_history: Vec::new(),
+                created_collections: Vec::new(),
             },
         )
         .unwrap();

@@ -121,6 +121,7 @@ where
             installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             ux: manifest.metadata.ux.clone(), installed_via: Some(installed_via),
             source: Some(source), source_history: Vec::new(),
+            created_collections: Vec::new(),
         };
         let publish_home = home.clone();
         let mut publish_record = record.clone();

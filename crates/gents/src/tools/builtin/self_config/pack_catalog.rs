@@ -140,18 +140,48 @@ impl PackInstaller {
             .await?
             .with_context(|| format!("{coordinate} is not installed; see pack list"))?;
         let edited = self.edited_documents(&coordinate, true).await?;
+        let collections = match &self.home {
+            Some(home) => {
+                let pack = crate::collection_use::pack_collections(
+                    &access,
+                    home,
+                    self.core.node_did(),
+                    &coordinate,
+                )
+                .await;
+                match pack {
+                    Ok(pack) => json!({
+                        "note": "What --with-collections would do to each collection the pack declares. removable: true is emptied and removed with the documents counted here, which are only the ones you can read. A user that is one of this pack's own documents goes with the pack; whatever still names a collection after that keeps it.",
+                        "collections": crate::collection_use::collection_cleanup_plan(
+                            &access,
+                            Some(home),
+                            self.core.node_did(),
+                            &pack,
+                        )
+                        .await?,
+                    }),
+                    Err(error) => json!({
+                        "unavailable": format!("the pack's declared collections cannot be read ({error:#}), so --with-collections would be refused and remove nothing"),
+                    }),
+                }
+            }
+            None => json!({
+                "unavailable": "this runtime has no node home to read the pack's SDL from, so --with-collections is refused; remove without it, then use schema collection preview remove NAME",
+            }),
+        };
         ordered! {
             "committed": false,
             "operation": "remove",
             "pack": coordinate,
             "installed": installed,
             "edited_documents": edited,
+            "with_collections": collections,
             "apply_with": if edited.is_some() {
                 json!({"argv":["pack","remove",coordinate],"options":{"edited":"keep"}})
             } else {
                 json!({"argv":["pack","remove",coordinate]})
             },
-            "effect": "Removes the documents the pack created; its collections and their documents stay unless --with-collections is added.",
+            "effect": "Removes the documents the pack created; its collections and their documents stay unless --with-collections is added, which does what with_collections lists.",
         }
         .pretty()
     }
@@ -199,7 +229,7 @@ impl PackInstaller {
                 .home
                 .clone()
                 .context("--with-collections reads the pack's SDL from the node home, which this runtime does not have; remove without it, then use schema collection preview remove NAME")?;
-            crate::collection_use::pack_declared_collections(
+            crate::collection_use::pack_collections(
                 &access,
                 &home,
                 self.core.node_did(),
@@ -208,7 +238,7 @@ impl PackInstaller {
             .await
             .with_context(|| format!("{coordinate}: its declared collections cannot be read, so nothing was removed; remove without --with-collections"))?
         } else {
-            Default::default()
+            crate::collection_use::PackCollections::default()
         };
         self.require_edited_decision(&coordinate, true, edited, words)
             .await?;
@@ -217,7 +247,7 @@ impl PackInstaller {
             &access,
             self.home.as_deref(),
             self.core.node_did(),
-            declared,
+            &declared,
         )
         .await
         .with_context(|| format!("{coordinate} and its documents were removed, but cleaning up its collections failed; inspect them with schema collection list"))?;
@@ -226,7 +256,7 @@ impl PackInstaller {
             "removed": report,
             "collections": with_collections.then_some(collections),
             "effect": if with_collections {
-                "The package's documents were removed. Each declared collection nothing else names was emptied and removed; the rest are listed with what still uses them."
+                "The package's documents were removed. Each collection its install created that nothing else names was emptied and removed; the rest are listed with what keeps them."
             } else {
                 "The package's documents were removed. Its collections and their documents stay; pack remove PACKAGE --with-collections also removes the ones nothing else uses, or use schema collection preview remove NAME."
             },

@@ -521,6 +521,8 @@ async fn install_documents_pack_resolved_inner(
         .collect();
     let schema_access = local.map_or(access, |local| &local.schema);
     let writer = local.map_or(access, |local| &local.writer);
+    let created_collections =
+        gents::pack::collections_install_creates(schema_access, pack.archive()).await?;
     gents::pack::apply_prepared_dependency_schemas(schema_access, &prepared).await?;
     let schemas = super::super::schema::apply_pack_schemas_if_present(schema_access, temp.path())
         .await
@@ -573,6 +575,7 @@ async fn install_documents_pack_resolved_inner(
                 installed_via: Some(gents::pack::InstalledVia::Operator),
                 source: Some(pack.provenance()),
                 source_history: Vec::new(),
+                created_collections,
             },
             gents::pack::InstalledVia::Operator,
             explicit,

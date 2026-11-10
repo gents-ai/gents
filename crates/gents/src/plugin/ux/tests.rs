@@ -52,6 +52,7 @@ fn install_record(
             source_history: Vec::new(),
             installed_at: "2026-01-01T00:00:00Z".into(),
             ux,
+            created_collections: Vec::new(),
         },
     )
     .unwrap();

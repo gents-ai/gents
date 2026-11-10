@@ -313,6 +313,7 @@ fn install_board(home: &std::path::Path, data: Vec<UxDataSurface>) {
                 default_enabled: None,
                 data,
             }],
+            created_collections: Vec::new(),
         },
     )
     .unwrap();

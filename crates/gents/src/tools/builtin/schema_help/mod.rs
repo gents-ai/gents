@@ -188,6 +188,7 @@ impl SchemaTool {
             self.home.as_deref(),
             &self.node_did,
             name,
+            None,
         )
         .await?;
         if remove && !users.is_empty() {

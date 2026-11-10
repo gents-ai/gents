@@ -1767,6 +1767,7 @@ async fn a_delayed_plugin_notification_projects_the_current_home_pin() {
             installed_via: None,
             source: None,
             source_history: Vec::new(),
+            created_collections: Vec::new(),
         },
     )
     .unwrap();
@@ -2020,6 +2021,7 @@ fn operator_record(archive: &crate::pack::archive::PackArchive) -> crate::pack::
         installed_via: Some(crate::pack::InstalledVia::Operator),
         source: None,
         source_history: Vec::new(),
+        created_collections: Vec::new(),
     }
 }
 
@@ -2051,6 +2053,7 @@ async fn non_explicit_self_config_record_never_lowers_operator_provenance() {
         archive.manifest(),
         &identity,
         String::new(),
+        Vec::new(),
         Vec::new(),
         crate::pack::InstalledVia::SelfConfig,
         false,

@@ -608,6 +608,7 @@ mod tests {
                     default_enabled: None,
                     data: vec![],
                 }],
+                created_collections: Vec::new(),
             },
         )
         .unwrap();
