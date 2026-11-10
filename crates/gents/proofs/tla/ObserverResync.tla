@@ -2,7 +2,7 @@
 \* The desktop observer's delivery and resync loop for runtime documents
 \* (`observe.rs`, `observe/delivery.rs`, `observe/projection_store.rs`) and
 \* the direct refresh path beside it (`ClientCore::refresh_store`,
-\* `refresh_node`, `refresh_config_source`).
+\* `refresh_node`, `refresh_written_node`).
 \*
 \* Runtime. Each node's runtime commits projected writes (`db`). DefraDB
 \* delivers a change event for a commit only on a subscription armed before
@@ -38,9 +38,8 @@
 \*
 \* Direct refresh. A user mutation refreshes its node once: capture, read,
 \* publish through the fence. A rejected refresh queues the observer; with
-\* `FallbackOnReject` it instead reads again for the same mutation, as
-\* `refresh_config_source` and the session commands fell back to
-\* `refresh_store` when `refresh_node` was rejected.
+\* `FallbackOnReject` it instead reads again for the same mutation: a
+\* fallback to `refresh_store` when `refresh_node` is rejected.
 \*
 \* Each remaining constant breaks one guard of the fixed design.
 EXTENDS Naturals

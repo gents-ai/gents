@@ -16,6 +16,7 @@ import {
 } from "../../../hooks/chatDrafts";
 import {
   deliveryAffordances,
+  resendRefused,
   sendStatus,
   type SendStatus,
 } from "../../../hooks/chatDeliveryView";
@@ -110,7 +111,11 @@ function SavedMessage({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const noun = draft.mailbox ? "answer" : "message";
-  const shown = deliveryAffordances(status, draft.mailbox !== undefined);
+  const shown = deliveryAffordances(
+    status,
+    draft.mailbox !== undefined,
+    resendRefused(draft),
+  );
   async function retry() {
     if (busy || disabled) return;
     const intent = actions.captureComposeIntent();
@@ -156,8 +161,6 @@ function SavedMessage({
     }
   }
   const failed = shown.view === "failed";
-  /* sending again under the same identity is refused again */
-  const denied = failed && draft.failure?.error?.code === "permissionDenied";
   return (
     <Notice
       tone={failed ? "destructive" : "info"}
@@ -180,7 +183,7 @@ function SavedMessage({
       detailsLabel={`Saved ${noun}`}
       actions={
         <>
-          {shown.retry && !denied && (
+          {shown.retry && (
             <Button
               variant="outline"
               size="sm"
@@ -203,12 +206,12 @@ function SavedMessage({
         </>
       }
     >
-      {denied && (
+      {failed && !shown.retry && (
         <p>
           {`This account can't post in this session. Ask the node's owner for access, or discard the ${noun}.`}
         </p>
       )}
-      {failed && !denied && (
+      {failed && shown.retry && (
         <p>
           {draft.failure
             ? errorWords(draft.failure.message)

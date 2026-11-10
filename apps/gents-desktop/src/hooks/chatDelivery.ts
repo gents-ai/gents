@@ -15,7 +15,7 @@ import {
   validateChatResult,
   type ChatDraft,
 } from "./chatDrafts";
-import { deliveryAffordances, sendStatus } from "./chatDeliveryView";
+import { deliveryAffordances, resendRefused, sendStatus } from "./chatDeliveryView";
 import type { ShellStores } from "./shellProjection";
 
 type Applied = (result: ChatSendResult, draft: ChatDraft) => Promise<boolean>;
@@ -172,8 +172,11 @@ export function createChatDelivery(
           mailbox?.itemId,
         ).some(
           (draft) =>
-            deliveryAffordances(sendStatus(draft, now()), mailbox !== undefined)
-              .blocksComposer,
+            deliveryAffordances(
+              sendStatus(draft, now()),
+              mailbox !== undefined,
+              resendRefused(draft),
+            ).blocksComposer,
         )
       )
         throw new Error(
