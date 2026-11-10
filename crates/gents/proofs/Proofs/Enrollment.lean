@@ -1,4 +1,5 @@
 import Proofs.Enrollment.State
+import Proofs.Enrollment.AutoRenewal
 import Proofs.Enrollment.Transition
 import Proofs.Enrollment.Executable
 import Proofs.Enrollment.Properties

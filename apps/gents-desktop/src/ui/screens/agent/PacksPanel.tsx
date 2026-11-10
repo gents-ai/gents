@@ -1,12 +1,10 @@
-import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import { Button } from "@gents/ui/components/button";
 import { Input } from "@gents/ui/components/input";
 import { Spinner } from "@gents/ui/components/spinner";
 import { toast } from "sonner";
 import type {
-  FoundPack,
   InstalledPack,
-  PackEditedChoice,
   PackPluginSlot,
   PackSlotProfile,
   PackWireSources,
@@ -21,13 +19,8 @@ import { RegistryPack } from "./RegistryPack";
 import { errorText } from "../../../lib/errorText";
 import { href } from "@/lib/router";
 import { packContents } from "./packContents";
-import { refreshRuntimePackUxPlugins } from "@/contrib/runtime-door";
-
-/** An install or update that would replace documents someone edited stops and
- * names them; the person chooses keep or overwrite. */
-function editedChoice(error: unknown): boolean {
-  return errorText(error).includes("--overwrite");
-}
+import { usePackActions } from "./usePackActions";
+import { useRegistrySearch } from "./useRegistrySearch";
 
 const NO_SOURCES: PackWireSources = { plugins: [], target_packs: [] };
 
@@ -35,17 +28,9 @@ export function PacksPanel({ deployment }: { deployment: NodeView }) {
   const { actions } = useApp();
   const [installed, setInstalled] = useState<InstalledPack[] | null>(null);
   const [account, setAccount] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
-  const [found, setFound] = useState<FoundPack[]>([]);
-  const [page, setPage] = useState(1);
-  const [hasMore, setHasMore] = useState(false);
-  /* null until the first answer; a search is in flight while true */
-  const [searched, setSearched] = useState<boolean | null>(null);
-  const searches = useRef(0);
   /* the registry pack whose page is open under its line */
   const [opened, setOpened] = useState<string | null>(null);
   const [token, setToken] = useState("");
-  const [busy, setBusy] = useState<string | null>(null);
   const [slots, setSlots] = useState<PackPluginSlot[]>([]);
   const [profiles, setProfiles] = useState<PackSlotProfile[]>([]);
   const [sources, setSources] = useState<PackWireSources>(NO_SOURCES);
@@ -90,109 +75,9 @@ export function PacksPanel({ deployment }: { deployment: NodeView }) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
-
-  /* an empty query lists every pack, a page at a time; an answer to a search
-     typed over since is dropped */
-  async function search(next: number, q = query) {
-    const mine = ++searches.current;
-    setSearched((was) => (was === null ? null : true));
-    try {
-      const report = await actions.searchPacks(q.trim(), next);
-      if (mine !== searches.current) return;
-      setFound(report.packs);
-      setHasMore(report.has_more);
-      setPage(next);
-    } catch (error) {
-      if (mine === searches.current) toast.error(errorText(error));
-    } finally {
-      if (mine === searches.current) setSearched(false);
-    }
-  }
-
-  /* the registry shows its packs as the page opens, and follows what is
-     typed once typing pauses */
-  const typed = useRef(false);
-  useEffect(() => {
-    const wait = typed.current ? 300 : 0;
-    typed.current = true;
-    const timer = setTimeout(() => void search(1, query), wait);
-    return () => clearTimeout(timer);
-    /* only a change of query searches again; search reads the rest fresh */
-  }, [query]);
-
-  async function refreshPages(pack: string) {
-    try {
-      await refreshRuntimePackUxPlugins(pack);
-    } catch (error) {
-      toast.error(`Couldn't refresh pack pages: ${errorText(error)}`);
-    }
-  }
-
-  async function install(
-    pack: string,
-    edited: PackEditedChoice = "refuse",
-    grantAuthority = false,
-  ) {
-    setBusy(pack);
-    try {
-      await actions.installPack({ package: pack, edited, grantAuthority });
-      toast.success(`Installed ${pack}`);
-      await refreshPages(pack);
-      await refresh();
-    } catch (error) {
-      const text = errorText(error);
-      if (
-        text.includes("--grant-authority") &&
-        window.confirm(`${text}\n\nAllow it?`)
-      ) {
-        return install(pack, edited, true);
-      }
-      if (editedChoice(error)) {
-        const overwrite = window.confirm(
-          `${text}\n\nOK replaces them, Cancel keeps your edits.`,
-        );
-        return install(pack, overwrite ? "overwrite" : "keep", grantAuthority);
-      }
-      toast.error(text);
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function update(pack: string, edited: PackEditedChoice = "refuse") {
-    setBusy(pack);
-    try {
-      await actions.updatePack(pack, edited);
-      toast.success(`Updated ${pack}`);
-      await refreshPages(pack);
-      await refresh();
-    } catch (error) {
-      if (editedChoice(error)) {
-        const overwrite = window.confirm(
-          `${errorText(error)}\n\nOK replaces them, Cancel keeps your edits.`,
-        );
-        return update(pack, overwrite ? "overwrite" : "keep");
-      }
-      toast.error(errorText(error));
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function remove(pack: string) {
-    if (!window.confirm(`Remove ${pack} and everything it installed?`)) return;
-    setBusy(pack);
-    try {
-      await actions.removePack(pack);
-      toast.success(`Removed ${pack}`);
-      await refreshPages(pack);
-      await refresh();
-    } catch (error) {
-      toast.error(errorText(error));
-    } finally {
-      setBusy(null);
-    }
-  }
+  const { busy, setBusy, install, update, remove } = usePackActions(refresh);
+  const { query, setQuery, found, page, hasMore, searched, search } =
+    useRegistrySearch();
 
   async function bindSlot(plugin: string, profile: string) {
     setBusy(plugin);
@@ -300,7 +185,7 @@ export function PacksPanel({ deployment }: { deployment: NodeView }) {
                 size="sm"
                 variant="outline"
                 disabled={busy !== null}
-                onClick={() => remove(pack.pack)}
+                onClick={() => void remove(pack.pack)}
               >
                 Remove
               </Button>

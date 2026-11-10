@@ -234,6 +234,7 @@ pub async fn authorize_enrollment_generation(
         server_peer: offer.server_peer.clone(),
         candidate_did: member_identity.did().to_string(),
         candidate_peer: member_peer.to_string(),
+        candidate_name: None,
         candidate_ticket: member_address.to_string(),
         owner_node_did: offer.owner_node_did.clone(),
         profile: offer.profile.clone(),

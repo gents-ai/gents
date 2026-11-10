@@ -67,12 +67,17 @@ export function createPeerActions({
     return api.reconnectNode(nodeDid);
   }
 
-  async function requestStatusEnrollment(serverAddress: string) {
+  async function requestStatusEnrollment(
+    serverAddress: string,
+    candidateName?: string,
+  ) {
     try {
       if (!clientRuns()) {
         await ensureDesktopClientStarted();
       }
-      const request = await api.requestStatusEnrollment(serverAddress);
+      const request = candidateName
+        ? await api.requestStatusEnrollment(serverAddress, candidateName)
+        : await api.requestStatusEnrollment(serverAddress);
       await refreshSnapshot();
       return request;
     } catch (err) {
@@ -100,8 +105,13 @@ export function createPeerActions({
     });
   }
 
+  function dismissEndedAccess(nodeDid: string) {
+    return mutateSnapshot(() => api.dismissEndedAccess(nodeDid));
+  }
+
   return {
     reconnectNode,
+    dismissEndedAccess,
     requestStatusEnrollment,
     initLocalRuntime,
     removePeer,

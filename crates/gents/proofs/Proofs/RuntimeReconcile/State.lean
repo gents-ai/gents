@@ -204,6 +204,41 @@ theorem visible_foreign_session_is_rejected (requested bound : AgentDid)
     sessionSelection requested (some bound) = .mismatched := by
   simp [sessionSelection, different]
 
+/-- Before claiming, the router reads the routed generation's selected
+configuration as its Agent (`Identity.Configuration.providerConfigurationVisible`).
+A committed configuration change can revoke that selection before the control
+watcher activates the replacement generation; a claim would then fail the
+request at its first provider-input assembly although the replacement could run
+it. Invisibility may mean superseded or revoked, so, as with a missing session
+selection, the router does not claim and the request waits for a newer active
+generation. A revocation after the claim is refused by the assembly check; the
+read and the claim are not atomic. -/
+inductive ConfigurationAdmission where
+  | claim | awaitNewerGeneration
+  deriving DecidableEq, Repr
+
+def configurationAdmission (visible : Bool) : ConfigurationAdmission :=
+  if visible then .claim else .awaitNewerGeneration
+
+/-- A request deferred under one generation is routed again only once a newer
+generation is active; the deferring generation retains the same selection. -/
+def retriesDeferred (deferredAt active : Generation) : Bool :=
+  deferredAt < active
+
+theorem invisible_configuration_is_not_claimed :
+    configurationAdmission false = .awaitNewerGeneration := rfl
+
+theorem visible_configuration_is_claimed :
+    configurationAdmission true = .claim := rfl
+
+theorem deferred_request_waits_within_its_generation (generation : Generation) :
+    retriesDeferred generation generation = false := by
+  simp [retriesDeferred]
+
+theorem deferred_request_retries_under_newer_generation (generation : Generation) :
+    retriesDeferred generation (generation + 1) = true := by
+  simp [retriesDeferred]
+
 
 def effectiveDispatchers (s : RuntimeState) : Finset AgentDid :=
   s.active.dispatchers \ s.startupDemoted

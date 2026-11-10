@@ -63,6 +63,12 @@ impl DesktopPaths {
         &self.root
     }
 
+    /// The CLI's own client principal under this desktop root: a separate User
+    /// key, which `gents init` makes the native admin of the homes it provisions.
+    pub fn cli_client(&self) -> Self {
+        Self::from_root(self.root.join("cli"))
+    }
+
     pub fn node_data_dir(&self) -> &Path {
         &self.node_data_dir
     }

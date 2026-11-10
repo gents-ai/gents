@@ -179,55 +179,14 @@ pub(super) fn trusted_delete_schema(collection: &str) -> Option<&'static str> {
         .find_map(|(name, schema)| (*name == collection).then_some(*schema))
 }
 
-/// Canonical migrated collections retain their root identity and pinned target
-/// version. Only the exact bundled SDL is eligible for that local lineage;
-/// server-provided schemas and versions cannot authorize a signing graph.
+/// The signing graph uses the version the exact SDL registers, which is the canonical
+/// version: every collection's fresh store registers its current SDL directly.
 pub(super) fn signing_schema(sdl: &str, collection: &str) -> Result<::schema::CollectionVersion> {
     let mut schemas = query::parse_sdl(sdl)?;
     if schemas.len() != 1 || schemas[0].name != collection {
         return Err(ConfigClientError::ClientAgentTransportRequired);
     }
-    let mut schema = schemas.remove(0);
-    let bundled = crate::Collection::ALL
-        .iter()
-        .copied()
-        .find(|item| item.graphql_type() == collection)
-        .and_then(trusted_create_schema)
-        .or_else(|| trusted_delete_schema(collection))
-        .or(match collection {
-            gents_protocol::schemas::AGENT_SESSION_NAME => {
-                Some(gents_protocol::schemas::AGENT_SESSION)
-            }
-            gents_protocol::schemas::AGENT_MESSAGE_NAME => {
-                Some(gents_protocol::schemas::AGENT_MESSAGE)
-            }
-            gents_protocol::schemas::COMPACTION_ENTRY_NAME => {
-                Some(gents_protocol::schemas::COMPACTION_ENTRY)
-            }
-            gents_protocol::schemas::AGENT_REQUEST_NAME => {
-                Some(gents_protocol::schemas::AGENT_REQUEST)
-            }
-            gents_protocol::schemas::AGENT_SESSION_GOAL_CONTROL_NAME => {
-                Some(gents_protocol::schemas::AGENT_SESSION_GOAL_CONTROL)
-            }
-            _ => None,
-        });
-    if bundled == Some(sdl) {
-        if let Some(plan) = gents_migration::canonical_schema_plan(collection)
-            .map_err(ConfigClientError::ClientCanonicalSchema)?
-        {
-            let mut root = query::parse_sdl(plan.root_sdl)?;
-            if root.len() != 1
-                || root[0].name != collection
-                || root[0].version_id != plan.root_version
-            {
-                return Err(ConfigClientError::ClientAgentTransportRequired);
-            }
-            schema.collection_id = root.remove(0).collection_id;
-            schema.version_id = plan.version;
-        }
-    }
-    Ok(schema)
+    Ok(schemas.remove(0))
 }
 
 pub(super) fn update_route(intent: bool, collection: crate::Collection, http: bool) -> CreateRoute {

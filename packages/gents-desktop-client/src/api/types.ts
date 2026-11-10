@@ -213,9 +213,11 @@ export type DesktopApiAdapter = {
   reconnectNode?: (nodeDid: string | null) => Promise<string | null>;
   removePeer: (peerId: string) => Promise<DesktopClientSnapshot>;
   renamePeer: (peerId: string, label: string) => Promise<DesktopClientSnapshot>;
+  dismissEndedAccess: (nodeDid: string) => Promise<DesktopClientSnapshot>;
   fetchPeerStatus: (peerId: string) => Promise<unknown>;
   requestStatusEnrollment: (
     serverAddress: string,
+    candidateName?: string,
   ) => Promise<EnrollmentRequestView>;
   listWorkspace: (subpath?: string | null) => Promise<WorkspaceListingView>;
   fetchRequestTimeline: (

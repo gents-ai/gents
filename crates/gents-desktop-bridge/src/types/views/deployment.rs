@@ -220,6 +220,14 @@ pub struct TriggerView {
     pub fire_count: Option<i64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskOriginView {
+    pub node_did: String,
+    pub task_id: String,
+    pub task_name: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionSummary {
@@ -245,6 +253,9 @@ pub struct SessionSummary {
     pub latest_request_id: Option<String>,
     pub task_id: Option<String>,
     pub task_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub task_origin: Option<TaskOriginView>,
     pub trigger_id: Option<String>,
     pub trigger_kind: Option<String>,
     pub created_at: Option<String>,
@@ -391,6 +402,16 @@ pub struct DeploymentView {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub pairing_ready: Option<bool>,
+    /// When this desktop's enrollment authorization on a joined node runs
+    /// out, after which reconciliation removes the node from this desktop;
+    /// none for a node this desktop reaches without enrollment. The node's
+    /// ACP grant carries no expiry of its own.
+    pub lease_expires_at: Option<String>,
+    /// Whether this desktop holds the node's signed operator endpoint, the
+    /// only path for its writes and operator reads (a fork, account
+    /// recovery). A joined node offers it once it advertises one; the node's
+    /// ACP still decides each signed request.
+    pub operator_access: bool,
     pub last_error: Option<String>,
     pub node: NodeView,
     pub node_config: Option<Node>,
@@ -431,6 +452,35 @@ pub struct DesktopRuntimeSnapshot {
     #[ts(optional)]
     pub operator_config_authoritative_node_dids: Option<Vec<String>>,
     pub deployments: Vec<DeploymentView>,
+    pub ended_access: Vec<EndedAccessView>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct EndedAccessView {
+    pub node_did: String,
+    pub label: String,
+    /// "expired" when the lease ran out, "revoked" when the node withdrew it
+    /// before then.
+    pub reason: String,
+    pub ended_at: String,
+    pub lease_expires_at: String,
+}
+
+impl From<gents_desktop_core::client::EndedAccess> for EndedAccessView {
+    fn from(ended: gents_desktop_core::client::EndedAccess) -> Self {
+        Self {
+            node_did: ended.node_did,
+            label: ended.label,
+            reason: match ended.reason {
+                gents_desktop_core::client::EndedAccessReason::Expired => "expired",
+                gents_desktop_core::client::EndedAccessReason::Revoked => "revoked",
+            }
+            .to_owned(),
+            ended_at: ended.ended_at,
+            lease_expires_at: ended.lease_expires_at,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
