@@ -10,20 +10,6 @@ use super::*;
 
 use crate::documents::PluginSourceDocument;
 
-/// The Tools edit that sets `conflict`'s selecting Tools to `integrations`.
-fn pin_edit(conflict: &crate::pack::PluginPinConflict, integrations: &Value) -> Vec<String> {
-    vec![
-        "tools".to_owned(),
-        "edit".to_owned(),
-        "--agent".to_owned(),
-        conflict.agent.clone(),
-        "--shared".to_owned(),
-        "acknowledge".to_owned(),
-        "--set".to_owned(),
-        format!("integrations={integrations}"),
-    ]
-}
-
 impl ConfigCommandTool {
     /// The plugin source document `id` on this node, as the calling agent may
     /// read it.
@@ -214,7 +200,7 @@ impl ConfigCommandTool {
         // back: a Tools pinned to a digest that is not installed fails to
         // build its tool surface.
         let mut followed = Vec::new();
-        let mut moved: Vec<crate::pack::PluginPinConflict> = Vec::new();
+        let mut moved: Vec<super::super::super::PluginPinConflict> = Vec::new();
         let installed = async {
             for conflict in installer.pin_conflicts(&distribution).await? {
                 if moved.iter().any(|done| done.tools == conflict.tools) {

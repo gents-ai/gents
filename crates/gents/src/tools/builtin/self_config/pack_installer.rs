@@ -291,6 +291,20 @@ impl PackInstaller {
     }
 }
 
+/// The Tools edit that sets `conflict`'s selecting Tools to `integrations`.
+pub(super) fn pin_edit(conflict: &PluginPinConflict, integrations: &Value) -> Vec<String> {
+    vec![
+        "tools".to_owned(),
+        "edit".to_owned(),
+        "--agent".to_owned(),
+        conflict.agent.clone(),
+        "--shared".to_owned(),
+        "acknowledge".to_owned(),
+        "--set".to_owned(),
+        format!("integrations={integrations}"),
+    ]
+}
+
 /// The `tools update` that moves `conflict`'s pins to the replacement. The
 /// whole `integrations` field is sent because `set` replaces a field.
 pub(super) fn pin_move_call(conflict: &PluginPinConflict) -> Value {

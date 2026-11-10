@@ -23,7 +23,7 @@ use crate::pack::node_packs::{
     self, Distribution, DriftPolicy, HomePackRemovalError, LocalPackError, NodePacks, PackChange,
     PluginPinConflict,
 };
-use pack_installer::{pin_move_call, PackInstaller};
+use pack_installer::{pin_edit, pin_move_call, PackInstaller};
 mod pack_plugins;
 mod read;
 mod requests;
