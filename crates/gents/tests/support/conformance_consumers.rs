@@ -56,6 +56,41 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "tools::builtin::self_config::command::grants::scope_tests::yolo_group_is_the_engineer_preset",
+            package: "gents",
+            source_path: "crates/gents/src/tools/builtin/self_config/command/grants.rs",
+            module_path: "tools::builtin::self_config::command::grants::scope_tests",
+            function: "yolo_group_is_the_engineer_preset",
+        },
+        ConformanceConsumer::RustTest {
+            id: "pack::provenance::ownership_tests::document_ownership_matches_executable_model",
+            package: "gents",
+            source_path: "crates/gents/src/pack/provenance.rs",
+            module_path: "pack::provenance::ownership_tests",
+            function: "document_ownership_matches_executable_model",
+        },
+        ConformanceConsumer::RustTest {
+            id: "pack::installation::tests::install_source_selection_matches_lean",
+            package: "gents",
+            source_path: "crates/gents/src/pack/installation/tests.rs",
+            module_path: "pack::installation::tests",
+            function: "install_source_selection_matches_lean",
+        },
+        ConformanceConsumer::RustTest {
+            id: "pack::interpolate::install_variable_conformance::variable_precedence_matches_the_executable_model",
+            package: "gents",
+            source_path: "crates/gents/src/pack/interpolate.rs",
+            module_path: "pack::interpolate::install_variable_conformance",
+            function: "variable_precedence_matches_the_executable_model",
+        },
+        ConformanceConsumer::RustTest {
+            id: "pack::interpolate::install_variable_conformance::upgrade_variable_precedence_matches_the_executable_model",
+            package: "gents",
+            source_path: "crates/gents/src/pack/interpolate.rs",
+            module_path: "pack::interpolate::install_variable_conformance",
+            function: "upgrade_variable_precedence_matches_the_executable_model",
+        },
+        ConformanceConsumer::RustTest {
             id: "pack::installation::tests::pack_install_applies_exactly_the_declared_placement_readers",
             package: "gents",
             source_path: "crates/gents/src/pack/installation/tests.rs",
@@ -1918,6 +1953,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "rust_inference_call_transition_table_matches_lean_contract",
         },
         ConformanceConsumer::TypeScriptTest {
+            id: "apps/gents-desktop/tests/lean-conformance/session-goal-view.test.ts::session Goal view shows each modeled Goal state as its view and offers only its next action",
+            app: "gents-desktop",
+            source_path: "apps/gents-desktop/tests/lean-conformance/session-goal-view.test.ts",
+            suite: "session Goal view",
+            test: "shows each modeled Goal state as its view and offers only its next action",
+        },
+        ConformanceConsumer::TypeScriptTest {
+            id: "apps/gents-desktop/tests/lean-conformance/session-goal-view.test.ts::session Goal view shows and offers what the modeled fold of reads does",
+            app: "gents-desktop",
+            source_path: "apps/gents-desktop/tests/lean-conformance/session-goal-view.test.ts",
+            suite: "session Goal view",
+            test: "shows and offers what the modeled fold of reads does",
+        },
+        ConformanceConsumer::TypeScriptTest {
             id: "packages/gents-desktop-chat/src/chat-shell.test.ts::projectChatShell matches generated Lean ClientShell projection contracts",
             app: "gents-desktop-chat",
             source_path: "packages/gents-desktop-chat/src/chat-shell.test.ts",
@@ -1972,6 +2021,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             source_path: "crates/gents/src/session/message/agent_tools_tests.rs",
             module_path: "session_message::agent_tools_tests",
             function: "session_target_authority_matches_lean_owner",
+        },
+        ConformanceConsumer::RustTest {
+            id: "session_message::agent_tools_tests::session_list_entries_match_lean_owner",
+            package: "gents",
+            source_path: "crates/gents/src/session/message/agent_tools_tests.rs",
+            module_path: "session_message::agent_tools_tests",
+            function: "session_list_entries_match_lean_owner",
         },
         ConformanceConsumer::RustTest {
             id: "conformance::enrollment::generated_causal_hop_cases_match_native_materializer",
@@ -2686,6 +2742,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             source_path: "crates/gents/tests/conformance.rs",
             module_path: "conformance",
             function: "generated_codex_shim_binding_cases_pin_runnable_gated_binding",
+        },
+        ConformanceConsumer::RustTest {
+            id: "conformance::generated_codex_shim_connection_admission_cases_pin_runnable_gate",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance.rs",
+            module_path: "conformance",
+            function: "generated_codex_shim_connection_admission_cases_pin_runnable_gate",
         },
         ConformanceConsumer::RustTest {
             id: "conformance::generated_startup_readiness_cases_pin_bounded_barrier_release",

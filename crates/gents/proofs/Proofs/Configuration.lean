@@ -560,6 +560,78 @@ theorem backend_negative_queue_rejected (queue : Int) (h : queue < 0) :
   have hn : ¬ (0 : Int) ≤ queue := by omega
   simp [resolveBackendControls, defaultBackendControls, ConfigDefaults.resolveNat, hn]
 
+/-- An existing dependency retains its own install variable, including an
+explicitly unset value. Only a per-pack override may replace that value;
+ambient variables are consulted for a root install or a first installation. -/
+def resolvePackInstallVariable (dependency installed : Bool)
+    (previous override : Option (Option String)) (ambient : Option String) : Option (Option String) :=
+  match override with
+  | some value => some value
+  | none => if dependency && installed then previous else some ambient
+
+theorem dependency_variable_preserved (previous ambient : Option String) :
+    resolvePackInstallVariable true true (some previous) none ambient = some previous := by
+  rfl
+
+theorem explicit_pack_variable_wins (dependency installed : Bool) (previous : Option (Option String))
+    (override ambient : Option String) :
+    resolvePackInstallVariable dependency installed previous (some override) ambient = some override := by
+  rfl
+
+theorem first_dependency_uses_ambient (ambient : Option String) :
+    resolvePackInstallVariable true false none none ambient = some ambient := by
+  rfl
+
+theorem root_uses_current_environment (installed : Bool) (previous : Option (Option String)) (ambient : Option String) :
+    resolvePackInstallVariable false installed previous none ambient = some ambient := by
+  rfl
+
+/-- Older records without an observed binding do not authorize substituting
+the current caller's environment for an installed dependency. -/
+theorem unknown_dependency_binding_fails_closed (ambient : Option String) :
+    resolvePackInstallVariable true true none none ambient = none := by
+  rfl
+
+/-- Upgrades render the current template using an explicitly supplied value,
+    or the installed binding when no replacement is supplied. -/
+def resolvePackUpgradeVariable (previous supplied : Option String) : Option String :=
+  supplied.orElse fun _ => previous
+
+theorem omitted_upgrade_value_preserved (previous : Option String) :
+    resolvePackUpgradeVariable previous none = previous := by rfl
+
+theorem supplied_upgrade_value_wins (previous : Option String) (supplied : String) :
+    resolvePackUpgradeVariable previous (some supplied) = some supplied := by rfl
+
+/-- Node identity comes from the installation scope, not from pack variables. -/
+def packVariableOverrideAllowed (name : String) : Bool :=
+  name != "GENTS_PACK_NODE_DID"
+
+theorem node_identity_override_refused :
+    packVariableOverrideAllowed "GENTS_PACK_NODE_DID" = false := by decide
+
+/-- An installed dependency can be reused without recovering its original
+environment only when the same artifact is requested and the caller has not
+explicitly selected replacement bindings. The snapshot is authoritative only
+if the installation record and every recorded document still match at commit. -/
+def reuseInstalledDependency (installed sameArtifact explicitOverride : Bool) : Bool :=
+  installed && sameArtifact && !explicitOverride
+
+def commitDependencySnapshot (sameRecord sameDocuments : Bool) : Bool :=
+  sameRecord && sameDocuments
+
+theorem replacement_binding_disallows_reuse (installed sameArtifact : Bool) :
+    reuseInstalledDependency installed sameArtifact true = false := by
+  simp [reuseInstalledDependency]
+
+theorem changed_dependency_snapshot_refused (sameRecord : Bool) :
+    commitDependencySnapshot sameRecord false = false := by
+  simp [commitDependencySnapshot]
+
+theorem changed_dependency_record_refused (sameDocuments : Bool) :
+    commitDependencySnapshot false sameDocuments = false := by
+  simp [commitDependencySnapshot]
+
 /-- Local pack preparation has the root and declared dependency manifests and
 an installed-plugin inventory. Every declared reference must resolve through
 those existing resources before configuration writes begin. -/
@@ -703,6 +775,26 @@ def wireTargetAllowed (localTarget preview remove : Bool) : Bool :=
   localTarget || preview || remove
 
 theorem graphql_wire_cannot_publish_pin : wireTargetAllowed false false false = false := by decide
+
+/-- Untagged documents retain the existing adoption behavior. A tagged document
+can be written only by the same full pack coordinate; an old unqualified tag
+does not establish a publisher identity. -/
+def packDocumentWriteAllowed (coordinate : String) (origin : Option String) : Bool :=
+  match origin with
+  | none => true
+  | some existing => existing == coordinate
+
+def packDocumentRemovalAllowed (coordinate : String) (origin : Option String) : Bool :=
+  packDocumentWriteAllowed coordinate origin
+
+theorem pack_document_other_publisher_refused :
+    packDocumentWriteAllowed "other/demo" (some "acme/demo") = false := by decide
+
+theorem pack_document_unqualified_origin_refused :
+    packDocumentWriteAllowed "acme/demo" (some "demo") = false := by decide
+
+theorem pack_document_untagged_adoptable :
+    packDocumentWriteAllowed "acme/demo" none = true := by decide
 
 /-- Only a node-local installer can inspect or publish plugin bytes. A remote
 GraphQL install may write plugin-free documents, but recorded pack metadata is

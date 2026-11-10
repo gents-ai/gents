@@ -793,6 +793,26 @@ def caseCoverage : List CoverageEntry :=
       "pack::installation::hosted::tests::hosted_home_publication_conforms_to_lean"
       "Binds actual home record write and failure to modeled success; native commit and cancellation ordering are exercised by the transaction owner.")
       "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "pack_document_ownership_cases"
+      "PackDocumentOwnershipCases"
+      "pack::provenance::ownership_tests::document_ownership_matches_executable_model")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "pack_source_selection_cases"
+      "PackSourceSelectionCases"
+      "pack::installation::tests::install_source_selection_matches_lean")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "pack_install_variable_cases"
+      "PackInstallVariableCases"
+      "pack::interpolate::install_variable_conformance::variable_precedence_matches_the_executable_model")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "pack_install_upgrade_cases"
+      "PackInstallUpgradeCases"
+      "pack::interpolate::install_variable_conformance::upgrade_variable_precedence_matches_the_executable_model")
+      "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "agent_steer_disposition_cases"
       "AgentSteerDispositionCases"
@@ -892,6 +912,11 @@ def caseCoverage : List CoverageEntry :=
       "causal_hop_contract"
       "SessionTargetAuthorityCases"
       "session_message::agent_tools_tests::session_target_authority_matches_lean_owner")
+      "request-lifecycle" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "causal_hop_contract"
+      "SessionListEntryCases"
+      "session_message::agent_tools_tests::session_list_entries_match_lean_owner")
       "request-lifecycle" [Surface.agentFacing]
   , tagged (followUpCoverage
       "title_request_admission_cases"
@@ -1045,6 +1070,11 @@ def caseCoverage : List CoverageEntry :=
       "SelfConfigCases"
       "conformance::generated_self_config_cases_fence_patch_merge"
       "Covers production patch admissibility and accepted merges, replays every Tools row through the always-on operator-grant guard (guard_tools_keep_grants) and every Context and Agent row, clone rows included, through reselection_keeps_grants, and replays guarded rows through the production Tools/Agent no-lockout guards, the Backend auth fence and the Profile account choice fence. Reference validation and unchanged stored state after rejection require the shared configuration transaction owner.")
+      "self-config" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "self_config_scope_cases"
+      "SelfConfigScopeCases"
+      "tools::builtin::self_config::command::grants::scope_tests::yolo_group_is_the_engineer_preset")
       "self-config" [Surface.agentFacing]
   , tagged (consumerCoverage
       "agent_decision_cases"
@@ -2085,6 +2115,16 @@ def caseCoverage : List CoverageEntry :=
       "gents_desktop_bridge::commands::goal::tests::generated_session_goal_views_name_their_cause")
       "durable-goals" [Surface.operatorUi]
   , tagged (consumerCoverage
+      "goal_session_observation_cases"
+      "GoalSessionObservationCases"
+      "apps/gents-desktop/tests/lean-conformance/session-goal-view.test.ts::session Goal view shows each modeled Goal state as its view and offers only its next action")
+      "durable-goals" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "goal_session_fold_cases"
+      "GoalSessionFoldCases"
+      "apps/gents-desktop/tests/lean-conformance/session-goal-view.test.ts::session Goal view shows and offers what the modeled fold of reads does")
+      "durable-goals" [Surface.operatorUi]
+  , tagged (consumerCoverage
       "plugin_approval_cases"
       "PluginApprovalCases"
       "plugin::approval::contract_tests::generated_approval_traces_drive_native_queue_and_grants")
@@ -2270,6 +2310,11 @@ def caseCoverage : List CoverageEntry :=
       "codex_shim_binding_cases"
       "CodexShimBindingCases"
       "conformance::generated_codex_shim_binding_cases_pin_runnable_gated_binding")
+      "codex-shim" [Surface.api, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "codex_shim_connection_admission_cases"
+      "CodexShimConnectionAdmissionCases"
+      "conformance::generated_codex_shim_connection_admission_cases_pin_runnable_gate")
       "codex-shim" [Surface.api, Surface.runtimeInternal]
   , tagged (followUpCoverage
       "transcript_cases"

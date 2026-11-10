@@ -340,6 +340,7 @@ async fn dependency_slot_is_provisioned_once_and_owned_by_its_installation() {
         None,
         &|_| None,
         Some(&provisioner),
+        &Default::default(),
     )
     .await
     .unwrap();

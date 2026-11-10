@@ -13,6 +13,16 @@ on:
       - 'crates/gents-cli/src/cli/args/**'
       - 'crates/gents-cli/src/lib.rs'
       - 'crates/gents-cli/src/commands/prepare_runtime*'
+      - 'crates/gents-cli/src/commands/start*'
+      - 'crates/gents-cli/src/commands/start/**'
+      - 'crates/gents-cli/src/commands/codex*'
+      - 'crates/gents-cli/src/commands/codex/**'
+      - 'crates/gents-cli/src/commands/codex_shim/**'
+      - 'crates/gents-cli/src/client_settings.rs'
+      - 'crates/gents-cli/src/commands/init.rs'
+      - 'crates/gents-cli/src/interactive_backend.rs'
+      - 'crates/gents-cli/tests/suites/cli_onboarding_live.rs'
+      - 'crates/gents-cli/tests/suites/cli_onboarding_live/**'
       - 'crates/gents-cli/src/http/runtime_control.rs'
       - 'crates/gents/src/runtime/service.rs'
       - 'crates/gents/src/runtime/agent/runtime/startup.rs'
@@ -50,7 +60,9 @@ jobs:
       matrix:
         os: [ubuntu-24.04, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    # macOS also builds and runs the live onboarding suite (#3546); a cold
+    # dependency cache took 46 minutes to build the service alone.
+    timeout-minutes: 90
     env:
       CARGO_INCREMENTAL: '0'
       CARGO_BUILD_JOBS: '2'
@@ -96,3 +108,7 @@ jobs:
           python3 .github/scripts/test-managed-self-update.py --binary target/fast-dev/gents --scenario busy-timeout
           python3 .github/scripts/test-managed-self-update.py --binary target/fast-dev/gents --scenario health-failure
           python3 .github/scripts/test-managed-self-update.py --binary target/fast-dev/gents --scenario config-health-failure
+      - name: Exercise first-run setup against launchd
+        if: runner.os == 'macOS'
+        run: |
+          cargo test --locked -p gents-cli --features live-e2e,native-e2e --test cli_live_suite cli_onboarding_live::no_model:: --profile fast-dev -- --ignored --nocapture --test-threads=1

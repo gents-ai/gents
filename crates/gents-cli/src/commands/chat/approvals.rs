@@ -1,30 +1,13 @@
-use std::io::{IsTerminal, Write};
 use std::path::Path;
 
 use anyhow::Result;
 use gents::plugin::approval::{self, Answer, Request};
-
-pub(super) fn parse_answer(line: &str) -> Answer {
-    match line.trim().to_ascii_lowercase().as_str() {
-        "o" | "once" | "y" | "yes" => Answer::Once,
-        "c" | "command" | "invocation" => Answer::AlwaysInvocation,
-        "f" | "file" => Answer::AlwaysPath,
-        "a" | "always" | "folder" => Answer::AlwaysFolder,
-        _ => Answer::Deny,
-    }
-}
 
 pub(super) fn mine(request: &Request, session_id: &str) -> bool {
     request
         .session_id
         .as_deref()
         .is_none_or(|id| id == session_id)
-}
-
-pub(super) fn has_pending(home: &Path, session_id: &str) -> Result<bool> {
-    Ok(approval::pending(home)?
-        .iter()
-        .any(|request| mine(request, session_id)))
 }
 
 pub(super) fn answer_pending(
@@ -42,45 +25,6 @@ pub(super) fn answer_pending(
         approval::decide(home, &request.id, answer)?;
     }
     Ok(asked)
-}
-
-pub(super) fn ask_on_terminal(request: &Request) -> Answer {
-    if !std::io::stdin().is_terminal() {
-        eprintln!("{} No terminal to ask on; denied.", request.prompt());
-        return Answer::Deny;
-    }
-    show_prompt(request);
-    let mut line = String::new();
-    match std::io::stdin().read_line(&mut line) {
-        Ok(_) => parse_answer(&line),
-        Err(_) => Answer::Deny,
-    }
-}
-
-pub(super) fn show_prompt(request: &Request) {
-    let mut output = std::io::stdout().lock();
-    let _ = writeln!(output, "{}", request.prompt());
-    let _ = write!(output, "[o] allow once");
-    if let Some(file) = request.filesystem() {
-        if request.allows_answer(Answer::AlwaysPath) && !file.is_dir {
-            let _ = write!(output, "  [f] always allow this file");
-        }
-        if request.allows_answer(Answer::AlwaysFolder) {
-            let _ = write!(
-                output,
-                "  [a] always allow the folder {}",
-                file.folder.display()
-            );
-        }
-    }
-    if request.allows_answer(Answer::AlwaysInvocation) {
-        let _ = write!(
-            output,
-            "  [c] remember this exact command until permissions change"
-        );
-    }
-    let _ = write!(output, "  [d] deny (default) > ");
-    let _ = output.flush();
 }
 
 #[cfg(test)]

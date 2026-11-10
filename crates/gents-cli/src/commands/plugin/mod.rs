@@ -75,7 +75,7 @@ fn plugin_pack(
     std::fs::write(
         dir.join("README.md"),
         format!(
-            "# {}\n\n{description}\n\nInstall with `gents plugin install {}/{}`.\n",
+            "# {}\n\n{description}\n\nInstall with `gents config pack plugin install {}/{}`.\n",
             package.name, package.namespace, package.name
         ),
     )?;
@@ -121,7 +121,7 @@ async fn remove(args: PluginRemoveArgs) -> Result<()> {
                     record.kind,
                     gents::pack::PackKind::Assets | gents::pack::PackKind::Plugins
                 ) && record.plugins.iter().all(|plugin| plugin.name == name),
-                "{namespace}/{name} is installed by pack {coordinate} with other contents; remove it with gents pack remove {coordinate}"
+                "{namespace}/{name} is installed by pack {coordinate} with other contents; remove it with gents config pack remove {coordinate}"
             );
             let removed =
                 crate::commands::pack::remove_home_install_with_guard(&home, &coordinate, guard)

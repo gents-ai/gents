@@ -1831,6 +1831,9 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/tools/background/job/driver.rs", 1),
     ("crates/gents/src/tools/background/job/driver/step.rs", 1),
     ("crates/gents/src/turn/provider_input/replay.rs", 1),
+    // rmcp erases transport errors behind DynamicTransportError; the pool's
+    // McpAuthRefusal is then asked for on its erased source chain
+    ("crates/gents/src/tools/mcp/pool/auth_refusal.rs", 2),
     ("crates/gents/src/inference/rendered_request/mod.rs", 2),
     ("crates/gents/src/request/admission.rs", 2),
     ("crates/gents/src/tools/builtin/schema_help/mod.rs", 2),
@@ -1993,7 +1996,7 @@ const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     // persisted AgentRequest failure_reason
     ("crates/gents/src/eval/runner/embedded/executor/outcome.rs", 2),
     // MCP probe transport/OS error text (metric label)
-    ("crates/gents/src/tools/mcp/health.rs", 10),
+    ("crates/gents/src/tools/mcp/health.rs", 8),
     // display only: appends a next-call hint when absent
     ("crates/gents/src/tools/builtin/p2p.rs", 1),
     // DefraDB SDL parser messages (help page choice)

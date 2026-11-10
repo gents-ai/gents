@@ -46,7 +46,7 @@ export const refusedWhileRunning = (error: string) =>
 const shellArgument = (value: string) => `'${value.replace(/'/g, "'\\''")}'`;
 const wireCommand = (plugin: string, agent: string, targetsFrom: string[]) =>
   [
-    "gents pack wire",
+    "gents config pack wire",
     shellArgument(plugin),
     "--agent",
     shellArgument(agent),

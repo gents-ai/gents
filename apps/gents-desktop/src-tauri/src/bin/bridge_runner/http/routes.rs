@@ -183,6 +183,7 @@ pub(super) async fn handle_request(
                         request.edited,
                         request.grant_authority,
                         request.preview,
+                        request.expect_digest,
                     )
                 })
                 .await?,

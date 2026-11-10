@@ -12,7 +12,10 @@ import type {
   RenderedTimelineItem,
 } from "@source-inc/gents-desktop-client";
 import { LIST_WINDOW_THRESHOLD } from "@source-inc/gents-desktop-ui";
-import { isTerminalTurnState } from "@source-inc/gents-desktop-client";
+import {
+  isTerminalTurnState,
+  snapshotGoalShown,
+} from "@source-inc/gents-desktop-client";
 import { MessageList } from "../Transcript.js";
 import { timelineKey } from "../transcript/TimelineItem.js";
 import { isHiddenRuntimeInput } from "../transcript/runtimeInputs.js";
@@ -79,6 +82,13 @@ export function ChatTranscriptPanel({
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [awayFromBottom, setAwayFromBottom] = useState(false);
   const [newContentBelow, setNewContentBelow] = useState(false);
+  /* this panel sees one snapshot, so its Goal is that read's, shown only when
+     it is a current verified Goal (Lean `SessionObservation.shown`) */
+  const goalShown = session ? snapshotGoalShown(session) : null;
+  const shownGoal =
+    goalShown?.kind === "current" && goalShown.view.kind === "goal"
+      ? goalShown.view.goal
+      : null;
 
   const sourceTimelineItems = useMemo<RenderedTimelineItem[]>(() => {
     const durable = (session?.timelineItems ?? []).filter(
@@ -474,20 +484,20 @@ export function ChatTranscriptPanel({
     >
       {selectedSessionId && (session || timelineItems.length > 0) ? (
         <div className="message-list">
-          {showGoal && session?.goal ? (
+          {showGoal && shownGoal ? (
             <article className="message-card" data-testid="durable-goal-card">
               <div className="message-role">
-                durable goal · {session.goal.status ?? "unknown"}
+                durable goal · {shownGoal.status || "unknown"}
               </div>
               <div className="message-content">
-                {session.goal.objective ?? "No objective"}
+                {shownGoal.objective || "No objective"}
               </div>
               <div className="muted">
-                {session.goal.tokensUsed}
-                {session.goal.tokenBudget != null
-                  ? ` / ${session.goal.tokenBudget}`
+                {shownGoal.tokensUsed}
+                {shownGoal.tokenBudget != null
+                  ? ` / ${shownGoal.tokenBudget}`
                   : ""}{" "}
-                charged tokens · {session.goal.activeTimeSeconds}s active
+                charged tokens · {shownGoal.activeTimeSeconds}s active
               </div>
             </article>
           ) : null}

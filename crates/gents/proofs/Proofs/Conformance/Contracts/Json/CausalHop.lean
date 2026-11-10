@@ -276,6 +276,30 @@ def sessionTargetCaseJson (c : SessionTargetCase) : String :=
     ++ ",\"expected_allowed\":" ++ toString (DurableLineage.sessionTargetAllowed
       c.sameRequester c.sameNode c.caused c.allowedTarget) ++ "}"
 
+structure SessionListCase where
+  target : SessionTargetCase
+  verifiedStarterReceipt : Bool
+  interruptAllowed : Bool
+
+def sessionListCases : List SessionListCase := do
+  let target ← sessionTargetCases
+  let verifiedStarterReceipt ← [false, true]
+  let interruptAllowed ← [false, true]
+  pure ⟨target, verifiedStarterReceipt, interruptAllowed⟩
+
+def sessionListCaseJson (c : SessionListCase) : String :=
+  let entry := DurableLineage.listedSession c.target.sameRequester c.target.sameNode
+    c.target.caused c.target.allowedTarget c.verifiedStarterReceipt c.interruptAllowed
+  "{\"same_requester\":" ++ toString c.target.sameRequester
+    ++ ",\"same_node\":" ++ toString c.target.sameNode
+    ++ ",\"caused\":" ++ toString c.target.caused
+    ++ ",\"allowed_target\":" ++ toString c.target.allowedTarget
+    ++ ",\"verified_starter_receipt\":" ++ toString c.verifiedStarterReceipt
+    ++ ",\"interrupt_allowed\":" ++ toString c.interruptAllowed
+    ++ ",\"expected_listed\":" ++ toString entry.isSome
+    ++ ",\"expected_can_message\":" ++ toString (entry.any (·.canMessage))
+    ++ ",\"expected_can_interrupt\":" ++ toString (entry.any (·.canInterrupt)) ++ "}"
+
 structure CapObservationCase where
   name : String
   observation : Option (Option Nat)
@@ -313,7 +337,8 @@ def contractJson : String :=
     ++ ",\"job_creation_cases\":" ++ jsonArray (jobCreationCases.map jobCreationCaseJson)
     ++ ",\"deferred_creation_cases\":" ++ jsonArray (jobCreationCases.map deferredCreationCaseJson)
     ++ ",\"write_cases\":" ++ jsonArray (writeCases.map writeCaseJson)
-    ++ ",\"session_target_cases\":" ++ jsonArray (sessionTargetCases.map sessionTargetCaseJson) ++ "}"
+    ++ ",\"session_target_cases\":" ++ jsonArray (sessionTargetCases.map sessionTargetCaseJson)
+    ++ ",\"session_list_cases\":" ++ jsonArray (sessionListCases.map sessionListCaseJson) ++ "}"
 
 
 theorem step_cases_cover_causes_and_outcomes :

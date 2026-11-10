@@ -60,6 +60,7 @@ pub(crate) async fn outdated_packs_on(
         report.push(json!({
             "pack": pack.coordinate,
             "installed": pack.version,
+            "digest": pack.digest,
             "latest": latest,
             "outdated": outdated,
             "error": error,
@@ -123,13 +124,14 @@ pub(crate) async fn update(args: PackUpdateArgs) -> Result<()> {
         let Some(latest) = pack["latest"].as_str() else {
             failed.push(json!({
                 "pack": coordinate,
-                "error": "the registry reported no latest version for this pack; run gents pack outdated and retry",
+                "error": "the registry reported no latest version for this pack; run gents config pack outdated and retry",
             }));
             continue;
         };
         let install_args = PackInstallArgs {
             package: format!("{coordinate}@{latest}"),
             inference_slots: args.inference_slots.clone(),
+            dependency_variables: Vec::new(),
             preview: false,
             scope: args.scope.clone(),
             output: OutputFormat::Json,
@@ -219,7 +221,7 @@ mod tests {
             home_path.to_str().unwrap(),
         ])
         .unwrap();
-        let crate::cli::Command::Init(init_args) = cli.command else {
+        let Some(crate::cli::Command::Init(init_args)) = cli.command else {
             panic!("expected init")
         };
         crate::commands::init::init(init_args)
@@ -242,6 +244,7 @@ mod tests {
         crate::request_helpers::capture_report(super::super::install(PackInstallArgs {
             package: "demo_pack".to_owned(),
             inference_slots: Vec::new(),
+            dependency_variables: Vec::new(),
             preview: false,
             scope: scope.clone(),
             output: OutputFormat::Json,
@@ -300,7 +303,7 @@ mod tests {
             home.path().to_str().unwrap(),
         ])
         .unwrap();
-        let crate::cli::Command::Init(init_args) = cli.command else {
+        let Some(crate::cli::Command::Init(init_args)) = cli.command else {
             panic!("expected init")
         };
         crate::commands::init::init(init_args)
@@ -369,6 +372,7 @@ mod tests {
             crate::request_helpers::capture_report(super::super::install(PackInstallArgs {
                 package,
                 inference_slots: vec![slot.clone()],
+                dependency_variables: Vec::new(),
                 preview: false,
                 scope: scope.clone(),
                 output: OutputFormat::Json,
@@ -414,6 +418,7 @@ mod tests {
         crate::request_helpers::capture_report(super::super::install(PackInstallArgs {
             package: fixture.to_str().unwrap().to_owned(),
             inference_slots: Vec::new(),
+            dependency_variables: Vec::new(),
             preview: false,
             scope: scope.clone(),
             output: OutputFormat::Json,
