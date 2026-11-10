@@ -49,6 +49,41 @@ pub fn job_block_admissible(
         && matches!(dynamic, DynamicMode::Off | DynamicMode::Check)
 }
 
+/// Lean `consentedDynamic`: the node owner's consent raises a block at `check`
+/// to `run`; `off` stays off and no consent changes nothing.
+pub fn consented_dynamic(consent: bool, mode: DynamicMode) -> DynamicMode {
+    if consent && mode == DynamicMode::Check {
+        DynamicMode::Run
+    } else {
+        mode
+    }
+}
+
+/// What a job block at `check` means to whoever just installed or wired
+/// `plugin`, and the call that changes it: nothing else tells them a workflow
+/// pack does nothing dynamic as shipped (a pack cannot ship `run`).
+pub fn dynamic_check_notice(plugin: &str) -> String {
+    format!(
+        "{plugin}: its job block has policy.dynamic check, so a workflow script the model writes is checked but every spawn and message it asks for is refused until dynamic is run. Set it on the Tools that select {plugin}: config [\"tools\",\"get\"], then [\"tools\",\"edit\"] with set.integrations sent back and that plugin's job.policy.dynamic \"run\" (operator: gents config tools set --file tools.json)"
+    )
+}
+
+/// [`dynamic_check_notice`] for every job block at `check` in `tools`.
+pub fn dynamic_check_notices<'a>(tools: impl IntoIterator<Item = &'a Tools>) -> Vec<String> {
+    tools
+        .into_iter()
+        .flat_map(|tools| tools.integrations.iter())
+        .flat_map(|integrations| integrations.plugins.iter().flatten())
+        .filter(|plugin| {
+            plugin
+                .job
+                .as_ref()
+                .is_some_and(|job| job.policy.dynamic == DynamicMode::Check)
+        })
+        .map(|plugin| dynamic_check_notice(&plugin.plugin))
+        .collect()
+}
+
 /// Decides every job block of a pack's Tools document through
 /// [`job_block_admissible`]. `shipped` lists the pack and each resolved
 /// dependency with the configuration it ships, so a target id is traced to the
@@ -95,9 +130,11 @@ pub fn pack_job_block_admissible(
              block needs an operator install or an agent install under pack authority \
              (self_config.enable_pack_authority), job.agent_targets that name AgentTargets shipped \
              by {coordinate} or its dependencies, job.policy.trusted_packs within {coordinate} \
-             and its dependencies, and job.policy.dynamic off or check. Next: drop the job \
-             block from the pack, or install the \
-             pack with `gents config pack install` and wire the block into Tools as the operator",
+             and its dependencies, and job.policy.dynamic off or check; a pack never ships run, which is set on the selecting \
+             Tools after install. Next: an agent that holds pack authority repeats this install \
+             (config [\"tools\",\"get\"] shows self_config.enable_pack_authority); without it, the node's User \
+             installs the pack with `gents config pack install`, or you drop the job block from \
+             the pack and install the rest",
             plugin.plugin
         );
     }

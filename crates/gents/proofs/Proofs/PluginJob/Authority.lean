@@ -348,6 +348,29 @@ theorem pack_job_block_never_run (via : InstallProvenance) (closure : List Strin
   intro hr
   simp [hr] at h
 
+/-- Maintainer decision (2026-11-10, gents-ai/packs#61 items 6 and 7). A pack
+never ships `run` (`pack_job_block_never_run`), and a block at `check` refuses
+every spawn and message a dynamic script asks for, so a workflow pack does
+nothing dynamic until `run` is set. `run` is the node owner's consent to
+model-written scripts starting agents. Approving the pack at init gives it,
+and wiring then raises the shipped `check` to `run`; afterwards whoever may
+write the selecting Tools sets it (job settings are configuration data, see
+`SelfConfig.keepsGrants`). Consent raises `check` only: a block shipped or set
+`off` stays off, and wiring without consent leaves the mode as it is. -/
+def consentedDynamic (consent : Bool) (mode : DynamicMode) : DynamicMode :=
+  if consent && decide (mode = .check) then .run else mode
+
+theorem unconsented_wiring_keeps_dynamic (mode : DynamicMode) :
+    consentedDynamic false mode = mode := by
+  simp [consentedDynamic]
+
+theorem consent_never_enables_off (consent : Bool) :
+    consentedDynamic consent .off = .off := by
+  simp [consentedDynamic]
+
+theorem consent_runs_check : consentedDynamic true .check = .run := by
+  simp [consentedDynamic]
+
 /-- After `wireTargetsFrom pack`, the pack is trusted and the job targets are
 within the caller's targets, so an installed-origin pin spawns exactly the
 live ∩ pinned ∩ job targets (`wiring_makes_job_targets_spawnable`). -/

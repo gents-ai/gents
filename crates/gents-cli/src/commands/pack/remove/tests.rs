@@ -612,6 +612,7 @@ async fn referenced_plugin_removal_refuses_before_changing_pack_or_store_records
             targets_from: Vec::new(),
             remove: false,
             preview: false,
+            dynamic_consent: false,
         };
         crate::commands::pack::wire::wire_in(&access, &owner, home.path(), &request)
             .await
@@ -714,6 +715,7 @@ async fn wiring_holds_store_lock_through_pin_commit() {
                 targets_from: Vec::new(),
                 remove: false,
                 preview: false,
+                dynamic_consent: false,
             };
             super::super::wire::wire_in(&access, &owner, &path, &request).await
         }
@@ -888,6 +890,7 @@ async fn remote_wire_refuses_new_pin_before_http_access_but_allows_preview_and_r
             targets_from: vec![],
             remove,
             preview,
+            dynamic_consent: false,
         };
         let error = super::super::wire::wire_in(&access, "did:key:remote", home.path(), &request)
             .await
@@ -959,6 +962,7 @@ async fn wire_refuses_even_the_initialized_homes_served_endpoint() {
         targets_from: vec![],
         remove: false,
         preview: false,
+        dynamic_consent: false,
     };
     let error = super::super::wire::wire_in(&access, &init.node_did, home.path(), &request)
         .await
@@ -995,6 +999,7 @@ async fn removal_holds_plugin_lock_after_reference_check_until_deletion() {
             targets_from: vec![],
             remove: false,
             preview: false,
+            dynamic_consent: false,
         };
         let wired = super::super::wire::wire_in(&access, &owner, home.path(), &request).await;
         access

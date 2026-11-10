@@ -21,6 +21,12 @@ pub(crate) const ENGINEER_DEFAULT_PACKS: &[&str] = &[
     "gents/data_tables",
 ];
 
+/// The default packs whose approval is also the consent to dynamic workflow
+/// scripts: approving one sets its job block to `dynamic: run` as it is wired
+/// (Lean `consentedDynamic`), since a pack can only ship `check`, which
+/// refuses every spawn a script asks for.
+const DYNAMIC_RUN_ON_APPROVAL: &[&str] = &["gents/dynamic_workflows"];
+
 /// How long one default pack may take to resolve. Init succeeds without its
 /// default packs, so an unreachable registry must not hold a first run for
 /// the operating system's connection timeout once per pack.
@@ -179,6 +185,9 @@ async fn install_one(
                         ask["asks"].as_str().unwrap_or_default()
                     );
                 }
+                if DYNAMIC_RUN_ON_APPROVAL.contains(&pack) {
+                    eprintln!("  Approving also lets workflow scripts the model writes start agents (job.policy.dynamic: run).");
+                }
                 crate::interactive_backend::confirm(
                     &format!("Install {pack} and allow this?"),
                     false,
@@ -223,8 +232,15 @@ async fn install_one(
     let (access, owner) = command::resolve_scope_owner(&scope()).await?;
     let attached = async {
         let wired = if wire {
-            command::wire_pack_plugins(&access, &owner, home, &source, &[engineer.to_owned()])
-                .await?
+            command::wire_pack_plugins_consenting(
+                &access,
+                &owner,
+                home,
+                &source,
+                &[engineer.to_owned()],
+                grant && DYNAMIC_RUN_ON_APPROVAL.contains(&coordinate.as_str()),
+            )
+            .await?
         } else {
             Vec::new()
         };

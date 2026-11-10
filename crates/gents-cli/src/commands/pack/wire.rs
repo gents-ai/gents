@@ -30,6 +30,10 @@ pub(crate) struct WireRequest {
     pub(crate) targets_from: Vec<String>,
     pub(crate) remove: bool,
     pub(crate) preview: bool,
+    /// The node owner approved dynamic scripts for this plugin (the init
+    /// approval of its pack): wiring raises its job block from `check` to
+    /// `run` (Lean `consentedDynamic`). The wire command never sets it.
+    pub(crate) dynamic_consent: bool,
 }
 
 #[cfg(test)]
@@ -52,6 +56,7 @@ pub(crate) async fn wire(args: PackWireArgs) -> Result<()> {
         targets_from: args.targets_from,
         remove: args.remove,
         preview: args.preview,
+        dynamic_consent: false,
     };
     crate::print_json(&wire_in(&access, &owner, &home, &request).await?)
 }
@@ -241,6 +246,10 @@ impl WirePlan<'_> {
                 self.targets_from,
             )?
         };
+        let (mut tools, mut report) = (tools, report);
+        if self.request.dynamic_consent && !self.request.remove {
+            gents::documents::consent_dynamic_run(&mut tools, &self.request.plugin, &mut report);
+        }
         tools.validate()?;
         if !self.request.preview {
             let document = |collection, value: Value| DesiredStateApplyDocument {

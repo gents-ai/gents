@@ -296,6 +296,7 @@ pub async fn promote(
             targets_from: run.owners.clone(),
             remove: false,
             preview: false,
+            dynamic_consent: false,
         },
     )
     .await

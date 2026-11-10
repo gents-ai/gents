@@ -1446,6 +1446,12 @@ pub(crate) enum LeanPluginJobAuthorityCase {
         policy: Box<LeanPluginJobPolicy>,
         expected: Box<LeanPluginJobValidExpected>,
     },
+    ConsentedDynamic {
+        name: String,
+        consent: bool,
+        mode: String,
+        expected: LeanPluginJobModeExpected,
+    },
     PublishedRead {
         name: String,
         publication_in_progress: bool,
@@ -1471,6 +1477,7 @@ impl LeanPluginJobAuthorityCase {
             | Self::Origin { name, .. }
             | Self::PackJobBlock { name, .. }
             | Self::PolicyValid { name, .. }
+            | Self::ConsentedDynamic { name, .. }
             | Self::WireTargetsFrom { name, .. }
             | Self::PublishedRead { name, .. } => name,
         }
@@ -1523,6 +1530,12 @@ pub(crate) struct LeanPluginJobPackBlock {
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanPluginJobAdmissibleExpected {
     pub(crate) admissible: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobModeExpected {
+    pub(crate) mode: String,
 }
 
 #[derive(Debug, Deserialize)]

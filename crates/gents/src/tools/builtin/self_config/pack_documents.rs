@@ -61,6 +61,16 @@ impl PackInstaller {
             std::iter::once(distribution.manifest())
                 .chain(dependencies.iter().map(|d| d.manifest())),
         )?;
+        // A shipped job block is granted by this install under pack authority
+        // (Lean `packJobBlockAdmissible`); the receipt records the grant and
+        // what `check` leaves refused.
+        let job_blocks = crate::tools::background::job::settings::dynamic_check_notices(
+            prepared
+                .config
+                .tools
+                .iter()
+                .chain(prepared.dependencies.iter().flat_map(|d| &d.config.tools)),
+        );
         let dependency_receipts = dependencies.iter().map(|dependency| json!({
             "coordinate": dependency.coordinate(),
             "version": dependency.manifest().version, "artifact_digest": dependency.digest(),
@@ -75,6 +85,7 @@ impl PackInstaller {
                 "installation_blockers": blockers,
                 "edited_documents": self.edited_documents(&distribution.coordinate(), false).await?,
                 "would_grant": authority,
+                "job_blocks": (!job_blocks.is_empty()).then_some(&job_blocks),
                 "operation": operation,
                 "package": distribution.manifest().name, "version": distribution.manifest().version,
                 "installed": prior,
@@ -100,6 +111,7 @@ impl PackInstaller {
             "effective": effective,
             "install": without_empty_lists(serde_json::to_value(&receipt)?),
             "granted_authority": authority,
+            "job_blocks": (!job_blocks.is_empty()).then_some(&job_blocks),
             "operation": operation,
             "inference": bound_inference(serde_json::to_value(&prepared.inference)?),
             "dependency_inference": (!prepared.dependency_inference.is_empty()).then_some(&prepared.dependency_inference),

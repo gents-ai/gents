@@ -1155,6 +1155,22 @@ fn generated_plugin_job_authority_cases_drive_origin_and_provenance() {
                     "{name}: valid"
                 );
             }
+            LeanPluginJobAuthorityCase::ConsentedDynamic {
+                name,
+                consent,
+                mode,
+                expected,
+            } => {
+                *kinds.entry("consented_dynamic").or_default() += 1;
+                assert_eq!(
+                    gents::tools::background::job::settings::consented_dynamic(
+                        *consent,
+                        spelled(mode)
+                    ),
+                    spelled(&expected.mode),
+                    "{name}: mode"
+                );
+            }
             LeanPluginJobAuthorityCase::PublishedRead {
                 name,
                 publication_in_progress,
@@ -1207,6 +1223,7 @@ fn generated_plugin_job_authority_cases_drive_origin_and_provenance() {
     assert_eq!(
         kinds,
         BTreeMap::from([
+            ("consented_dynamic", 4),
             ("install", 6),
             ("installer", 4),
             ("origin", 4),

@@ -227,6 +227,39 @@ mod wire {
         assert!(settings::validate(block).is_empty());
         assert_eq!(report.job.as_ref(), Some(block));
         assert!(report.next_call.is_none());
+        // A block left at check says what that refuses and the call that
+        // changes it (packs#61 item 6).
+        let warning = report
+            .warnings
+            .iter()
+            .find(|warning| warning.starts_with("dynamic_check: "))
+            .expect("a check block is reported");
+        assert!(
+            warning.contains("every spawn and message it asks for is refused")
+                && warning.contains("[\"tools\",\"edit\"]")
+                && warning.contains("acme/runner"),
+            "{warning}"
+        );
+
+        // The node owner's consent raises check to run and records it.
+        let (mut tools, mut report) = (tools, report);
+        super::super::consent_dynamic_run(&mut tools, "acme/runner", &mut report);
+        assert_eq!(
+            self::block(&tools).unwrap().policy.dynamic,
+            DynamicMode::Run
+        );
+        assert_eq!(
+            report.job.as_ref().map(|job| job.policy.dynamic),
+            Some(DynamicMode::Run)
+        );
+        assert!(report
+            .warnings
+            .iter()
+            .all(|warning| !warning.starts_with("dynamic_check: ")));
+        assert!(report
+            .changed
+            .iter()
+            .any(|change| change.contains("set job.policy.dynamic run for acme/runner")));
     }
 
     #[test]
