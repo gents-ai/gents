@@ -1005,17 +1005,28 @@ async fn agent_lists_separate_targets_from_messageable_sessions() {
         .await
         .unwrap();
     let sessions = from_child["sessions"].as_array().unwrap();
+    assert!(
+        sessions
+            .iter()
+            .any(|session| session["session_id"] == caller.session_id
+                && session["relationship"] == "started_you"),
+        "{from_child}"
+    );
     for session in sessions {
-        assert!(resolve_send_target(
-            &node,
-            &caused.node_did,
-            &caused.agent_did,
-            &tools,
-            session["session_id"].as_str().unwrap()
-        )
-        .await
-        .unwrap()
-        .is_some());
+        assert_eq!(
+            resolve_send_target(
+                &node,
+                &caused.node_did,
+                &caused.agent_did,
+                &tools,
+                session["session_id"].as_str().unwrap()
+            )
+            .await
+            .unwrap()
+            .is_some(),
+            session["can_message"] == true,
+            "{session}"
+        );
     }
     node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
@@ -1074,6 +1085,240 @@ fn session_target_authority_matches_lean_owner() {
             "{case:?}"
         );
     }
+}
+
+#[test]
+fn session_list_entries_match_lean_owner() {
+    let cases = &crate::lean_vocab_test::lean_causal_hop_contract().session_list_cases;
+    assert_eq!(cases.len(), 8);
+    for case in cases {
+        let entry = super::discovery::listed_session(
+            case.target_allowed,
+            case.caller_starter,
+            case.interrupt_allowed,
+        );
+        assert_eq!(entry.is_some(), case.expected_listed, "{case:?}");
+        assert_eq!(
+            entry.is_some_and(|entry| entry.can_message),
+            case.expected_can_message,
+            "{case:?}"
+        );
+        assert_eq!(
+            entry.is_some_and(|entry| entry.can_interrupt),
+            case.expected_can_interrupt,
+            "{case:?}"
+        );
+    }
+}
+
+/// A User starts Agent A; A starts Agent B through `agent_new`. B lists A's
+/// session, which the User requested, from B's own verified creation receipt;
+/// A lists B's; an unrelated Agent C lists neither.
+#[tokio::test]
+async fn session_list_names_the_starter_from_the_callers_own_receipt() {
+    use crate::tools::call::lifecycle::admission_fixture::published_admission_with_owner;
+
+    let (mut admission, request) = published_admission_with_owner(PublishedAdmissionOptions {
+        name: "session-list-starter".into(),
+        real_identity: true,
+        await_mode: AwaitMode::Background,
+        start_running: false,
+        tool_name: Some(crate::tools::native::AGENT_NEW_TOOL_NAME.into()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let node = admission.node.clone();
+    let caller = request.request().clone();
+    assert_ne!(
+        caller.requester_did.as_deref(),
+        Some(caller.agent_did.as_str()),
+        "the root session is requested by the User, not Agent A"
+    );
+    let caller_access = admission.tool.access().unwrap();
+    let signer = caller_access.managed_agent_signer().unwrap();
+    let root = crate::KeyIdentity::load_existing(admission.path.join("node.key"), None).unwrap();
+    let binding = crate::store::identity::provision_agent_identity(&root).unwrap();
+    let worker = crate::store::identity::resolve_agent_identity(&root, &binding).unwrap();
+    crate::test_support::install_test_agent_binding_with_access(
+        &caller.node_did,
+        "started worker",
+        &binding,
+        &admission.client,
+    )
+    .await;
+    let worker_rows = admission
+        .client
+        .execute(&format!(
+            r#"{{ Agent(filter: {{agent_did: {{_eq: "{}"}}}}) {{ _docID }} }}"#,
+            escape_graphql_string(&binding.agent_did)
+        ))
+        .await
+        .unwrap();
+    let worker_doc = worker_rows["data"]["Agent"][0]["_docID"]
+        .as_str()
+        .expect("installed worker Agent")
+        .to_owned();
+    for (relation, actor) in [
+        ("session_writer", caller.agent_did.as_str()),
+        ("executor", worker.did()),
+    ] {
+        admission
+            .client
+            .add_actor_relationship(
+                "Agent",
+                &worker_doc,
+                relation,
+                &identity::Did::new(actor).unwrap(),
+            )
+            .await
+            .unwrap();
+    }
+    let cause = SessionMessageCause {
+        caller_node_did: caller.node_did.clone(),
+        caller_agent_did: caller.agent_did.clone(),
+        caller_session_id: caller.session_id.clone(),
+        caller_requester_did: caller.requester_did.clone(),
+        caller_request_id: caller.request_id.clone(),
+        caller_request_doc_id: caller.doc_id.clone(),
+        caller_hop: caller.request_hop,
+        tool_call_id: admission.tool.tool_call_id().to_owned(),
+        tool_call_doc_id: admission.tool.doc_id().unwrap().to_owned(),
+        correlation: None,
+    };
+    let target = SessionMessageTarget {
+        node_did: caller.node_did.clone(),
+        agent_did: worker.did().to_owned(),
+        session_id: uuid::Uuid::new_v4().to_string(),
+    };
+    let mut started_plan = plan(
+        &node,
+        &cause,
+        &target,
+        RenderedBody {
+            content: "start the worker".into(),
+            goal: None,
+        },
+        None,
+        false,
+        &signer,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    started_plan
+        .sign_agent_creation(&cause.caller_node_did, &caller.input, &signer)
+        .await
+        .unwrap();
+    let receipt = commit(&node, &cause, &mut admission.tool, started_plan, false)
+        .await
+        .unwrap();
+    let started = crate::request::binding::load_agent_request_by_doc_id_with_access(
+        &caller_access,
+        &receipt.request_doc_id,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(started.agent_did, worker.did());
+    assert_eq!(
+        started.requester_did.as_deref(),
+        Some(caller.agent_did.as_str())
+    );
+    let no_targets = AgentToolConfig {
+        enabled: true,
+        targets: Vec::new(),
+    };
+
+    let from_worker = agent_session_list(
+        &node,
+        &started,
+        &no_targets,
+        &AgentSessionListArgs::default(),
+    )
+    .await
+    .unwrap();
+    let sessions = from_worker["sessions"].as_array().unwrap();
+    assert_eq!(sessions.len(), 1, "{from_worker}");
+    assert_eq!(sessions[0]["session_id"], caller.session_id);
+    assert_eq!(sessions[0]["node_did"], caller.node_did);
+    assert_eq!(sessions[0]["agent_did"], caller.agent_did);
+    assert_eq!(sessions[0]["relationship"], "started_you");
+    assert_eq!(sessions[0]["can_message"], false);
+    assert_eq!(sessions[0]["can_interrupt"], false);
+    assert!(
+        sessions[0].get("title").is_none() && sessions[0].get("status").is_none(),
+        "the starter entry reads none of the starter's documents: {from_worker}"
+    );
+    let (node_ref, started_ref, tools_ref) = (&node, &started, &no_targets);
+    let filtered = move |filter: serde_json::Value| {
+        let (node, started, tools) = (node_ref, started_ref, tools_ref);
+        async move {
+            agent_session_list(
+                node,
+                started,
+                tools,
+                &serde_json::from_value(serde_json::json!({ "filter": filter })).unwrap(),
+            )
+            .await
+            .unwrap()["sessions"]
+                .as_array()
+                .unwrap()
+                .len()
+        }
+    };
+    assert_eq!(
+        filtered(serde_json::json!({"relationship": "started_you"})).await,
+        1
+    );
+    assert_eq!(
+        filtered(serde_json::json!({"relationship": "same_node"})).await,
+        0
+    );
+    assert_eq!(
+        filtered(serde_json::json!({"agent": caller.agent_did})).await,
+        1
+    );
+    assert_eq!(filtered(serde_json::json!({"status": "busy"})).await, 0);
+
+    let from_starter = agent_session_list(
+        &node,
+        &caller,
+        &no_targets,
+        &AgentSessionListArgs::default(),
+    )
+    .await
+    .unwrap();
+    let sessions = from_starter["sessions"].as_array().unwrap();
+    assert_eq!(sessions.len(), 1, "{from_starter}");
+    assert_eq!(sessions[0]["session_id"], started.session_id);
+    assert_eq!(sessions[0]["relationship"], "started_by_you");
+    assert_eq!(sessions[0]["can_message"], true);
+    assert_eq!(sessions[0]["can_interrupt"], true);
+
+    let unrelated = crate::tools::call::lifecycle::admission_fixture::claimed_signed_request(
+        &node,
+        "request-session-list-unrelated",
+        "session-session-list-unrelated",
+        &root,
+        None,
+    )
+    .await;
+    let unrelated = unrelated.request().clone();
+    assert_ne!(unrelated.agent_did, caller.agent_did);
+    assert_ne!(unrelated.agent_did, started.agent_did);
+    let from_unrelated = agent_session_list(
+        &node,
+        &unrelated,
+        &no_targets,
+        &AgentSessionListArgs::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(from_unrelated["sessions"], serde_json::json!([]));
+
+    node.shutdown().await.unwrap();
+    std::fs::remove_dir_all(&admission.path).unwrap();
 }
 
 #[tokio::test]

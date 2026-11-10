@@ -2401,6 +2401,8 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "causal_hop_contract".into(),
         "SessionTargetAuthorityCases".into(),
     ));
+    assert!(!snapshot.causal_hop_contract.session_list_cases.is_empty());
+    emitted.insert(("causal_hop_contract".into(), "SessionListEntryCases".into()));
     assert!(!snapshot.title_text_cases["cases"]
         .as_array()
         .unwrap()
