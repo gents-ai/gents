@@ -132,6 +132,12 @@ impl Tool for DefraQueryTool {
         ToolDefinition {name:Self::NAME.into(),description:"Read application and runtime documents. argv: [fields], [find], [count], [search], [explain], or [help,COMMAND]. Count aggregates every matching row; find returns a bounded ordered page. Explain inspects a native plan; executing it requires options.mode:execute. Configuration uses config, definitions use schema.".into(),parameters:json!({"type":"object","required":["argv"],"additionalProperties":false,"properties":{"argv":{"type":"array","items":{"type":"string"}},"collection":{"type":"string","description":"GraphQL collection name. Discover with schema collection list. Surface IDs belong to config datastore get."},"options":{"type":"object"}}})}
     }
     async fn call(&self, args: Self::Args) -> Result<String, Self::Error> {
+        if let Some(verb) = command::write_verb(&args) {
+            return Err(anyhow!("{}", json!({
+                "error": format!("query only reads; it has no {verb} command. Writes go through the write tool"),
+                "recovery": crate::tools::builtin::defra_write::write_grant_guidance(self.holds_tools, None, args.collection.as_slice()),
+            })).into());
+        }
         let result = if let Some(actor) = &self.actor {
             crate::store::config_client::ConfigAccess::transact_local_readonly(
                 &self.node,
@@ -150,7 +156,6 @@ impl Tool for DefraQueryTool {
         };
         match result {
             Ok(value) => render_result(value).map_err(Into::into),
-            Err(error) if error.is::<command::WriteVerb>() => Err(anyhow!("{}", json!({"error":format!("{error:#}"),"recovery":crate::tools::builtin::defra_write::write_grant_guidance(self.holds_tools, None, args.collection.as_slice())})).into()),
             Err(error) if error.is::<command::CollectionDiscoveryError>() => Err(anyhow!("{}", json!({"error":format!("{error:#}"),"recovery":{"tool":"schema","args":{"argv":["collection","list"]}}})).into()),
             Err(error) => Err(anyhow!("{}", json!({"error":format!("{error:#}"),"recovery":{"tool":"query","args":{"argv":["help",args.argv.first().filter(|command| query_help(Some(command)).is_ok()).map(String::as_str).unwrap_or("find")]}}})).into()),
         }

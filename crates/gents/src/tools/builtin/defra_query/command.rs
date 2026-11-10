@@ -50,10 +50,13 @@ const WRITE_VERBS: [&str; 7] = [
     "write", "create", "insert", "update", "delete", "mutate", "add",
 ];
 
-/// `query` was asked to change a document: it only reads.
-#[derive(Debug, thiserror::Error)]
-#[error("query only reads; it has no {0} command. Writes go through the write tool")]
-pub(super) struct WriteVerb(pub(super) String);
+/// The write verb `args` asks `query` for, which only reads.
+pub(super) fn write_verb(args: &QueryParams) -> Option<&str> {
+    args.argv
+        .first()
+        .map(String::as_str)
+        .filter(|verb| WRITE_VERBS.contains(verb))
+}
 
 pub fn query_help(command: Option<&str>) -> Result<&'static str> {
     match command {
@@ -143,9 +146,6 @@ pub async fn execute_command(
         );
         ensure!(argv.len() <= 2, "help accepts one command");
         return Ok(json!({"help":query_help(argv.get(1).copied())?}));
-    }
-    if let Some(verb) = argv.first().filter(|verb| WRITE_VERBS.contains(verb)) {
-        return Err(WriteVerb((*verb).to_owned()).into());
     }
     ensure!(
         argv.len() == 1,
