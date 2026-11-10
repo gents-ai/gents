@@ -77,6 +77,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "selected_callback_agents_follow_native_visibility",
         },
         ConformanceConsumer::RustTest {
+            id: "store::config_client::desired_state::agent_target_access::tests::configured_agent_targets_grant_exactly_session_writer",
+            package: "gents",
+            source_path: "crates/gents/src/store/config_client/desired_state/agent_target_access.rs",
+            module_path: "store::config_client::desired_state::agent_target_access::tests",
+            function: "configured_agent_targets_grant_exactly_session_writer",
+        },
+        ConformanceConsumer::RustTest {
             id: "triggers::callback::tests::callback_parent_requires_the_selected_authenticated_agent",
             package: "gents",
             source_path: "crates/gents/src/triggers/callback/tests.rs",

@@ -148,7 +148,20 @@ pub async fn session_snapshot(
             .await
             .map(Some)
     };
-    let (context, ownership) = tokio::join!(context_read, ownership_read);
+    let goal_read =
+        core.session_goal_observation(node_did.as_deref().unwrap_or_default(), &session_id);
+    let (context, ownership, goal) = tokio::join!(context_read, ownership_read, goal_read);
+    let goal = match goal {
+        Ok(state) => crate::commands::verified_session_goal(state),
+        Err(error) => {
+            let classified = BridgeError::classify_transport_error(error);
+            if classified.code == BridgeErrorCode::PermissionDenied {
+                return Err(classified);
+            }
+            tracing::warn!(session_id, error = %classified, "session Goal observation unavailable; showing no Goal");
+            None
+        }
+    };
     let context_store = match context {
         Ok(store) => store,
         Err(error) => {
@@ -197,6 +210,7 @@ pub async fn session_snapshot(
     .await
     .map_err(BridgeError::classify_transport_error)?;
     if let Some(snapshot) = snapshot.as_mut() {
+        snapshot.goal = goal;
         if let (Some(node), Some(requests), Some(selected)) = (
             node_did.as_deref(),
             fresh_requests.as_ref(),

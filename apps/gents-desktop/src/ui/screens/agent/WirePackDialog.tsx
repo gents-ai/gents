@@ -102,7 +102,7 @@ export function WirePackDialog({
   const job = preview?.report.job;
   return (
     <Dialog open onOpenChange={(open) => !open && onClose(false)}>
-      <DialogContent aria-modal="true" className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Enable {plugin} for an agent</DialogTitle>
           <DialogDescription>Nothing is written until you enable it.</DialogDescription>

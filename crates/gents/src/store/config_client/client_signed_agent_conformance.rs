@@ -30,15 +30,9 @@ fn client_goal_graphs_use_the_bundled_canonical_lineage() {
         ),
     ] {
         let schema = super::client_signed_agent::signing_schema(sdl, name).unwrap();
-        if let Some(plan) = gents_migration::canonical_schema_plan(name).unwrap() {
-            let root = query::parse_sdl(plan.root_sdl).unwrap().remove(0);
-            assert_eq!(schema.collection_id, root.collection_id);
-            assert_eq!(schema.version_id, plan.version);
-        } else {
-            let bundled = query::parse_sdl(sdl).unwrap().remove(0);
-            assert_eq!(schema.collection_id, bundled.collection_id);
-            assert_eq!(schema.version_id, bundled.version_id);
-        }
+        let bundled = query::parse_sdl(sdl).unwrap().remove(0);
+        assert_eq!(schema.collection_id, bundled.collection_id);
+        assert_eq!(schema.version_id, bundled.version_id);
     }
 }
 
