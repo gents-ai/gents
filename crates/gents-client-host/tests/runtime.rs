@@ -2794,7 +2794,7 @@ async fn exercise_message_edit(
                 )
                 .await;
             *id += 1;
-            if view["sessionId"] == child {
+            if view["kind"] == "observed" && view["observation"]["sessionId"] == child {
                 return;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -2998,6 +2998,7 @@ async fn wait_goal(
     session: &str,
     status: &str,
 ) -> Result<Value> {
+    let mut last = Value::Null;
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             let view = client
@@ -3008,17 +3009,20 @@ async fn wait_goal(
                 )
                 .await;
             *id += 1;
-            if view["nodeDid"] == node_did
-                && view["sessionId"] == session
-                && view["goal"]["status"] == status
+            let observation = &view["observation"];
+            if view["kind"] == "observed"
+                && observation["nodeDid"] == node_did
+                && observation["sessionId"] == session
+                && observation["goal"]["status"] == status
             {
-                return view;
+                return observation.clone();
             }
+            last = view;
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
     .await
-    .context("the signed goal observation did not reach the client")
+    .with_context(|| format!("the signed goal observation did not reach the client; last: {last}"))
 }
 
 async fn configure_inference(
