@@ -271,7 +271,7 @@ pub(crate) mod tests {
             None,
             &BTreeMap::new(),
             local.clone(),
-            |_| async { Ok(()) },
+            |_, _| async { Ok(()) },
         )
         .await
         .unwrap();
@@ -282,7 +282,7 @@ pub(crate) mod tests {
             None,
             &BTreeMap::new(),
             super::super::PackSource::Store,
-            |_| async { Ok(()) },
+            |_, _| async { Ok(()) },
         )
         .await
         .unwrap();

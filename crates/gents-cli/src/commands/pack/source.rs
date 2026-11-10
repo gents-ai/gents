@@ -89,6 +89,21 @@ impl PackSource {
         }
     }
 
+    /// Records the provenance of `root` and `dependencies` under their pack coordinates.
+    pub(crate) fn record_graph_sources(
+        prepared: &mut gents::pack::PreparedDocumentPackInstall,
+        root: &Self,
+        dependencies: &[Self],
+    ) {
+        for source in std::iter::once(root).chain(dependencies) {
+            let manifest = source.manifest();
+            prepared.sources.insert(
+                format!("{}/{}", manifest.metadata.namespace, manifest.name),
+                source.provenance(),
+            );
+        }
+    }
+
     pub(crate) fn provenance(&self) -> gents::pack::PackSource {
         match &self.from {
             Source::Local => gents::pack::PackSource::Local {

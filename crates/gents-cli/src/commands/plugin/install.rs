@@ -24,10 +24,16 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
         !manifest.metadata.plugins.is_empty(),
         "{namespace}/{name} carries no plugins; install the whole pack with gents config pack install"
     );
+    let source = gents::pack::PackSource::Registry {
+        namespace: pack.namespace.clone(),
+        name: pack.name.clone(),
+        version: pack.version.clone(),
+        artifact_digest: pack.artifact_digest.clone(),
+    };
     let notification_scope = crate::commands::pack::plugin_notification_scope(&home).await?;
     if let Some((gents::ConfigAccess::Graphql(endpoint), owner)) = &notification_scope {
         use futures_util::StreamExt;
-        let source = crate::commands::pack::PackSource::received(pack.archive);
+        let source = crate::commands::pack::PackSource::received(pack.archive, source)?;
         let dependencies =
             futures_util::stream::iter(source.manifest().metadata.dependencies.iter())
                 .map(|coordinate| {
@@ -73,12 +79,6 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
     }
     let notify_scope = notification_scope.clone();
     let notify_home = home.clone();
-    let source = gents::pack::PackSource::Registry {
-        namespace: pack.namespace.clone(),
-        name: pack.name.clone(),
-        version: pack.version.clone(),
-        artifact_digest: pack.artifact_digest.clone(),
-    };
     let result = gents::pack::plugin_lifecycle::install_plugin(
         &home,
         &pack.archive,

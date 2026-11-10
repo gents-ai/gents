@@ -384,23 +384,27 @@ async fn run_inner(
         let requested = crate::commands::pack::parse_inference_slot_bindings(
             &received.request.inference_slots,
         )?;
-        let prepared = Arc::new(
-            gents::pack::prepare_document_pack_archive(
-                &access,
-                &state.node_did,
-                received.root.archive(),
-                &requested,
-                &received
-                    .dependencies
-                    .iter()
-                    .map(|source| source.archive())
-                    .collect::<Vec<_>>(),
-                gents::pack::InstalledVia::Operator,
-                Some(&home),
-                &|name| std::env::var(name).ok(),
-            )
-            .await?,
+        let mut prepared = gents::pack::prepare_document_pack_archive(
+            &access,
+            &state.node_did,
+            received.root.archive(),
+            &requested,
+            &received
+                .dependencies
+                .iter()
+                .map(|source| source.archive())
+                .collect::<Vec<_>>(),
+            gents::pack::InstalledVia::Operator,
+            Some(&home),
+            &|name| std::env::var(name).ok(),
+        )
+        .await?;
+        crate::commands::pack::PackSource::record_graph_sources(
+            &mut prepared,
+            &received.root,
+            &received.dependencies,
         );
+        let prepared = Arc::new(prepared);
         let stage = gents::pack::stage_hosted_pack(
             &state.node_did,
             &home,
@@ -551,6 +555,8 @@ async fn run_inner(
             ux: received.root.manifest().metadata.ux.clone(),
             installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             installed_via: Some(gents::pack::InstalledVia::Operator),
+            source: Some(received.root.provenance()),
+            source_history: Vec::new(),
         };
         Some(gents::pack::HostedHomePublication {
             home,

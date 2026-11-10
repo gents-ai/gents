@@ -438,21 +438,21 @@ pub(crate) async fn install_remote(
     let preparation = session.preparation().clone();
     let access = gents::store::config_client::ConfigAccess::Graphql(endpoint.clone());
     let requested = crate::commands::pack::parse_inference_slot_bindings(&args.inference_slots)?;
-    let prepared = std::sync::Arc::new(
-        gents::pack::prepare_hosted_document_pack_archive(
-            &access,
-            owner,
-            pack.archive(),
-            &requested,
-            &dependencies
-                .iter()
-                .map(crate::commands::pack::PackSource::archive)
-                .collect::<Vec<_>>(),
-            &|name| std::env::var(name).ok(),
-            &preparation,
-        )
-        .await?,
-    );
+    let mut prepared = gents::pack::prepare_hosted_document_pack_archive(
+        &access,
+        owner,
+        pack.archive(),
+        &requested,
+        &dependencies
+            .iter()
+            .map(crate::commands::pack::PackSource::archive)
+            .collect::<Vec<_>>(),
+        &|name| std::env::var(name).ok(),
+        &preparation,
+    )
+    .await?;
+    crate::commands::pack::PackSource::record_graph_sources(&mut prepared, pack, dependencies);
+    let prepared = std::sync::Arc::new(prepared);
     let graph_archive = pack.shared_archive();
     let graph_prepared = prepared.clone();
     let graph = tokio::task::spawn_blocking(move || {

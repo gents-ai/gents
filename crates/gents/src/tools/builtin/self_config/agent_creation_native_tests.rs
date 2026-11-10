@@ -684,11 +684,13 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     );
     let (_fixture, _, archive) = crate::pack::plugin_lifecycle::tests::fixture("1.0.0", false);
     let plugin_home = tempfile::tempdir()?;
-    let distribution =
-        super::pack_installer::ConfigPackDistribution(crate::pack::resolve::ResolvedNamedPack {
+    let distribution = super::pack_installer::ConfigPackDistribution(
+        crate::pack::resolve::ResolvedNamedPack {
             archive,
             from: crate::pack::resolve::ResolvedFrom::Store,
-        });
+        },
+        None,
+    );
     let installer = super::pack_installer::PackInstaller {
         core: core.clone(),
         node: node.clone(),
@@ -1755,11 +1757,13 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         let (bytes, _) = crate::pack::archive::pack_dir(directory.path())?;
         crate::pack::archive::PackArchive::from_bytes(&bytes)
     }).await??;
-    let distribution =
-        super::pack_installer::ConfigPackDistribution(crate::pack::resolve::ResolvedNamedPack {
+    let distribution = super::pack_installer::ConfigPackDistribution(
+        crate::pack::resolve::ResolvedNamedPack {
             archive,
             from: crate::pack::resolve::ResolvedFrom::Store,
-        });
+        },
+        None,
+    );
     let installer = super::pack_installer::PackInstaller {
         core: core.clone(),
         node: node.clone(),

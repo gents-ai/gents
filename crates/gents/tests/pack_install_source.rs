@@ -41,15 +41,24 @@ async fn document_install_records_portable_source_and_history() {
     let identity = KeyIdentity::load_or_create(keys.path().join("node.key"), None).unwrap();
     let owner = identity.did().to_string();
     let node = Arc::new(
-        gents::defra_node::EmbeddedNode::builder()
+        gents::defra_node::Node::builder()
             .with_node_identity_did(identity.did())
             .build()
             .await
             .unwrap(),
     );
     gents::ensure_runtime_schemas(&node).await.unwrap();
-    gents::documents::ensure_node(&node, &owner).await.unwrap();
-    let access = ConfigAccess::local(node.clone());
+    let access = ConfigAccess::local_as(node.clone(), owner.parse().unwrap());
+    access
+        .write(
+            "test.pack_source.node",
+            &format!(
+                "mutation {{ create_Node(input: {{node_did: \"{}\", enabled: true}}) {{_docID}} }}",
+                gents::store::graphql::escape_graphql_string(&owner),
+            ),
+        )
+        .await
+        .unwrap();
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/packs/shared_fixture");
     let (bytes, _) = pack_dir(&fixture).unwrap();
     let archive = PackArchive::from_bytes(&bytes).unwrap();
@@ -102,7 +111,7 @@ async fn document_install_records_portable_source_and_history() {
     );
     assert_eq!(record["source_history"][0]["digest"], archive.digest());
     assert!(!record.to_string().contains("/private/folder"));
-    node.shutdown().await;
+    node.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -120,7 +129,7 @@ async fn asset_install_keeps_portable_source_across_reinstall() {
             None,
             &BTreeMap::new(),
             source,
-            |_| async { Ok(()) },
+            |_, _| async { Ok(()) },
         )
         .await
         .unwrap();

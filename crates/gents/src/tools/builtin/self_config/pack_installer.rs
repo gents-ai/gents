@@ -30,7 +30,7 @@ pub(super) fn installs_kind(kind: &crate::pack::PackKind) -> bool {
 
 pub(super) struct ConfigPackDistribution(
     pub(super) crate::pack::resolve::ResolvedNamedPack,
-    Option<crate::pack::PackSource>,
+    pub(super) Option<crate::pack::PackSource>,
 );
 
 impl ConfigPackDistribution {

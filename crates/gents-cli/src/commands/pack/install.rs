@@ -230,13 +230,7 @@ async fn install_documents_pack_resolved_inner(
         }
         Err(refusal) => return Err(refusal),
     };
-    for source in std::iter::once(pack).chain(dependencies.iter()) {
-        let manifest = source.manifest();
-        prepared.sources.insert(
-            format!("{}/{}", manifest.metadata.namespace, manifest.name),
-            source.provenance(),
-        );
-    }
+    PackSource::record_graph_sources(&mut prepared, pack, &dependencies);
     let inference = prepared.inference.clone();
     let dependency_inference = prepared.dependency_inference.clone();
     if args.preview {
