@@ -36,14 +36,27 @@ pub async fn materialize_enrollment_desired_in_txn(
         "enrollment authorization expired before route materialization"
     );
     fence_arrivals(txn, "PeerPairingDesired").await?;
-    let response = txn
-        .execute(
-            r#"{ PeerPairingDesired {
-        _docID peer_id node_did actor_did source template collections profiles replicator_addresses enrollment_request_digest
-        enrollment_authorization_sequence enrollment_authorization_expires_at
-    } }"#,
+    let response = {
+        use gents_protocol::document_query::{
+            fields::peer_pairing_desired as fields, Query, Selection,
+        };
+        let query = Query::select(
+            Selection::doc_id()
+                .field(fields::PEER_ID)
+                .field(fields::NODE_DID)
+                .field(fields::ACTOR_DID)
+                .field(fields::SOURCE)
+                .field(fields::TEMPLATE)
+                .field(fields::COLLECTIONS)
+                .field(fields::PROFILES)
+                .field(fields::REPLICATOR_ADDRESSES)
+                .field(fields::ENROLLMENT_REQUEST_DIGEST)
+                .field(fields::ENROLLMENT_AUTHORIZATION_SEQUENCE)
+                .field(fields::ENROLLMENT_AUTHORIZATION_EXPIRES_AT),
         )
-        .await?;
+        .render();
+        txn.run(&query).await?
+    };
     let rows: Vec<DesiredWitness> = serde_json::from_value(
         response
             .pointer("/data/PeerPairingDesired")

@@ -20,7 +20,7 @@ use tokio::time::timeout;
 use uuid::Uuid;
 
 use crate::store::config_client::ConfigAccess;
-use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
+use crate::store::graphql::{escape_graphql_string, rows};
 use crate::store::identity::NodeIdentity;
 
 use super::enrollment_store::RequestRow;
@@ -357,11 +357,17 @@ struct AdminPinRow {
 /// The local runtime's admin pins for `network_id`. Pins are `operations`
 /// documents, so they are read as the runtime actor that owns them.
 async fn network_admin_pins(access: &ConfigAccess, network_id: &str) -> Result<Vec<AdminPinRow>> {
-    let query = format!(
-        r#"{{ NetworkAdminPin(filter: {{ network_id: {{ _eq: "{}" }} }}) {{ _docID admin_did parent_linked }} }}"#,
-        escape_graphql_string(network_id)
-    );
-    let response = access.execute(&query).await?;
+    use gents_protocol::document_query::{
+        fields::network_admin_pin as fields, Filter, Query, Selection,
+    };
+    let query = Query::select(
+        Selection::doc_id()
+            .field(fields::ADMIN_DID)
+            .field(fields::PARENT_LINKED),
+    )
+    .filter(Filter::eq(fields::NETWORK_ID, network_id))
+    .render();
+    let response = access.read(&query).await?;
     Ok(serde_json::from_value(
         response
             .pointer("/data/NetworkAdminPin")
@@ -382,7 +388,6 @@ pub async fn confirm_network_admin_pin(
     )?;
     let access = ConfigAccess::local_as(node.clone(), runtime.clone());
     let (network_id, admin_did) = (&offer.network_id, &offer.admin_did);
-    let network_id_escaped = escape_graphql_string(network_id);
     let pins = network_admin_pins(&access, network_id).await?;
     match pins.as_slice() {
         [pin] if &pin.admin_did == admin_did => {
@@ -423,28 +428,28 @@ pub async fn confirm_network_admin_pin(
         "pin-{}",
         derive_enrollment_id("gents-network-admin-pin-v1", &[network_id])
     );
-    let mutation = format!(
-        r#"mutation {{
-            create_NetworkAdminPin(input: {{
-                pin_key: "{}",
-                network_id: "{network_id_escaped}",
-                admin_did: "{}",
-                offer_id: "{}",
-                confirmed_at: "{}",
-                parent_linked: false
-            }}) {{ _docID }}
-        }}"#,
-        escape_graphql_string(&pin_key),
-        escape_graphql_string(admin_did),
-        escape_graphql_string(&offer.offer_id),
-        Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
-    );
+    let mutation = {
+        use gents_protocol::document_query::{fields::network_admin_pin as fields, Create, Input};
+        Create::new(
+            Input::new()
+                .set(fields::PIN_KEY, &pin_key)
+                .set(fields::NETWORK_ID, network_id)
+                .set(fields::ADMIN_DID, admin_did)
+                .set(fields::OFFER_ID, &offer.offer_id)
+                .set(
+                    fields::CONFIRMED_AT,
+                    Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+                )
+                .set(fields::PARENT_LINKED, false),
+        )
+        .render()
+    };
     if let Err(commit_error) = access
         .transact_write("enrollment.create_admin_pin", |txn| {
             let mutation = &mutation;
             let runtime = &runtime;
             Box::pin(async move {
-                let response = txn.execute(mutation).await?;
+                let response = txn.run(mutation).await?;
                 let doc =
                     gents_protocol::graphql::extract_mutation_doc_id(&response, "NetworkAdminPin")?;
                 crate::store::config_client::maybe_link_deferred_operation_in_txn(
@@ -477,14 +482,16 @@ async fn persisted_request(
     offer_token: &str,
     candidate_peer: &str,
 ) -> Result<Option<(EnrollmentRequestRecord, String)>> {
-    let query = format!(
-        r#"{{ NetworkEnrollmentRequest(filter: {{ offer_id: {{ _eq: "{}" }}, candidate_did: {{ _eq: "{}" }}, candidate_peer: {{ _eq: "{}" }} }}) {{ {REQUEST_FIELDS} }} }}"#,
-        escape_graphql_string(&offer.offer_id),
-        escape_graphql_string(identity.did()),
-        escape_graphql_string(candidate_peer),
-    );
+    use gents_protocol::document_query::{
+        fields::network_enrollment_request as fields, Filter, Query, Selection,
+    };
+    let query = Query::select(Selection::owned(REQUEST_FIELDS))
+        .filter(Filter::eq(fields::OFFER_ID, &offer.offer_id))
+        .filter(Filter::eq(fields::CANDIDATE_DID, identity.did()))
+        .filter(Filter::eq(fields::CANDIDATE_PEER, candidate_peer))
+        .render();
     let response =
-        graphql_with_transaction_retry(node, &query, "loading retryable enrollment request")
+        crate::store::graphql::read_rendered(node, &query, "loading retryable enrollment request")
             .await?;
     let found = rows::<RequestRow>(&response, "NetworkEnrollmentRequest")?;
     let row = match found.as_slice() {
@@ -558,11 +565,16 @@ pub(super) async fn publish_candidate_document(
             let reader = &reader;
             Box::pin(async move {
                 txn.validate_runtime_actor(runtime)?;
-                let query = format!(
-                    r#"{{ Node(filter: {{node_did: {{_eq: "{}"}}}}, limit: 2) {{_docID}} }}"#,
-                    escape_graphql_string(runtime.as_str())
-                );
-                let nodes = txn.execute(&query).await?;
+                let query = {
+                    use gents_protocol::document_query::{
+                        fields::node as node_fields, Filter, Query, Selection,
+                    };
+                    Query::select(Selection::doc_id())
+                        .filter(Filter::eq(node_fields::NODE_DID, runtime.as_str()))
+                        .limit(2)
+                        .render()
+                };
+                let nodes = txn.run(&query).await?;
                 let nodes = gents_protocol::graphql::graphql_rows_from_response(&nodes, "Node");
                 let parent = match nodes.as_slice() {
                     [] => None,

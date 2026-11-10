@@ -69,9 +69,20 @@ impl GraphqlPairingStateStore {
         runtime: &identity::Did,
     ) -> Result<()> {
         fence_arrivals(txn, "PeerPairingApplied").await?;
-        let response = txn
-            .execute("{ PeerPairingApplied { _docID peer_id node_did } }")
-            .await?;
+        let response = {
+            use gents_protocol::document_query::{
+                fields::peer_pairing_applied as fields, Query, Selection,
+            };
+            txn.run(
+                &Query::select(
+                    Selection::doc_id()
+                        .field(fields::PEER_ID)
+                        .field(fields::NODE_DID),
+                )
+                .render(),
+            )
+            .await?
+        };
         let mut ids = Vec::new();
         for row in
             gents_protocol::graphql::graphql_rows_from_response(&response, "PeerPairingApplied")
@@ -200,28 +211,30 @@ impl GraphqlPairingStateStore {
     /// scan but not by a `peer_id` filter, so twins are found by scanning the
     /// collection once for the whole sweep.
     async fn load_applied_rows(&self) -> Result<Vec<AppliedStateRow>> {
-        let query = format!(
-            r#"{{
-            PeerPairingApplied(filter: {{node_did: {{_eq: "{}"}}}}) {{
-                _docID
-                peer_id
-                collections
-                replicator_addresses
-                replicator_filter
-                enrollment_request_digest
-                enrollment_authorization_sequence
-                enrollment_authorization_expires_at
-            }}
-        }}"#,
-            escape_graphql_string(self.identity.did())
-        );
+        let query = {
+            use gents_protocol::document_query::{
+                fields::peer_pairing_applied as fields, Filter, Query, Selection,
+            };
+            Query::select(
+                Selection::doc_id()
+                    .field(fields::PEER_ID)
+                    .field(fields::COLLECTIONS)
+                    .field(fields::REPLICATOR_ADDRESSES)
+                    .field(fields::REPLICATOR_FILTER)
+                    .field(fields::ENROLLMENT_REQUEST_DIGEST)
+                    .field(fields::ENROLLMENT_AUTHORIZATION_SEQUENCE)
+                    .field(fields::ENROLLMENT_AUTHORIZATION_EXPIRES_AT),
+            )
+            .filter(Filter::eq(fields::NODE_DID, self.identity.did()))
+            .render()
+        };
         let runtime = identity::Did::new(self.identity.did())?;
         self.runtime_access()?
             .transact_readonly("p2p.load_applied_owned", |txn| {
                 let query = &query;
                 let runtime = &runtime;
                 Box::pin(async move {
-                    let response = txn.execute_local_response(query).await?;
+                    let response = txn.run_local_response(query).await?;
                     let found = rows::<AppliedStateRow>(&response, "PeerPairingApplied")?;
                     let ids = found
                         .iter()
@@ -261,33 +274,44 @@ impl PairingStateStore for GraphqlPairingStateStore {
 
     async fn load_desired_with_authority(&self, peer_id: &str) -> Result<LoadedPairingDesired> {
         let raw_peer_id = peer_id.to_string();
-        let peer_id = escape_graphql_string(peer_id);
-        let query = format!(
-            r#"{{
-                PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{
-                    _docID
-                    actor_did
-                    peer_id
-                    node_did
-                    replicator_addresses
-                    template
-                    source
-                    enrollment_request_digest
-                    enrollment_authorization_sequence
-                    enrollment_authorization_expires_at
-                }}
-                DataPlanePairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{
-                    _docID
-                    actor_did
-                    peer_id
-                    node_did
-                    collections
-                    replicator_addresses
-                    template
-                    source
-                }}
-            }}"#
-        );
+        let query = {
+            use gents_protocol::document_query::{fields, Filter, Query, QuerySet, Selection};
+            QuerySet::new()
+                .plain(
+                    &Query::select(
+                        Selection::doc_id()
+                            .field(fields::peer_pairing_desired::ACTOR_DID)
+                            .field(fields::peer_pairing_desired::PEER_ID)
+                            .field(fields::peer_pairing_desired::NODE_DID)
+                            .field(fields::peer_pairing_desired::REPLICATOR_ADDRESSES)
+                            .field(fields::peer_pairing_desired::TEMPLATE)
+                            .field(fields::peer_pairing_desired::SOURCE)
+                            .field(fields::peer_pairing_desired::ENROLLMENT_REQUEST_DIGEST)
+                            .field(fields::peer_pairing_desired::ENROLLMENT_AUTHORIZATION_SEQUENCE)
+                            .field(
+                                fields::peer_pairing_desired::ENROLLMENT_AUTHORIZATION_EXPIRES_AT,
+                            ),
+                    )
+                    .filter(Filter::eq(fields::peer_pairing_desired::PEER_ID, peer_id)),
+                )
+                .plain(
+                    &Query::select(
+                        Selection::doc_id()
+                            .field(fields::data_plane_pairing_desired::ACTOR_DID)
+                            .field(fields::data_plane_pairing_desired::PEER_ID)
+                            .field(fields::data_plane_pairing_desired::NODE_DID)
+                            .field(fields::data_plane_pairing_desired::COLLECTIONS)
+                            .field(fields::data_plane_pairing_desired::REPLICATOR_ADDRESSES)
+                            .field(fields::data_plane_pairing_desired::TEMPLATE)
+                            .field(fields::data_plane_pairing_desired::SOURCE),
+                    )
+                    .filter(Filter::eq(
+                        fields::data_plane_pairing_desired::PEER_ID,
+                        peer_id,
+                    )),
+                )
+                .render()
+        };
         let runtime = identity::Did::new(self.identity.did())?;
         let response =
             self.runtime_access()?
@@ -295,7 +319,7 @@ impl PairingStateStore for GraphqlPairingStateStore {
                     let query = &query;
                     let runtime = &runtime;
                     Box::pin(async move {
-                        let response = txn.execute_local_response(query).await?;
+                        let response = txn.run_local_response(query).await?;
                         let ids = rows::<serde_json::Value>(&response, "PeerPairingDesired")?
                             .into_iter()
                             .map(|row| {

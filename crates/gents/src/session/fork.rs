@@ -21,7 +21,6 @@ use gents_protocol::output::rows::{
     decode_transcript_message_row, OutputSegmentRow, AGENT_MESSAGE_FIELDS,
     CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
-use gents_protocol::session::session_scope_filter;
 use gents_protocol::session::SessionScope;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -359,18 +358,79 @@ pub async fn fork_edit_on(
                         }
                     };
                 match decide_edit_fork(&requested, &retained) {
-                    EditForkDecision::Create => {
-                        Ok(Some(fork_in_txn(txn, &params, &child, Some(&requested.client_did)).await?))
-                    }
+                    EditForkDecision::Create => Ok(Some(
+                        fork_in_txn(txn, &params, &child, Some(&requested.client_did)).await?,
+                    )),
                     EditForkDecision::Reuse => {
-                        let escaped = crate::store::graphql::escape_graphql_string(&child);
-                        let owner = crate::store::graphql::escape_graphql_string(params.caller_node_did);
-                        let rows = txn.execute(&format!(r#"{{ AgentMessage(filter: {{ node_did: {{ _eq: "{owner}" }}, session_id: {{ _eq: "{escaped}" }}, parent_linked: {{ _eq: false }} }}, limit: 1) {{ _docID }} AgentOutputSegment(filter: {{ node_did: {{ _eq: "{owner}" }}, session_id: {{ _eq: "{escaped}" }}, parent_linked: {{ _eq: false }} }}, limit: 1) {{ _docID }} AgentSession(filter: {{ node_did: {{ _eq: "{owner}" }}, session_id: {{ _eq: "{escaped}" }}, relationships_pending: {{ _eq: true }} }}, limit: 1) {{ _docID }} }}"#)).await?;
-                        anyhow::ensure!(rows["data"]["AgentMessage"].as_array().is_some_and(Vec::is_empty), ForkError::ForkRecoveryIntentRequired(child));
-                        anyhow::ensure!(rows["data"]["AgentOutputSegment"].as_array().is_some_and(Vec::is_empty), ForkError::ForkRecoveryIntentRequired(child));
-                        anyhow::ensure!(rows["data"]["AgentSession"].as_array().is_some_and(Vec::is_empty), ForkError::ForkRecoveryIntentRequired(child));
+                        use gents_protocol::document_query::{
+                            fields::{agent_message, agent_output_segment, agent_session},
+                            Filter, Query, QuerySet, Selection,
+                        };
+                        let rows = txn
+                            .run(
+                                &QuerySet::new()
+                                    .plain(
+                                        &Query::select(Selection::doc_id())
+                                            .filter(Filter::eq(
+                                                agent_message::NODE_DID,
+                                                params.caller_node_did,
+                                            ))
+                                            .filter(Filter::eq(agent_message::SESSION_ID, &child))
+                                            .filter(Filter::eq(agent_message::PARENT_LINKED, false))
+                                            .limit(1),
+                                    )
+                                    .plain(
+                                        &Query::select(Selection::doc_id())
+                                            .filter(Filter::eq(
+                                                agent_output_segment::NODE_DID,
+                                                params.caller_node_did,
+                                            ))
+                                            .filter(Filter::eq(
+                                                agent_output_segment::SESSION_ID,
+                                                &child,
+                                            ))
+                                            .filter(Filter::eq(
+                                                agent_output_segment::PARENT_LINKED,
+                                                false,
+                                            ))
+                                            .limit(1),
+                                    )
+                                    .plain(
+                                        &Query::select(Selection::doc_id())
+                                            .filter(Filter::eq(
+                                                agent_session::NODE_DID,
+                                                params.caller_node_did,
+                                            ))
+                                            .filter(Filter::eq(agent_session::SESSION_ID, &child))
+                                            .filter(Filter::eq(
+                                                agent_session::RELATIONSHIPS_PENDING,
+                                                true,
+                                            ))
+                                            .limit(1),
+                                    )
+                                    .render(),
+                            )
+                            .await?;
+                        anyhow::ensure!(
+                            rows["data"]["AgentMessage"]
+                                .as_array()
+                                .is_some_and(Vec::is_empty),
+                            ForkError::ForkRecoveryIntentRequired(child)
+                        );
+                        anyhow::ensure!(
+                            rows["data"]["AgentOutputSegment"]
+                                .as_array()
+                                .is_some_and(Vec::is_empty),
+                            ForkError::ForkRecoveryIntentRequired(child)
+                        );
+                        anyhow::ensure!(
+                            rows["data"]["AgentSession"]
+                                .as_array()
+                                .is_some_and(Vec::is_empty),
+                            ForkError::ForkRecoveryIntentRequired(child)
+                        );
                         Ok(None)
-                    },
+                    }
                     EditForkDecision::Refuse => {
                         anyhow::bail!("the retained fork destination has another source binding")
                     }
@@ -555,14 +615,17 @@ async fn copy_fork_inventory(
     if source.tools.is_empty() {
         return Ok(());
     }
-    let escape = crate::store::graphql::escape_graphql_string;
+    use gents_protocol::document_query::{
+        fields::tool_file_inventory as inventory, Filter, Query, Selection,
+    };
     let response = txn
-        .execute(&format!(
-            r#"{{ ToolFileInventory(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }} }}) {{ {FORK_INVENTORY_FIELDS} }} }}"#,
-            escape(params.caller_node_did),
-            escape(params.source_session_id),
-            escape(requester),
-        ))
+        .run(
+            &Query::select(Selection::owned(FORK_INVENTORY_FIELDS))
+                .filter(Filter::eq(inventory::NODE_DID, params.caller_node_did))
+                .filter(Filter::eq(inventory::SESSION_ID, params.source_session_id))
+                .filter(Filter::eq(inventory::REQUESTER_DID, requester))
+                .render(),
+        )
         .await?;
     let mut selected = Vec::new();
     let mut seen = BTreeSet::new();
@@ -733,19 +796,62 @@ async fn fork_in_txn(
         ForkError::CrossAgentForkUnavailable
     );
 
-    let scope = session_scope_filter(
-        params.caller_node_did,
-        params.source_session_id,
-        params.caller_requester_did,
-    );
+    use gents_protocol::document_query::{
+        fields::{agent_message, agent_request, compaction_entry},
+        session_scope, Direction, Query, QuerySet, Selection,
+    };
     let snapshot = txn
-        .execute(&format!(
-            r#"{{
-                AgentRequest(filter: {{ {scope} }}) {{ purpose lifecycle_state }}
-                AgentMessage(filter: {{ {scope} }}, order: {{ sequence: ASC }}) {{ {AGENT_MESSAGE_FIELDS} }}
-                CompactionEntry(filter: {{ {scope} }}, order: {{ sequence: ASC }}) {{ _docID compaction_key session_id node_did requester_did request_id request_doc_id sequence summary files_read files_modified messages_compacted compacted_through_sequence original_tokens compacted_tokens created_at }}
-            }}"#
-        ))
+        .run(
+            &QuerySet::new()
+                .plain(
+                    &Query::select(
+                        Selection::new()
+                            .field(agent_request::PURPOSE)
+                            .field(agent_request::LIFECYCLE_STATE),
+                    )
+                    .filter(session_scope(
+                        params.caller_node_did,
+                        params.source_session_id,
+                        params.caller_requester_did,
+                    )),
+                )
+                .plain(
+                    &Query::select(Selection::owned(AGENT_MESSAGE_FIELDS))
+                        .filter(session_scope(
+                            params.caller_node_did,
+                            params.source_session_id,
+                            params.caller_requester_did,
+                        ))
+                        .order_by(agent_message::SEQUENCE, Direction::Asc),
+                )
+                .plain(
+                    &Query::select(
+                        Selection::doc_id()
+                            .field(compaction_entry::COMPACTION_KEY)
+                            .field(compaction_entry::SESSION_ID)
+                            .field(compaction_entry::NODE_DID)
+                            .field(compaction_entry::REQUESTER_DID)
+                            .field(compaction_entry::REQUEST_ID)
+                            .field(compaction_entry::REQUEST_DOC_ID)
+                            .field(compaction_entry::SEQUENCE)
+                            .field(compaction_entry::SUMMARY)
+                            .field(compaction_entry::FILES_READ)
+                            .field(compaction_entry::FILES_MODIFIED)
+                            .field(compaction_entry::MESSAGES_COMPACTED)
+                            .field(compaction_entry::COMPACTED_THROUGH_SEQUENCE)
+                            .field(compaction_entry::ORIGINAL_TOKENS)
+                            .field(compaction_entry::COMPACTED_TOKENS)
+                            .field(compaction_entry::CREATED_AT),
+                    )
+                    .filter(session_scope(
+                        params.caller_node_did,
+                        params.source_session_id,
+                        params.caller_requester_did,
+                    ))
+                    .order_by(compaction_entry::SEQUENCE, Direction::Asc),
+                )
+                .render(),
+        )
         .await?;
     for request in rows(&snapshot, "AgentRequest")? {
         let purpose =

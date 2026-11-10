@@ -11,6 +11,7 @@ use gents_protocol::session_input_edit::{
 use super::session_commands::run_session_command_reconciler_with_agents;
 use super::session_commands::{CommandRow, FIELDS};
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
+#[cfg(test)]
 use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::NodeIdentity;
 
@@ -70,6 +71,10 @@ async fn authority_rejection(
     txn: &ConfigApplyTxn<'_>,
     command: &SessionInputEdit,
 ) -> Result<Option<String>> {
+    use gents_protocol::document_query::{
+        fields::{agent as agent_fields, agent_session as session_fields},
+        Filter, Query, Selection,
+    };
     // P2P carries no session edit, so a command naming a requester peer
     // arrived outside the direct client-signed path and fails closed.
     if command.requester_peer_id.is_some() {
@@ -133,10 +138,11 @@ async fn authority_rejection(
             "replacement changed canonical session provenance".into(),
         ));
     }
-    let session_id = escape_graphql_string(&command.session_doc_id);
-    let response = txn.execute(&format!(
-        r#"{{ AgentSession(filter: {{ _docID: {{ _eq: "{session_id}" }} }}, limit: 2) {{ _docID relationships_pending }} }}"#
-    )).await?;
+    let rendered = Query::select(Selection::doc_id().field(session_fields::RELATIONSHIPS_PENDING))
+        .filter(Filter::eq(session_fields::DOC_ID, &command.session_doc_id))
+        .limit(2)
+        .render();
+    let response = txn.run(&rendered).await?;
     let sessions = response["data"]["AgentSession"]
         .as_array()
         .context("edit session readiness unavailable")?;
@@ -146,8 +152,16 @@ async fn authority_rejection(
             && sessions[0]["relationships_pending"] == false,
         "edit session relationships unavailable"
     );
-    let target = escape_graphql_string(&command.agent_doc_id);
-    let response = txn.execute(&format!(r#"{{ Agent(filter: {{ _docID: {{ _eq: "{target}" }} }}, limit: 2) {{ _docID node_did agent_did enabled }} }}"#)).await?;
+    let rendered = Query::select(
+        Selection::doc_id()
+            .field(agent_fields::NODE_DID)
+            .field(agent_fields::AGENT_DID)
+            .field(agent_fields::ENABLED),
+    )
+    .filter(Filter::eq(agent_fields::DOC_ID, &command.agent_doc_id))
+    .limit(2)
+    .render();
+    let response = txn.run(&rendered).await?;
     let agents = response["data"]["Agent"]
         .as_array()
         .context("edit Agent observation unavailable")?;
@@ -204,15 +218,21 @@ async fn physical_session_agent(
     txn: &ConfigApplyTxn<'_>,
     row: &CommandRow,
 ) -> Result<Option<String>> {
+    use gents_protocol::document_query::{
+        fields::agent_session as session_fields, Filter, Query, Selection,
+    };
     let Ok(command) = serde_json::from_str::<SessionInputEdit>(&row.intent_json) else {
         return Ok(None);
     };
-    let response = txn
-        .execute(&format!(
-            r#"{{ AgentSession(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ node_did agent_did }} }}"#,
-            escape_graphql_string(&command.session_doc_id)
-        ))
-        .await?;
+    let rendered = Query::select(
+        Selection::new()
+            .field(session_fields::NODE_DID)
+            .field(session_fields::AGENT_DID),
+    )
+    .filter(Filter::eq(session_fields::DOC_ID, &command.session_doc_id))
+    .limit(2)
+    .render();
+    let response = txn.run(&rendered).await?;
     let sessions = response["data"]["AgentSession"]
         .as_array()
         .context("edit physical session observation unavailable")?;
@@ -263,12 +283,20 @@ async fn replacements_were_applied(
     command: &SessionInputEdit,
     docs: &[String],
 ) -> Result<bool> {
+    use gents_protocol::document_query::{
+        fields::agent_request as request, Filter, Query, Selection,
+    };
     for (index, old) in command.edit.selected_request_doc_ids.iter().enumerate() {
-        let query = format!(
-            r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}, limit: 2) {{_docID lifecycle_state superseded_by_request_doc_id failure_reason}} }}"#,
-            escape_graphql_string(old)
-        );
-        let response = txn.execute(&query).await?;
+        let rendered = Query::select(
+            Selection::doc_id()
+                .field(request::LIFECYCLE_STATE)
+                .field(request::SUPERSEDED_BY_REQUEST_DOC_ID)
+                .field(request::FAILURE_REASON),
+        )
+        .filter(Filter::eq(request::DOC_ID, old))
+        .limit(2)
+        .render();
+        let response = txn.run(&rendered).await?;
         let rows = response["data"]["AgentRequest"]
             .as_array()
             .context("selected request observation unavailable")?;
@@ -336,13 +364,17 @@ pub(crate) async fn process_command(
     doc_id: &str,
     agent_identity: &dyn NodeIdentity,
 ) -> Result<Option<DateTime<Utc>>> {
+    use gents_protocol::document_query::{
+        fields::agent_session_input_edit as edit_fields, Filter, Input, Query, Selection, Update,
+    };
     let actor = ::identity::Did::new(agent_identity.did())?;
     let access = ConfigAccess::local_managed_agent(node.clone(), actor.clone(), agent_identity)?;
     access.transact_idempotent(IdempotentTransactionRetry::Standard,
         "queue.apply_signed_edit", |txn| {
         let actor = &actor;
         Box::pin(async move {
-            let response = txn.execute(&format!(r#"{{ AgentSessionInputEdit(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {FIELDS} }} }}"#, escape_graphql_string(doc_id))).await?;
+            let rendered = Query::select(Selection::owned(FIELDS)).filter(Filter::eq(edit_fields::DOC_ID, doc_id)).render();
+            let response = txn.run(&rendered).await?;
             let rows: Vec<CommandRow> = serde_json::from_value(response["data"]["AgentSessionInputEdit"].clone())?;
             let [row] = rows.as_slice() else {
                 anyhow::ensure!(rows.is_empty(), "edit command is ambiguous");
@@ -365,8 +397,11 @@ pub(crate) async fn process_command(
                 && row.session_id == command.session_id, "edit immutable scope disagrees with signed intent");
             if verified_receipt(identity.as_ref(), &command, row.receipt_json.as_deref()).await?.is_some() { return Ok(None); }
             crate::store::graphql::fence_arrivals(txn, "AgentSessionInputEdit").await?;
-            let twins = txn.execute(&format!(r#"{{ AgentSessionInputEdit(filter: {{ node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }} }}) {{ _docID command_id }} }}"#,
-                escape_graphql_string(&row.node_did), escape_graphql_string(&row.requester_did))).await?;
+            let rendered = Query::select(Selection::doc_id().field(edit_fields::COMMAND_ID))
+                .filter(Filter::eq(edit_fields::NODE_DID, &row.node_did))
+                .filter(Filter::eq(edit_fields::REQUESTER_DID, &row.requester_did))
+                .render();
+            let twins = txn.run(&rendered).await?;
             let twins = twins["data"]["AgentSessionInputEdit"].as_array().context("missing command identity query")?;
             if twins.iter().any(|twin| twin["command_id"].as_str() == Some(command.command_id.as_str()) && twin["_docID"].as_str() != Some(row.doc_id.as_str())) {
                 tracing::debug!(command_doc_id = doc_id, command_id = %command.command_id, "edit command identity collides; leaving it unanswered");
@@ -430,8 +465,8 @@ pub(crate) async fn process_command(
                 }
             };
             let receipt = signed_receipt(identity.as_ref(), &command, outcome, reason, request_doc_ids).await?;
-            let written = txn.execute(&format!(r#"mutation {{ update_AgentSessionInputEdit(docID: "{}", input: {{ receipt_json: "{}" }}) {{ _docID }} }}"#,
-                escape_graphql_string(&row.doc_id), escape_graphql_string(&serde_json::to_string(&receipt)?))).await?;
+            let rendered = Update::doc(row.doc_id.as_str(), Input::new().set(edit_fields::RECEIPT_JSON, serde_json::to_string(&receipt)?)).render();
+            let written = txn.run(&rendered).await?;
             anyhow::ensure!(written["data"]["update_AgentSessionInputEdit"].as_array().is_some_and(|rows| rows.len() == 1 && rows[0]["_docID"].as_str() == Some(row.doc_id.as_str())), "edit receipt write lost its command");
             Ok(None)
         })

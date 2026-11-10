@@ -380,13 +380,29 @@ fn is_reserved(document: &RecordedDocument) -> bool {
 }
 
 async fn read_record(txn: &ConfigApplyTxn<'_>, owner: &str, coordinate: &str) -> Result<Record> {
-    let response = txn
-        .execute(&format!(
-            r#"{{ {RECORD}(filter: {{ node_did: {{ _eq: "{}" }}, coordinate: {{ _eq: "{}" }} }}, limit: 2) {{ _docID version digest agent_bindings documents variables plugins history source source_history required_by explicit plugin_store }} }}"#,
-            escape_graphql_string(owner),
-            escape_graphql_string(coordinate)
-        ))
-        .await?;
+    use gents_protocol::document_query::{
+        fields::pack_installation as fields, Filter, Query, Selection,
+    };
+    let query = Query::select(
+        Selection::doc_id()
+            .field(fields::VERSION)
+            .field(fields::DIGEST)
+            .field(fields::AGENT_BINDINGS)
+            .field(fields::DOCUMENTS)
+            .field(fields::VARIABLES)
+            .field(fields::PLUGINS)
+            .field(fields::HISTORY)
+            .field(fields::SOURCE)
+            .field(fields::SOURCE_HISTORY)
+            .field(fields::REQUIRED_BY)
+            .field(fields::EXPLICIT)
+            .field(fields::PLUGIN_STORE),
+    )
+    .filter(Filter::eq(fields::NODE_DID, owner))
+    .filter(Filter::eq(fields::COORDINATE, coordinate))
+    .limit(2)
+    .render();
+    let response = txn.run(&query).await?;
     let rows = response["data"][RECORD]
         .as_array()
         .context("reading the pack installation record")?;
@@ -1402,12 +1418,20 @@ pub async fn list_installed_packs(
     access: &ConfigAccess,
     owner: &str,
 ) -> Result<Vec<InstalledPack>> {
-    let response = access
-        .execute(&format!(
-            r#"{{ {RECORD}(filter: {{ node_did: {{ _eq: "{}" }} }}, order: {{ coordinate: ASC }}) {{ _docID coordinate version digest plugin_store }} }}"#,
-            escape_graphql_string(owner)
-        ))
-        .await?;
+    use gents_protocol::document_query::{
+        fields::pack_installation as fields, Direction, Filter, Query, Selection,
+    };
+    let query = Query::select(
+        Selection::doc_id()
+            .field(fields::COORDINATE)
+            .field(fields::VERSION)
+            .field(fields::DIGEST)
+            .field(fields::PLUGIN_STORE),
+    )
+    .filter(Filter::eq(fields::NODE_DID, owner))
+    .order_by(fields::COORDINATE, Direction::Asc)
+    .render();
+    let response = access.read(&query).await?;
     response["data"][RECORD]
         .as_array()
         .context("reading the pack installation records")?
@@ -1428,13 +1452,21 @@ pub async fn read_installed_pack(
     owner: &str,
     coordinate: &str,
 ) -> Result<Option<InstalledPack>> {
-    let response = access
-        .execute(&format!(
-            r#"{{ {RECORD}(filter: {{ node_did: {{ _eq: "{}" }}, coordinate: {{ _eq: "{}" }} }}, limit: 2) {{ _docID coordinate version digest plugin_store }} }}"#,
-            escape_graphql_string(owner),
-            escape_graphql_string(coordinate)
-        ))
-        .await?;
+    use gents_protocol::document_query::{
+        fields::pack_installation as fields, Filter, Query, Selection,
+    };
+    let query = Query::select(
+        Selection::doc_id()
+            .field(fields::COORDINATE)
+            .field(fields::VERSION)
+            .field(fields::DIGEST)
+            .field(fields::PLUGIN_STORE),
+    )
+    .filter(Filter::eq(fields::NODE_DID, owner))
+    .filter(Filter::eq(fields::COORDINATE, coordinate))
+    .limit(2)
+    .render();
+    let response = access.read(&query).await?;
     let rows = response["data"][RECORD]
         .as_array()
         .context("reading the pack installation records")?;
@@ -1462,13 +1494,19 @@ pub async fn installed_pack_documents(
     owner: &str,
     coordinate: &str,
 ) -> Result<Vec<(Collection, String)>> {
-    let response = access
-        .execute(&format!(
-            r#"{{ {RECORD}(filter: {{ node_did: {{ _eq: "{}" }}, coordinate: {{ _eq: "{}" }} }}, limit: 2) {{ _docID documents plugin_store }} }}"#,
-            escape_graphql_string(owner),
-            escape_graphql_string(coordinate)
-        ))
-        .await?;
+    use gents_protocol::document_query::{
+        fields::pack_installation as fields, Filter, Query, Selection,
+    };
+    let query = Query::select(
+        Selection::doc_id()
+            .field(fields::DOCUMENTS)
+            .field(fields::PLUGIN_STORE),
+    )
+    .filter(Filter::eq(fields::NODE_DID, owner))
+    .filter(Filter::eq(fields::COORDINATE, coordinate))
+    .limit(2)
+    .render();
+    let response = access.read(&query).await?;
     let rows = response["data"][RECORD]
         .as_array()
         .context("reading the pack installation record")?;
@@ -1521,9 +1559,16 @@ pub async fn referenced_pack_digests(
         digests.insert(record.digest);
     }
     if let Some(access) = node {
-        let response = access
-            .execute(&format!("{{ {RECORD} {{ digest history }} }}"))
-            .await?;
+        use gents_protocol::document_query::{
+            fields::pack_installation as fields, Query, Selection,
+        };
+        let query = Query::select(
+            Selection::new()
+                .field(fields::DIGEST)
+                .field(fields::HISTORY),
+        )
+        .render();
+        let response = access.read(&query).await?;
         for row in response["data"][RECORD]
             .as_array()
             .context("reading the pack installation records")?

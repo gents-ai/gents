@@ -910,23 +910,49 @@ async fn reconcile_data_plane(
         .transact_readonly("p2p.query_enrollment_routes", |txn| {
             let runtime = &runtime;
             Box::pin(async move {
-                let response = txn.execute_local_response(
-                    r#"{
-                PeerPairingDesired {
-                    _docID peer_id node_did actor_did template source collections replicator_addresses
-                    enrollment_request_digest enrollment_authorization_sequence
-                    enrollment_authorization_expires_at
-                }
-            }"#,
-                )
-                .await?;
-                let ids = rows::<serde_json::Value>(&response, "PeerPairingDesired")?.into_iter()
-                    .map(|row| row["_docID"].as_str().map(str::to_owned).context("desired route has no ID"))
+                let read = {
+                    use gents_protocol::document_query::{
+                        fields::peer_pairing_desired as fields, Query, Selection,
+                    };
+                    Query::select(
+                        Selection::doc_id()
+                            .field(fields::PEER_ID)
+                            .field(fields::NODE_DID)
+                            .field(fields::ACTOR_DID)
+                            .field(fields::TEMPLATE)
+                            .field(fields::SOURCE)
+                            .field(fields::COLLECTIONS)
+                            .field(fields::REPLICATOR_ADDRESSES)
+                            .field(fields::ENROLLMENT_REQUEST_DIGEST)
+                            .field(fields::ENROLLMENT_AUTHORIZATION_SEQUENCE)
+                            .field(fields::ENROLLMENT_AUTHORIZATION_EXPIRES_AT),
+                    )
+                    .render()
+                };
+                let response = txn.run_local_response(&read).await?;
+                let ids = rows::<serde_json::Value>(&response, "PeerPairingDesired")?
+                    .into_iter()
+                    .map(|row| {
+                        row["_docID"]
+                            .as_str()
+                            .map(str::to_owned)
+                            .context("desired route has no ID")
+                    })
                     .collect::<Result<Vec<_>>>()?;
-                let owners = if ids.is_empty() { Vec::new() } else { txn.document_owners("PeerPairingDesired", &ids).await? };
-                anyhow::ensure!(owners.len() == ids.len(), "desired route ownership is incomplete");
-                let owned = owners.into_iter().filter(|row| row.visible && row.owner.as_ref() == Some(runtime))
-                    .map(|row| row.doc_id).collect::<BTreeSet<_>>();
+                let owners = if ids.is_empty() {
+                    Vec::new()
+                } else {
+                    txn.document_owners("PeerPairingDesired", &ids).await?
+                };
+                anyhow::ensure!(
+                    owners.len() == ids.len(),
+                    "desired route ownership is incomplete"
+                );
+                let owned = owners
+                    .into_iter()
+                    .filter(|row| row.visible && row.owner.as_ref() == Some(runtime))
+                    .map(|row| row.doc_id)
+                    .collect::<BTreeSet<_>>();
                 Ok::<_, anyhow::Error>((response, owned))
             })
         })
@@ -1071,28 +1097,53 @@ async fn delete_enrollment_route(node: &std::sync::Arc<EmbeddedNode>, peer_id: &
     )?;
     let access = crate::store::config_client::ConfigAccess::local_as(node.clone(), runtime.clone());
     let mutation = delete_enrollment_route_mutation(peer_id, runtime.as_str());
-    let peer = crate::store::graphql::escape_graphql_string(peer_id);
-    let node_did = crate::store::graphql::escape_graphql_string(runtime.as_str());
-    access.transact_write("p2p.retract_enrollment_route_fenced", |txn| {
-        let runtime = &runtime;
-        let mutation = &mutation;
-        let peer = &peer;
-        let node_did = &node_did;
-        Box::pin(async move {
-            txn.validate_runtime_actor(runtime)?;
-            crate::store::graphql::fence_arrivals(txn, "PeerPairingDesired").await?;
-            let response = txn.execute(&format!(r#"{{ PeerPairingDesired(filter: {{peer_id: {{_eq: "{peer}"}}, node_did: {{_eq: "{node_did}"}}, actor_did: {{_eq: "{node_did}"}}, source: {{_eq: "enrollment"}}}}) {{_docID}} }}"#)).await?;
-            let ids = gents_protocol::graphql::graphql_rows_from_response(&response, "PeerPairingDesired")
-                .into_iter().map(|row| row["_docID"].as_str().map(str::to_owned).context("desired route has no ID"))
+    let route_query = {
+        use gents_protocol::document_query::{
+            fields::peer_pairing_desired as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::doc_id())
+            .filter(Filter::eq(fields::PEER_ID, peer_id))
+            .filter(Filter::eq(fields::NODE_DID, runtime.as_str()))
+            .filter(Filter::eq(fields::ACTOR_DID, runtime.as_str()))
+            .filter(Filter::eq(fields::SOURCE, "enrollment"))
+            .render()
+    };
+    access
+        .transact_write("p2p.retract_enrollment_route_fenced", |txn| {
+            let runtime = &runtime;
+            let mutation = &mutation;
+            let route_query = &route_query;
+            Box::pin(async move {
+                txn.validate_runtime_actor(runtime)?;
+                crate::store::graphql::fence_arrivals(txn, "PeerPairingDesired").await?;
+                let response = txn.run(route_query).await?;
+                let ids = gents_protocol::graphql::graphql_rows_from_response(
+                    &response,
+                    "PeerPairingDesired",
+                )
+                .into_iter()
+                .map(|row| {
+                    row["_docID"]
+                        .as_str()
+                        .map(str::to_owned)
+                        .context("desired route has no ID")
+                })
                 .collect::<Result<Vec<_>>>()?;
-            if !ids.is_empty() {
-                let owners = txn.document_owners("PeerPairingDesired", &ids).await?;
-                anyhow::ensure!(owners.len() == ids.len() && owners.iter().all(|row| row.visible && row.owner.as_ref() == Some(runtime)), "desired route has another native owner");
-            }
-            txn.execute(mutation).await?;
-            Ok::<_, anyhow::Error>(())
+                if !ids.is_empty() {
+                    let owners = txn.document_owners("PeerPairingDesired", &ids).await?;
+                    anyhow::ensure!(
+                        owners.len() == ids.len()
+                            && owners
+                                .iter()
+                                .all(|row| row.visible && row.owner.as_ref() == Some(runtime)),
+                        "desired route has another native owner"
+                    );
+                }
+                txn.execute(mutation).await?;
+                Ok::<_, anyhow::Error>(())
+            })
         })
-    }).await
+        .await
 }
 
 fn delete_enrollment_route_mutation(peer_id: &str, node_did: &str) -> String {
