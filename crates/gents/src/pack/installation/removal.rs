@@ -103,6 +103,9 @@ pub struct PluginPinConflict {
     /// The selecting Tools' `integrations` with every replaced plugin's pin
     /// moved to its replacement: the value that lets the replacement through.
     pub integrations: serde_json::Value,
+    /// The selecting Tools' `integrations` as they are now: what puts the
+    /// pins back when the replacement does not install.
+    pub previous_integrations: serde_json::Value,
 }
 
 /// Every selection pinned to a digest other than the one `replacements`
@@ -129,6 +132,7 @@ where
         if pin == replacement {
             continue;
         }
+        let previous_integrations = serde_json::to_value(&integrations)?;
         let mut moved = integrations;
         for entry in moved.plugins.iter_mut().flatten() {
             if let Some(replacement) = replacements.get(&entry.plugin) {
@@ -144,6 +148,7 @@ where
             tools,
             pin: pin.clone(),
             integrations: serde_json::to_value(&moved)?,
+            previous_integrations,
         });
     }
     Ok(conflicts)

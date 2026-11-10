@@ -10,6 +10,20 @@ use super::*;
 
 use crate::documents::PluginSourceDocument;
 
+/// The Tools edit that sets `conflict`'s selecting Tools to `integrations`.
+fn pin_edit(conflict: &crate::pack::PluginPinConflict, integrations: &Value) -> Vec<String> {
+    vec![
+        "tools".to_owned(),
+        "edit".to_owned(),
+        "--agent".to_owned(),
+        conflict.agent.clone(),
+        "--shared".to_owned(),
+        "acknowledge".to_owned(),
+        "--set".to_owned(),
+        format!("integrations={integrations}"),
+    ]
+}
+
 impl ConfigCommandTool {
     /// The plugin source document `id` on this node, as the calling agent may
     /// read it.
@@ -195,49 +209,75 @@ impl ConfigCommandTool {
         // follow the rebuild: each pin moves to the new digest through the
         // Tools edit path, with that path's authority, before the install's
         // pin check (Lean `Configuration.pluginReplacementSafe`) reads them.
+        // A moved pin names a digest that is installed only once the install
+        // commits, so a refused move or a failed install puts every moved pin
+        // back: a Tools pinned to a digest that is not installed fails to
+        // build its tool surface.
         let mut followed = Vec::new();
-        let mut moved = BTreeSet::new();
-        for conflict in installer.pin_conflicts(&distribution).await? {
-            if !moved.insert(conflict.tools.clone()) {
-                continue;
-            }
-            let call = pin_move_call(&conflict);
-            let argv = vec![
-                "tools".to_owned(),
-                "edit".to_owned(),
-                "--agent".to_owned(),
-                conflict.agent.clone(),
-                "--shared".to_owned(),
-                "acknowledge".to_owned(),
-                "--set".to_owned(),
-                format!("integrations={}", conflict.integrations),
-            ];
-            Box::pin(self.dispatch(&argv)).await.map_err(|error| {
-                CommandGuidance {
-                    message: format!(
-                        "plugin {coordinate} built and passed its cases, but nothing was installed: Tools {:?} of agent {} pins the previous build ({}) and could not be moved to {}: {error:#}. Move the pin with the tools update below, then repeat [\"plugin\",\"build\",{id:?}] with no set: the saved source builds to that same digest.",
-                        conflict.tools, conflict.agent, conflict.pin, conflict.replacement
-                    ),
-                    next_call: call,
+        let mut moved: Vec<crate::pack::PluginPinConflict> = Vec::new();
+        let installed = async {
+            for conflict in installer.pin_conflicts(&distribution).await? {
+                if moved.iter().any(|done| done.tools == conflict.tools) {
+                    continue;
                 }
-            })?;
-            followed.push(json!({"tools": conflict.tools, "agent": conflict.agent, "from": conflict.pin, "to": conflict.replacement}));
+                let call = pin_move_call(&conflict);
+                Box::pin(self.dispatch(&pin_edit(&conflict, &conflict.integrations)))
+                    .await
+                    .map_err(|error| CommandGuidance {
+                        message: format!(
+                            "plugin {coordinate} built and passed its cases, but nothing was installed: Tools {:?} of agent {} pins the previous build ({}) and could not be moved to {}: {error:#}. Move the pin with the tools update below, then repeat [\"plugin\",\"build\",{id:?}] with no set: the saved source builds to that same digest.",
+                            conflict.tools, conflict.agent, conflict.pin, conflict.replacement
+                        ),
+                        next_call: call,
+                    })?;
+                followed.push(json!({"tools": conflict.tools, "agent": conflict.agent, "from": conflict.pin, "to": conflict.replacement}));
+                moved.push(conflict);
+            }
+            installer
+                .plugins_pack(
+                    if prepared.installed {
+                        "update"
+                    } else {
+                        "install"
+                    },
+                    &PackChange {
+                        expected_digest: Some(distribution.digest().to_owned()),
+                        ..PackChange::of(&coordinate)
+                    },
+                    &distribution,
+                    true,
+                )
+                .await
         }
-        let receipt = installer
-            .plugins_pack(
-                if prepared.installed {
-                    "update"
+        .await;
+        let receipt = match installed {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                let mut stranded = Vec::new();
+                for conflict in moved.iter().rev() {
+                    if let Err(restore) = Box::pin(
+                        self.dispatch(&pin_edit(conflict, &conflict.previous_integrations)),
+                    )
+                    .await
+                    {
+                        stranded.push(format!(
+                            "Tools {:?} of agent {} still pins {}, which is not installed ({restore:#}); set its pin back to {} with tools update",
+                            conflict.tools, conflict.agent, conflict.replacement, conflict.pin
+                        ));
+                    }
+                }
+                return Err(error.context(if moved.is_empty() {
+                    "no selection's pin was moved".to_owned()
+                } else if stranded.is_empty() {
+                    format!(
+                        "the {} pin(s) this build had moved were put back to the installed build",
+                        moved.len()
+                    )
                 } else {
-                    "install"
-                },
-                &PackChange {
-                    expected_digest: Some(distribution.digest().to_owned()),
-                    ..PackChange::of(&coordinate)
-                },
-                &distribution,
-                true,
-            )
-            .await?;
+                    stranded.join("; ")
+                }));
+            }
+        };
         let receipt: Value =
             serde_json::from_str(&receipt).context("reading the install receipt")?;
         let digest = receipt["plugins"][0]["digest"].clone();
