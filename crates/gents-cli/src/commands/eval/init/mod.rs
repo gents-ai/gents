@@ -2,7 +2,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::{Context as _, Result};
-use gents::eval::checks::CheckRegistry;
+use gents_eval::checks::CheckRegistry;
 
 use self::contract::{first_turn, MAX_VALIDATION_ROUNDS, VALIDATION_PREFIX};
 use self::dossier::Dossier;

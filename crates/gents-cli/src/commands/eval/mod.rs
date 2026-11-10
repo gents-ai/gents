@@ -2,9 +2,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use gents::eval::checks::CheckRegistry;
-use gents::eval::runner::embedded::EmbeddedExecutor;
-use gents::eval::runner::{RunOptions, TrialExecutor};
+use gents_eval::checks::CheckRegistry;
+use gents_eval::runner::embedded::EmbeddedExecutor;
+use gents_eval::runner::{RunOptions, TrialExecutor};
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
@@ -343,11 +343,11 @@ pub(crate) async fn follow_progress<T>(
 }
 
 pub(crate) fn surface_refusal(error: anyhow::Error) -> anyhow::Error {
-    let verbatim = gents::eval::report::report_refused(&error)
+    let verbatim = gents_eval::report::report_refused(&error)
         .map(ToString::to_string)
-        .or_else(|| gents::eval::runner::freeze_refused(&error).map(ToString::to_string))
+        .or_else(|| gents_eval::runner::freeze_refused(&error).map(ToString::to_string))
         .or_else(|| gents::eval::already_invalidated(&error).map(ToString::to_string))
-        .or_else(|| gents::eval::runner::provider_down(&error).map(ToString::to_string));
+        .or_else(|| gents_eval::runner::provider_down(&error).map(ToString::to_string));
     match verbatim {
         Some(text) => anyhow::anyhow!(text),
         None => error,
@@ -387,10 +387,10 @@ pub(crate) const UNCALIBRATED_BANNER: &str =
 
 pub(crate) fn load_policy(
     arg: &crate::cli::PolicyArg,
-) -> Result<gents::eval::optimization::PolicyV2> {
+) -> Result<gents_eval::optimization::PolicyV2> {
     use anyhow::Context;
     match arg {
-        crate::cli::PolicyArg::Defaults => Ok(gents::eval::optimization::PolicyV2::uncalibrated()),
+        crate::cli::PolicyArg::Defaults => Ok(gents_eval::optimization::PolicyV2::uncalibrated()),
         crate::cli::PolicyArg::File(path) => {
             let bytes = std::fs::read(path)
                 .with_context(|| format!("reading policy {}", path.display()))?;

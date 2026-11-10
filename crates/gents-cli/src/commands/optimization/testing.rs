@@ -1,6 +1,6 @@
 use clap::Parser;
-use gents::eval::checks::CheckRegistry;
 use gents::Collection;
+use gents_eval::checks::CheckRegistry;
 use tokio_util::sync::CancellationToken;
 
 use super::execute;

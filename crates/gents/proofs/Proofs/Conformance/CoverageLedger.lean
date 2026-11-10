@@ -972,7 +972,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "pack_eval_subject_cases"
       "PackEvalSubjectCases"
-      "eval::runner::subject_binding::tests::selected_subject_resolution_matches_lean")
+      "runner::subject_binding::tests::selected_subject_resolution_matches_lean")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "pack_identity_cases"

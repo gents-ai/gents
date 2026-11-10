@@ -308,7 +308,7 @@ fn config_help_resource(argv: &[String]) -> Option<Option<&str>> {
     None
 }
 
-pub(crate) fn is_help_call(args: &Value) -> bool {
+pub fn is_help_call(args: &Value) -> bool {
     serde_json::from_value::<ConfigCommandParams>(args.clone())
         .ok()
         .and_then(|params| params.into_argv().ok())
