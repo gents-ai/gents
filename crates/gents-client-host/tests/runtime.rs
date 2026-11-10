@@ -1471,16 +1471,22 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 "goal controls must preserve the current owned turn"
             );
         }
-        // The snapshot shows a Goal only as the Agent's verified observation
-        // shows it (Lean `SessionObservation.view`); that no Goal document
+        // The snapshot carries the Goal state `desktop_session_goal` reads
+        // (Lean `SessionObservation.State`), so it shows a Goal only as the
+        // Agent's verified observation shows it; that no Goal document
         // reaches the client is checked on its own store after the host stops.
         let projection = read_session(&mut client, &mut id, node_did, session).await?;
+        let shown = &projection["goal"]["observation"];
         ensure!(
             projection["sessionId"] == session
                 && projection["nodeDid"] == node_did
-                && projection["goal"]["goalId"] == view["goal"]["goalId"]
-                && projection["goal"]["status"] == view["goal"]["status"]
-                && projection["goal"]["objective"] == view["goal"]["objective"],
+                && projection["goal"]["kind"] == "observed"
+                && projection["goal"]["next"] == "control_goal"
+                && shown["nodeDid"] == node_did
+                && shown["sessionId"] == session
+                && shown["goal"]["goalId"] == view["goal"]["goalId"]
+                && shown["goal"]["status"] == view["goal"]["status"]
+                && shown["goal"]["objective"] == view["goal"]["objective"],
             "the session snapshot must show the Agent's verified Goal observation: {} vs {}",
             projection["goal"],
             view["goal"]

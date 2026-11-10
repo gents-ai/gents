@@ -30,7 +30,8 @@ import { SelectedChatFolder } from "../ChatFolderPicker";
 import { LoadingStatus } from "../LoadingStatus";
 import { SelectedPendingTray, useSessionQueue } from "../PendingTray";
 import { ReplyingTo } from "../ReplyingTo";
-import { Goal } from "../SessionHeader";
+import { Goal, GoalUnavailable } from "../SessionHeader";
+import { goalShown } from "../../../hooks/goalState";
 import { useMentionMenu } from "../useMentionMenu";
 import { useSlashMenu } from "../useSlashMenu";
 import {
@@ -66,9 +67,12 @@ export function OpenSessionComposer({
   toBottom: () => void;
   stop: () => void;
   stopping: boolean;
-  goal: DesktopSessionSnapshot["goal"];
+  /* undefined until the chat's snapshot arrives */
+  goal: DesktopSessionSnapshot["goal"] | undefined;
   agentDid: string | null;
 }) {
+  const shown = goalShown(goal);
+  const current = shown.kind === "goal" ? shown.goal : null;
   const { drafts, stores, actions } = useApp();
   const activityStatus = useView((view) => view.shellProjection.activityStatus);
   const sendStatus = useView((view) => view.shellProjection.nonEmptyContentSendStatus);
@@ -120,10 +124,10 @@ export function OpenSessionComposer({
   const slash = useSlashMenu(
     deployment?.skills ?? [],
     deployment?.contexts.find((c) => c.context_id === agent?.contextId),
-    [goalCommand(goal, inFlight)],
+    [goalCommand(shown, inFlight)],
     () =>
-      goal && goalIsEditable(goal)
-        ? goalMode.edit(goal.objective ?? "")
+      current && goalIsEditable(current)
+        ? goalMode.edit(current.objective)
         : goalMode.create(),
   );
   const mention = useMentionMenu(deployment?.nodeDid ?? null, sessionId);
@@ -284,11 +288,12 @@ export function OpenSessionComposer({
 
   return (
     <div ref={roomRef} className="sticky bottom-0 z-20 mt-auto bg-background pt-6 pb-6">
-      {goal && (
+      {shown.kind === "unavailable" && <GoalUnavailable text={shown.text} />}
+      {current && (
         <Goal
-          goal={goal}
+          goal={current}
           onEdit={() => {
-            goalMode.edit(goal.objective ?? "");
+            goalMode.edit(current.objective);
             textarea.current?.focus();
           }}
           onControl={

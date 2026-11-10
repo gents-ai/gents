@@ -369,7 +369,7 @@ export function OpenSession() {
                 toBottom={toBottom}
                 stop={stop}
                 stopping={stopping}
-                goal={session?.goal ?? null}
+                goal={session ? session.goal : undefined}
                 agentDid={session?.agentDid ?? null}
               />
             </div>

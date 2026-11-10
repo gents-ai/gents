@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import type { GoalView } from "@source-inc/gents-desktop-client";
+import type { GoalControlView } from "@source-inc/gents-desktop-client";
 import type { RenderedToolCallView } from "@source-inc/gents-desktop-client/generated/RenderedToolCallView";
 import {
   cancelCauseText,
@@ -107,15 +107,15 @@ describe("words for what the runtime reports", () => {
 
 describe("where the words are used", () => {
   it("draws a goal's status and reasons as words, not codes", () => {
-    const goal: GoalView = {
+    const goal: GoalControlView = {
       goalId: "g",
+      revision: { document: "goal-doc", composite: "cid" },
       objective: "Make the import resumable",
       status: "usage_limited",
       tokenBudget: null,
-      tokensUsed: 0,
-      activeTimeSeconds: 0,
-      consecutiveBlockedAudits: 0,
-      continuationSequence: 0,
+      tokensUsed: "0",
+      activeTimeSeconds: "0",
+      continuationSequence: "0",
       wrapupRequested: false,
       wrapupCompleted: false,
       lastBlockedReason: "verification_failed: the resume test still fails",

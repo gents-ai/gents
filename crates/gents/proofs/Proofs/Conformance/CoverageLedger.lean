@@ -2090,6 +2090,16 @@ def caseCoverage : List CoverageEntry :=
       "gents_desktop_bridge::commands::goal::tests::generated_session_goal_views_name_their_cause")
       "durable-goals" [Surface.operatorUi]
   , tagged (consumerCoverage
+      "goal_session_observation_cases"
+      "GoalSessionObservationCases"
+      "apps/gents-desktop/tests/lean-conformance/session-goal-view.test.ts::session Goal view shows each modeled Goal state as its view and offers only its next action")
+      "durable-goals" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "goal_session_observation_cases"
+      "GoalSessionObservationCases"
+      "apps/gents-desktop/tests/lean-conformance/session-goal-view.test.ts::session Goal view keeps the last read Goal state until another read classifies one")
+      "durable-goals" [Surface.operatorUi]
+  , tagged (consumerCoverage
       "plugin_approval_cases"
       "PluginApprovalCases"
       "plugin::approval::contract_tests::generated_approval_traces_drive_native_queue_and_grants")

@@ -6,7 +6,10 @@ import {
   sentence,
 } from "../../lib/reasonText";
 import { ChevronDown, Pause, Pencil, Play, Target, Timer, X, Zap } from "lucide-react";
-import type { GoalControlAction, GoalView } from "@source-inc/gents-desktop-client";
+import type {
+  GoalControlAction,
+  GoalControlView,
+} from "@source-inc/gents-desktop-client";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import { cn } from "@gents/ui/lib/utils";
@@ -195,18 +198,40 @@ const GOAL_CONTROLS: Record<string, readonly ("pause" | "resume" | "edit" | "sto
     usage_limited: ["resume", "stop"],
   };
 
+/** A chat whose Goal state is not a verified fact: it names the cause and
+    offers no Goal action (Lean `SessionObservation.view` = `unavailable`). */
+export function GoalUnavailable({ text }: { text: string }) {
+  return (
+    <div
+      className="mb-2 flex items-start gap-2 rounded-xl border border-border bg-raised px-3 py-2 text-sm"
+      data-testid="goal-unavailable"
+    >
+      <Target className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+      <span className="shrink-0 font-medium text-muted-foreground">Goal unknown</span>
+      <span className="min-w-0 text-muted-foreground">{text}</span>
+    </div>
+  );
+}
+
+/* Decimal strings carry the runtime's signed 64-bit counters; display
+   tolerates the precision a number loses past 2^53. */
+const count = (value: string | null) => (value ? Number(value) : 0);
+
 export function Goal({
   goal,
   onEdit,
   onControl,
 }: {
-  goal: GoalView;
+  goal: GoalControlView;
   onEdit?: () => void;
   onControl?: (action: Exclude<GoalControlAction, { kind: "create" | "edit" }>) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const controls = onControl ? (GOAL_CONTROLS[goal.status ?? ""] ?? []) : [];
-  const used = goal.tokenBudget ? goal.tokensUsed / goal.tokenBudget : null;
+  const controls = onControl ? (GOAL_CONTROLS[goal.status] ?? []) : [];
+  const tokenBudget = count(goal.tokenBudget);
+  const activeTimeSeconds = count(goal.activeTimeSeconds);
+  const continuationSequence = count(goal.continuationSequence);
+  const used = tokenBudget ? count(goal.tokensUsed) / tokenBudget : null;
   const blocked = goal.status === "blocked";
   /* A budget-limited stop also completes wrap-up; runtime status records
      whether the goal was met. */
@@ -253,16 +278,16 @@ export function Goal({
             {goal.objective}
           </span>
         )}
-        {goal.activeTimeSeconds > 0 && (
+        {activeTimeSeconds > 0 && (
           <span className="ml-auto shrink-0 font-mono text-xs text-muted-foreground tabular-nums">
-            {duration(goal.activeTimeSeconds * 1000)}
+            {duration(activeTimeSeconds * 1000)}
           </span>
         )}
         {controls.length > 0 && (
           <span
             className={cn(
               "flex shrink-0 items-center",
-              goal.activeTimeSeconds > 0 ? "" : "ml-auto",
+              activeTimeSeconds > 0 ? "" : "ml-auto",
             )}
           >
             {controls.includes("pause") && (
@@ -320,7 +345,7 @@ export function Goal({
           aria-label={open ? "Hide goal detail" : "Show goal detail"}
           className={cn(
             "shrink-0",
-            goal.activeTimeSeconds > 0 || controls.length > 0 ? "" : "ml-auto",
+            activeTimeSeconds > 0 || controls.length > 0 ? "" : "ml-auto",
           )}
         >
           <ChevronDown
@@ -334,8 +359,7 @@ export function Goal({
             <div className="flex items-baseline justify-between text-xs text-muted-foreground">
               <span>Budget</span>
               <span className="font-mono tabular-nums">
-                {Math.round(used * 100)}% of {Math.round(goal.tokenBudget! / 1000)}k
-                tokens
+                {Math.round(used * 100)}% of {Math.round(tokenBudget / 1000)}k tokens
               </span>
             </div>
             <div className="h-1 overflow-hidden rounded-full bg-muted">
@@ -350,12 +374,12 @@ export function Goal({
           </div>
         )}
         <dl className="mt-2 grid gap-1 text-xs text-muted-foreground">
-          {goal.continuationSequence > 0 && (
+          {continuationSequence > 0 && (
             <div className="flex justify-between gap-4">
               <dt>Continued</dt>
               <dd className="font-mono tabular-nums">
                 {goal.continuationSequence}{" "}
-                {goal.continuationSequence === 1 ? "time" : "times"}
+                {continuationSequence === 1 ? "time" : "times"}
               </dd>
             </div>
           )}
