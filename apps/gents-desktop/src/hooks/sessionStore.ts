@@ -118,6 +118,29 @@ export function writeSessionRead(
   );
 }
 
+/** Shows a kept read of the selected session with the Goal it held, until
+    the session's own read lands over it. */
+export function writeSessionRecent(
+  store: SessionStore,
+  session: DesktopSessionSnapshot,
+  goal: HeldSessionGoal | null,
+) {
+  store.setState((state) =>
+    session === state.session
+      ? state
+      : { ...state, session, facts: factsOf(state, session), goal },
+  );
+}
+
+/** Drops the held session unless it is the selection's. */
+export function keepSelectedSession(
+  store: SessionStore,
+  sessionId: string | null,
+  nodeDid: string | null,
+) {
+  writeSession(store, (held) => heldFor(held, sessionId, nodeDid));
+}
+
 /** Folds one Goal read of the selected session into what the store holds. */
 export function writeSessionGoalRead(store: SessionStore, read: SessionGoalRead) {
   store.setState((state) => ({ goal: foldSessionGoalRead(state.goal, read) }));

@@ -3,7 +3,7 @@ import { selectedAgentDidForDeployment } from "@source-inc/gents-desktop-client"
 import { chat } from "./chatStore";
 import { listedSession, nodeKeyOf, nodeOrFirst, type FleetState } from "./fleetStore";
 import { selection, type SelectionState } from "./selectionStore";
-import { writeSession } from "./sessionStore";
+import { keepSelectedSession } from "./sessionStore";
 import type { ShellStores } from "./shellProjection";
 import { clientStatus } from "./clientStore";
 
@@ -32,7 +32,12 @@ export function sessionDestination(
 export function createSelectionActions({ stores }: SelectionActionParams) {
   const store = stores.selection;
   const fleet = () => stores.fleet.getState();
-  const dropSession = () => writeSession(stores.session, null);
+  /* a move drops the session held for the selection it left; a recent read
+     the move already showed is the new selection's and stays */
+  const dropSession = () => {
+    const { sessionId, nodeDid } = store.getState();
+    keepSelectedSession(stores.session, sessionId, nodeDid);
+  };
 
   function selectNode(nodeDid: string | null) {
     if (selection.selectNode(store, nodeDid)) dropSession();

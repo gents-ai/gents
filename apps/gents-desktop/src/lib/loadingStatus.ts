@@ -185,7 +185,16 @@ export function isSessionDeliveryPhase(
 }
 
 export type SessionLoadState = {
-  phase: "idle" | "loading" | "pending" | SessionDeliveryPhase | "loaded" | "failed";
+  /** `cached`: a recent read of the session is shown while it is read again
+      (Lean `ClientSessionLoad.Phase.cached`) */
+  phase:
+    | "idle"
+    | "loading"
+    | "pending"
+    | SessionDeliveryPhase
+    | "loaded"
+    | "failed"
+    | "cached";
   sessionId: string | null;
   nodeDid: string | null;
   found: boolean | null;
@@ -223,6 +232,14 @@ export type SessionLoadingStatus = {
   title: string;
   detail: string;
   action: SessionLoadingAction | null;
+};
+
+const LOADING_STATUS: SessionLoadingStatus = {
+  layer: "localDatabase",
+  phase: "loading",
+  title: "Loading session",
+  detail: "Reading saved messages from the runtime.",
+  action: null,
 };
 
 type SessionLoadingInput = {
@@ -276,13 +293,19 @@ export function projectSessionLoadingStatus({
   }
 
   if (loadMatches && sessionLoad.phase === "loading" && !sessionMatches) {
-    return {
-      layer: "localDatabase",
-      phase: "loading",
-      title: "Loading session",
-      detail: "Reading saved messages from the runtime.",
-      action: null,
-    };
+    return LOADING_STATUS;
+  }
+
+  if (loadMatches && sessionLoad.phase === "cached") {
+    return sessionMatches
+      ? {
+          layer: "localDatabase",
+          phase: "loading",
+          title: "Updating session",
+          detail: "Showing the last read of this session while it is read again.",
+          action: null,
+        }
+      : LOADING_STATUS;
   }
 
   if (loadMatches && sessionLoad.phase === "failed") {

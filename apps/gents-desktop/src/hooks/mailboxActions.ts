@@ -9,7 +9,7 @@ import { createChatDelivery } from "./chatDelivery";
 import { loadChatDrafts, removeChatDraft, type ChatDraft } from "./chatDrafts";
 import { actionFailure, shownFailure } from "./actionFailure";
 import { selection } from "./selectionStore";
-import { writeSession } from "./sessionStore";
+import { keepSelectedSession } from "./sessionStore";
 import type { ShellStores } from "./shellProjection";
 
 type MailboxActionParams = {
@@ -39,7 +39,8 @@ export function createMailboxActions({
         agentDid: item.targetAgentDid,
         sessionId: item.sessionId ?? null,
       });
-      writeSession(stores.session, null);
+      const { sessionId, nodeDid } = store.getState();
+      keepSelectedSession(stores.session, sessionId, nodeDid);
       return item;
     } catch (error) {
       if (!selection.acceptsIntent(store, captured)) return null;
