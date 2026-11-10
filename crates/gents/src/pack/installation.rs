@@ -63,6 +63,46 @@ impl PackSource {
         }
     }
 
+    /// A pack named by store digest came from the store; one named by path
+    /// is local.
+    pub fn of_local_name(name: &crate::pack::local::LocalName<'_>) -> Self {
+        match name {
+            crate::pack::local::LocalName::Digest(_) => Self::Store,
+            crate::pack::local::LocalName::Path(path) => Self::local(path),
+        }
+    }
+
+    /// Where the resolver found a named pack.
+    pub fn of_resolution(resolved: &crate::pack::resolve::ResolvedNamedPack) -> Self {
+        match &resolved.from {
+            crate::pack::resolve::ResolvedFrom::Installed => Self::Installed,
+            crate::pack::resolve::ResolvedFrom::Store => Self::Store,
+            crate::pack::resolve::ResolvedFrom::Registry {
+                artifact_digest,
+                version,
+            } => {
+                let manifest = resolved.archive.manifest();
+                Self::Registry {
+                    namespace: manifest.metadata.namespace.clone(),
+                    name: manifest.name.clone(),
+                    version: version.clone(),
+                    artifact_digest: artifact_digest.clone(),
+                }
+            }
+        }
+    }
+
+    /// The serialized `kind` tag, which the model-facing installer reports
+    /// as a pack's source.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Local { .. } => "local",
+            Self::Installed => "installed",
+            Self::Store => "store",
+            Self::Registry { .. } => "registry",
+        }
+    }
+
     pub fn validate(&self) -> Result<()> {
         if let Self::Local {
             file_name: Some(name),

@@ -689,7 +689,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
             archive,
             from: crate::pack::resolve::ResolvedFrom::Store,
         },
-        None,
+        crate::pack::PackSource::Store,
     );
     let installer = super::pack_installer::PackInstaller {
         core: core.clone(),
@@ -1762,7 +1762,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
             archive,
             from: crate::pack::resolve::ResolvedFrom::Store,
         },
-        None,
+        crate::pack::PackSource::Store,
     );
     let installer = super::pack_installer::PackInstaller {
         core: core.clone(),

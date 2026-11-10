@@ -28,9 +28,10 @@ pub(super) fn installs_kind(kind: &crate::pack::PackKind) -> bool {
     )
 }
 
+/// A resolved pack and the provenance its installation records.
 pub(super) struct ConfigPackDistribution(
     pub(super) crate::pack::resolve::ResolvedNamedPack,
-    pub(super) Option<crate::pack::PackSource>,
+    pub(super) crate::pack::PackSource,
 );
 
 impl ConfigPackDistribution {
@@ -43,33 +44,7 @@ impl ConfigPackDistribution {
     }
 
     pub(super) fn source(&self) -> &'static str {
-        if matches!(&self.1, Some(crate::pack::PackSource::Local { .. })) {
-            return "local";
-        }
-        match self.0.from {
-            crate::pack::resolve::ResolvedFrom::Installed => "installed",
-            crate::pack::resolve::ResolvedFrom::Store => "store",
-            crate::pack::resolve::ResolvedFrom::Registry { .. } => "registry",
-        }
-    }
-
-    pub(super) fn provenance(&self) -> crate::pack::PackSource {
-        if let Some(source) = &self.1 {
-            return source.clone();
-        }
-        match &self.0.from {
-            crate::pack::resolve::ResolvedFrom::Installed => crate::pack::PackSource::Installed,
-            crate::pack::resolve::ResolvedFrom::Store => crate::pack::PackSource::Store,
-            crate::pack::resolve::ResolvedFrom::Registry {
-                artifact_digest,
-                version,
-            } => crate::pack::PackSource::Registry {
-                namespace: self.manifest().metadata.namespace.clone(),
-                name: self.manifest().name.clone(),
-                version: version.clone(),
-                artifact_digest: artifact_digest.clone(),
-            },
-        }
+        self.1.kind()
     }
 
     /// Pin the preview's resolution so applying it resolves the same pack
@@ -141,10 +116,7 @@ impl PackInstaller {
         self.validate(args)?;
         let coordinate = args.package.trim();
         if let Some(local) = crate::pack::local::classify(coordinate) {
-            let source = match &local {
-                crate::pack::local::LocalName::Digest(_) => crate::pack::PackSource::Store,
-                crate::pack::local::LocalName::Path(path) => crate::pack::PackSource::local(path),
-            };
+            let source = crate::pack::PackSource::of_local_name(&local);
             let home = self
                 .home
                 .as_deref()
@@ -199,7 +171,7 @@ impl PackInstaller {
                     archive,
                     from: crate::pack::resolve::ResolvedFrom::Store,
                 },
-                Some(source),
+                source,
             ));
         }
         let registry_url = crate::pack::registry::resolve_registry_url(None);
@@ -237,7 +209,8 @@ impl PackInstaller {
             },
         )
         .await?;
-        let distribution = ConfigPackDistribution(resolved, None);
+        let source = crate::pack::PackSource::of_resolution(&resolved);
+        let distribution = ConfigPackDistribution(resolved, source);
         anyhow::ensure!(
             operation == "get" || installs_kind(&distribution.manifest().metadata.kind),
             "pack {:?} is {:?}; the model-facing installer supports document and plugins-only packs",

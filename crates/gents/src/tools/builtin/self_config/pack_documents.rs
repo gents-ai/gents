@@ -125,7 +125,7 @@ impl PackInstaller {
             let manifest = source.manifest();
             prepared.sources.insert(
                 format!("{}/{}", manifest.metadata.namespace, manifest.name),
-                source.provenance(),
+                source.1.clone(),
             );
         }
         // Inference slot bindings pick provider accounts exactly like the
