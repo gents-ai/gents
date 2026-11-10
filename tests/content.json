@@ -31,7 +31,7 @@
     },
     {
       "name": "the agent uses the declared inference slot and a prompt that names the tool",
-      "expr": "row(\"agents\"; \"agent_id\"; \"chart-maker\").inference_profile_id == \"gents:inference-slot:chart_maker\" and (.manifest.inference_slots | map(.name)) == [\"chart_maker\"] and (doc_text(\"agent_behaviors/chart_maker/system_prompt.md\") | contains(\"`charts`\"))"
+      "expr": "row(\"agents\"; \"agent_slot\"; \"chart-maker\").inference_profile_id == \"gents:inference-slot:chart_maker\" and (.manifest.inference_slots | map(.name)) == [\"chart_maker\"] and (doc_text(\"agent_behaviors/chart_maker/system_prompt.md\") | contains(\"`charts`\"))"
     },
     {
       "name": "two nodes on the one charts plugin split on save, so a read-only folder serves requests without it",

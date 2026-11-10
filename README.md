@@ -33,8 +33,10 @@ first time (see Authority). The same agent runs from a terminal:
 
 ```sh
 gents config pack install gents/charts --inference-slot chart_maker=<profile>
-gents -p "Chart sales.csv: revenue by month, one line per region" --agent chart-maker
+gents -p "Chart sales.csv: revenue by month, one line per region" --agent <agent-did>
 ```
+
+The install prints the DID it gave the `chart-maker` agent under `apply.agents`; pass it as `<agent-did>`.
 
 ## Use it as a model tool
 
