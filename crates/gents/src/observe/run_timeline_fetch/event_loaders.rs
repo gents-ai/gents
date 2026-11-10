@@ -306,7 +306,7 @@ pub(super) async fn resolve_timeline_tool_observations(
                 .clone()
                 .filter(|state| !state.trim().is_empty())
                 .context("timeline AgentToolCall omits authoritative lifecycle_state")?;
-            let presentation = crate::tools::call::lifecycle::query::load_tool_call_presentation(
+            match crate::tools::call::lifecycle::query::load_tool_call_presentation(
                 access,
                 row.doc_id
                     .as_deref()
@@ -315,9 +315,18 @@ pub(super) async fn resolve_timeline_tool_observations(
                 session_id,
                 requester_did,
             )
-            .await?;
-            row.args = presentation.arguments;
-            row.result = presentation.result;
+            .await
+            {
+                Ok(presentation) => {
+                    row.args = presentation.arguments;
+                    row.result = presentation.result;
+                }
+                Err(error) => {
+                    tracing::warn!(tool_call_id = %row.tool_call_id, error = %format!("{error:#}"),
+                        "derived timeline tool payload is unreadable");
+                    row.payload_unavailable = Some(format!("{error:#}"));
+                }
+            }
             rows.push(row);
         } else {
             rows.push(resolve_tool_payloads(observation, messages)?);

@@ -567,3 +567,181 @@ async fn a_computing_background_guest_stops_at_its_declared_allowance() {
     fixture.db.node.shutdown().await.unwrap();
 }
 
+/// A foreground script with one child in each state a stopped script can leave.
+async fn script_with_children(
+    name: &str,
+) -> (super::background_budget::BudgetHookFixture, [String; 4]) {
+    let fixture =
+        super::background_budget::budget_hook_fixture(name, Default::default(), Default::default())
+            .await;
+    bind_admitted_deadline(&fixture).await;
+    let hook = &fixture.hook;
+    accept_hook_tool_call(hook, "script", "plugin", "{}", None).await;
+    assert!(matches!(
+        hook.on_tool_call("plugin", None, "script", "{}").await,
+        ToolCallHookAction::Continue
+    ));
+    let completed = hook
+        .admit_tool_effect("script", 1, "probe", "{}")
+        .await
+        .unwrap();
+    assert!(matches!(
+        hook.on_tool_call("probe", None, &completed, "{}").await,
+        ToolCallHookAction::Continue
+    ));
+    hook.on_tool_result(
+        "probe",
+        None,
+        &completed,
+        "{}",
+        &crate::tools::call::lifecycle::ToolOutcome::Completed("{\"ordinal\":1}".into()),
+    )
+    .await;
+    hook.finish_tool_effect(&completed, None).await.unwrap();
+    let pending = hook
+        .admit_tool_effect("script", 2, "probe", "{}")
+        .await
+        .unwrap();
+    let running = hook
+        .admit_tool_effect("script", 3, "probe", "{}")
+        .await
+        .unwrap();
+    assert!(matches!(
+        hook.on_tool_call("probe", None, &running, "{}").await,
+        ToolCallHookAction::Continue
+    ));
+    let cancelled = hook
+        .admit_tool_effect("script", 4, "probe", "{}")
+        .await
+        .unwrap();
+    assert!(matches!(
+        hook.on_tool_call("probe", None, &cancelled, "{}").await,
+        ToolCallHookAction::Continue
+    ));
+    hook.finish_tool_effect(
+        &cancelled,
+        Some(&crate::tools::call::lifecycle::ToolOutcome::Cancelled),
+    )
+    .await
+    .unwrap();
+    (fixture, [completed, pending, running, cancelled])
+}
+
+async fn timeline(
+    fixture: &super::background_budget::BudgetHookFixture,
+) -> Vec<crate::observe::run_timeline::TimelineToolCallRow> {
+    crate::observe::run_timeline_fetch::load_session_tool_calls(
+        &fixture.access,
+        fixture.db.node_identity.did(),
+        &fixture.session_id,
+        Some(fixture.user.did()),
+    )
+    .await
+    .expect("one script call never fails the session timeline")
+}
+
+#[tokio::test]
+async fn the_timeline_reads_a_script_child_in_every_state() {
+    let (fixture, [completed, pending, running, cancelled]) =
+        script_with_children("script-timeline-states").await;
+    let rows = timeline(&fixture).await;
+    for (child, status, has_result) in [
+        (&completed, "completed", true),
+        (&pending, "pending", false),
+        (&running, "running", false),
+        (&cancelled, "cancelled", true),
+    ] {
+        let row = rows
+            .iter()
+            .find(|row| &row.tool_call_id == child)
+            .unwrap_or_else(|| panic!("{status} child is on the timeline"));
+        assert_eq!(row.status, status);
+        assert_eq!(row.tool_name, "probe");
+        assert_eq!(row.args, "{}", "{status}");
+        assert_eq!(
+            row.result.is_some(),
+            has_result,
+            "{status}: {:?}",
+            row.result
+        );
+        assert_eq!(row.payload_unavailable, None, "{status}");
+    }
+    // A script that stopped with children in flight: they settle and still read.
+    fixture
+        .hook
+        .settle_tool_effects(
+            "script",
+            &crate::tools::call::lifecycle::ToolOutcome::Cancelled,
+        )
+        .await
+        .unwrap();
+    let rows = timeline(&fixture).await;
+    for child in [&pending, &running] {
+        let row = rows.iter().find(|row| &row.tool_call_id == child).unwrap();
+        assert_eq!(row.status, "cancelled");
+        assert_eq!(row.payload_unavailable, None);
+    }
+    fixture.db.node.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn one_unreadable_script_child_is_marked_and_the_timeline_still_loads() {
+    let (fixture, [completed, pending, _running, _cancelled]) =
+        script_with_children("script-timeline-unreadable").await;
+    // The child's recorded identity no longer matches its canonical arguments.
+    let row =
+        super::background_budget::tool_row(&fixture.access, &fixture.session_id, &pending).await;
+    let changed = fixture
+        .access
+        .write(
+            "test.corrupt_script_child",
+            &format!(
+                r#"mutation {{ update_AgentToolCall(docID: "{}", input: {{ tool_name: "renamed" }}) {{ _docID }} }}"#,
+                crate::store::graphql::escape_graphql_string(row["_docID"].as_str().unwrap()),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        changed["data"]["update_AgentToolCall"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
+    let rows = timeline(&fixture).await;
+    let unreadable = rows.iter().find(|row| row.tool_call_id == pending).unwrap();
+    assert_eq!(unreadable.status, "pending");
+    assert!(unreadable.payload_unavailable.is_some());
+    assert!(unreadable.args.is_empty() && unreadable.result.is_none());
+    let readable = rows
+        .iter()
+        .find(|row| row.tool_call_id == completed)
+        .unwrap();
+    assert_eq!(readable.payload_unavailable, None);
+    assert!(readable.result.is_some());
+    fixture.db.node.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_background_request_on_a_script_child_is_refused() {
+    let (fixture, [_completed, _pending, running, _cancelled]) =
+        script_with_children("script-child-background-control").await;
+    let refusal = crate::tools::background::status::request_foreground_backgrounding(
+        &fixture.access,
+        fixture.db.node_identity.did(),
+        &fixture.session_id,
+        &fixture.request_id,
+        &running,
+    )
+    .await
+    .expect_err("only the model's own Bash call can move to the background");
+    assert!(
+        format!("{refusal:#}").contains("only a direct native Bash command can be backgrounded"),
+        "{refusal:#}"
+    );
+    let row =
+        super::background_budget::tool_row(&fixture.access, &fixture.session_id, &running).await;
+    assert_eq!(row["await_mode"], "foreground");
+    assert_eq!(row["lifecycle_state"], "running");
+    fixture.db.node.shutdown().await.unwrap();
+}
