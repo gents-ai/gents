@@ -4,7 +4,7 @@ use std::ops::RangeInclusive;
 use anyhow::Context;
 use gents_protocol::job::{DynamicMode, JobCeiling, JobPolicy, PluginJobSettings};
 
-use crate::documents::{PackConfig, Tools};
+use crate::documents::{PackConfig, Tools, WireReport};
 use crate::pack::{InstalledVia, PackMetadata};
 
 const MAX_LIVE: RangeInclusive<u32> = 1..=64;
@@ -57,6 +57,33 @@ pub fn consented_dynamic(consent: bool, mode: DynamicMode) -> DynamicMode {
     } else {
         mode
     }
+}
+
+/// Applies the node owner's consent to dynamic scripts to `coordinate`'s job
+/// block (Lean `consentedDynamic`): `check` becomes `run`, and the report
+/// records the grant in place of the `check` warning.
+pub fn consent_dynamic_run(tools: &mut Tools, coordinate: &str, report: &mut WireReport) {
+    let Some(job) = tools
+        .integrations
+        .iter_mut()
+        .flat_map(|integrations| integrations.plugins.iter_mut().flatten())
+        .find(|plugin| plugin.plugin == coordinate)
+        .and_then(|plugin| plugin.job.as_mut())
+    else {
+        return;
+    };
+    let consented = consented_dynamic(true, job.policy.dynamic);
+    if consented == job.policy.dynamic {
+        return;
+    }
+    job.policy.dynamic = consented;
+    report.job = Some(job.clone());
+    report
+        .warnings
+        .retain(|warning| !warning.starts_with("dynamic_check: "));
+    report.changed.push(format!(
+        "set job.policy.dynamic run for {coordinate}: the node owner approved its dynamic scripts"
+    ));
 }
 
 /// What a job block at `check` means to whoever just installed or wired

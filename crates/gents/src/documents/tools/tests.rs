@@ -243,7 +243,7 @@ mod wire {
 
         // The node owner's consent raises check to run and records it.
         let (mut tools, mut report) = (tools, report);
-        super::super::consent_dynamic_run(&mut tools, "acme/runner", &mut report);
+        settings::consent_dynamic_run(&mut tools, "acme/runner", &mut report);
         assert_eq!(
             self::block(&tools).unwrap().policy.dynamic,
             DynamicMode::Run

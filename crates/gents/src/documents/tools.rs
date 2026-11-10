@@ -1056,34 +1056,6 @@ fn union_into(list: &mut Vec<String>, items: &[String]) {
     }
 }
 
-/// Applies the node owner's consent to dynamic scripts to `coordinate`'s job
-/// block (Lean `consentedDynamic`): `check` becomes `run`, and the report
-/// records the grant in place of the `check` warning.
-pub fn consent_dynamic_run(tools: &mut Tools, coordinate: &str, report: &mut WireReport) {
-    use crate::tools::background::job::settings::consented_dynamic;
-    let Some(job) = tools
-        .integrations
-        .iter_mut()
-        .flat_map(|integrations| integrations.plugins.iter_mut().flatten())
-        .find(|plugin| plugin.plugin == coordinate)
-        .and_then(|plugin| plugin.job.as_mut())
-    else {
-        return;
-    };
-    let consented = consented_dynamic(true, job.policy.dynamic);
-    if consented == job.policy.dynamic {
-        return;
-    }
-    job.policy.dynamic = consented;
-    report.job = Some(job.clone());
-    report
-        .warnings
-        .retain(|warning| !warning.starts_with("dynamic_check: "));
-    report.changed.push(format!(
-        "set job.policy.dynamic run for {coordinate}: the node owner approved its dynamic scripts"
-    ));
-}
-
 /// Merges `new` into `existing` without widening anything `existing` grants
 /// (targets and trusted packs are the additions).
 fn merge_job_blocks(

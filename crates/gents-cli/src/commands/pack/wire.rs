@@ -248,7 +248,11 @@ impl WirePlan<'_> {
         };
         let (mut tools, mut report) = (tools, report);
         if self.request.dynamic_consent && !self.request.remove {
-            gents::documents::consent_dynamic_run(&mut tools, &self.request.plugin, &mut report);
+            gents::tools::background::job::settings::consent_dynamic_run(
+                &mut tools,
+                &self.request.plugin,
+                &mut report,
+            );
         }
         tools.validate()?;
         if !self.request.preview {
