@@ -1,4 +1,5 @@
 use super::*;
+use crate::pack;
 
 impl PackInstaller {
     pub(super) async fn list(&self, limit: usize, cursor: Option<&str>) -> anyhow::Result<String> {
@@ -6,15 +7,14 @@ impl PackInstaller {
             (1..=50).contains(&limit),
             "--limit must be between 1 and 50"
         );
-        let store = self.home.as_deref().map(crate::pack::store::PackStore::new);
+        let store = self.home.as_deref().map(pack::store::PackStore::new);
         let mut names: BTreeMap<_, _> = match &store {
             Some(store) => store.names()?.into_iter().collect(),
             None => BTreeMap::new(),
         };
         let access = self.core.access()?;
         let installed =
-            crate::pack::installed_catalog(&access, self.core.node_did(), self.home.as_deref())
-                .await?;
+            pack::installed_catalog(&access, self.core.node_did(), self.home.as_deref()).await?;
         for coordinate in installed.keys() {
             names.entry(coordinate.clone()).or_default();
         }
@@ -32,7 +32,7 @@ impl PackInstaller {
         let mut items = Vec::with_capacity(selected.len());
         for (coordinate, versions) in selected {
             let current = installed.get(&coordinate);
-            let listing = crate::pack::store::list_pack_versions(
+            let listing = pack::store::list_pack_versions(
                 &versions,
                 current.map(|entry| entry.stored.clone()),
             );
@@ -85,8 +85,8 @@ impl PackInstaller {
     }
 
     pub(super) async fn search(&self, query: &str, page: u32) -> anyhow::Result<String> {
-        let registry = crate::pack::registry::resolve_registry_url(None);
-        let response = crate::pack::registry::RegistryClient::new(registry.clone())
+        let registry = pack::registry::resolve_registry_url(None);
+        let response = pack::registry::RegistryClient::new(registry.clone())
             .search(query, page)
             .await?;
         let packs = response["packs"]
@@ -125,7 +125,7 @@ impl PackInstaller {
         let distribution = self.resolve("get", &args).await?;
         let access = self.core.access()?;
         let node_binding = self.core.refresh_node_binding().await?;
-        let inference = crate::pack::inspect_pack_inference_bindings_with_node_binding(
+        let inference = pack::inspect_pack_inference_bindings_with_node_binding(
             &access,
             distribution.manifest(),
             self.core.node_did(),
@@ -143,12 +143,64 @@ impl PackInstaller {
             "installed": installed,
             "installable": true,
             "installation_blockers": self.plugin_install_blockers(distribution.manifest()),
-            "supported_operations": if distribution.manifest().metadata.kind == crate::pack::PackKind::Documents {
-                vec!["preview install", "install", "preview update", "update", "remove"]
-            } else {
-                vec!["preview install", "install", "preview update", "update"]
-            },
+            "supported_operations": ["preview install", "install", "preview update", "update", "remove"],
         }))?)
+    }
+
+    /// Removes an assets or plugins pack: its home record and the plugin
+    /// records it owns, released together by the local removal owner, then
+    /// the node is told. Retiring plugins needs a complete reference inventory
+    /// (`ensure_plugins_unreferenced`), so a pack that ships plugins is refused
+    /// where that inventory is unavailable and stays installed.
+    async fn remove_home_pack(
+        &self,
+        access: &crate::store::config_client::ConfigAccess,
+        home: &std::path::Path,
+        coordinate: String,
+        record: pack::HomePackInstall,
+    ) -> anyhow::Result<String> {
+        let (namespace, _) = pack::registry::split_pack_coordinate(&coordinate);
+        let plugins = record
+            .plugins
+            .iter()
+            .map(|plugin| format!("{namespace}/{}", plugin.name))
+            .collect();
+        pack::ensure_plugins_unreferenced(access, self.core.node_did(), &plugins).await?;
+        let local_home = home.to_owned();
+        let local_coordinate = coordinate.clone();
+        let removal = tokio::task::spawn_blocking(move || {
+            pack::plugin_lifecycle::remove_local(
+                &local_home,
+                &local_coordinate,
+                |current| {
+                    anyhow::ensure!(
+                        *current == record,
+                        "{local_coordinate} changed while checking plugin references; retry removal"
+                    );
+                    Ok(())
+                },
+                |()| Ok(()),
+            )
+        })
+        .await
+        .context("pack removal task did not finish")??;
+        if !removal.plugins.is_empty() {
+            pack::record_plugin_store_change_as(
+                access,
+                self.core.node_did(),
+                self.core.identity().ok(),
+                home,
+                &coordinate,
+                None,
+            )
+            .await?;
+        }
+        ordered! {
+            "pack": coordinate,
+            "removed": json!({"kind": removal.record.kind, "plugins": removal.plugins, "pages": removal.record.ux.iter().map(|page| page.name.clone()).collect::<Vec<_>>()}),
+            "effect": "The pack's install record and plugin records were released. Its cached assets, plugin bytes and archive stay until the operator runs `gents pack prune`.",
+        }
+        .pretty()
     }
 
     /// Removes an installed pack's `PackInstallation` record and everything
@@ -163,7 +215,7 @@ impl PackInstaller {
             expected_digest: None,
         };
         self.validate(&args)?;
-        let spec = crate::pack::resolve::parse_pack_spec(package.trim())?;
+        let spec = pack::resolve::parse_pack_spec(package.trim())?;
         anyhow::ensure!(
             spec.version.is_none(),
             "pack remove takes a coordinate without a version; remove {}/{}",
@@ -171,23 +223,30 @@ impl PackInstaller {
             spec.name
         );
         let coordinate = format!("{}/{}", spec.namespace, spec.name);
+        let access = self.core.access()?;
         if let Some(home) = self.home.as_deref() {
-            if let Some(record) = crate::pack::read_home_install(home, &coordinate)? {
-                anyhow::ensure!(!matches!(record.kind, crate::pack::PackKind::Assets | crate::pack::PackKind::Plugins), "native removal of home-installed plugin/assets packs is unavailable; the existing pack removal owner must release plugin and home records together. Current installation is unchanged");
+            if let Some(record) = pack::read_home_install(home, &coordinate)? {
+                if matches!(
+                    record.kind,
+                    pack::PackKind::Assets | pack::PackKind::Plugins
+                ) {
+                    return self
+                        .remove_home_pack(&access, home, coordinate, record)
+                        .await;
+                }
             }
         }
-        let access = self.core.access()?;
-        let report = crate::pack::remove_pack(
+        let report = pack::remove_pack(
             &access,
             self.core.node_did(),
             &coordinate,
-            crate::pack::DriftPolicy::Refuse,
+            pack::DriftPolicy::Refuse,
         )
         .await?;
         if let Some(home) = self.home.as_deref() {
-            crate::pack::forget_home_install(home, &coordinate)?;
+            pack::forget_home_install(home, &coordinate)?;
             for removed in std::iter::once(&report).chain(&report.dependencies) {
-                crate::pack::plugin_lifecycle::release_plugin_records(
+                pack::plugin_lifecycle::release_plugin_records(
                     home,
                     &removed.pack,
                     &removed.documents.plugins,

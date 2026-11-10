@@ -241,6 +241,16 @@ async fn a_shell_less_agent_installs_an_assets_pack_with_a_page() {
     let got = config_json(&tools, &["pack", "get", "./board"]).await;
     assert_eq!(got["installed"]["digest"], digest.as_str(), "{got}");
     assert_eq!(built["out"], "gents.board-0.1.0.pack", "{built}");
+
+    let removed = config_json(&tools, &["pack", "remove", "gents/board"]).await;
+    assert_eq!(removed["removed"]["pages"], json!(["board"]), "{removed}");
+    assert!(crate::pack::read_home_install(home.path(), "gents/board")
+        .unwrap()
+        .is_none());
+    assert!(
+        crate::plugin::ux::list(home.path()).unwrap().is_empty(),
+        "the removed pack's page is no longer listed"
+    );
 }
 
 #[tokio::test]

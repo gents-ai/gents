@@ -8034,7 +8034,10 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
         .await
         .unwrap_err()
         .to_string();
-    assert!(removal.contains("native removal"));
+    assert!(
+        removal.contains("cannot remove plugin fixture/native_echo"),
+        "{removal}"
+    );
     assert_eq!(
         crate::plugin::store::read_record(home.path(), "fixture", "native_echo")
             .unwrap()
