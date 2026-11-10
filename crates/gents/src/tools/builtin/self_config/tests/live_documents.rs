@@ -18,6 +18,16 @@ async fn fileless_tool_guarded(
     home: &std::path::Path,
     no_lockout: bool,
 ) -> (SelfConfigFixture, Vec<Box<dyn ToolDyn>>) {
+    fileless_tool_under(label, home, no_lockout, None).await
+}
+
+/// `ceiling_plugins` is the process ceiling's plugin allowlist; `None` admits all.
+async fn fileless_tool_under(
+    label: &str,
+    home: &std::path::Path,
+    no_lockout: bool,
+    ceiling_plugins: Option<BTreeSet<String>>,
+) -> (SelfConfigFixture, Vec<Box<dyn ToolDyn>>) {
     let fixture = SelfConfigFixture::new(label).await;
     fixture.grant_selected_configuration().await;
     fixture.grant_pack_install().await;
@@ -27,6 +37,7 @@ async fn fileless_tool_guarded(
     tool_config.no_lockout = no_lockout;
     tool_config.enable_pack_install = true;
     tool_config.enable_pack_authority = true;
+    tool_config.ceiling_plugins = ceiling_plugins;
     assert_eq!(
         tool_config.process_ceiling.file_mode,
         crate::tools::surface::FileToolMode::Off
@@ -548,17 +559,40 @@ async fn plugin_run_drives_the_rounds_a_tool_call_does() {
         "{ran}"
     );
 
-    let unserved = call(
+    // A result that carries a request-shaped field beside its own fields is
+    // the plugin's result; the field is pointed out, not turned into a failure.
+    let job_request = json!({"requests": [{"id": "a", "child_output": {"slots": ["s"], "offset": 0, "limit": 1}}]});
+    let carried = ok(
         &tools,
-        json!({"argv":["plugin","run",coordinate],"options":{"input":{
-            "job_calls": {"requests": [{"id": "a", "child_output": {"slots": ["s"], "offset": 0, "limit": 1}}]}}}}),
+        json!({"argv":["plugin","run",coordinate],"options":{"input":{"job_calls": job_request}}}),
+    )
+    .await;
+    assert_eq!(carried["output"]["job_calls"], job_request, "{carried}");
+    assert!(carried["output"]["data_results"].is_object(), "{carried}");
+    let note = carried["unserved"].as_str().unwrap();
+    assert!(
+        note.contains("output is the plugin's result") && note.contains("job_calls"),
+        "{carried}"
+    );
+
+    // A plugin the process ceiling does not admit is not run, selected or not.
+    let (_ceiling_fixture, under_ceiling) = fileless_tool_under(
+        "plugin-run-ceiling",
+        home.path(),
+        false,
+        Some(BTreeSet::from(["other".to_owned()])),
+    )
+    .await;
+    let refused = call(
+        &under_ceiling,
+        json!({"argv":["plugin","run",coordinate],"options":{"input":{}}}),
     )
     .await
     .unwrap_err();
     assert!(
-        unserved.contains("asked for job_calls and was not re-invoked")
-            && unserved.contains("integrations.plugins")
-            && unserved.contains("in a fresh request"),
-        "{unserved}"
+        refused.contains("was not run")
+            && refused.contains("process tool ceiling")
+            && refused.contains("it admits other"),
+        "{refused}"
     );
 }

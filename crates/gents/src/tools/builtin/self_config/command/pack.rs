@@ -71,7 +71,28 @@ impl ConfigCommandTool {
             }
             None => Value::Null,
         };
-        let (output, binding_note) =
+        let tool_name = coordinate
+            .split_once('/')
+            .map_or(coordinate.as_str(), |(_, name)| name);
+        if let Some(allowed) = self
+            .ceiling_plugins
+            .as_ref()
+            .filter(|allowed| !allowed.contains(tool_name))
+        {
+            return Err(CommandGuidance {
+                message: format!(
+                    "plugin {coordinate} was not run: this runtime's process tool ceiling does not admit the plugin tool {tool_name:?}; it admits {}. An installed plugin runs with its installed filesystem, environment and network grants whether or not your Tools select it, so plugin run stays inside the ceiling. No config call widens the ceiling: the operator who starts the runtime sets it.",
+                    if allowed.is_empty() {
+                        "no plugin tools".to_owned()
+                    } else {
+                        allowed.iter().cloned().collect::<Vec<_>>().join(", ")
+                    }
+                ),
+                next_call: json!({"argv":["plugin","list"]}),
+            }
+            .into());
+        }
+        let (output, unserved, binding_note) =
             PluginTool::for_run(self.plugins.clone(), coordinate, &self.selected_plugins)?
                 .with_agent_data(
                     self.node.clone(),
@@ -81,7 +102,7 @@ impl ConfigCommandTool {
                 .run_once(input)
                 .await
                 .with_context(|| format!("calling plugin {coordinate}"))?;
-        ordered! {"output": output, "plugin": coordinate, "binding_note": binding_note}.pretty()
+        ordered! {"output": output, "unserved": unserved, "plugin": coordinate, "binding_note": binding_note}.pretty()
     }
 
     pub(super) async fn pack(&self, argv: &[String]) -> Result<String> {

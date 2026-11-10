@@ -87,6 +87,7 @@ pub(super) fn config(categories: &[&str]) -> SelfConfigToolConfig {
         enable_pack_authority: false,
         process_ceiling: Default::default(),
         selected_plugins: Vec::new(),
+        ceiling_plugins: None,
     }
 }
 

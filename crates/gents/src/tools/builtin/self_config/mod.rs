@@ -328,6 +328,7 @@ pub(crate) fn build_self_config_tools_with_runtime(
         execution: Arc::new(execution::ExecutionObservation::default()),
         plugins,
         selected_plugins: config.selected_plugins.clone(),
+        ceiling_plugins: config.ceiling_plugins.clone(),
     }));
     tools
 }

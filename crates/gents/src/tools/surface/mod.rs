@@ -150,6 +150,10 @@ pub struct SelfConfigToolConfig {
     /// The request's selected plugin tools, which `config plugin run` calls
     /// as the agent's own tool call would.
     pub selected_plugins: Vec<crate::documents::PluginToolRef>,
+    /// The plugin tool names the process ceiling admits; `None` when it
+    /// admits every plugin. `config plugin run` calls no plugin outside it,
+    /// selected or not: an installed plugin runs with its installed grants.
+    pub ceiling_plugins: Option<std::collections::BTreeSet<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize)]

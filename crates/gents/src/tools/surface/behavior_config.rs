@@ -366,6 +366,10 @@ impl AgentToolSurfaceConfig {
                     root: ceiling.root().map(ToOwned::to_owned),
                 },
                 selected_plugins: Vec::new(),
+                ceiling_plugins: match &ceiling_policy.plugin_tools {
+                    EndpointScope::All => None,
+                    scope => Some(scope.keys().into_iter().collect()),
+                },
             },
             agent_policy,
             ceiling_policy,

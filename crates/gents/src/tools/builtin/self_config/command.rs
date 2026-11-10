@@ -363,6 +363,8 @@ pub struct ConfigCommandTool {
     pub(super) plugins: Arc<crate::plugin::executor::PluginExecutor>,
     /// The plugins the calling agent's Tools select for this request.
     pub(super) selected_plugins: Vec<crate::documents::PluginToolRef>,
+    /// The plugin tool names the process ceiling admits; `None` is all.
+    pub(super) ceiling_plugins: Option<BTreeSet<String>>,
 }
 
 impl Tool for ConfigCommandTool {

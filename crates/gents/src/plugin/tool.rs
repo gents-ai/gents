@@ -248,20 +248,29 @@ impl PluginTool {
 
     /// One call through the rounds a tool call drives, inside the tool call
     /// that asked for it: the plugin's `writes` commit with that call's row.
-    /// A request the host did not serve is an error naming the service and
-    /// the call that serves it, never the plugin's result.
+    /// An output that is only a request the host did not serve is an error
+    /// naming the service and the call that serves it, never the plugin's
+    /// result; a result that carries a request-shaped field is returned with
+    /// a note saying that field was not served.
     pub(crate) async fn run_once(
         &self,
         input: serde_json::Value,
-    ) -> Result<(serde_json::Value, Option<String>)> {
+    ) -> Result<(serde_json::Value, Option<String>, Option<String>)> {
         let invoked = self.invoke(input).await;
         let (output, binding_note) = invoked.result.map_err(|error| match error {
             ToolError::ToolCallError(error) => anyhow::anyhow!("{error}"),
             other => anyhow::anyhow!("{other}"),
         })?;
-        if let Some(service) = super::rounds::unserved_request(&output) {
-            anyhow::bail!("{}", self.unserved(service));
-        }
+        let carried = match super::rounds::unserved_request(&output) {
+            Some(super::rounds::Unserved::Request(service)) => {
+                anyhow::bail!("{}", self.unserved(service).0)
+            }
+            Some(super::rounds::Unserved::Carried(service)) => {
+                let (_, why, next) = self.unserved(service);
+                Some(format!("output is the plugin's result. Its {service} field is shaped like a request and was not served ({why}); if the plugin meant it as a request: {next}"))
+            }
+            None => None,
+        };
         if let Some(writes) = invoked.deferred_writes {
             current_tool_runtime_context()
                 .and_then(|context| context.live_output)
@@ -270,10 +279,12 @@ impl PluginTool {
                 .await
                 .map_err(|error| anyhow::anyhow!("plugin writes rejected: {error}"))?;
         }
-        Ok((output, binding_note))
+        Ok((output, carried, binding_note))
     }
 
-    fn unserved(&self, service: &str) -> String {
+    /// The refusal for an unserved `service` request, with its reason and
+    /// next call on their own.
+    fn unserved(&self, service: &str) -> (String, String, String) {
         let coordinate = format!("{}/{}", self.record.namespace, self.record.name);
         let name = &self.definition.name;
         let (why, next) = match service {
@@ -298,7 +309,11 @@ impl PluginTool {
                 format!("read [\"plugin\",\"get\",\"{coordinate}\"] and reinstall its pack with the network authority granted"),
             ),
         };
-        format!("plugin {coordinate} asked for {service} and was not re-invoked: {why}. Its request was not served and is not a result. Next: {next}")
+        (
+            format!("plugin {coordinate} asked for {service} and was not re-invoked: {why}. Its request was not served and is not a result. Next: {next}"),
+            why,
+            next,
+        )
     }
 }
 
