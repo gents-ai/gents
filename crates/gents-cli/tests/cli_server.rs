@@ -265,7 +265,7 @@ async fn server_error_after_runtime_spawn_drains_the_runtime() -> Result<()> {
         .env("RUST_LOG", "error")
         .current_dir(&home_dir)
         .args(["server", "--http-port", &port.to_string()])
-        .args(["--no-codex-shim", "--p2p-transport", "none"])
+        .args(["--p2p-transport", "none"])
         .stdout(Stdio::piped())
         .stderr(Stdio::from(
             stderr_log.reopen().context("opening gents stderr log")?,
@@ -544,15 +544,7 @@ fn server_refuses_a_secure_enclave_home_before_building_a_node() -> Result<()> {
         .to_string(),
     )?;
     let port = allocate_port()?;
-    let stderr = run_cli_failure_stderr(
-        &home_dir,
-        &[
-            "server",
-            "--http-port",
-            &port.to_string(),
-            "--no-codex-shim",
-        ],
-    )?;
+    let stderr = run_cli_failure_stderr(&home_dir, &["server", "--http-port", &port.to_string()])?;
     assert!(stderr.contains("macos-secure-enclave"), "{stderr}");
     assert!(stderr.contains("--identity-backend file"), "{stderr}");
     let store_entries = fs::read_dir(gents_home.join("data"))
@@ -1995,12 +1987,6 @@ fn a_home_still_set_to_grok_serves() -> Result<()> {
             .join(gents::store::local::home::CLIENT_CONFIG_FILE_NAME),
         r#"{"client":"grok"}"#,
     )?;
-    let refusal = run_cli_failure_stderr(&home_dir, &["config", "client", "show"])?;
-    assert!(
-        refusal.contains("gents config client set shell"),
-        "the file must be the one `gents` reads: {refusal}"
-    );
-
     let (_serve, readiness) = spawn_server_with_ready_json(
         &home_dir,
         allocate_port()?,

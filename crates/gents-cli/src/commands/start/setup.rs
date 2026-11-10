@@ -216,7 +216,7 @@ fn next_step_lines(initialized: &serde_json::Value, home: &Path) -> Vec<String> 
         .into_iter()
         .flatten()
         .filter_map(serde_json::Value::as_str)
-        .filter(|step| !matches!(*step, "gents runtime server" | "gents codex"))
+        .filter(|step| !matches!(*step, "gents runtime server" | "gents"))
         .map(|step| {
             if step.starts_with("gents accounts login") {
                 format!(
@@ -276,7 +276,7 @@ mod tests {
                 "gents accounts login codex",
                 "llama-server -hf m",
                 "gents runtime server",
-                "gents codex",
+                "gents",
                 "To change the model's address, do this.",
             ],
         });

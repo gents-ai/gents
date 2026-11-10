@@ -3,7 +3,7 @@ use std::path::Path;
 use gents_shell::keys::KeySet;
 use serde_json::{json, Value};
 
-/// The shell's own client-local choices, apart from `ClientSettings` which rejects unknown fields.
+/// The shell's own client-local choices.
 fn keys_path(home: &Path) -> std::path::PathBuf {
     home.join(gents::store::local::home::SHELL_CONFIG_FILE_NAME)
 }

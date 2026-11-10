@@ -1733,7 +1733,7 @@ fn init_next_steps(
         steps.push(format!("llama-server -hf {}", summary.model_name));
     }
     steps.push("gents runtime server".to_string());
-    steps.push("gents codex".to_string());
+    steps.push("gents".to_string());
     let home = crate::shell_word(home);
     steps.push(format!(
         "To change the model's address, save the output of `gents config backend show {} --home {home}` without its `_docID`, edit `endpoint`, and load it with `gents config backend set --file <backend.json> --home {home}`.",

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use axum::{http::Uri, routing::get, Router};
+use axum::{routing::get, Router};
 use gents::defra_node::Node as EmbeddedNode;
 use gents::{
     DocumentRuntimeOptions, Gents, KeyIdentity, McpPool, NodeIdentity, ProcessLifecycleObserver,
@@ -17,7 +17,6 @@ use tokio::sync::watch;
 use uuid::Uuid;
 
 use crate::cli::*;
-use crate::commands::codex_shim::{bind_codex_shim, CodexShimBindArgs};
 use crate::http::router::{RuntimeActivationObservation, ServeLifecycleHandle};
 use crate::http::runtime_contract_router;
 use crate::shared::{P2pAdmissionState, *};
@@ -26,7 +25,6 @@ use crate::{
     parse_cli_tool_arg, print_json, read_init_config, resolve_home_dir, server_start_failure_hint,
     write_runtime_state, DEFAULT_NODE_NAME,
 };
-use gents::codex_shim_binding::{ShimBinding, ShimUnboundReason};
 use gents_protocol::row::{
     project_node_readiness_summary, AgentReadinessState, NodeReadinessSummary,
     ProjectedNodeReadinessSummary,
@@ -49,7 +47,6 @@ struct RuntimeConfigurationObservation {
 }
 
 struct CliRuntimeSnapshotObserver {
-    runnable_tx: watch::Sender<Vec<String>>,
     configuration_tx: watch::Sender<Option<RuntimeConfigurationObservation>>,
     activation_tx: watch::Sender<RuntimeActivationObservation>,
 }
@@ -78,9 +75,8 @@ impl gents::RuntimeSnapshotObserver for CliRuntimeSnapshotObserver {
         &self,
         generation: u64,
         configuration_fingerprint: &str,
-        runnable_agent_dids: &[String],
+        _runnable_agent_dids: &[String],
     ) {
-        self.runnable_tx.send_replace(runnable_agent_dids.to_vec());
         self.configuration_tx
             .send_replace(Some(RuntimeConfigurationObservation {
                 generation,
@@ -219,58 +215,6 @@ struct AppliedPack {
     expected_agent_dids: BTreeSet<String>,
 }
 
-fn announce_codex_shim(
-    bound: &crate::commands::codex_shim::BoundCodexShim,
-    args: &ServeArgs,
-) -> Value {
-    let bound_url = format!(
-        "ws://{}:{}/",
-        display_shim_host(bound.addr().ip()),
-        bound.addr().port()
-    );
-    let codex_shim_url = args.codex_shim_public_url.as_deref().unwrap_or(&bound_url);
-    let launch_command =
-        codex_shim_launch_command(codex_shim_url, args.codex_shim_auth_token_env.as_deref());
-    tracing::info!(
-        "Codex shim is listening on {bound_url} with state dir {}",
-        bound.codex_home().display(),
-    );
-    if codex_shim_url != bound_url {
-        tracing::info!("Codex shim public endpoint: {codex_shim_url}");
-    }
-    tracing::info!("Codex shim event log: {}", bound.trace_path().display());
-    tracing::info!("Chat from another terminal with: {launch_command}");
-    json!({
-        "websocket": codex_shim_url,
-        "launch_command": launch_command,
-        "auth_required": bound.auth_required(),
-        "bound_node_did": bound.node_did(),
-        "bound_agent_did": bound.agent_did(),
-        "shim_home": bound.codex_home().to_path_buf(),
-        "codex_home": bound.codex_home().to_path_buf(),
-        "event_log": bound.trace_path().to_path_buf(),
-    })
-}
-
-fn codex_shim_launch_command(websocket: &str, auth_token_env: Option<&str>) -> String {
-    let mut command = if websocket == crate::DEFAULT_CODEX_REMOTE {
-        "gents codex".to_string()
-    } else {
-        format!("gents codex --remote {websocket}")
-    };
-    if let Some(env_name) = auth_token_env {
-        command.push_str(" --remote-auth-token-env ");
-        command.push_str(env_name);
-    }
-    command
-}
-
-fn set_codex_shim_health(handle: &CodexShimHealthHandle, health: CodexShimHealth) {
-    if let Ok(mut guard) = handle.write() {
-        *guard = health;
-    }
-}
-
 /// The user identity remains in a short-lived client process. The daemon only
 /// observes its public result and waits for runtime reconciliation.
 async fn apply_pack_after_ready(
@@ -392,107 +336,6 @@ async fn apply_pack_after_ready(
     })
 }
 
-fn spawn_codex_shim_supervisor(
-    bind_args: CodexShimBindArgs,
-    bound_agent_did: String,
-    mut runnable_rx: watch::Receiver<Vec<String>>,
-    public_url: Option<String>,
-    auth_token_env: Option<String>,
-    health: CodexShimHealthHandle,
-) {
-    tokio::spawn(async move {
-        let mut binding = ShimBinding::unbound(
-            bound_agent_did.clone(),
-            ShimUnboundReason::DependencyMissing,
-        );
-
-        loop {
-            let runnable = runnable_rx.borrow_and_update().clone();
-
-            if binding.grants_listen(runnable.iter().map(String::as_str)) {
-                match bind_codex_shim(bind_args.clone()).await {
-                    Ok(bound) => {
-                        binding.settle_listen(true);
-                        let bound_url = format!(
-                            "ws://{}:{}/",
-                            display_shim_host(bound.addr().ip()),
-                            bound.addr().port()
-                        );
-                        let url = public_url.as_deref().unwrap_or(&bound_url).to_string();
-                        set_codex_shim_health(
-                            &health,
-                            CodexShimHealth::Listening {
-                                websocket: url.clone(),
-                                auth_required: bound.auth_required(),
-                                bound_node_did: bound.node_did().to_string(),
-                                bound_agent_did: bound.agent_did().to_string(),
-                            },
-                        );
-                        tracing::info!(
-                            "Codex endpoint bound: agent {bound_agent_did:?} became runnable; \
-                             the shim is now running on {url} (no restart was needed)."
-                        );
-                        tracing::info!(
-                            "Chat from another terminal with: {}",
-                            codex_shim_launch_command(&url, auth_token_env.as_deref())
-                        );
-                        bound.spawn();
-                        return;
-                    }
-                    Err(error) if error.is_dependency_missing() => {
-                        tracing::debug!(
-                            agent_did = %bound_agent_did,
-                            error = %error.error(),
-                            "Codex shim still waiting on its bound agent's documents"
-                        );
-                    }
-                    Err(error) => {
-                        binding.settle_listen(false);
-                        set_codex_shim_health(
-                            &health,
-                            CodexShimHealth::Disabled {
-                                reason: format!("{:#}", error.error()),
-                            },
-                        );
-                        tracing::warn!(
-                            "Codex endpoint disabled: agent {bound_agent_did:?} became runnable, \
-                             but the shim could not bind: {:#}",
-                            error.error()
-                        );
-                        tracing::warn!(
-                            "This is not something configuration can fix. Restart with --codex-shim-port <free-port>, or silence this with --no-codex-shim."
-                        );
-                        return;
-                    }
-                }
-            }
-
-            if runnable_rx.changed().await.is_err() {
-                return;
-            }
-        }
-    });
-}
-
-fn read_codex_shim_auth_token(env_name: Option<&str>) -> Result<Option<String>> {
-    env_name
-        .map(|name| read_codex_shim_auth_token_with(name, |name| std::env::var(name)))
-        .transpose()
-}
-
-fn read_codex_shim_auth_token_with<F>(env_name: &str, read: F) -> Result<String>
-where
-    F: FnOnce(&str) -> std::result::Result<String, std::env::VarError>,
-{
-    let token =
-        read(env_name).with_context(|| format!("reading app-server token from {env_name}"))?;
-    let token = token.trim();
-    if token.is_empty() {
-        anyhow::bail!("app-server token in {env_name} is empty");
-    }
-    Ok(token.to_string())
-}
-
 fn read_metrics_auth_token(env_name: &str) -> Result<String> {
     let token = std::env::var(env_name)
         .with_context(|| format!("reading metrics scrape token from {env_name}"))?;
@@ -501,28 +344,6 @@ fn read_metrics_auth_token(env_name: &str) -> Result<String> {
         anyhow::bail!("metrics scrape token in {env_name} is empty");
     }
     Ok(token.to_string())
-}
-
-fn normalize_codex_shim_public_url(raw: &str) -> Result<String> {
-    let uri = raw
-        .parse::<Uri>()
-        .with_context(|| format!("invalid --codex-shim-public-url {raw:?}"))?;
-    if uri.scheme_str() != Some("wss") {
-        anyhow::bail!("--codex-shim-public-url must use wss://");
-    }
-    let authority = uri
-        .authority()
-        .ok_or_else(|| anyhow::anyhow!("--codex-shim-public-url must include a host"))?;
-    if authority.as_str().contains('@') {
-        anyhow::bail!("--codex-shim-public-url must not contain credentials");
-    }
-    if authority.port_u16().is_none() {
-        anyhow::bail!("--codex-shim-public-url must include an explicit port");
-    }
-    if uri.path() != "/" || uri.query().is_some() {
-        anyhow::bail!("--codex-shim-public-url must point to the root path without a query");
-    }
-    Ok(format!("wss://{authority}/"))
 }
 
 pub(crate) async fn serve(args: ServeArgs, runtime: tokio::runtime::Handle) -> Result<()> {
@@ -661,19 +482,6 @@ async fn serve_foreground(
     mut startup: Option<super::prepare_runtime::PreparedStartup>,
     store_lifetime: &mut Option<gents::store::config_client::ConfigAccess>,
 ) -> Result<()> {
-    args.codex_shim_public_url = args
-        .codex_shim_public_url
-        .as_deref()
-        .map(normalize_codex_shim_public_url)
-        .transpose()?;
-    let codex_shim_auth_token = if args.no_codex_shim {
-        None
-    } else {
-        read_codex_shim_auth_token(args.codex_shim_auth_token_env.as_deref())?
-    };
-    if args.codex_shim_public_url.is_some() && codex_shim_auth_token.is_none() {
-        anyhow::bail!("--codex-shim-public-url requires --codex-shim-auth-token-env");
-    }
     let metrics_auth_token = args
         .metrics_auth_token_env
         .as_deref()
@@ -814,18 +622,6 @@ async fn serve_foreground(
     let p2p_admission_state = p2p_config.as_ref().map(p2p_admission_state);
     let p2p_admission = p2p_admission_state.as_ref().map(P2pAdmissionState::to_json);
     let backend_health = gents::BackendHealthMap::new();
-    let codex_shim_health: CodexShimHealthHandle =
-        Arc::new(std::sync::RwLock::new(if args.no_codex_shim {
-            CodexShimHealth::Off
-        } else {
-            CodexShimHealth::Pending {
-                bound_agent_did: args
-                    .codex_shim_agent_did
-                    .clone()
-                    .unwrap_or_else(|| "<default>".to_string()),
-                reason: "the Codex shim has not bound yet".to_string(),
-            }
-        }));
     preflight_embedded_http_bind(http_addr).await?;
     let metrics_listener = match args.metrics_addr {
         Some(addr) => Some(
@@ -881,7 +677,6 @@ async fn serve_foreground(
         mcp_options,
         Some(backend_health.clone()),
         p2p_admission_state.clone(),
-        Some(codex_shim_health.clone()),
         enrollment_offer_issuer.clone(),
         enrollment_decisions.clone(),
         activation_runtime.clone(),
@@ -979,7 +774,6 @@ async fn serve_foreground(
             crate::http::enrollment::EnrollmentDecisionService::new(identity.clone(), node.clone()),
         );
         let (ready_tx, mut ready_rx) = watch::channel(ProcessLifecycleState::Uninitialized);
-        let (runnable_tx, runnable_rx) = watch::channel::<Vec<String>>(Vec::new());
         let (configuration_tx, mut configuration_rx) =
             watch::channel::<Option<RuntimeConfigurationObservation>>(None);
 
@@ -996,7 +790,6 @@ async fn serve_foreground(
                 backend_health: Some(backend_health.clone()),
                 process_state_observer: Some(Arc::new(CliReadyObserver { tx: ready_tx })),
                 runtime_snapshot_observer: Some(Arc::new(CliRuntimeSnapshotObserver {
-                    runnable_tx,
                     configuration_tx,
                     activation_tx,
                 })),
@@ -1014,8 +807,6 @@ async fn serve_foreground(
         let agent = agent
             .with_background_process_records(data_dir.join("background-processes"))
             .with_task_hook_records(data_dir.join("task-hooks"));
-        let background_execution_registry = agent.background_execution_registry();
-        let usage_cache = agent.usage_cache().clone();
         let runtime_configuration_probe = agent.clone();
         activation_runtime
             .set(agent.clone())
@@ -1061,119 +852,6 @@ async fn serve_foreground(
                         "client".to_string(),
                     ));
             }
-
-            let mut codex_shim_output = None;
-            let codex_shim_bind_args = CodexShimBindArgs {
-                usage_cache: usage_cache.clone(),
-                home: home_dir.clone(),
-                fs_root: effective_tool_root.clone(),
-                node: node.clone(),
-                background_execution_registry: background_execution_registry.clone(),
-                graphql: graphql_url.clone(),
-                node_did: identity.did().to_string(),
-                agent_did: args.codex_shim_agent_did.clone(),
-                runtime_identity: identity.clone(),
-                auth_token: codex_shim_auth_token,
-                bind_addr: args.codex_shim_bind_addr,
-                port: args.codex_shim_port,
-                timeout_secs: args.codex_shim_timeout_secs,
-                poll_ms: args.codex_shim_poll_ms,
-                runnable: runnable_rx.clone(),
-                agent_routes: args.codex_shim_agent_did.is_none()
-                    && args.codex_shim_public_url.is_none(),
-                has_public_url: args.codex_shim_public_url.is_some(),
-            };
-            let mut codex_shim_handle = if args.no_codex_shim {
-                None
-            } else {
-                match bind_codex_shim(codex_shim_bind_args.clone()).await {
-                    Ok(bound) => {
-                        let announced = announce_codex_shim(&bound, &args);
-                        set_codex_shim_health(
-                            &codex_shim_health,
-                            CodexShimHealth::Listening {
-                                websocket: announced
-                                    .get("websocket")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or_default()
-                                    .to_string(),
-                                auth_required: bound.auth_required(),
-                                bound_node_did: bound.node_did().to_string(),
-                                bound_agent_did: bound.agent_did().to_string(),
-                            },
-                        );
-                        codex_shim_output = Some(announced);
-                        Some(bound.spawn())
-                    }
-                    Err(error) if error.is_dependency_missing() => {
-                        match crate::commands::codex_shim::resolve_codex_shim_agent_did(
-                            node.as_ref(),
-                            args.codex_shim_agent_did.as_deref(),
-                            identity.did(),
-                        )
-                        .await
-                        {
-                            Ok(bound_agent_did) => {
-                                tracing::warn!("Codex endpoint pending: {:#}", error.error());
-                                tracing::warn!(
-                                    "The server keeps running. The shim binds by itself once agent {bound_agent_did:?} \
-                                     becomes runnable (for example after `gents config apply`) — no restart needed."
-                                );
-                                codex_shim_output = Some(json!({
-                                    "pending": true,
-                                    "bound_agent_did": bound_agent_did,
-                                    "reason": format!("{:#}", error.error()),
-                                }));
-                                set_codex_shim_health(
-                                    &codex_shim_health,
-                                    CodexShimHealth::Pending {
-                                        bound_agent_did: bound_agent_did.clone(),
-                                        reason: format!("{:#}", error.error()),
-                                    },
-                                );
-                                spawn_codex_shim_supervisor(
-                                    codex_shim_bind_args.clone(),
-                                    bound_agent_did,
-                                    runnable_rx,
-                                    args.codex_shim_public_url.clone(),
-                                    args.codex_shim_auth_token_env.clone(),
-                                    codex_shim_health.clone(),
-                                );
-                            }
-                            Err(binding_error) => {
-                                let reason = format!("{binding_error:#}");
-                                tracing::warn!("Codex endpoint disabled: {reason}");
-                                codex_shim_output = Some(json!({
-                                    "disabled": true,
-                                    "reason": reason,
-                                }));
-                                set_codex_shim_health(
-                                    &codex_shim_health,
-                                    CodexShimHealth::Disabled { reason },
-                                );
-                            }
-                        }
-                        None
-                    }
-                    Err(error) => {
-                        tracing::warn!("Codex endpoint disabled: {:#}", error.error());
-                        tracing::warn!(
-                            "The server keeps running without it. Fix the cause and restart, pick another port with --codex-shim-port, or silence this with --no-codex-shim."
-                        );
-                        codex_shim_output = Some(json!({
-                            "disabled": true,
-                            "reason": format!("{:#}", error.error()),
-                        }));
-                        set_codex_shim_health(
-                            &codex_shim_health,
-                            CodexShimHealth::Disabled {
-                                reason: format!("{:#}", error.error()),
-                            },
-                        );
-                        None
-                    }
-                }
-            };
 
             let configuration_before_apply =
                 match wait_for_runtime_configuration(&mut configuration_rx, None).await {
@@ -1354,7 +1032,6 @@ async fn serve_foreground(
                 "p2p_peer_id": p2p_status.get("p2p_peer_id").cloned().unwrap_or(Value::Null),
                 "p2p_listen_addresses": p2p_status.get("p2p_listen_addresses").cloned().unwrap_or_else(|| json!([])),
                 "p2p_admission": p2p_status.get("p2p_admission").cloned().unwrap_or(Value::Null),
-                "codex_shim": codex_shim_output,
                 "apply_root": pack_apply,
             });
             drop(native_reservation.take());
@@ -1407,23 +1084,8 @@ async fn serve_foreground(
             }
 
             let notices = crate::service_update::watch_notices(runtime_configuration_probe.clone(), home_dir.clone());
-            let serving = async {
-            if let Some(handle) = codex_shim_handle.as_mut() {
-                tokio::select! {
-                    result = runtime.join() => result,
-                    result = handle => {
-                        match result {
-                            Ok(result) => result.context("Codex shim task failed"),
-                            Err(error) => Err(anyhow::anyhow!("joining Codex shim task: {error}")),
-                        }
-                    }
-                }
-            } else {
-                runtime.join().await
-            }
-            };
             tokio::select! {
-                result = serving => result,
+                result = runtime.join() => result,
                 _ = notices => unreachable!("the notice observer remains scoped to the serving runtime"),
             }
 
@@ -1893,15 +1555,6 @@ fn resolve_default_tool_root(explicit: Option<&Path>) -> Result<PathBuf> {
         .ok()
         .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
         .ok_or_else(|| anyhow::anyhow!("unable to determine a default tool root for local tools"))
-}
-
-fn display_shim_host(host: IpAddr) -> String {
-    let host_text = display_host(host);
-    if host.is_ipv6() {
-        format!("[{host_text}]")
-    } else {
-        host_text
-    }
 }
 
 #[cfg(all(test, unix))]

@@ -28,7 +28,6 @@ pub(crate) struct SubmittedRequest {
     pub(crate) request_doc_id: String,
     pub(crate) requester_did: Option<String>,
     pub(crate) input: Option<RequestInput>,
-    pub(crate) created_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -436,7 +435,6 @@ fn submitted_from_receipt(row: AgentRequestRow) -> Result<SubmittedRequest> {
         requester_did: row.requester_did,
         agent_did: row.agent_did,
         input: row.input,
-        created_at: row.created_at,
     })
 }
 

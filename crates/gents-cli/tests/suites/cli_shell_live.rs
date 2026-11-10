@@ -26,7 +26,7 @@ const KEYS: Duration = Duration::from_secs(20);
 const PROMPT: &str = "What is 12 times 12? Reply with only the number.";
 const ANSWER: &str = "144";
 
-fn open_shell(home: &Path, shim_port: u16) -> Result<Session> {
+fn open_shell(home: &Path) -> Result<Session> {
     let home = home.to_str().context("home is not UTF-8")?;
     let traces = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("cli_shell_live");
     let context = ExecutionContext {
@@ -41,15 +41,7 @@ fn open_shell(home: &Path, shim_port: u16) -> Result<Session> {
     let options = RunOptions {
         backend: defaults.backend,
         program: cli_bin().to_string(),
-        args: [
-            "shell",
-            "--home",
-            home,
-            "--codex-remote",
-            &format!("ws://127.0.0.1:{shim_port}/"),
-        ]
-        .map(String::from)
-        .to_vec(),
+        args: ["shell", "--home", home].map(String::from).to_vec(),
         profile: defaults.profile,
         cols: COLS,
         rows: ROWS,
@@ -125,12 +117,11 @@ fn conversation_rows(session: &Session) -> Result<Vec<String>> {
         .collect())
 }
 
-/// A foreground runtime on allocated ports, serving the Codex endpoint, on a fresh home.
+/// A foreground runtime on an allocated port, on a fresh home.
 struct Live {
     home: PathBuf,
     node_did: String,
     graphql: String,
-    shim_port: u16,
     _serve: ServeProcess,
     _tempdir: tempfile::TempDir,
 }
@@ -160,18 +151,10 @@ async fn start_live() -> Result<Live> {
     let node_did = node_did_from_init(&init)?;
 
     let port = allocate_port()?;
-    let shim_port = allocate_port()?;
     let mut serve = spawn_server_with_env(
         &home,
         port,
-        &[
-            "--home",
-            home_arg,
-            "--codex-shim-port",
-            &shim_port.to_string(),
-            "--p2p-transport",
-            "none",
-        ],
+        &["--home", home_arg, "--p2p-transport", "none"],
         &[],
     )?;
     wait_for_port(port, &mut serve)?;
@@ -183,12 +166,10 @@ async fn start_live() -> Result<Live> {
             Duration::from_secs(30),
         ))
         .await?;
-    wait_for_port(shim_port, &mut serve)?;
     Ok(Live {
         home,
         node_did,
         graphql,
-        shim_port,
         _serve: serve,
         _tempdir: tempdir,
     })
@@ -235,7 +216,7 @@ fn quit_cleanly(shell: &Session) -> Result<()> {
 async fn the_shell_streams_a_live_reply_and_quits_cleanly() -> Result<()> {
     let live = start_live().await?;
 
-    let shell = open_shell(&live.home, live.shim_port)?;
+    let shell = open_shell(&live.home)?;
     ask_the_model(&shell)?;
     let rows = conversation_rows(&shell)?;
     ensure!(
@@ -310,7 +291,7 @@ async fn wait_for_mailbox_status(
 #[ignore = "requires a live model at GENTS_CLI_E2E_MODEL_ENDPOINT"]
 async fn the_shell_answers_a_question_and_the_item_is_acted() -> Result<()> {
     let live = start_live().await?;
-    let shell = open_shell(&live.home, live.shim_port)?;
+    let shell = open_shell(&live.home)?;
     ask_the_model(&shell)?;
     let (_, session, agent) = wait_for_request(&live.graphql, &live.node_did, PROMPT).await?;
 

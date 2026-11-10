@@ -709,7 +709,6 @@ mod tests {
         let child = |state: &str| CausedSession {
             scope: scope("c1"),
             agent_did: "did:key:z:researcher".to_string(),
-            root_session_id: "s1".to_string(),
             caused_by_scope: scope("s1"),
             depth: 1,
             first: request("r1", "c1", "completed", "look into it\nthen report", ""),

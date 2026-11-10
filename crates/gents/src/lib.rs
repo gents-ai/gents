@@ -7,7 +7,6 @@ pub(crate) mod support;
 
 pub mod claude_gateway_login;
 mod claude_request_context;
-pub mod codex_shim_binding;
 pub mod documents;
 pub mod drop_cleanup;
 pub mod error;

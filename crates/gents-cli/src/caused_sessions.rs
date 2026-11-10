@@ -1,11 +1,9 @@
 use rapidhash::RapidHashSet;
-use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use gents::defra_node::Node as EmbeddedNode;
 use gents::session::load_latest_request_in_txn;
 use gents::session::origin::{
-    lineage, load_session, started_by, starting_request, SessionLink, REQUEST_FIELDS,
+    lineage, load_session, starting_request, SessionLink, REQUEST_FIELDS,
 };
 use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::escape_graphql_string;
@@ -17,22 +15,10 @@ use serde_json::Value;
 pub(crate) struct CausedSession {
     pub(crate) scope: SessionScope,
     pub(crate) agent_did: String,
-    pub(crate) root_session_id: String,
     pub(crate) caused_by_scope: SessionScope,
     pub(crate) depth: u32,
     pub(crate) first: AgentRequestRow,
     pub(crate) latest: AgentRequestRow,
-}
-
-fn access(node: &Arc<EmbeddedNode>) -> ConfigAccess {
-    ConfigAccess::local(node.clone())
-}
-
-pub(crate) async fn load_caused_sessions(
-    node: &Arc<EmbeddedNode>,
-    roots: &[SessionScope],
-) -> Result<Vec<CausedSession>> {
-    load_caused_sessions_as(&access(node), roots).await
 }
 
 pub(crate) async fn load_caused_sessions_as(
@@ -42,20 +28,18 @@ pub(crate) async fn load_caused_sessions_as(
     let mut visited = roots.iter().cloned().collect::<RapidHashSet<_>>();
     let mut frontier = roots
         .iter()
-        .map(|scope| (scope.clone(), scope.session_id.clone(), 0_u32))
+        .map(|scope| (scope.clone(), 0_u32))
         .collect::<Vec<_>>();
     let mut caused = Vec::new();
-    while let Some((scope, root, depth)) = frontier.pop() {
+    while let Some((scope, depth)) = frontier.pop() {
         for link in lineage(access, &scope).await?.started {
             if !visited.insert(link.scope.clone()) {
                 continue;
             }
             let child = link.scope.clone();
-            if let Some(session) =
-                view(access, link, scope.clone(), root.clone(), depth + 1).await?
-            {
+            if let Some(session) = view(access, link, scope.clone(), depth + 1).await? {
                 caused.push(session);
-                frontier.push((child, root.clone(), depth + 1));
+                frontier.push((child, depth + 1));
             }
         }
     }
@@ -66,45 +50,6 @@ pub(crate) async fn load_caused_sessions_as(
             .then_with(|| left.scope.cmp(&right.scope))
     });
     Ok(caused)
-}
-
-pub(crate) async fn load_caused_session(
-    node: &Arc<EmbeddedNode>,
-    session_id: &str,
-    is_root: impl Fn(&SessionScope) -> bool,
-) -> Result<Option<CausedSession>> {
-    let access = access(node);
-    let Some(session) = load_session(&access, session_id, None).await? else {
-        return Ok(None);
-    };
-    let mut scope = SessionScope::from(&session);
-    let mut chain = Vec::<SessionLink>::new();
-    let mut seen = RapidHashSet::from_iter([scope.clone()]);
-    loop {
-        let Some(link) = started_by(&access, &scope).await? else {
-            return Ok(None);
-        };
-        if !seen.insert(link.scope.clone()) {
-            return Ok(None);
-        }
-        let reached_root = is_root(&link.scope);
-        scope = link.scope.clone();
-        chain.push(link);
-        if reached_root {
-            break;
-        }
-    }
-    let depth = u32::try_from(chain.len()).context("caused session chain is too deep")?;
-    let root = chain
-        .last()
-        .map(|link| link.scope.session_id.clone())
-        .context("caused session chain is empty")?;
-    let parent = chain.swap_remove(0);
-    let started = SessionLink {
-        scope: SessionScope::from(&session),
-        cause_request_doc_id: parent.cause_request_doc_id,
-    };
-    view(&access, started, parent.scope, root, depth).await
 }
 
 pub(crate) async fn started_by_request(
@@ -132,7 +77,6 @@ async fn view(
     access: &ConfigAccess,
     link: SessionLink,
     caused_by_scope: SessionScope,
-    root_session_id: String,
     depth: u32,
 ) -> Result<Option<CausedSession>> {
     let Some(session) = load_session(
@@ -153,19 +97,11 @@ async fn view(
     Ok(Some(CausedSession {
         scope: link.scope,
         agent_did: session.agent_did,
-        root_session_id,
         caused_by_scope,
         depth,
         first,
         latest,
     }))
-}
-
-pub(crate) async fn load_session_head(
-    node: &Arc<EmbeddedNode>,
-    scope: &SessionScope,
-) -> Result<Option<AgentRequestRow>> {
-    load_session_head_as(&access(node), scope).await
 }
 
 async fn load_session_head_as(
@@ -549,56 +485,12 @@ pub(crate) mod fixtures {
         }
         ids
     }
-
-    /// A parent request in `parent_session` and two child sessions it started,
-    /// each opened by a request naming the same tool call (of no session-message
-    /// kind). Returns the parent request's `_docID`.
-    pub(crate) async fn seed_one_call_two_sessions(
-        node: &gents::defra_node::Node,
-        did: &str,
-        parent_session: &str,
-    ) -> String {
-        let request = |request_id: &str, session_id: &str, cause: &str| {
-            format!(
-                r#"mutation {{ create_AgentRequest(input: {{ purpose: "normal", request_id: "{request_id}", node_did: "{did}", requester_did: "{did}", agent_did: "worker", session_id: "{session_id}", {cause} content: "work", lifecycle_state: "completed", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "2026-09-26T00:00:01Z", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#
-            )
-        };
-        let parent = run(
-            node,
-            request("parent-request", parent_session, ""),
-            "AgentRequest",
-        )
-        .await;
-        for child in ["child-a", "child-b"] {
-            let cause = format!(
-                r#"caused_by_parent_request_id: "parent-request", caused_by_parent_request_doc_id: "{parent}", caused_by_parent_tool_call_id: "call-1", caused_by_parent_tool_call_doc_id: "call-doc","#
-            );
-            let opening = run(
-                node,
-                request(&format!("{child}-request"), child, &cause),
-                "AgentRequest",
-            )
-            .await;
-            create_started_session(
-                node,
-                fixture_session(did, child),
-                gents_protocol::session::SessionReference {
-                    node_did: did.to_owned(),
-                    session_id: parent_session.to_owned(),
-                    requester_did: Some(did.to_owned()),
-                },
-                &parent,
-                &opening,
-            )
-            .await;
-        }
-        parent
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn generated_plugin_job_lineage_cases_drive_caused_session_readers() {

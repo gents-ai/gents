@@ -5,10 +5,8 @@ pub(crate) mod chat;
 pub(crate) mod claude_gateway_login;
 pub(crate) mod claude_login;
 pub(crate) mod cloud;
-pub(crate) mod codex;
 pub(crate) mod codex_auth_probe;
 pub(crate) mod codex_login;
-pub(crate) mod codex_shim;
 pub(crate) mod config;
 pub(crate) mod diagnose;
 pub(crate) mod docs_bundle;
@@ -21,7 +19,6 @@ pub(crate) mod fleet;
 pub(crate) mod goal;
 pub(crate) mod grok_auth_probe;
 pub(crate) mod grok_login;
-pub(crate) mod inference_binding;
 pub(crate) mod init;
 pub(crate) mod job;
 pub(crate) mod login_wait;
@@ -52,6 +49,3 @@ pub(crate) mod ux;
 pub(crate) mod write;
 
 pub(crate) mod desktop;
-
-#[cfg(test)]
-pub(crate) mod test_shim_fixtures;

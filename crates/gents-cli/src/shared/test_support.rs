@@ -120,15 +120,6 @@ pub(crate) fn fixture_node_builder() -> defra_node::NodeBuilder {
     defra_node::Node::builder().with_node_identity_did(signer.did())
 }
 
-/// The fixture signer's managed Agent for one test: derived from the held
-/// runtime root, so its signing key is registered in this process.
-pub(crate) fn fixture_agent() -> gents_protocol::agent_identity::AgentIdentityBinding {
-    gents::store::identity::provision_agent_identity(
-        &crate::caused_sessions::fixtures::fixture_signer(),
-    )
-    .unwrap()
-}
-
 /// The fixture signer's managed Agent named `name`: the same name derives the
 /// same Agent DID, so fixtures can name Agents across documents and reads.
 pub(crate) fn fixture_agent_named(

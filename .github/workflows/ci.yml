@@ -349,7 +349,6 @@ jobs:
             -p gents-callback-fixture-create-workspace \
             -p gents-protocol \
             -p gents-schemas \
-            -p gents-codex-protocol \
             -p gents-chatgpt-login \
             -p gents-claude \
             -p gents-claude-login \

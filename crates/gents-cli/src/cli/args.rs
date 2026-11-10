@@ -3,9 +3,9 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 
 use crate::{
-    CODEX_AFTER_HELP, CONFIG_AFTER_HELP, DIAGNOSE_AFTER_HELP, INIT_AFTER_HELP, P2P_AFTER_HELP,
-    PROVISION_AFTER_HELP, RESET_AFTER_HELP, ROOT_HELP_TEMPLATE, SERVER_AFTER_HELP,
-    SESSION_AFTER_HELP, STATUS_AFTER_HELP, TASK_AFTER_HELP,
+    CONFIG_AFTER_HELP, DIAGNOSE_AFTER_HELP, INIT_AFTER_HELP, P2P_AFTER_HELP, PROVISION_AFTER_HELP,
+    RESET_AFTER_HELP, ROOT_HELP_TEMPLATE, SERVER_AFTER_HELP, SESSION_AFTER_HELP, STATUS_AFTER_HELP,
+    TASK_AFTER_HELP,
 };
 
 mod accounts;
@@ -75,6 +75,7 @@ fn parse_message(value: &str) -> Result<String, String> {
 const FORMER_COMMANDS: &[(&str, &str)] = &[
     ("auth", "accounts"),
     ("cloud", "accounts login cloud"),
+    ("codex", "shell"),
     ("codex-login", "accounts login codex"),
     ("grok-login", "accounts login grok"),
     ("claude-login", "accounts login claude"),
@@ -231,12 +232,6 @@ pub(crate) enum Command {
         hide = true
     )]
     PrepareRuntime(PrepareRuntimeArgs),
-    #[command(
-        about = "Open the Codex terminal UI against the local Node runtime",
-        after_help = CODEX_AFTER_HELP,
-        hide = true
-    )]
-    Codex(CodexArgs),
     #[command(
         about = "Open the built-in shell against this home's runtime",
         hide = true

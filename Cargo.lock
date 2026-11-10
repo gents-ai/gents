@@ -4452,7 +4452,6 @@ dependencies = [
  "gents",
  "gents-chatgpt-login",
  "gents-claude-login",
- "gents-codex-protocol",
  "gents-desktop-core",
  "gents-fs-runner",
  "gents-lean-contract",
@@ -4542,18 +4541,6 @@ dependencies = [
  "tracing",
  "uuid",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "gents-codex-protocol"
-version = "1.0.0-rc1"
-dependencies = [
- "rapidhash",
- "serde",
- "serde_json",
- "serde_with",
- "strum_macros 0.28.0",
- "thiserror 2.0.18",
 ]
 
 [[package]]

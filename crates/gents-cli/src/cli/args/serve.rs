@@ -2,8 +2,8 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 
 use super::{
-    parse_agent_did, parse_env_var_name, P2pDiscoveryArg, P2pRelayModeArg, P2pTransportArg,
-    StoreKeyCustodyArg, ToolCeilingArg,
+    parse_env_var_name, P2pDiscoveryArg, P2pRelayModeArg, P2pTransportArg, StoreKeyCustodyArg,
+    ToolCeilingArg,
 };
 
 #[derive(clap::Args)]
@@ -110,45 +110,9 @@ pub(crate) struct ServeArgs {
     pub(crate) tool_root: Option<PathBuf>,
     #[arg(
         long,
-        default_value_t = false,
-        help = "Disable the Codex TUI endpoint (`gents codex` needs it)"
-    )]
-    pub(crate) no_codex_shim: bool,
-    #[arg(
-        long,
-        default_value = "127.0.0.1",
-        help = "Address for the app-server shim to listen on; non-loopback addresses require --codex-shim-auth-token-env"
-    )]
-    pub(crate) codex_shim_bind_addr: IpAddr,
-    #[arg(long, default_value_t = crate::DEFAULT_CODEX_SHIM_PORT)]
-    pub(crate) codex_shim_port: u16,
-    #[arg(
-        long,
-        value_name = "ENV_VAR",
-        value_parser = parse_env_var_name,
-        conflicts_with = "no_codex_shim",
-        help = "Environment variable containing the bearer token required by the app-server WebSocket"
-    )]
-    pub(crate) codex_shim_auth_token_env: Option<String>,
-    #[arg(
-        long,
-        value_name = "WSS_URL",
-        requires = "codex_shim_auth_token_env",
-        conflicts_with = "no_codex_shim",
-        help = "Public wss:// app-server URL advertised when TLS terminates in a reverse proxy"
-    )]
-    pub(crate) codex_shim_public_url: Option<String>,
-    #[arg(long, help = "Optional GENTS agent override for Codex turns")]
-    pub(crate) codex_shim_agent_did: Option<String>,
-    #[arg(long, default_value_t = crate::DEFAULT_CODEX_SHIM_TIMEOUT_SECS)]
-    pub(crate) codex_shim_timeout_secs: u64,
-    #[arg(long, default_value_t = 250)]
-    pub(crate) codex_shim_poll_ms: u64,
-    #[arg(
-        long,
         value_enum,
         default_value_t = P2pTransportArg::Iroh,
-        help = "P2P transport for this server. Use `none` for local-only demos that only need GraphQL/Codex shim"
+        help = "P2P transport for this server. Use `none` for local-only demos that only need GraphQL"
     )]
     pub(crate) p2p_transport: P2pTransportArg,
     #[arg(
@@ -227,44 +191,6 @@ pub(crate) struct ServeArgs {
 }
 
 #[derive(clap::Args)]
-pub(crate) struct CodexArgs {
-    #[arg(
-        long,
-        default_value = crate::DEFAULT_CODEX_REMOTE,
-        help = "Codex shim endpoint (ws://HOST:PORT, wss://HOST:PORT, or unix://PATH)"
-    )]
-    pub(crate) remote: String,
-    #[arg(
-        long,
-        value_name = "ENV_VAR",
-        value_parser = parse_env_var_name,
-        help = "Environment variable containing the bearer token for the remote app server; requires wss:// or loopback ws://"
-    )]
-    pub(crate) remote_auth_token_env: Option<String>,
-    #[arg(
-        long,
-        value_name = "AGENT_DID",
-        value_parser = parse_agent_did,
-        help = "Agent to open instead of the node's default; requires a local ws:// endpoint"
-    )]
-    pub(crate) agent: Option<String>,
-    #[arg(
-        long,
-        default_value_t = false,
-        help = "Run inline, preserving terminal scrollback, instead of the alternate screen"
-    )]
-    pub(crate) no_alt_screen: bool,
-    #[arg(
-        value_name = "PROMPT",
-        help = "Optional prompt to start the session with"
-    )]
-    pub(crate) prompt: Option<String>,
-    /// Set by `gents --continue`, never by a flag.
-    #[arg(skip)]
-    pub(crate) resume: Option<String>,
-}
-
-#[derive(clap::Args)]
 pub(crate) struct ShellArgs {
     /// Node home to set up or open. Defaults to GENTS_HOME, the folder chosen at setup, then ~/.gents.
     #[arg(long)]
@@ -272,24 +198,4 @@ pub(crate) struct ShellArgs {
     /// As on `init`: tests pass `file` so they never write login-keychain items.
     #[arg(long, value_enum, hide = true)]
     pub(crate) store_key_custody: Option<StoreKeyCustodyArg>,
-    /// This home's runtime endpoint when it serves on another port, as `gents runtime server --codex-shim-port` sets. Loopback ws:// only.
-    #[arg(long, value_name = "WS_URL", value_parser = parse_loopback_codex_remote)]
-    pub(crate) codex_remote: Option<String>,
-}
-
-pub(crate) fn parse_loopback_codex_remote(value: &str) -> Result<String, String> {
-    let loopback = url::Url::parse(value).is_ok_and(|url| {
-        url.scheme() == "ws"
-            && url.port().is_some()
-            && url
-                .host()
-                .is_some_and(|host| crate::commands::codex::is_loopback_host(&host))
-    });
-    if loopback {
-        Ok(value.to_string())
-    } else {
-        Err(format!(
-            "{value} is not a loopback ws:// address; remote homes come later"
-        ))
-    }
 }

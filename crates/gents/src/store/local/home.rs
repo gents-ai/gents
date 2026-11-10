@@ -346,7 +346,8 @@ pub const RUNTIME_STARTUP_LOCK_FILE_NAME: &str = "runtime-startup.lock";
 /// Host-local listen addresses for `gents runtime server`; binding precedes opening
 /// the store, so they cannot live in a document.
 pub const NETWORK_CONFIG_FILE_NAME: &str = "network.json";
-/// The interface `gents` opens for this home; no file means the built-in shell.
+/// Where `gents config client set` chose the interface before the built-in shell was the only
+/// one; `gents` names a file left here and ignores it.
 pub const CLIENT_CONFIG_FILE_NAME: &str = "client.json";
 /// The built-in shell's own client-local choices, such as its key set.
 pub const SHELL_CONFIG_FILE_NAME: &str = "shell.json";
@@ -362,6 +363,7 @@ pub const PLUGIN_APPROVALS_LOCK_FILE_NAME: &str = ".plugin-approvals.lock";
 pub const PLUGINS_DIR_NAME: &str = "plugins";
 pub const PLUGIN_SERVICES_DIR_NAME: &str = "plugin-services";
 pub const REGISTRY_DIR_NAME: &str = "registry";
+/// The removed Codex app-server's state; listed so retiring a home still removes it.
 pub const CODEX_UI_DIR_NAME: &str = "codex-ui";
 pub const SERVICE_UPDATES_DIR_NAME: &str = "service-updates";
 pub const EVAL_DIR_NAME: &str = "eval";
