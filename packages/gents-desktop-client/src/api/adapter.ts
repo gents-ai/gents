@@ -1,6 +1,7 @@
 import type { DesktopTransport } from "../transport.js";
 import { createHostAccessCommands } from "./hostAccess.js";
 import { createDesktopInvoker } from "./invoke.js";
+import { createJoinRequestCommands } from "./joinRequests.js";
 import { createManagedServerCommands } from "./managedServer.js";
 import { createPackCommands } from "./packs.js";
 import { createUxPluginCommands } from "./uxPlugins.js";
@@ -44,6 +45,7 @@ export function createDesktopApiAdapter(
     startDesktopClient: () => invokeDesktop("desktop_client_start"),
     shutdownDesktopClient: () => invokeDesktop("desktop_client_shutdown"),
     ...createManagedServerCommands(invokeDesktop),
+    ...createJoinRequestCommands(invokeDesktop),
     quitDesktop: () => invokeDesktop("desktop_app_quit"),
     openDbExplorer: () => invokeDesktop("desktop_open_db_explorer"),
     openExternalUrl: (url) =>

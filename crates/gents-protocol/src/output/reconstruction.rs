@@ -37,6 +37,52 @@ pub struct ReconstructedStream {
     pub text: String,
 }
 
+#[derive(Default)]
+pub(crate) struct StreamDeclarations {
+    positions: BTreeSet<(u32, u32, u8)>,
+    reasoning: BTreeSet<u32>,
+    stopped: BTreeSet<u32>,
+}
+
+impl StreamDeclarations {
+    pub(crate) fn admit(&mut self, declaration: &StreamDeclaration, bytes: u32) -> bool {
+        let block = declaration.block_index;
+        if self.stopped.contains(&block) {
+            return false;
+        }
+        let field = match declaration.payload {
+            StreamPayload::ReasoningSignature => 1,
+            StreamPayload::ReasoningStop => {
+                if bytes != 0 || declaration.part_index != 0 || !self.reasoning.contains(&block) {
+                    return false;
+                }
+                2
+            }
+            _ => 0,
+        };
+        if !self
+            .positions
+            .insert((block, declaration.part_index, field))
+        {
+            return false;
+        }
+        match declaration.payload {
+            StreamPayload::Reasoning | StreamPayload::ReasoningRedacted => {
+                self.reasoning.insert(block);
+            }
+            StreamPayload::ReasoningStop => {
+                self.stopped.insert(block);
+            }
+            _ => {}
+        }
+        true
+    }
+
+    pub(crate) fn allows_continuation(&self, declaration: &StreamDeclaration) -> bool {
+        !self.stopped.contains(&declaration.block_index)
+    }
+}
+
 /// Require one exact fact. Duplicate arrival is harmless; distinct physical
 /// identities or contents conflict. No winner is selected from twins.
 fn unique<'a>(
@@ -257,7 +303,7 @@ fn extent_streams_from_closing(
         return Err(malformed());
     }
     let mut streams: Vec<ReconstructedStream> = Vec::new();
-    let mut positions = BTreeSet::new();
+    let mut declarations = StreamDeclarations::default();
     for ordinal in 0..*count {
         let missing = ReconstructionError::MissingSegment {
             close_doc_id: reference.close_doc_id.clone(),
@@ -294,11 +340,7 @@ fn extent_streams_from_closing(
                 .ok_or_else(malformed)?;
             if let Some(declaration) = &run.declaration {
                 if run.stream as usize != streams.len()
-                    || !positions.insert((
-                        declaration.block_index,
-                        declaration.part_index,
-                        matches!(declaration.payload, StreamPayload::ReasoningSignature),
-                    ))
+                    || !declarations.admit(declaration, run.bytes)
                 {
                     return Err(malformed());
                 }
@@ -307,11 +349,11 @@ fn extent_streams_from_closing(
                     text: part.to_owned(),
                 });
             } else {
-                streams
-                    .get_mut(run.stream as usize)
-                    .ok_or_else(malformed)?
-                    .text
-                    .push_str(part);
+                let stream = streams.get_mut(run.stream as usize).ok_or_else(malformed)?;
+                if !declarations.allows_continuation(&stream.declaration) {
+                    return Err(malformed());
+                }
+                stream.text.push_str(part);
             }
             offset = end;
         }

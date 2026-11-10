@@ -5,8 +5,8 @@ mod agent_management;
 mod agent_queries;
 #[cfg(test)]
 use agent_management::agent_mutate;
-pub use agent_management::configure_agent;
 use agent_management::load_agent_catalog;
+pub use agent_management::{configure_agent, grant_own_self_configuration};
 #[cfg(test)]
 use agent_queries::node_default_agent;
 use agent_queries::{agent_inspect, agent_list, guard_agent_profile_choice};

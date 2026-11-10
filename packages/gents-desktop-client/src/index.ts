@@ -29,6 +29,11 @@ export type {
   ManagedServerStatus,
   ManagedServerResetResult,
   HomeResetDisposition,
+  JoinHistoryView,
+  JoinMemberView,
+  JoinRequestDecideRequest,
+  JoinRequestDecisionView,
+  JoinRequestView,
 } from "./api/types.js";
 export type { MailboxItemObservation } from "./generated/MailboxItemObservation.js";
 export type { QuestionReplyView } from "./generated/QuestionReplyView.js";
@@ -46,6 +51,7 @@ export * from "./types.js";
 export const NARROW_BREAKPOINT_PX = 760;
 
 export * from "./sessionLiveDelta.js";
+export * from "./sessionGoal.js";
 export * from "./sessionTimeline.js";
 export * from "./pendingQueue.js";
 

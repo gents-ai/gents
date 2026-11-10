@@ -86,7 +86,16 @@ pub(super) async fn run(
     deps: &Deps<'_>,
     out: &mut dyn Write,
 ) -> Result<()> {
-    let budget = TrialBudget::new(args.concurrency as usize)?;
+    let requested = args.concurrency as usize;
+    let ceiling = runner::trial_ceiling(requested, deps.executor.isolation());
+    if ceiling < requested {
+        tracing::warn!(
+            requested,
+            running = ceiling,
+            "eval batch holds embedded trials to the per-process ceiling"
+        );
+    }
+    let budget = TrialBudget::new(ceiling)?;
     let parsed = parse_plan(
         &std::fs::read(&args.plan)
             .with_context(|| format!("reading batch plan {}", args.plan.display()))?,

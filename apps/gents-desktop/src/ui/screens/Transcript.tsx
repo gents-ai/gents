@@ -331,6 +331,8 @@ const TranscriptItem = memo(function TranscriptItem({
         <div className={cn("relative", state && "mb-2")}>
           <AgentInitials
             name={sender.agentName ?? senderName}
+            agentDid={sender.summary?.agentDid}
+            shared={sender.agentShared}
             className="absolute -top-1 right-2 size-6 text-[10px] ring-2 ring-background sm:top-3.5 sm:-right-8 sm:ring-0"
             aria-hidden={false}
             role="img"

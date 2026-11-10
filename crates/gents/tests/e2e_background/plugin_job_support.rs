@@ -177,6 +177,7 @@ pub(crate) async fn install_job_fixture(
         Some(plugin_home),
         Some(&archive),
         &|_| None,
+        &Default::default(),
     )
     .await
     .expect("prepare the job fixture install");

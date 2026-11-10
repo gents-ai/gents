@@ -239,7 +239,7 @@ async fn run_split(
     .await?;
     anyhow::ensure!(
         !outcome.cancelled && outcome.abandoned == 0,
-        "pilot run {run_id} stopped before it finished; the pack stays as written; `gents eval resume {run_id}` continues it"
+        "pilot run {run_id} stopped before it finished; the pack stays as written; `gents utils eval resume {run_id}` continues it"
     );
     Ok(())
 }

@@ -22,12 +22,18 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
     let manifest = pack.archive.manifest();
     anyhow::ensure!(
         !manifest.metadata.plugins.is_empty(),
-        "{namespace}/{name} carries no plugins; install the whole pack with gents pack install"
+        "{namespace}/{name} carries no plugins; install the whole pack with gents config pack install"
     );
+    let source = gents::pack::PackSource::Registry {
+        namespace: pack.namespace.clone(),
+        name: pack.name.clone(),
+        version: pack.version.clone(),
+        artifact_digest: pack.artifact_digest.clone(),
+    };
     let notification_scope = crate::commands::pack::plugin_notification_scope(&home).await?;
     if let Some((gents::ConfigAccess::Graphql(endpoint), owner)) = &notification_scope {
         use futures_util::StreamExt;
-        let source = crate::commands::pack::PackSource::received(pack.archive);
+        let source = crate::commands::pack::PackSource::received(pack.archive, source)?;
         let dependencies =
             futures_util::stream::iter(source.manifest().metadata.dependencies.iter())
                 .map(|coordinate| {
@@ -45,6 +51,7 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
         let pack_args = crate::cli::PackInstallArgs {
             package: args.name.clone(),
             inference_slots: Vec::new(),
+            dependency_variables: Vec::new(),
             preview: false,
             scope: crate::cli::ScopeArgs {
                 home: Some(home.clone()),
@@ -77,6 +84,7 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
         &home,
         &pack.archive,
         args.grant_authority,
+        source,
         move |identity, changes| async move {
             if let Some((access, owner)) = notify_scope {
                 gents::pack::record_staged_plugin_store_change(
@@ -190,7 +198,7 @@ mod tests {
             home.path().to_str().unwrap(),
         ])
         .unwrap();
-        let crate::cli::Command::Init(init_args) = cli.command else {
+        let Some(crate::cli::Command::Init(init_args)) = cli.command else {
             panic!("expected init")
         };
         crate::commands::init::init(init_args).await.unwrap();

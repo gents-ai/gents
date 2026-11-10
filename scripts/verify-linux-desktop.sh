@@ -13,7 +13,7 @@ binary=/usr/bin/gents-desktop-tauri
 [[ -x "$binary" ]]
 cli=/usr/bin/gents
 [[ -x "$cli" ]]
-"$cli" version | grep -F "$version"
+"$cli" runtime version | grep -F "$version"
 if ldd "$binary" | grep -q 'not found'; then
   echo "Installed desktop has unresolved shared libraries" >&2
   exit 1
@@ -60,7 +60,7 @@ appimage_extract=$(mktemp -d /tmp/gents-appimage-extract.XXXXXX)
 )
 appimage_cli=$(find "$appimage_extract/squashfs-root" -type f -name gents -perm -u+x -print -quit)
 [[ -n "$appimage_cli" ]]
-env -u APPDIR -u APPIMAGE -u LD_LIBRARY_PATH "$appimage_cli" version | grep -F "$version"
+env -u APPDIR -u APPIMAGE -u LD_LIBRARY_PATH "$appimage_cli" runtime version | grep -F "$version"
 rm -rf -- "$appimage_extract"
 
 mkdir -p target/desktop-dist

@@ -158,7 +158,8 @@ private def outcomeJson : CanonicalOutput.Outcome → String
 
 private def payloadKindJson : CanonicalOutput.PayloadKind → String
   | .text => "text" | .reasoning => "reasoning" | .summary => "summary"
-  | .signature => "signature" | .encrypted => "encrypted" | .redacted => "redacted"
+  | .signature => "signature" | .reasoningStop => "reasoning_stop"
+  | .encrypted => "encrypted" | .redacted => "redacted"
   | .arguments => "arguments" | .toolOutput => "tool_output"
   | .media => "media"
 

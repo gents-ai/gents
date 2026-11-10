@@ -31,7 +31,7 @@ async fn goal_slash_controls_use_runtime_owner_without_submitting_inference() {
         (
             "resume",
             Some("paused"),
-            Some("gents goal resume-request --session SESSION --from REQUEST_ID"),
+            Some("gents automation goal resume-request --session SESSION --from REQUEST_ID"),
         ),
         ("clear", None, None),
     ] {
@@ -269,7 +269,7 @@ async fn ended_row_replies_not_applicable() {
             "{text}: {reply}"
         );
         assert!(
-            reply.contains("gents job show wf-ended:call-b"),
+            reply.contains("gents automation job show wf-ended:call-b"),
             "{text}: {reply}"
         );
     }
