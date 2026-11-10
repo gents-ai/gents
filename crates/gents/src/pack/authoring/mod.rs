@@ -1,6 +1,7 @@
 pub mod build;
 pub mod check;
 pub mod edit;
+pub mod export;
 pub mod inspect;
 pub mod names;
 pub mod scaffold;
