@@ -1246,7 +1246,10 @@ async fn pack_install_uses_current_node_and_inference_chain() {
         .unwrap();
     assert_eq!(
         tags["data"]["Agent"][0]["tags"],
-        json!(["gents:pack:fixture/plugin_documents_fixture", "user:favorite"])
+        json!([
+            "gents:pack:fixture/plugin_documents_fixture",
+            "user:favorite"
+        ])
     );
     let store = crate::pack::store::PackStore::new(home.path());
     let installed_path = store

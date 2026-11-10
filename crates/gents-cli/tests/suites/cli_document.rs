@@ -20,7 +20,18 @@ fn write_note_sdl(dir: &Path) -> Result<PathBuf> {
 }
 
 fn apply_note_schema(home_dir: &Path, graphql: &str, sdl: &str) -> Result<()> {
-    run_cli_json(home_dir, &["utils", "data", "schema", "apply", "--graphql", graphql, sdl])?;
+    run_cli_json(
+        home_dir,
+        &[
+            "utils",
+            "data",
+            "schema",
+            "apply",
+            "--graphql",
+            graphql,
+            sdl,
+        ],
+    )?;
     Ok(())
 }
 
