@@ -186,6 +186,47 @@ pub(super) fn tools_request(
     request.guard = Box::new(|_, stored, merged| guard_tools_keep_control(stored, merged));
     request
 }
+/// Refuses a Tools write that newly selects a plugin this node has not
+/// installed (Lean `Configuration.pluginReferencesAvailable`). The runtime
+/// cannot build a tool surface that names one, so every agent that selects
+/// these Tools would be unavailable from its next request, the caller
+/// included when they are its own (#1796). A selection already stored is left
+/// alone, so Tools that hold one can still be edited, and a pin is not
+/// checked: an install moves a pin to its replacement before it publishes it.
+pub(super) fn refuse_uninstalled_plugins(
+    mut request: ApplyRequest<'static>,
+    plugins: Arc<crate::plugin::executor::PluginExecutor>,
+) -> ApplyRequest<'static> {
+    fn selected(document: &serde_json::Map<String, Value>) -> BTreeSet<&str> {
+        document
+            .get("integrations")
+            .and_then(|integrations| integrations.get("plugins"))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| entry.get("plugin")?.as_str())
+            .collect()
+    }
+    let guard = request.guard;
+    request.guard = Box::new(move |anchor, stored, merged| {
+        guard(anchor, stored, merged)?;
+        let before = selected(stored);
+        for plugin in selected(merged).difference(&before) {
+            if let Err(error) = plugins.installed_record(plugin) {
+                return Err(command::CommandGuidance {
+                    message: format!(
+                        "nothing was changed: these Tools would select plugin {plugin}, which is not installed on this node ({error:#}). An agent whose Tools select a plugin that is not installed cannot load its tools and fails its next request. Install the pack that ships {plugin}, then select it with pack wire, which pins the installed digest and writes its job block"
+                    ),
+                    next_call: json!({"argv":["pack","preview","install","<PACK>"]}),
+                }
+                .into());
+            }
+        }
+        Ok(())
+    });
+    request
+}
+
 pub(super) fn refuse_silent_tools_drops(
     mut request: ApplyRequest<'static>,
     allow_drop: BTreeSet<String>,

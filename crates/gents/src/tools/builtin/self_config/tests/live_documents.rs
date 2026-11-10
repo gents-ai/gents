@@ -429,6 +429,32 @@ async fn a_rebuild_moves_the_pins_of_the_tools_that_select_the_plugin() {
         integrations = json!({});
     }
     integrations["plugins"] = json!([first["selection"]]);
+    // Selecting a plugin nothing installed would leave this agent without a
+    // tool surface on its next request, so the edit is refused whole, with
+    // the install as the next call (#1796).
+    let mut absent = integrations.clone();
+    absent["plugins"] = json!([
+        first["selection"],
+        {"plugin": "acme/absent", "job": {"agent_targets": []}}
+    ]);
+    let lockout = call(
+        &tools,
+        json!({"argv":["tools","update"],"set":{"integrations":absent}}),
+    )
+    .await
+    .expect_err("selecting a plugin nothing installed is refused");
+    assert!(
+        lockout.contains("nothing was changed")
+            && lockout.contains("would select plugin acme/absent, which is not installed")
+            && lockout.contains("preview")
+            && lockout.contains("install"),
+        "{lockout}"
+    );
+    assert_eq!(
+        ok(&tools, json!({"argv":["tools","get"]})).await["document"]["integrations"],
+        tools_document["document"]["integrations"],
+        "the refused edit wrote nothing"
+    );
     ok(
         &tools,
         json!({"argv":["tools","update"],"set":{"integrations":integrations}}),

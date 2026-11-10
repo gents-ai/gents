@@ -33,7 +33,8 @@ use requests::profile_request;
 use requests::{
     agent_request, anchored_request, automation_request, automation_target, backend_request,
     local_backend_create_request, mcp_service_request, outcome_text, profile_create_request,
-    profile_target_request, protect_working_agent, refuse_silent_tools_drops, tools_request,
+    profile_target_request, protect_working_agent, refuse_silent_tools_drops,
+    refuse_uninstalled_plugins, tools_request,
 };
 #[cfg(test)]
 mod tests;
