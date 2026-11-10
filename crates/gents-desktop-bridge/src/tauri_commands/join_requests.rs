@@ -92,15 +92,29 @@ async fn decide_join_request(
     let Some((home, target)) = co_hosted_runtime(state, &request.node_did).await? else {
         return Err(not_co_hosted());
     };
-    gents_server::server_host::decide_managed_enrollment(
-        &home,
-        &target.graphql,
-        &request.request_id,
-        request.decision.into(),
-    )
-    .await
-    .map(JoinRequestDecisionView::from)
-    .map_err(decision_error)
+    let decided = match request.decision.into() {
+        gents_server::server_host::ManagedEnrollmentDecision::Approve { lease_seconds } => {
+            gents_server::server_host::admit_managed_enrollment(
+                &home,
+                &target.graphql,
+                &request.request_id,
+                lease_seconds,
+            )
+            .await
+        }
+        decision => {
+            gents_server::server_host::decide_managed_enrollment(
+                &home,
+                &target.graphql,
+                &request.request_id,
+                decision,
+            )
+            .await
+        }
+    };
+    decided
+        .map(JoinRequestDecisionView::from)
+        .map_err(decision_error)
 }
 
 fn not_co_hosted() -> BridgeError {
@@ -271,6 +285,7 @@ mod tests {
                 decided_by: "did:key:z6MkOperator".into(),
                 revoked_at: Some("2026-11-05T00:00:00Z".into()),
                 revoked_by: Some("did:key:z6MkOperator".into()),
+                expired_at: None,
             }],
             observed_count: 73,
             limit: 50,
@@ -290,6 +305,7 @@ mod tests {
                     "decidedBy": "did:key:z6MkOperator",
                     "revokedAt": "2026-11-05T00:00:00Z",
                     "revokedBy": "did:key:z6MkOperator",
+                    "expiredAt": null,
                 }],
                 "observedCount": 73,
                 "limit": 50,
@@ -297,6 +313,28 @@ mod tests {
                 "conflictsOmitted": false,
             })
         );
+    }
+
+    #[test]
+    fn a_lapsed_approval_reads_as_ended_history() {
+        let entry: ManagedEnrollmentHistoryEntry = serde_json::from_value(serde_json::json!({
+            "request_id": "request", "candidate_did": "did:key:z6MkCandidate",
+            "candidate_peer": "peer", "profile": "client", "state": "expired",
+            "decided_at": "2026-11-01T00:00:00Z", "decided_by": "did:key:z6MkOperator",
+            "revoked_at": null, "revoked_by": null, "expired_at": "2026-11-02T00:00:00Z",
+        }))
+        .expect("expired entry");
+        let view = crate::types::JoinHistoryEntryView::from(entry);
+        assert_eq!(view.state, crate::types::JoinHistoryState::Expired);
+        assert_eq!(view.expired_at.as_deref(), Some("2026-11-02T00:00:00Z"));
+        let older: ManagedEnrollmentHistoryEntry = serde_json::from_value(serde_json::json!({
+            "request_id": "request", "candidate_did": "did:key:z6MkCandidate",
+            "candidate_peer": "peer", "profile": "client", "state": "approved",
+            "decided_at": "2026-11-01T00:00:00Z", "decided_by": "did:key:z6MkOperator",
+            "revoked_at": null, "revoked_by": null,
+        }))
+        .expect("entry from a runtime before expiry was reported");
+        assert_eq!(older.expired_at, None);
     }
 
     #[test]

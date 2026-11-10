@@ -62,6 +62,7 @@ const recorded = (
   decidedBy: OPERATOR,
   revokedAt: null,
   revokedBy: null,
+  expiredAt: null,
   ...overrides,
 });
 
@@ -282,6 +283,27 @@ describe("the Sharing page", () => {
       decision: { kind: "deny" },
     });
     expect(await screen.findByText("Nothing is shared yet.")).toBeTruthy();
+  });
+
+  it("shows an admission that could not grant access in the request's row", async () => {
+    const user = userEvent.setup();
+    show({
+      decide: vi.fn(async () => {
+        throw new BridgeInvokeError({
+          code: "unknown",
+          message:
+            "granting the enrollment's access before approving it; nothing was approved: enrollment offer has a different administrator",
+          retryable: false,
+          endpoint: null,
+        });
+      }),
+    });
+    const row = await screen.findByRole("listitem", { name: /^Request from/ });
+    await user.click(within(row).getByRole("button", { name: "Approve" }));
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "nothing was approved",
+    );
+    expect(screen.queryByRole("listitem", { name: /: Whole node/ })).toBeNull();
   });
 
   it("shows a refused decision in the request's row", async () => {
