@@ -8,13 +8,14 @@ import type {
   SessionRowsView,
   SessionRowsWindow,
 } from "@source-inc/gents-desktop-client";
+import { acceptsAsyncResult } from "../../hooks/observationOrdering";
 import { applyRowsRead, drawnRows, noRows } from "./transcriptRows";
 
 const RETRY_MS = [500, 1000, 2000, 4000];
 
 /* the held rows' owner: a session on its node */
 const ownerKey = (nodeDid: string | null, sessionId: string | null) =>
-  sessionId === null ? null : JSON.stringify([nodeDid, sessionId]);
+  sessionId === null ? null : `${nodeDid ?? ""}\0${sessionId}`;
 
 export function useHeldRows(
   nodeDid: string | null,
@@ -39,12 +40,11 @@ export function useHeldRows(
   const busy = useRef(false);
   const failures = useRef(0);
   const retry = useRef<ReturnType<typeof setTimeout> | null>(null);
-  /* the latest read; any other read's result is dropped */
+  /* the latest read, moved on by an owner change too; any other read's
+     result is dropped */
   const latest = useRef(0);
   const owner = useRef(key);
   owner.current = key;
-  const ownerSession = useRef(sessionId);
-  ownerSession.current = sessionId;
   useEffect(
     () => () => {
       if (retry.current) clearTimeout(retry.current);
@@ -76,7 +76,7 @@ export function useHeldRows(
       failedRead.current = null;
       const reader = owner.current;
       const settles = () => {
-        if (mine !== latest.current || owner.current !== reader) return false;
+        if (!acceptsAsyncResult(latest.current, mine)) return false;
         busy.current = false;
         setLoading(null);
         return true;
@@ -90,6 +90,7 @@ export function useHeldRows(
             return;
           }
           failures.current = 0;
+          /* the caller may land the rows after the owner has changed */
           apply(() => {
             setHeld((now) =>
               now.key === reader
@@ -121,9 +122,7 @@ export function useHeldRows(
           if (error instanceof BridgeInvokeError && error.retryable) {
             const delay = RETRY_MS[Math.min(failures.current, RETRY_MS.length - 1)]!;
             failures.current += 1;
-            retry.current = setTimeout(() => {
-              if (owner.current === reader) read(window, kind, apply, landed);
-            }, delay);
+            retry.current = setTimeout(() => read(window, kind, apply, landed), delay);
           }
         },
       );
@@ -153,7 +152,7 @@ export function useHeldRows(
     [read],
   );
   const reset = useCallback(
-    () => setHeld({ key: owner.current, rows: noRows(ownerSession.current) }),
+    () => setHeld((now) => ({ ...now, rows: noRows(now.rows.sessionId) })),
     [],
   );
 
