@@ -106,10 +106,7 @@ impl ConfigAccess {
     }
 
     /// A schema grant never grants host filesystem access.
-    pub async fn set_schema_migration(
-        &self,
-        config: crate::defra_node::LensConfig,
-    ) -> Result<Value> {
+    pub async fn set_schema_migration(&self, config: defra_node::LensConfig) -> Result<Value> {
         config.validate_for_http()?;
         match self {
             Self::Local(local) => {

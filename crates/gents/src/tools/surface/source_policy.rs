@@ -36,4 +36,13 @@ impl ToolSourcePolicy for ToolCeiling {
             })
             .collect())
     }
+
+    fn selected_tools(&self, node: &str, context: &Value) -> Option<String> {
+        crate::documents::references_of(crate::Collection::AgentContext, context, node)
+            .ok()?
+            .into_iter()
+            .find(|reference| reference.collection == crate::Collection::Tools)
+            .map(|reference| reference.id)
+            .filter(|id| !id.is_empty())
+    }
 }

@@ -88,7 +88,7 @@ impl<'a> FreshBackendStore<'a> {
             .with_node_acp_enabled();
         let node = builder.build().await?;
         let result = async {
-            crate::ensure_runtime_schemas(&node)
+            crate::store::schema::ensure_runtime_schemas(&node)
                 .await
                 .map_err(BackendProtectionError::Schema)?;
             validate_binding(&node).await

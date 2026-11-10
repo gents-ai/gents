@@ -286,7 +286,7 @@ impl ToolPermissionProjection {
             let Some((context_doc, context)) = context_by_id.get(context_id) else {
                 continue;
             };
-            let Some(tools_id) = selected_tools(node, context) else {
+            let Some(tools_id) = self.policy.selected_tools(node, context) else {
                 continue;
             };
             let Some((tools_doc, tool_value)) = tools_by_id.get(&tools_id) else {
@@ -578,15 +578,6 @@ fn row(doc: document::Document) -> Result<(String, serde_json::Value)> {
         object.remove("updated_at");
     }
     Ok((id, value))
-}
-
-fn selected_tools(node: &str, context: &serde_json::Value) -> Option<String> {
-    crate::documents::references_of(crate::Collection::AgentContext, context, node)
-        .ok()?
-        .into_iter()
-        .find(|reference| reference.collection == crate::Collection::Tools)
-        .map(|reference| reference.id)
-        .filter(|id| !id.is_empty())
 }
 
 fn field<'a>(value: &'a serde_json::Value, name: &str) -> Option<&'a str> {

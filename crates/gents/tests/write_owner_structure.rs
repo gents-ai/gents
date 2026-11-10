@@ -2604,7 +2604,7 @@ const LAYER_EDGE_ALLOWLIST: &[(&str, &str, usize)] = &[
     ("session", "request", 27),
     ("session", "tools", 28),
     ("session", "turn", 4),
-    ("store", "documents", 37),
+    ("store", "documents", 36),
     ("store", "inference", 2),
     ("tools", "goal", 35),
     ("tools", "observe", 4),

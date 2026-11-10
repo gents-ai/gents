@@ -172,7 +172,7 @@ impl ConfigApplyTxn<'_> {
         &self,
         document: &str,
         variables: &Value,
-        collection: crate::Collection,
+        collection: crate::store::collection::Collection,
         create: bool,
     ) -> Result<Value> {
         use super::super::client_signed_agent::{

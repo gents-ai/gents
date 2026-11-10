@@ -38,4 +38,8 @@ pub trait ToolSourcePolicy: Send + Sync {
 
     /// Installed plugin tools the configured tools permit.
     fn plugin_refs(&self, tools: &Value) -> anyhow::Result<Vec<ProjectedPluginRef>>;
+
+    /// The Tools document a raw AgentContext of `node` selects. A context
+    /// that does not decode, or that names an empty ID, selects none.
+    fn selected_tools(&self, node: &str, context: &Value) -> Option<String>;
 }

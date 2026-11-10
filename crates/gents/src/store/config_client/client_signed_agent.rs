@@ -139,7 +139,9 @@ pub(super) fn create_route(intent: bool, agent: bool, create: bool, http: bool) 
     }
 }
 
-pub(super) fn trusted_create_schema(collection: crate::Collection) -> Option<&'static str> {
+pub(super) fn trusted_create_schema(
+    collection: crate::store::collection::Collection,
+) -> Option<&'static str> {
     gents_protocol::schemas::RUNTIME_COLLECTION_NAMES
         .iter()
         .zip(gents_protocol::schemas::RUNTIME_ALL)
@@ -162,7 +164,7 @@ pub(super) fn trusted_delete_schema(collection: &str) -> Option<&'static str> {
         gents_protocol::schemas::GOAL_CREATION_CLAIM_NAME,
     ]
     .contains(&collection)
-        && !crate::Collection::ALL
+        && !crate::store::collection::Collection::ALL
             .iter()
             .any(|item| item.graphql_type() == collection)
     {
@@ -189,7 +191,11 @@ pub(super) fn signing_schema(sdl: &str, collection: &str) -> Result<::schema::Co
     Ok(schemas.remove(0))
 }
 
-pub(super) fn update_route(intent: bool, collection: crate::Collection, http: bool) -> CreateRoute {
+pub(super) fn update_route(
+    intent: bool,
+    collection: crate::store::collection::Collection,
+    http: bool,
+) -> CreateRoute {
     if !intent {
         CreateRoute::Native
     } else if http && trusted_create_schema(collection).is_some() {
@@ -204,7 +210,7 @@ pub(super) fn ordinary_mutation_allowed(intent: bool, mutation: bool) -> bool {
 }
 
 pub(super) fn configuration_replacement_patch(
-    collection: crate::Collection,
+    collection: crate::store::collection::Collection,
     current: &Value,
     proposed: &Value,
 ) -> Result<Value> {
