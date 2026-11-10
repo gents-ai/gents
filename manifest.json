@@ -11,7 +11,8 @@
     "skills/package_pack/SKILL.md",
     "skills/plan_work/SKILL.md",
     "skills/use_database/SKILL.md",
-    "skills/write_plugin/SKILL.md"
+    "skills/write_plugin/SKILL.md",
+    "tests/install.json"
   ],
   "authors": [
     "gents contributors"
@@ -30,5 +31,5 @@
     "engineer",
     "authoring"
   ],
-  "version": "0.6.0"
+  "version": "0.7.0"
 }

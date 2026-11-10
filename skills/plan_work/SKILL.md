@@ -49,6 +49,8 @@ Load a step's skill when you reach it. On a long build, hand independent steps t
 
 For syntax, use `config help <resource>` or `--help`. Don't read the gents binary (no `strings`) or look for Gents source anywhere. Use tool help.
 
+If you have the `script` tool, use one script instead of repeating single calls: to wait for a condition (loop a query with `await sleep`), to try exact logic before building a plugin, and to apply one change across many documents or files.
+
 Don't wait by sleeping or polling for a person. If you need someone, file one mailbox item, end your turn and say what you're waiting for.
 
 ## 5. Prove it
