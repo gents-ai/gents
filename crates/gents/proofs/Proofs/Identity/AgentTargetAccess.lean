@@ -16,11 +16,16 @@ structure Target where
 
 /-- The agent targets an Agent selects: its AgentContext's Tools, whose
 AgentTools group exposes `agent_new`/`agent_message` over `targetIds` only
-when `enabled`. -/
+when `enabled`, and whose plugin job blocks name `jobTargetIds`
+(`job.agent_targets`). A plugin job spawns into `jobTargets ∩ callerTargets`
+(`PluginJob.effectiveTargets`), where `callerTargets` is `targetIds` whether or
+not the group is enabled: `gents pack wire` adds job targets to `targetIds`
+and leaves `enabled` unchanged. -/
 structure Selection where
   agent : String
   enabled : Bool
   targetIds : List String
+  jobTargetIds : List String := []
   deriving BEq, Repr
 
 /-- One Node's configuration: its Agent documents (keyed by Agent DID), each
@@ -31,18 +36,23 @@ structure Config where
   targets : List Target
   deriving Repr
 
+/-- The target ids the Agent may start a session on: every `targetIds` entry
+for an enabled group, and otherwise those a plugin job block also names. -/
+def startable (selection : Selection) : List String :=
+  if selection.enabled then selection.targetIds
+  else selection.targetIds.filter selection.jobTargetIds.contains
+
 def targetAgents (config : Config) (selection : Selection) : List String :=
-  if selection.enabled then
-    selection.targetIds.filterMap fun id =>
-      (config.targets.find? fun target => target.id == id && target.isLocal).map (·.agent)
-  else []
+  (startable selection).filterMap fun id =>
+    (config.targets.find? fun target => target.id == id && target.isLocal).map (·.agent)
 
 /-- Configured delegation is declared access (`DeclaredAccess`): an Agent
 that selects an enabled agent target on its own Node declares itself a
 `session_writer` of the target's Agent document, the relation behind native
-`invoke` that `agent_new` and `agent_message` need. Nothing else is declared:
-no reader, executor or managing relation, and nothing for a disabled group, an
-unselected target, a remote target or an absent Agent. -/
+`invoke` that `agent_new`, `agent_message` and a plugin job's child spawn
+need. Nothing else is declared: no reader, executor or managing relation, and
+nothing for a disabled group's target no plugin job names, an unselected
+target, a remote target or an absent Agent. -/
 def writers (config : Config) (target : String) : List String :=
   if config.agents.contains target then
     ((config.selections.filter fun selection =>
@@ -186,9 +196,13 @@ def agents : List String := ["lead", "reviewer", "other"]
 def targets : List Target := [⟨"reviewer-target", "reviewer", true⟩, ⟨"remote-target", "other", false⟩]
 
 def unconfigured : Config := ⟨agents, [], targets⟩
-def configured : Config := ⟨agents, [⟨"lead", true, ["reviewer-target", "remote-target"]⟩], targets⟩
-def disabled : Config := ⟨agents, [⟨"lead", false, ["reviewer-target", "remote-target"]⟩], targets⟩
-def removedTarget : Config := ⟨agents, [⟨"lead", true, ["remote-target"]⟩], targets⟩
+def configured : Config := ⟨agents, [⟨"lead", true, ["reviewer-target", "remote-target"], []⟩], targets⟩
+def disabled : Config := ⟨agents, [⟨"lead", false, ["reviewer-target", "remote-target"], []⟩], targets⟩
+def removedTarget : Config := ⟨agents, [⟨"lead", true, ["remote-target"], []⟩], targets⟩
+/-- `gents pack wire` with the agents group disabled: the plugin job names
+`reviewer-target`, which also joins the caller's target ids. -/
+def jobOnly : Config :=
+  ⟨agents, [⟨"lead", false, ["reviewer-target", "remote-target"], ["reviewer-target"]⟩], targets⟩
 
 def configure (state : State) (configurer : String) (prior next : Config) : State :=
   (reconcile state configurer prior next).getD state
@@ -197,6 +211,8 @@ def byUser : State := configure fixture "user" unconfigured configured
 def byEngineer : State := configure fixture "admin" unconfigured configured
 def afterDisable : State := configure byUser "user" configured disabled
 def afterRemoval : State := configure byUser "user" configured removedTarget
+def byJob : State := configure fixture "user" unconfigured jobOnly
+def afterJobRemoval : State := configure byJob "user" jobOnly disabled
 
 def invokes (state : State) (caller target : String) : Bool :=
   allowed 5 state caller "agents" target "invoke"
@@ -228,6 +244,16 @@ theorem removing_or_disabling_the_target_revokes :
       [false, false, false, false] ∧
     afterRemoval.relations.length = fixture.relations.length := by native_decide
 
+/-- A plugin job's target is declared with the agents group disabled, so a
+job child spawn has the same native `invoke` as `agent_new`; dropping the job
+block revokes it. -/
+theorem job_target_grants_session_writer_while_disabled :
+    pairs.map (fun (caller, target) => invokes byJob caller target) =
+      [true, false, false, false] ∧
+    pairs.map (fun (caller, target) => invokes afterJobRemoval caller target) =
+      [false, false, false, false] ∧
+    afterJobRemoval.relations.length = fixture.relations.length := by native_decide
+
 theorem undeclared_target_stays_denied :
     invokes fixture "lead" "reviewer" = false ∧
     invokes byUser "lead" "other" = false ∧
@@ -239,7 +265,8 @@ native `invoke` decisions. -/
 def sequence : List (String × String × Config) :=
   [("unconfigured", "user", unconfigured), ("configured", "user", configured),
    ("disabled", "user", disabled), ("reenabled", "user", configured),
-   ("removed", "user", removedTarget), ("refused", "lead", configured)]
+   ("removed", "user", removedTarget), ("refused", "lead", configured),
+   ("job_only", "user", jobOnly), ("job_dropped", "user", disabled)]
 
 def casesJson : String :=
   let step := fun (acc : List Lean.Json × State × Config) (entry : String × String × Config) =>
@@ -247,10 +274,11 @@ def casesJson : String :=
     let (name, configurer, next) := entry
     let applied := (reconcile state configurer prior next).isSome
     let state := configure state configurer prior next
-    let lead := (next.selections.find? (·.agent == "lead")).getD ⟨"lead", false, []⟩
+    let lead := (next.selections.find? (·.agent == "lead")).getD ⟨"lead", false, [], []⟩
     let json := Lean.Json.mkObj
       [("state", Lean.toJson name), ("configurer", Lean.toJson configurer),
        ("enabled", Lean.toJson lead.enabled), ("target_ids", Lean.toJson lead.targetIds),
+       ("job_target_ids", Lean.toJson lead.jobTargetIds),
        ("applied", Lean.toJson applied),
        ("invokes", Lean.toJson (pairs.map fun (caller, target) => Lean.Json.mkObj
           [("caller", Lean.toJson caller), ("target", Lean.toJson target),

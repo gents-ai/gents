@@ -1,8 +1,9 @@
 //! Lean `Identity.AgentTargetAccess` and `Identity.DeclaredAccess`: an Agent
-//! whose AgentContext selects Tools with an enabled agents group declares
-//! itself a `session_writer` of each selected AgentTarget's Agent on the same
-//! Node. The configuring actor applies exactly the changed tuples in the
-//! configuration transaction, so native ACP bounds them by that actor's
+//! whose AgentContext selects Tools with an enabled agents group, or with a
+//! plugin job block naming the target, declares itself a `session_writer` of
+//! each such selected AgentTarget's Agent on the same Node. The configuring
+//! actor applies exactly the changed tuples in the configuration
+//! transaction, so native ACP bounds them by that actor's
 //! authority and a refused tuple refuses the whole apply. An Agent the plan
 //! removes has its declared tuples revoked before it is deleted.
 
@@ -67,6 +68,31 @@ fn text<'a>(value: &'a Value, field: &str) -> Option<&'a str> {
     value[field].as_str().filter(|text| !text.is_empty())
 }
 
+fn strings(value: &Value) -> impl Iterator<Item = &str> {
+    value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+}
+
+/// Lean `AgentTargetAccess.startable`: an enabled agents group's target ids,
+/// and otherwise those a plugin job block's `agent_targets` also names.
+fn startable(tools: &Value) -> Vec<String> {
+    let group = &tools["agents"];
+    let enabled = group["enabled"] == Value::Bool(true);
+    let jobs: BTreeSet<&str> = tools["integrations"]["plugins"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|plugin| strings(&plugin["job"]["agent_targets"]))
+        .collect();
+    strings(&group["target_ids"])
+        .filter(|id| enabled || jobs.contains(id))
+        .map(str::to_owned)
+        .collect()
+}
+
 /// Lean `AgentTargetAccess.writers` over the Node's stored configuration.
 async fn declared(txn: &ConfigApplyTxn<'_>, owner: &str) -> Result<Declared> {
     let contexts: BTreeMap<String, String> = rows(txn, Collection::AgentContext, owner)
@@ -82,22 +108,7 @@ async fn declared(txn: &ConfigApplyTxn<'_>, owner: &str) -> Result<Declared> {
     let tools: BTreeMap<String, Vec<String>> = rows(txn, Collection::Tools, owner)
         .await?
         .into_iter()
-        .filter_map(|(_, tools)| {
-            let group = &tools["agents"];
-            if group["enabled"] != Value::Bool(true) {
-                return None;
-            }
-            Some((
-                text(&tools, "tools_id")?.to_owned(),
-                group["target_ids"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(Value::as_str)
-                    .map(str::to_owned)
-                    .collect(),
-            ))
-        })
+        .filter_map(|(_, tools)| Some((text(&tools, "tools_id")?.to_owned(), startable(&tools))))
         .collect();
     let targets: BTreeMap<String, String> = rows(txn, Collection::AgentTarget, owner)
         .await?
@@ -274,7 +285,8 @@ mod tests {
     /// Lean `Identity.AgentTargetAccess`: each modeled configuration apply,
     /// published through the desired-state path by the modeled actor, commits
     /// exactly when the model applies it, and the native `invoke` decision
-    /// behind `agent_new` then matches the model for every caller and target.
+    /// behind `agent_new` and a plugin job's child spawn then matches the model
+    /// for every caller and target.
     #[tokio::test]
     async fn configured_agent_targets_grant_exactly_session_writer() {
         let (db, user, user_access) =
@@ -307,10 +319,17 @@ mod tests {
             {
                 agents["target_ids"] = case["target_ids"].clone();
             }
-            (
-                Collection::Tools,
-                json!({"node_did": node_did, "tools_id": format!("{}:tools", did("lead")), "agents": agents}),
-            )
+            let mut tools = json!({"node_did": node_did, "tools_id": format!("{}:tools", did("lead")), "agents": agents});
+            if case["job_target_ids"]
+                .as_array()
+                .is_some_and(|ids| !ids.is_empty())
+            {
+                tools["integrations"] = json!({"plugins": [{
+                    "plugin": "acme/jobs",
+                    "job": {"agent_targets": case["job_target_ids"]},
+                }]});
+            }
+            (Collection::Tools, tools)
         };
         let mut setup: Vec<_> = bindings
             .iter()
@@ -344,7 +363,7 @@ mod tests {
             identity::Did::new(node_did.clone()).unwrap(),
         );
         let cases = &crate::lean_vocab_test::lean_contract_snapshot().agent_target_access_cases;
-        assert_eq!(cases.len(), 6);
+        assert_eq!(cases.len(), 8);
         for (index, case) in cases.iter().enumerate() {
             let state = case["state"].as_str().unwrap();
             let access = match case["configurer"].as_str().unwrap() {
