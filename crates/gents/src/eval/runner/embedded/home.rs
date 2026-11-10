@@ -212,7 +212,7 @@ impl EmbeddedHome {
         )
         .await?;
         let _ = served.set((Arc::downgrade(&node), identity.clone()));
-        owner_staged.serve(&node);
+        owner_staged.serve(&node, identity.clone());
         if initialize_schemas {
             ensure_runtime_schemas(&node)
                 .await
@@ -354,7 +354,7 @@ impl EmbeddedHome {
         )
         .await?;
         let _ = served.set((Arc::downgrade(&node), self.identity.clone()));
-        owner_staged.serve(&node);
+        owner_staged.serve(&node, self.identity.clone());
         self.node = node;
         self.backend_admission = admission;
         self.client_endpoint = Some(client_endpoint);

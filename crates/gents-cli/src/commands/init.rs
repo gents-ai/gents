@@ -360,7 +360,7 @@ async fn init_home(mut args: InitArgs) -> Result<Value> {
     let result = async {
         gents::store::schema::migration::ensure_all_runtime_migrations(init_node.clone()).await?;
         gents::store::local::store_key::upgrade::finish(&data_dir)?;
-        owner_staged.serve(&init_node);
+        owner_staged.serve(&init_node, initialized_identity.identity.clone());
         let binding = if fresh_store {
             Some(provision_fresh_home(&init_node, initialized_identity.identity.as_ref(), client_identity.did()).await?)
         } else {

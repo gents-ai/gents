@@ -163,11 +163,15 @@ mod tests {
     async fn selected_callback_agents_follow_native_visibility() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let user = crate::KeyIdentity::load_or_create(directory.path().join("user"), None)?;
-        let runtime = crate::KeyIdentity::load_or_create(directory.path().join("runtime"), None)?;
+        let runtime = std::sync::Arc::new(crate::KeyIdentity::load_or_create(
+            directory.path().join("runtime"),
+            None,
+        )?);
         let other = crate::KeyIdentity::load_or_create(directory.path().join("other"), None)?;
-        let creator_binding = crate::store::identity::provision_agent_identity(&runtime)?;
-        let target_binding = crate::store::identity::provision_agent_identity(&runtime)?;
-        let creator = crate::store::identity::resolve_agent_identity(&runtime, &creator_binding)?;
+        let creator_binding = crate::store::identity::provision_agent_identity(runtime.as_ref())?;
+        let target_binding = crate::store::identity::provision_agent_identity(runtime.as_ref())?;
+        let creator =
+            crate::store::identity::resolve_agent_identity(runtime.as_ref(), &creator_binding)?;
         let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
         let address = listener.local_addr()?;
         // The client's selection is decided by the node's owner-staged route,
@@ -186,7 +190,7 @@ mod tests {
                 .await?,
         );
         crate::ensure_runtime_schemas(&node).await?;
-        owner_staged.serve(&node);
+        owner_staged.serve(&node, runtime.clone());
         let context =
             defra_core::RequestContext::default().with_identity(Some(user.did().to_owned()));
         for key in [creator.as_ref(), &other as &dyn NodeIdentity] {

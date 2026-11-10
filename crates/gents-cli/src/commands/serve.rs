@@ -986,7 +986,7 @@ async fn serve_foreground(
             crate::http::enrollment::ensure_enrollment_network(&node, identity.as_ref(), &node_name)
                 .await
                 .context("ensuring authenticated enrollment network")?;
-        owner_staged.serve(&node);
+        owner_staged.serve(&node, identity.clone());
         *enrollment_decisions.write().await = Some(
             crate::http::enrollment::EnrollmentDecisionService::new(identity.clone(), node.clone()),
         );

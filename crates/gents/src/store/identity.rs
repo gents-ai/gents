@@ -16,9 +16,11 @@ mod provision_client;
 mod registered;
 pub mod request_receipt;
 
+pub(crate) use agent::runtime_derives_agent;
 pub use agent::{
-    derive_agent_identity, provision_agent_identity, provision_agent_identity_authorized,
-    provision_agent_identity_for_agent, resolve_agent_identity, AgentProvisionError,
+    bind_runtime_identity, derive_agent_identity, provision_agent_identity,
+    provision_agent_identity_authorized, provision_agent_identity_for_agent,
+    resolve_agent_identity, AgentProvisionError,
 };
 pub use enrollment_grant::{
     grant_enrollment_authority, load_enrollment_grant_receipts, plan_grant, plan_withdrawal,

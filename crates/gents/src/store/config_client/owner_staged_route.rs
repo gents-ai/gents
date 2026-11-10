@@ -89,8 +89,15 @@ impl OwnerStagedRoute {
         Self::default()
     }
 
-    /// Bind the started node this route decides on; only the first binding counts.
-    pub fn serve(&self, node: &Arc<EmbeddedNode>) {
+    /// Bind the started node this route decides on, and the runtime key that
+    /// owns it, which proves the Agent identities the runtime may stage as
+    /// (`Identity.OwnerStaged.derivedAgents`); only the first binding counts.
+    pub fn serve(
+        &self,
+        node: &Arc<EmbeddedNode>,
+        runtime: Arc<dyn crate::store::identity::NodeIdentity>,
+    ) {
+        crate::store::identity::bind_runtime_identity(node, runtime);
         let _ = self.served.set(Arc::downgrade(node));
     }
 

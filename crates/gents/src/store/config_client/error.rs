@@ -192,6 +192,14 @@ pub enum ConfigClientError {
          nothing was committed, apply it again"
     )]
     OwnerStagedPlanChanged { revoked: usize },
+    /// The planning transaction of an HTTP apply could not be confirmed
+    /// discarded, so none of its owner-staged revocations was sent and the
+    /// apply was not run again.
+    #[error(
+        "the configuration was not applied: its planning transaction could not be \
+         confirmed discarded, so no relationship was changed; apply it again"
+    )]
+    OwnerStagedPlanUnconfirmed,
     #[error("owner-staged route refused the command ({status}): {body}")]
     OwnerStagedRouteStatus {
         status: reqwest::StatusCode,

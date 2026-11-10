@@ -74,13 +74,40 @@ def foundOwner (state : State) (runtime requester resource id : String) : Option
 /-- The owners the runtime stages as. An embedded configuration transaction
 acts as the runtime or one of its Agents, so it may sign only as those; the
 pairing authority stages only for observations the runtime itself owns.
-`agentsOf runtime` is the runtime's own view: the Agent rows configured on its
-Node, read as the runtime in the same transaction, like the owner it falls
-back to and its Node row. The requester's read access never decides whether
-an owner is one of the runtime's Agents. -/
+`agentsOf runtime` is the set of Agent identities the runtime can prove it
+controls: an Agent row configured on its Node, read as the runtime in the same
+transaction, counts only when the DID it names derives from the runtime key
+and the row's creation nonce (`derivedAgents`). A row's `agent_did` is written
+unverified by anyone who may create Agent rows, so a row alone never makes its
+DID an owner the runtime acts as. The requester's read access never decides
+whether an owner is one of the runtime's Agents. -/
 def stagesAs (runtime : DID) (agentsOf : DID → List DID) (owner : DID) : Authority → Bool
   | .documentUpdate => owner == runtime || (agentsOf runtime).contains owner
   | .pairingNode _ => owner == runtime
+
+/-- An Agent row on a runtime's Node: the DID it names and its creation nonce. -/
+structure AgentRow where
+  did : DID
+  nonce : String
+  deriving Repr
+
+/-- The Agent identities a runtime controls: the DIDs of its rows that derive
+from its key and the row's nonce (`derive`, native `resolve_agent_identity`). -/
+def derivedAgents (derive : DID → String → DID) (rows : DID → List AgentRow) (runtime : DID) :
+    List DID :=
+  (rows runtime).filterMap fun row => if derive runtime row.nonce == row.did then some row.did else none
+
+theorem derived_agent_has_a_deriving_row (derive : DID → String → DID)
+    (rows : DID → List AgentRow) (runtime owner : DID)
+    (h : owner ∈ derivedAgents derive rows runtime) :
+    ∃ row ∈ rows runtime, row.did = owner ∧ derive runtime row.nonce = owner := by
+  unfold derivedAgents at h
+  obtain ⟨row, hrow, hsome⟩ := List.mem_filterMap.mp h
+  by_cases hd : (derive runtime row.nonce == row.did) = true
+  · simp only [hd, if_true, Option.some.injEq] at hsome
+    subst hsome
+    exact ⟨row, hrow, rfl, beq_iff_eq.mp hd⟩
+  · simp [hd] at hsome
 
 inductive Outcome where
   | denied
@@ -139,6 +166,23 @@ theorem staged_owner_is_runtime_or_its_agent (state : State) (runtime : DID)
           cases authority <;> simp_all [stagesAs]
         · cases h
 
+/-- A DID that only a forged Agent row names (no row naming it derives from the
+runtime key) is never staged as, whoever requests and whatever they may
+update: the runtime acts only as itself or an identity it controls. -/
+theorem forged_row_owner_is_never_staged_as (state : State) (runtime : DID)
+    (derive : DID → String → DID) (rows : DID → List AgentRow) (requester : DID)
+    (authority : Authority) (relation : Relation) (owner : DID)
+    (forged : ∀ row ∈ rows runtime, row.did = owner → derive runtime row.nonce ≠ owner)
+    (notRuntime : owner ≠ runtime) :
+    outcome state runtime (derivedAgents derive rows) requester authority relation ≠
+      .staged owner := by
+  intro h
+  rcases staged_owner_is_runtime_or_its_agent state runtime _ requester authority relation owner h
+    with hrt | hmem
+  · exact notRuntime hrt
+  · obtain ⟨row, hrow, hdid, hder⟩ := derived_agent_has_a_deriving_row derive rows runtime owner hmem
+    exact forged row hrow hdid hder
+
 /-- The pairing authority stages only on a pairing observation the runtime owns,
 through the runtime's own Node row. -/
 theorem pairing_stages_only_runtime_owned_pairing_observations (state : State) (runtime : DID)
@@ -173,10 +217,23 @@ theorem unauthorized_refusal_independent_of_document (state state' : State) (run
       request state runtime agentsOf requester authority relation grant = state := by
   simp [outcome, request, refused, refused']
 
-/-- Agents configured on each runtime's Node in these fixtures. -/
-def agentsOf : DID → List DID
-  | "runtime" => ["creator-agent"]
+/-- The fixture runtime's key derives `creator-agent` from nonce `n1` and
+nothing that any other row names. -/
+def fixtureDerive : DID → String → DID
+  | "runtime", "n1" => "creator-agent"
+  | runtime, nonce => runtime ++ "/derived/" ++ nonce
+
+/-- Agent rows on each Node in these fixtures: a genuine one, and a forged one
+that names the User `user`. -/
+def fixtureRows : DID → List AgentRow
+  | "runtime" => [⟨"creator-agent", "n1"⟩, ⟨"user", "forged"⟩]
   | _ => []
+
+/-- Agent identities each fixture runtime controls. -/
+def agentsOf : DID → List DID := derivedAgents fixtureDerive fixtureRows
+
+theorem forged_fixture_row_names_no_agent : agentsOf "runtime" = ["creator-agent"] := by
+  native_decide
 
 def emptyHome : State :=
   { objects := [⟨"nodes", "node", "user"⟩],
@@ -268,6 +325,27 @@ theorem unmanaged_owner_is_not_staged :
       objects := [⟨"nodes", "node", "user"⟩, ⟨"configuration", "placement", "stranger"⟩] }
     outcome foreign "runtime" agentsOf "user" .documentUpdate
       (DeclaredAccess.readerRelation "configuration" "placement" "writer") = .unmanaged := by
+  native_decide
+
+/-- A User-owned placement under a Node that `admin` administers: `admin` may
+update it, and a forged Agent row names its owner `user`. -/
+def userPlacement : State :=
+  { objects := [⟨"nodes", "node", "user"⟩, ⟨"configuration", "placement", "user"⟩],
+    relations := [⟨"configuration", "placement", "parent", .object "nodes" "node"⟩,
+      ⟨"nodes", "node", "administrator", .actor "admin"⟩],
+    enrolled := [] }
+
+def forgedRowOutcome (requester : String) : Outcome :=
+  outcome userPlacement "runtime" agentsOf requester .documentUpdate
+    (DeclaredAccess.readerRelation "configuration" "placement" "writer")
+
+/-- The administrator may update the User's placement, but the runtime never
+stages as the User a forged row names. -/
+theorem forged_agent_row_is_refused_as_unmanaged :
+    authorized userPlacement "admin"
+        (DeclaredAccess.readerRelation "configuration" "placement" "writer") .documentUpdate =
+      true ∧
+    forgedRowOutcome "admin" = .unmanaged := by
   native_decide
 
 /-! ### Pairing readers (`Operations.pairingReaderFixture`)
@@ -437,7 +515,13 @@ that a separate owner-staged command then modifies. An apply that needs
 owner-staged revocations runs in three steps:
 
 * PLAN: a pass that commits nothing determines the revocations and grants the
-  apply needs.
+  apply needs (`planPass`). Its transaction, with any client-signed graph it
+  dispatched, is discarded; only a confirmed discard proves none of its writes
+  can commit, so otherwise nothing is revoked and the apply is not run again
+  (`unconfirmed_plan_changes_nothing`). WRITE signs its graph afresh.
+  External premise: a client-signed HTTP endpoint refuses unsigned mutations,
+  and the revocations an apply needs can depend on its own writes, so PLAN
+  cannot skip or unsign them.
 * REVOKE: each planned revocation is its own route command, sent before any
   write transaction is open. The first refusal aborts the apply before any
   write; revocations already decided stay, so access can only end up narrower.
@@ -472,6 +556,7 @@ inductive HttpApply where
   | applied
   | aborted
   | planChanged
+  | planUnconfirmed
   | committedIncomplete (pending : List Relation)
   deriving BEq, Repr
 
@@ -479,11 +564,12 @@ def HttpApply.name : HttpApply → String
   | .applied => "applied"
   | .aborted => "aborted"
   | .planChanged => "plan_changed"
+  | .planUnconfirmed => "plan_unconfirmed"
   | .committedIncomplete _ => "committed_incomplete"
 
 /-- The apply committed no documents: a refused revocation or a changed plan. -/
 def HttpApply.uncommitted : HttpApply → Bool
-  | .aborted | .planChanged => true
+  | .aborted | .planChanged | .planUnconfirmed => true
   | _ => false
 
 structure HttpApplyResult where
@@ -491,11 +577,22 @@ structure HttpApplyResult where
   committed : Bool
   result : HttpApply
 
-/-- PLAN determined `revocations` and `grants`; REVOKE decides the
+/-- Whether a pass of an HTTP apply may commit its transaction. -/
+structure Pass where
+  commits : Bool
+  deriving DecidableEq, Repr
+
+/-- The planning pass commits nothing; it is discarded before any revocation. -/
+def planPass : Pass := ⟨false⟩
+
+theorem plan_pass_commits_nothing : planPass.commits = false := rfl
+
+/-- PLAN determined `revocations` and `grants`; `planDiscarded` is the native
+observation that its transaction was confirmed discarded; REVOKE decides the
 revocations; `planHolds` is WRITE's revalidation, a native observation: the
 revocations it recomputed from the state it read are exactly the plan. WRITE
 commits only when the plan holds. -/
-def applyOverHttp (state : State) (runtime : DID) (agentsOf : DID → List DID) (requester : DID)
+def revokeThenWrite (state : State) (runtime : DID) (agentsOf : DID → List DID) (requester : DID)
     (authority : Authority) (revocations grants : List Relation) (planHolds : Bool) :
     HttpApplyResult :=
   match decideInOrder runtime agentsOf requester authority false state revocations with
@@ -549,17 +646,17 @@ theorem revocations_are_no_wider (runtime : DID) (agentsOf : DID → List DID) (
 
 /-- A refused revocation or a changed plan commits no documents, and access
 ends up no wider than before the apply. -/
-theorem aborted_apply_commits_nothing_and_is_no_wider (state : State) (runtime : DID)
+theorem revokeThenWrite_aborted_apply_commits_nothing_and_is_no_wider (state : State) (runtime : DID)
     (agentsOf : DID → List DID) (requester : DID) (authority : Authority)
     (revocations grants : List Relation) (planHolds : Bool)
-    (h : (applyOverHttp state runtime agentsOf requester authority revocations grants
+    (h : (revokeThenWrite state runtime agentsOf requester authority revocations grants
       planHolds).result.uncommitted = true) :
-    (applyOverHttp state runtime agentsOf requester authority revocations grants
+    (revokeThenWrite state runtime agentsOf requester authority revocations grants
         planHolds).committed = false ∧
-      ∀ x ∈ (applyOverHttp state runtime agentsOf requester authority revocations
+      ∀ x ∈ (revokeThenWrite state runtime agentsOf requester authority revocations
         grants planHolds).state.relations, x ∈ state.relations := by
   have wider := revocations_are_no_wider runtime agentsOf requester authority revocations state
-  unfold applyOverHttp at h ⊢
+  unfold revokeThenWrite at h ⊢
   split at h
   · rename_i revoked rest hd tl hsplit
     rw [hsplit] at wider
@@ -577,18 +674,18 @@ theorem aborted_apply_commits_nothing_and_is_no_wider (state : State) (runtime :
 /-- Revalidation: when every planned revocation was decided but WRITE no longer
 derives exactly the plan (`planHolds = false`), the apply is refused, commits nothing, keeps the
 completed revocations and is no wider than before. -/
-theorem changed_plan_is_refused_and_no_wider (state : State) (runtime : DID)
+theorem revokeThenWrite_changed_plan_is_refused_and_no_wider (state : State) (runtime : DID)
     (agentsOf : DID → List DID) (requester : DID) (authority : Authority)
     (revocations grants : List Relation)
     (decided : (decideInOrder runtime agentsOf requester authority false state revocations).2 = []) :
-    let applied := applyOverHttp state runtime agentsOf requester authority revocations grants
+    let applied := revokeThenWrite state runtime agentsOf requester authority revocations grants
       false
     applied.result = .planChanged ∧ applied.committed = false ∧
       applied.state = (decideInOrder runtime agentsOf requester authority false state
         revocations).1 ∧
       ∀ x ∈ applied.state.relations, x ∈ state.relations := by
   have wider := revocations_are_no_wider runtime agentsOf requester authority revocations state
-  unfold applyOverHttp
+  unfold revokeThenWrite
   generalize hd : decideInOrder runtime agentsOf requester authority false state revocations = d
     at decided wider
   obtain ⟨revoked, rest⟩ := d
@@ -598,15 +695,15 @@ theorem changed_plan_is_refused_and_no_wider (state : State) (runtime : DID)
 
 /-- A refused grant is reported only after the documents committed, with the
 refused grant and the ones after it pending. -/
-theorem refused_grant_is_reported_after_commit (state : State) (runtime : DID)
+theorem revokeThenWrite_refused_grant_is_reported_after_commit (state : State) (runtime : DID)
     (agentsOf : DID → List DID) (requester : DID) (authority : Authority)
     (revocations grants : List Relation) (planHolds : Bool) (pending : List Relation)
-    (h : (applyOverHttp state runtime agentsOf requester authority revocations grants
+    (h : (revokeThenWrite state runtime agentsOf requester authority revocations grants
       planHolds).result = .committedIncomplete pending) :
-    (applyOverHttp state runtime agentsOf requester authority revocations grants
+    (revokeThenWrite state runtime agentsOf requester authority revocations grants
         planHolds).committed = true ∧
       pending ≠ [] := by
-  unfold applyOverHttp at h ⊢
+  unfold revokeThenWrite at h ⊢
   split at h
   · cases h
   · split at h
@@ -621,15 +718,15 @@ theorem refused_grant_is_reported_after_commit (state : State) (runtime : DID)
 /-- When nothing is refused and no concurrent change makes WRITE derive a
 different plan, the HTTP apply reaches exactly the state of the same
 requester's embedded transaction. -/
-theorem http_apply_agrees_with_embedded (state result : State) (runtime : DID)
+theorem revokeThenWrite_http_apply_agrees_with_embedded (state result : State) (runtime : DID)
     (agentsOf : DID → List DID) (requester : DID) (authority : Authority)
     (revocations grants : List Relation)
     (h : applyEmbedded state runtime agentsOf requester authority revocations grants =
       some result) :
-    applyOverHttp state runtime agentsOf requester authority revocations grants true =
+    revokeThenWrite state runtime agentsOf requester authority revocations grants true =
       ⟨result, true, .applied⟩ := by
   unfold applyEmbedded at h
-  unfold applyOverHttp
+  unfold revokeThenWrite
   split at h
   · rename_i hrev
     rw [hrev]
@@ -640,6 +737,81 @@ theorem http_apply_agrees_with_embedded (state result : State) (runtime : DID)
     · cases h
   · cases h
 
+/-- The HTTP apply: nothing is revoked or written unless PLAN's transaction was
+confirmed discarded. -/
+def applyOverHttp (state : State) (runtime : DID) (agentsOf : DID → List DID) (requester : DID)
+    (authority : Authority) (revocations grants : List Relation) (planDiscarded planHolds : Bool) :
+    HttpApplyResult :=
+  if planDiscarded then
+    revokeThenWrite state runtime agentsOf requester authority revocations grants planHolds
+  else ⟨state, false, .planUnconfirmed⟩
+
+/-- An unconfirmed planning discard revokes, writes and grants nothing. -/
+theorem unconfirmed_plan_changes_nothing (state : State) (runtime : DID)
+    (agentsOf : DID → List DID) (requester : DID) (authority : Authority)
+    (revocations grants : List Relation) (planHolds : Bool) :
+    applyOverHttp state runtime agentsOf requester authority revocations grants false planHolds =
+      ⟨state, false, .planUnconfirmed⟩ := rfl
+
+/-- A refused revocation, a changed plan or an unconfirmed planning discard
+commits no documents, and access ends up no wider than before the apply. -/
+theorem aborted_apply_commits_nothing_and_is_no_wider (state : State) (runtime : DID)
+    (agentsOf : DID → List DID) (requester : DID) (authority : Authority)
+    (revocations grants : List Relation) (planDiscarded planHolds : Bool)
+    (h : (applyOverHttp state runtime agentsOf requester authority revocations grants
+      planDiscarded planHolds).result.uncommitted = true) :
+    (applyOverHttp state runtime agentsOf requester authority revocations grants
+        planDiscarded planHolds).committed = false ∧
+      ∀ x ∈ (applyOverHttp state runtime agentsOf requester authority revocations
+        grants planDiscarded planHolds).state.relations, x ∈ state.relations := by
+  cases planDiscarded with
+  | false => exact ⟨rfl, fun _ hx => hx⟩
+  | true =>
+    exact revokeThenWrite_aborted_apply_commits_nothing_and_is_no_wider state runtime agentsOf
+      requester authority revocations grants planHolds h
+
+/-- Revalidation: when PLAN was discarded and every planned revocation was
+decided but WRITE no longer derives exactly the plan, the apply is refused,
+commits nothing, keeps the completed revocations and is no wider. -/
+theorem changed_plan_is_refused_and_no_wider (state : State) (runtime : DID)
+    (agentsOf : DID → List DID) (requester : DID) (authority : Authority)
+    (revocations grants : List Relation)
+    (decided : (decideInOrder runtime agentsOf requester authority false state revocations).2 = []) :
+    let applied := applyOverHttp state runtime agentsOf requester authority revocations grants
+      true false
+    applied.result = .planChanged ∧ applied.committed = false ∧
+      applied.state = (decideInOrder runtime agentsOf requester authority false state
+        revocations).1 ∧
+      ∀ x ∈ applied.state.relations, x ∈ state.relations :=
+  revokeThenWrite_changed_plan_is_refused_and_no_wider state runtime agentsOf requester authority
+    revocations grants decided
+
+/-- A refused grant is reported only after the documents committed. -/
+theorem refused_grant_is_reported_after_commit (state : State) (runtime : DID)
+    (agentsOf : DID → List DID) (requester : DID) (authority : Authority)
+    (revocations grants : List Relation) (planDiscarded planHolds : Bool) (pending : List Relation)
+    (h : (applyOverHttp state runtime agentsOf requester authority revocations grants
+      planDiscarded planHolds).result = .committedIncomplete pending) :
+    (applyOverHttp state runtime agentsOf requester authority revocations grants
+        planDiscarded planHolds).committed = true ∧ pending ≠ [] := by
+  cases planDiscarded with
+  | false => cases h
+  | true =>
+    exact revokeThenWrite_refused_grant_is_reported_after_commit state runtime agentsOf requester
+      authority revocations grants planHolds pending h
+
+/-- With PLAN confirmed discarded, nothing refused and no concurrent change, the
+HTTP apply reaches exactly the state of the requester's embedded transaction. -/
+theorem http_apply_agrees_with_embedded (state result : State) (runtime : DID)
+    (agentsOf : DID → List DID) (requester : DID) (authority : Authority)
+    (revocations grants : List Relation)
+    (h : applyEmbedded state runtime agentsOf requester authority revocations grants =
+      some result) :
+    applyOverHttp state runtime agentsOf requester authority revocations grants true true =
+      ⟨result, true, .applied⟩ :=
+  revokeThenWrite_http_apply_agrees_with_embedded state result runtime agentsOf requester
+    authority revocations grants h
+
 /-- Event cursor rebinding over HTTP, one apply per requester: the
 configuring User's apply revokes the old writer and grants the new one, as in
 its embedded transaction; an outsider's apply aborts on the revocation and
@@ -649,7 +821,7 @@ def cursorWriter (agent : String) : Relation := ⟨"configuration", "cursor", "w
 
 def cursorApply (requester : String) (revocations grants : List Relation) : HttpApplyResult :=
   applyOverHttp runtimeCursor "runtime" agentsOf requester .documentUpdate revocations grants
-    true
+    true true
 
 theorem cursor_rebind_over_http_follows_the_ordering :
     let user := cursorApply "user" [cursorWriter "agent"] [cursorWriter "sibling"]
@@ -671,11 +843,11 @@ observation, for the route's generated cases: a revocation-only apply and a
 grant-only apply of `routeReader`. -/
 def pairingApply (requester direction : String) : HttpApplyResult :=
   if direction == "revoke" then
-    applyOverHttp unlinkedPairing "runtime" agentsOf requester runtimeNode [routeReader] [] true
+    applyOverHttp unlinkedPairing "runtime" agentsOf requester runtimeNode [routeReader] [] true true
   else if direction == "replan" then
     -- A concurrent change makes WRITE derive revocations other than the plan.
-    applyOverHttp unlinkedPairing "runtime" agentsOf requester runtimeNode [routeReader] [] false
-  else applyOverHttp unlinkedPairing "runtime" agentsOf requester runtimeNode [] [routeReader] true
+    applyOverHttp unlinkedPairing "runtime" agentsOf requester runtimeNode [routeReader] [] true false
+  else applyOverHttp unlinkedPairing "runtime" agentsOf requester runtimeNode [] [routeReader] true true
 
 theorem pairing_apply_refusals_follow_the_ordering :
     [(pairingApply "admin" "revoke").result.name, (pairingApply "admin" "grant").result.name,
@@ -743,6 +915,12 @@ def casesJson : String :=
         (PackPlacementReaders.readable (placementDeclared r) "writer")
         (outcome agentPlacement "runtime" agentsOf r .documentUpdate
           (DeclaredAccess.readerRelation "configuration" "placement" "writer"))) ++
+    (["admin"].map fun r =>
+      caseJson "forged_agent_row" r false
+        (PackPlacementReaders.readable
+          (request userPlacement "runtime" agentsOf r .documentUpdate
+            (DeclaredAccess.readerRelation "configuration" "placement" "writer") true) "writer")
+        (forgedRowOutcome r)) ++
     (["user", "outsider"].map fun r =>
       caseJson "workspace_selection" r (selectionDirect r)
         (allowed 8 (agentSelected r) "creator" "agents" "target" "read")

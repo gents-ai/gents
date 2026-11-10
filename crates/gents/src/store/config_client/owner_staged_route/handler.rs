@@ -86,6 +86,24 @@ async fn decide(
             "The command signature is invalid or was already used.",
         );
     }
+    let access = ConfigAccess::local_as(node.clone(), requester.clone());
+    // Authority before the nonce: an unauthorized signer is refused with the
+    // decision's own fixed denial and makes the runtime write nothing.
+    match access
+        .verified_client_may_request_owner_staged(&command.change)
+        .await
+    {
+        Ok(true) => {}
+        Ok(false) => return denied(),
+        Err(error) => {
+            tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "owner-staged authority check failed");
+            return failure(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "unavailable",
+                "The relationship change could not be applied.",
+            );
+        }
+    }
     if let Err(refused) =
         super::consume_signed_command_nonce(&node, requester.as_str(), &command.nonce, now).await
     {
@@ -96,7 +114,7 @@ async fn decide(
             "The command signature is invalid or was already used.",
         );
     }
-    match ConfigAccess::local_as(node, requester)
+    match access
         .request_verified_client_owner_staged(&command.change, command.grant)
         .await
     {
@@ -104,11 +122,7 @@ async fn decide(
             .into_response(),
         // The refusal text is fixed so the response reveals neither whether
         // the document exists nor who owns it.
-        Err(ConfigClientError::OwnerStagedRelationshipDenied { .. }) => failure(
-            StatusCode::FORBIDDEN,
-            OwnerStagedRefusal::Denied,
-            "The requesting client may not change this document's relationships.",
-        ),
+        Err(ConfigClientError::OwnerStagedRelationshipDenied { .. }) => denied(),
         Err(ConfigClientError::OwnerStagedRelationshipUnmanaged { .. }) => failure(
             StatusCode::CONFLICT,
             OwnerStagedRefusal::Unmanaged,
@@ -123,6 +137,16 @@ async fn decide(
             )
         }
     }
+}
+
+/// The fixed denial, whichever check refused, so a response reveals neither
+/// whether the document exists nor who owns it.
+fn denied() -> Response {
+    failure(
+        StatusCode::FORBIDDEN,
+        OwnerStagedRefusal::Denied,
+        "The requesting client may not change this document's relationships.",
+    )
 }
 
 fn failure(status: StatusCode, code: impl serde::Serialize, message: &str) -> Response {

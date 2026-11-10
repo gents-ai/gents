@@ -267,18 +267,27 @@ where
                             .http_endpoint()
                             .cloned()
                             .ok_or(ConfigClientError::LocalAccessRequired)?;
-                        let rollback = if txn.rollback_inner().await.is_ok() {
-                            RollbackStatus::Succeeded
-                        } else {
-                            RollbackStatus::Scheduled
-                        };
+                        // Only a confirmed discard proves nothing PLAN wrote can
+                        // commit; otherwise nothing is revoked or rerun.
+                        let discarded = txn.rollback_inner().await.is_ok();
                         telemetry.record(AttemptReport {
-                            outcome: WriteOutcome::Retrying,
+                            outcome: if discarded {
+                                WriteOutcome::Retrying
+                            } else {
+                                WriteOutcome::Failed
+                            },
                             conflict_source: ConflictSource::None,
                             backoff: None,
                             affected_documents: Some(0),
-                            rollback,
+                            rollback: if discarded {
+                                RollbackStatus::Succeeded
+                            } else {
+                                RollbackStatus::Scheduled
+                            },
                         });
+                        if !discarded {
+                            return Err(E::from(ConfigClientError::OwnerStagedPlanUnconfirmed));
+                        }
                         ConfigApplyTxn::send_planned_revocations(&endpoint, &planned).await?;
                         owner_staged_plan = Some(planned);
                         attempt -= 1;

@@ -803,7 +803,7 @@ async fn resolve_config_access_inner(
             gents::store::local::storage_backend::classify_store_error(error, &data_dir)
         })?;
     gents::store::local::store_key::upgrade::finish(&data_dir)?;
-    owner_staged.serve(&node);
+    owner_staged.serve(&node, runtime_identity.clone());
     Ok((access, home_dir, local_endpoint))
 }
 

@@ -508,17 +508,24 @@ async fn http_apply_orders_revocations_before_and_grants_after_commit() {
         // The requester's own concurrent writer, so WRITE can read its row.
         let writer = f.client(key.as_ref());
         let passes = std::sync::atomic::AtomicUsize::new(0);
+        let signed = std::sync::atomic::AtomicUsize::new(0);
         let client = f.client(key.as_ref());
         let applied = client
             .transact_write("test.owner_staged_route.apply", |txn| {
-                let (marker, changed, writer, passes) = (&marker, &changed, &writer, &passes);
+                let (marker, changed, writer, passes, signed) =
+                    (&marker, &changed, &writer, &passes, &signed);
                 let f = &f;
                 Box::pin(async move {
                     passes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    txn.execute(&format!(
-                        r#"mutation {{ create_Node(input: {{node_did: "{marker}"}}) {{_docID}} }}"#
-                    ))
+                    txn.execute_client_signed_create(
+                        "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
+                        &serde_json::json!({"input": {"node_did": marker}}),
+                        gents_protocol::schemas::NODE,
+                    )
                     .await?;
+                    if txn.client_signed_write_dispatched_for_test() {
+                        signed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    }
                     let seen = txn
                         .execute(&format!(
                             r#"{{ Node(filter: {{node_did: {{_eq: "{changed}"}}}}) {{_docID}} }}"#
@@ -579,11 +586,18 @@ async fn http_apply_orders_revocations_before_and_grants_after_commit() {
             Err(error) => panic!("{case}: unexpected apply error {error:#}"),
         };
         assert_eq!(result, case["result"], "{case}");
-        // PLAN runs once; WRITE runs again only after its revocations were
-        // sent, so a refused revocation aborts before any write attempt.
+        // PLAN commits nothing; WRITE runs only after its revocations were
+        // sent, so a refused revocation aborts before any write attempt. Each
+        // pass signs its graph afresh, and only the WRITE graph can commit
+        // (`committed` above counts the one marker row).
         let expected_passes = if grant || result == "aborted" { 1 } else { 2 };
         assert_eq!(
             passes.load(std::sync::atomic::Ordering::SeqCst),
+            expected_passes,
+            "{case}"
+        );
+        assert_eq!(
+            signed.load(std::sync::atomic::Ordering::SeqCst),
             expected_passes,
             "{case}"
         );
@@ -607,5 +621,168 @@ async fn http_apply_orders_revocations_before_and_grants_after_commit() {
                 .unwrap();
         }
     }
+    f.home.node.shutdown().await.unwrap();
+}
+
+/// Lean `Identity.OwnerStaged.forged_row_owner_is_never_staged_as`: an Agent
+/// row whose DID does not derive from the runtime key never makes the runtime
+/// act as that DID. A User owns a placement an administrator may update and a
+/// forged Agent row names the User: the administrator's reader request over
+/// signed HTTP is `Unmanaged` and nothing is staged. The same request for a
+/// placement owned by an Agent whose row derives is staged.
+#[tokio::test]
+async fn forged_agent_row_never_makes_the_runtime_stage_as_its_did() {
+    let generated = &crate::lean_vocab_test::lean_contract_snapshot().owner_staged_relation_cases;
+    let modeled = generated
+        .iter()
+        .find(|case| case["path"] == "forged_agent_row")
+        .expect("forged Agent row case");
+    assert_eq!(modeled["outcome"], "unmanaged");
+    assert_eq!(modeled["staged"], false);
+    let f = Fixture::start().await;
+    let runtime = f.home.identity.clone();
+    let runtime_access = ConfigAccess::local_as(f.home.node.clone(), did(runtime.did()));
+    let node_doc = {
+        let response = runtime_access
+            .execute(&format!(
+                r#"{{ Node(filter: {{node_did: {{_eq: "{}"}}}}) {{_docID}} }}"#,
+                runtime.did()
+            ))
+            .await
+            .unwrap();
+        gents_protocol::graphql::graphql_rows_from_response(&response, "Node")[0]["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let victim: Arc<dyn NodeIdentity> = Arc::new(
+        crate::KeyIdentity::load_or_create(f._keys.path().join("victim.key"), None).unwrap(),
+    );
+    let binding = crate::store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
+    let agent = crate::store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
+    for actor in [&victim, &agent] {
+        crate::store::identity::GrantSet::OperatorUser
+            .grant(&runtime_access, &did(actor.did()))
+            .await
+            .unwrap();
+    }
+    // Agent rows on the runtime's Node: a forged one naming the victim User,
+    // and a genuine one whose DID derives from the runtime key.
+    for (agent_did, nonce) in [
+        (victim.did().to_owned(), "f".repeat(64)),
+        (binding.agent_did.clone(), binding.creation_nonce.clone()),
+    ] {
+        runtime_access
+            .write(
+                "test.owner_staged_route.agent_row",
+                &format!(
+                    r#"mutation {{ create_Agent(input: {{node_did: "{}", agent_did: "{agent_did}", creation_nonce: "{nonce}", inference_profile_id: "profile", enabled: true}}) {{_docID}} }}"#,
+                    runtime.did()
+                ),
+            )
+            .await
+            .unwrap();
+    }
+    let placement = |owner: &Arc<dyn NodeIdentity>, repository: &'static str| {
+        let access = f.client(owner.as_ref());
+        let node_doc = node_doc.clone();
+        let runtime_did = runtime.did().to_owned();
+        async move {
+            access
+                .transact_write("test.owner_staged_route.placement", |txn| {
+                    let (node_doc, runtime_did) = (&node_doc, &runtime_did);
+                    Box::pin(async move {
+                        let created = txn
+                            .execute(&format!(
+                                r#"mutation {{ create_RepositoryPlacement(input: {{repository_id: "{repository}", node_did: "{runtime_did}", host_path: "/tmp/{repository}", enabled: true}}) {{_docID}} }}"#
+                            ))
+                            .await?;
+                        let doc = gents_protocol::graphql::extract_mutation_doc_id(
+                            &created,
+                            "RepositoryPlacement",
+                        )?;
+                        txn.add_resource_relationship(
+                            "RepositoryPlacement",
+                            &doc,
+                            "parent",
+                            "nodes",
+                            node_doc,
+                        )
+                        .await?;
+                        Ok::<_, anyhow::Error>(doc)
+                    })
+                })
+                .await
+                .unwrap()
+        }
+    };
+    let reader = |doc: &str| OwnerStagedChange::PlacementReader {
+        placement_doc_id: doc.to_owned(),
+        reader_did: f.target.to_string(),
+    };
+    let target_reads = |doc: String| {
+        let access = ConfigAccess::local_as(f.home.node.clone(), f.target.clone());
+        async move {
+            let response = access
+                .execute("{ RepositoryPlacement { _docID } }")
+                .await
+                .unwrap();
+            gents_protocol::graphql::graphql_rows_from_response(&response, "RepositoryPlacement")
+                .iter()
+                .any(|row| row["_docID"].as_str() == Some(doc.as_str()))
+        }
+    };
+    let admin = f.client(f.admin.as_ref());
+
+    let victims = placement(&victim, "victim-repository").await;
+    let refused = admin.request_owner_staged(&reader(&victims), true).await;
+    assert!(
+        matches!(
+            &refused,
+            Err(ConfigClientError::OwnerStagedRelationshipUnmanaged { doc_id, .. })
+                if doc_id == &victims
+        ),
+        "{refused:?}"
+    );
+    assert!(!target_reads(victims).await);
+
+    let agents = placement(&agent, "agent-repository").await;
+    admin
+        .request_owner_staged(&reader(&agents), true)
+        .await
+        .unwrap();
+    assert!(target_reads(agents).await);
+    f.home.node.shutdown().await.unwrap();
+}
+
+/// The route decides the signer's authority before it consumes the command's
+/// nonce: an unauthorized but validly signed command is denied with the fixed
+/// denial and makes the runtime write no nonce, while an authorized command's
+/// nonce is still consumed once.
+#[tokio::test]
+async fn unauthorized_signed_command_writes_no_nonce() {
+    let f = Fixture::start().await;
+    let runtime = ConfigAccess::local_as(f.home.node.clone(), did(f.home.identity.did()));
+    let nonces = || async {
+        let response = runtime
+            .execute("{ EnrollmentOperatorNonce { _docID } }")
+            .await
+            .unwrap();
+        gents_protocol::graphql::graphql_rows_from_response(&response, "EnrollmentOperatorNonce")
+            .len()
+    };
+    let before = nonces().await;
+    for doc in [&f.route, &f.missing, &f.foreign] {
+        let command = f.command(f.outsider.as_ref(), doc, true).await;
+        let (status, body) = f.post(&command, Some(f.outsider.as_ref())).await;
+        assert_eq!(route_outcome(status, &body), "denied", "{body}");
+    }
+    assert_eq!(nonces().await, before);
+    let command = f.command(f.admin.as_ref(), &f.route, true).await;
+    let (status, body) = f.post(&command, Some(f.admin.as_ref())).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(nonces().await, before + 1);
+    let (status, body) = f.post(&command, Some(f.admin.as_ref())).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "replayed nonce: {body}");
     f.home.node.shutdown().await.unwrap();
 }

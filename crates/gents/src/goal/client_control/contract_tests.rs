@@ -89,8 +89,9 @@ async fn generated_goal_client_controls_drive_signed_commands() {
                 fixture.node.clone(),
                 ::identity::Did::new(fixture.identity.did()).unwrap(),
             );
+            // A collaborating User holds no `get-collection`: its command and
+            // links still publish, in one transaction.
             for permission in [
-                crate::store::config_client::NodePermission::CollectionGet,
                 crate::store::config_client::NodePermission::DocumentRead,
                 crate::store::config_client::NodePermission::DocumentUpdate,
                 crate::store::config_client::NodePermission::DacRelationAdd,

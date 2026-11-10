@@ -137,7 +137,12 @@ async fn owner_staged_relationships_follow_the_document_owner() -> anyhow::Resul
 
     let cases = &crate::lean_vocab_test::lean_contract_snapshot().owner_staged_relation_cases;
     assert!(!cases.is_empty());
-    for case in cases.iter().filter(|case| case["path"] != "pairing_reader") {
+    // Pairing cases and the forged Agent row case have their own signed-HTTP
+    // replays (`owner_staged_route::tests`).
+    for case in cases
+        .iter()
+        .filter(|case| case["path"] != "pairing_reader" && case["path"] != "forged_agent_row")
+    {
         let (key, did) = match case["requester"].as_str().unwrap() {
             "user" => (&user, user_did.clone()),
             "admin" => (&admin, identity::Did::new(admin.did())?),

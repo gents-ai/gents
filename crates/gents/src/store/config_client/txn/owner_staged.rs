@@ -44,7 +44,7 @@ pub(crate) enum OwnerStagedRevocations {
     /// through PLAN and WRITE.
     Send,
     /// PLAN: record each revocation; the transaction owner discards this
-    /// attempt and sends them before WRITE.
+    /// attempt, confirmed, and sends them before WRITE.
     Plan(Vec<OwnerStagedChange>),
     /// WRITE: the planned revocations were sent; record what this attempt
     /// derives so the owner can revalidate it before committing.
@@ -154,6 +154,13 @@ impl ConfigApplyTxn<'_> {
                 },
             };
         }
+    }
+
+    /// Whether this attempt dispatched a client-signed graph.
+    #[cfg(test)]
+    pub(crate) fn client_signed_write_dispatched_for_test(&self) -> bool {
+        self.client_signed_write_dispatched
+            .load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// After a successful callback: commit, revoke the plan first, or refuse
@@ -343,7 +350,7 @@ impl ConfigApplyTxn<'_> {
         // the runtime itself owns.
         let managed = match authority {
             Authority::DocumentUpdate => {
-                owner == runtime || self.configures_agent(&runtime, &owner).await?
+                owner == runtime || self.controls_agent(node, &runtime, &owner).await?
             }
             Authority::PairingNode => owner == runtime,
         };
@@ -453,18 +460,22 @@ impl ConfigApplyTxn<'_> {
         })
     }
 
-    /// Whether `agent` is an Agent configured on the runtime's Node, as the
-    /// runtime observes it in this transaction (`stagesAs`): the requester's
-    /// read access never decides which owners the runtime manages.
-    async fn configures_agent(
+    /// Whether `agent` is an Agent identity the runtime controls (`stagesAs`,
+    /// `derivedAgents`): exactly one Agent row on the runtime's Node names it,
+    /// as the runtime observes it in this transaction, and its DID derives
+    /// from the runtime key and that row's creation nonce. A row's
+    /// `agent_did` is written unverified, so a row alone never suffices; the
+    /// requester's read access never decides it.
+    async fn controls_agent(
         &self,
+        node: &defra_node::Node,
         runtime: &identity::Did,
         agent: &identity::Did,
     ) -> Result<bool> {
         let response = self
             .execute_local_response_with_actor(
                 &format!(
-                    r#"{{ Agent(filter: {{node_did: {{_eq: "{}"}}, agent_did: {{_eq: "{}"}}}}, limit: 1) {{_docID}} }}"#,
+                    r#"{{ Agent(filter: {{node_did: {{_eq: "{}"}}, agent_did: {{_eq: "{}"}}}}, limit: 2) {{agent_did creation_nonce}} }}"#,
                     escape_graphql_string(runtime.as_str()),
                     escape_graphql_string(agent.as_str()),
                 ),
@@ -472,12 +483,27 @@ impl ConfigApplyTxn<'_> {
                 None,
             )
             .await?;
-        Ok(response
+        let rows = response
             .data
             .as_ref()
             .and_then(|data| data.get("Agent"))
-            .and_then(Value::as_array)
-            .is_some_and(|rows| !rows.is_empty()))
+            .and_then(Value::as_array);
+        let Some([row]) = rows.map(Vec::as_slice) else {
+            return Ok(false);
+        };
+        let (Some(agent_did), Some(creation_nonce)) =
+            (row["agent_did"].as_str(), row["creation_nonce"].as_str())
+        else {
+            return Ok(false);
+        };
+        Ok(agent_did == agent.as_str()
+            && crate::store::identity::runtime_derives_agent(
+                node,
+                &gents_protocol::agent_identity::AgentIdentityBinding {
+                    agent_did: agent_did.to_owned(),
+                    creation_nonce: creation_nonce.to_owned(),
+                },
+            ))
     }
 }
 
@@ -541,6 +567,46 @@ impl ConfigAccess {
             |txn| Box::pin(async move { txn.request_owner_staged(change, grant).await }),
         )
         .await
+    }
+
+    /// The decision's first step alone (`authorized`), read as the runtime:
+    /// whether this access's verified client may request `change` at all. The
+    /// route asks before it consumes a command's nonce, so an unauthorized
+    /// signer makes the runtime write nothing; the decision checks it again.
+    pub(crate) async fn verified_client_may_request_owner_staged(
+        &self,
+        change: &OwnerStagedChange,
+    ) -> Result<bool> {
+        let Self::Local(local) = self else {
+            return Err(ConfigClientError::EmbeddedAccessRequired);
+        };
+        let requester = local
+            .identity()
+            .cloned()
+            .ok_or(ConfigClientError::RelationshipActorRequired)?;
+        let runtime = identity::Did::new(
+            local
+                .node()
+                .node_identity_did()
+                .ok_or(ConfigClientError::LocalAccessRequired)?,
+        )
+        .map_err(ConfigClientError::RelationshipTargetIdentity)?;
+        let staged = StagedRelation::of(change)?;
+        ConfigAccess::local_as(local.node().clone(), runtime.clone())
+            .transact_readonly("config.owner_staged_authority", |txn| {
+                let (requester, runtime, staged) = (&requester, &runtime, &staged);
+                Box::pin(async move {
+                    txn.owner_staged_request_allowed(
+                        requester,
+                        runtime,
+                        staged.collection,
+                        &staged.doc_id,
+                        staged.authority,
+                    )
+                    .await
+                })
+            })
+            .await
     }
 }
 
