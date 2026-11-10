@@ -312,21 +312,25 @@ def validNativeShape (message : MessageEnvelope) : Bool :=
     | .user => message.nativeId.isNone && message.nativeRequestId.isNone
     | .assistant => true)
 
-def recoveryTextOnly : List (MessageBlock PayloadSpec) → Bool
+def recoveryBlocksValid : List (MessageBlock PayloadSpec) → Bool
   | [] => true
-  | .text payload :: rest => payload.presentation == .full && recoveryTextOnly rest
+  | .text payload :: rest => payload.presentation == .full && recoveryBlocksValid rest
+  | .reasoning none [.text payload _] :: rest =>
+      payload.presentation == .full && recoveryBlocksValid rest
+  | .reasoning none [.redacted payload] :: rest =>
+      payload.presentation == .full && recoveryBlocksValid rest
   | _ => false
 
 /-- Publication provenance constrains the header even when it has no payload.
-Recovery is the deliberately narrow text-only fallback; forks detach request
-membership and carry one exact origin. -/
+Recovery preserves text and stopped reasoning; forks detach request membership
+and carry one exact origin. -/
 def validPublicationShape (message : MessageEnvelope) : Bool :=
   match message.header.publication with
   | .requestExecution _ => message.header.request.isSome && message.header.origin.isNone
   | .requestRecovery _ =>
       message.header.request.isSome && message.header.origin.isNone &&
       message.header.role == .assistant && message.header.outcome == .partial &&
-      message.nativeId.isNone && message.nativeRequestId.isNone && recoveryTextOnly message.blocks
+      message.nativeId.isNone && message.nativeRequestId.isNone && recoveryBlocksValid message.blocks
   | .toolDelivery call =>
       message.header.request.isSome && message.header.origin.isNone &&
       message.header.role == .user && message.blocks.all (fun block => match block with
@@ -569,7 +573,12 @@ def validateRecoveryPositions (records : List Segment) (denied : List DocId)
     | .provider _ _ _ =>
         let (declaration, _) ← (reconstructPayload records denied reference).mapError
           MessageError.reconstruction
-        if declaration.kind == .text && declaration.part == 0 then .ok ()
+        let streams ← (reconstructExtent records closing).mapError
+          (fun error => MessageError.reconstruction (.extent error))
+        if declaration.part == 0 &&
+            (declaration.kind == .text ||
+              ((declaration.kind == .reasoning || declaration.kind == .redacted) &&
+                reasoningStopped streams declaration.block)) then .ok ()
         else .error .nativePosition
     | _ => .error .wrongSource
 

@@ -54,6 +54,7 @@ inductive PayloadKind where
   | text
   | reasoning
   | signature
+  | reasoningStop
   | summary
   | encrypted
   | redacted

@@ -905,7 +905,7 @@ where
         let path = self.config.definition_path(self.platform);
         if !path.is_file() {
             bail!(
-                "native service is not installed at {}; run `gents service install` first",
+                "native service is not installed at {}; run `gents runtime service install` first",
                 path.display()
             );
         }
@@ -1108,8 +1108,13 @@ fn render_launchd(config: &NativeServiceConfig) -> Result<String> {
         })
         .transpose()?
         .unwrap_or_default();
+    // launchd starts a LaunchAgent with the account's own HOME, not the one
+    // the installing process ran with; the runtime resolves HOME-relative
+    // state (the CLI client key, the remembered home) from it, so it must be
+    // the installer's.
+    let user_home = xml_path(&config.user_home, "user home")?;
     let environment = format!(
-        "\n  <key>EnvironmentVariables</key>\n  <dict><key>GENTS_SYSTEM_LOG</key><string>1</string>{search_path}</dict>"
+        "\n  <key>EnvironmentVariables</key>\n  <dict><key>GENTS_SYSTEM_LOG</key><string>1</string><key>HOME</key><string>{user_home}</string>{search_path}</dict>"
     );
     let stderr = config
         .stderr_path

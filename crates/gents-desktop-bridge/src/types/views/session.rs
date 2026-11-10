@@ -571,24 +571,6 @@ pub enum RenderedTimelineItem {
 
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct GoalView {
-    pub goal_id: String,
-    pub objective: Option<String>,
-    pub status: Option<String>,
-    pub token_budget: Option<i64>,
-    pub tokens_used: i64,
-    pub active_time_seconds: i64,
-    pub consecutive_blocked_audits: i64,
-    pub continuation_sequence: i64,
-    pub wrapup_requested: bool,
-    pub wrapup_completed: bool,
-    pub last_blocked_reason: Option<String>,
-    pub last_failure: Option<String>,
-    pub completion_evidence: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
 pub struct RetryEligibilityView {
     pub eligible: bool,
     pub denial_reason: Option<String>,
@@ -775,7 +757,13 @@ pub struct DesktopSessionSnapshot {
     pub title: Option<String>,
     pub preview_text: Option<String>,
     pub status: Option<String>,
-    pub goal: Option<GoalView>,
+    /// The session's Goal state from the one owner `desktop_session_goal`
+    /// also returns (Lean `SessionObservation.State`): only `observed`
+    /// carries a Goal or its verified absence. `None` means this snapshot's
+    /// read of it did not complete (Lean `ReadOutcome.incomplete`): a reader
+    /// folds it as such (`SessionObservation.step`), so it never shows a Goal
+    /// or its absence as current.
+    pub goal: Option<crate::types::SessionGoalState>,
     pub turn_state: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]

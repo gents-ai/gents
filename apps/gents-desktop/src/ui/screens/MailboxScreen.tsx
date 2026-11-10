@@ -12,6 +12,7 @@ import { ItemRow } from "./MailboxItem";
 import { MAILBOX, openHere, useMailboxList } from "./MailboxStack";
 import { useMinute } from "./time";
 import { SEARCH_FIELD } from "@/lib/textAssist";
+import { MailboxRequests, useMailboxRequests } from "./sharing/MailboxRequests";
 
 type Tab = MailboxTab;
 
@@ -27,6 +28,7 @@ export function MailboxScreen() {
   const kept = useListViews((views) => views.mailboxOpen);
   const openId = openHere(kept, selectedNodeDid, MAILBOX);
   const { items, searched, groups, shown } = useMailboxList(query ?? "");
+  const joins = useMailboxRequests();
   /* the whole mailbox, whatever the search narrows the list to */
   const summary = waiting(groupItems(items));
   const tabs = TRIAGE.map((t) => ({
@@ -111,6 +113,7 @@ export function MailboxScreen() {
             )}
           </>
         )}
+        {joins && <MailboxRequests {...joins} />}
         {shown.length > 0 && (
           <>
             <ul className="mt-5" data-testid="mailbox-list">
@@ -156,7 +159,7 @@ export function MailboxScreen() {
             </button>
           </p>
         )}
-        {items.length === 0 && (
+        {items.length === 0 && !joins && (
           <div className="grid min-h-[60vh] place-items-center animate-in fade-in-0 slide-in-from-bottom-2 duration-300 ease-out fill-mode-both motion-reduce:animate-none">
             <div className="text-center">
               <Inbox className="mx-auto size-6 text-muted-foreground" />

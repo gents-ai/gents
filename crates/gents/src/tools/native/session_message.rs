@@ -357,7 +357,7 @@ impl Tool for AgentSessionListTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_owned(),
-            description: "Find existing sessions you may message, including trigger-started work. Returns activity, relationship and message/interrupt permissions. Continue with next_cursor and the same filter; a stale cursor restarts the listing.".to_owned(),
+            description: "Find existing sessions you may message, including trigger-started work, and the session that started you (listed without message or interrupt permission). Returns activity, relationship and message/interrupt permissions. Continue with next_cursor and the same filter; a stale cursor restarts the listing.".to_owned(),
             parameters: serde_json::json!({
                 "type": "object", "additionalProperties": false,
                 "properties": {
@@ -374,7 +374,7 @@ impl Tool for AgentSessionListTool {
                         }
                     },
                     "cursor": {"type": "string"},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20}
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20, "description": "Sessions per page. The session that started you heads the first page and does not count toward limit."}
                 }
             }),
         }

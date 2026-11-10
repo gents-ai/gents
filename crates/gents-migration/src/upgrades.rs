@@ -66,6 +66,14 @@ pub(crate) fn include_existing_by_version(
             &["readers"][..],
         ),
         (
+            "ToolServiceRegistry",
+            "bafyreigckps33q33zvnrodzqlz72ri4osyodxleniwy6txwkfhnq7tgg3q",
+            "bafyreibvc5vydfmb6swugrjjff5c7eqfymcw6ckm5kn62wqz6tfmlvir2y",
+            "tool-service-registry-add-endpoint-url",
+            r#"[{"op":"add","path":"/ToolServiceRegistry/Fields/-","value":{"Name":"endpoint_url","Kind":"String"}}]"#,
+            &["endpoint_url"][..],
+        ),
+        (
             "CallbackResult",
             "bafyreiay7i7erfmg4o56oqrzbbwrohw253x7yme4plut46t4tgpzujdcq4",
             "bafyreiavdoikuwav2vgp4lxpnulwqlm6tvlqkmw7tugwb7gtjs5twd7kpq",
@@ -88,6 +96,14 @@ pub(crate) fn include_existing_by_version(
             "workspace-receipt-add-handoff-route",
             handoff_route_patch!("WorkspaceReceipt"),
             &HANDOFF_ROUTE_FIELDS[..],
+        ),
+        (
+            "PackInstallation",
+            "bafyreia5f6iex3vrzfjzzlpm7jqkqehmnis3vqnbcdyuno2jlafyyrx3vu",
+            "bafyreif63c7rk5p7u66z6wvhab5gjh2544wt6uauq7ndmfszizfixsmwmi",
+            "pack-installation-add-source-and-variables",
+            r#"[{"op":"add","path":"/PackInstallation/Fields/-","value":{"Name":"source","Kind":"JSON"}},{"op":"add","path":"/PackInstallation/Fields/-","value":{"Name":"source_history","Kind":"JSON"}},{"op":"add","path":"/PackInstallation/Fields/-","value":{"Name":"variables","Kind":"JSON"}}]"#,
+            &["source", "source_history", "variables"][..],
         ),
     ] {
         let Some(current) = get_version(name)? else {

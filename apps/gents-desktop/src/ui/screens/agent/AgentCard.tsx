@@ -19,8 +19,7 @@ import { useHomeFolder } from "@/hooks/useHomeFolder";
 import { useHomeDid, useNodeReach } from "@/hooks/useClient";
 import { isLocalNode } from "@/lib/firstRun";
 import { InferenceSummary, OnlineStatus, StateDot, counted } from "../NodeFacts";
-import { AgentInitials } from "../parts";
-import { agentName } from "../behavior";
+import { AgentMark } from "../parts";
 import { span, useMinute } from "../time";
 import { lastRunFailed } from "./automation";
 import { limitNote } from "./ProviderUsage";
@@ -186,9 +185,10 @@ export function AgentMarks({
   return (
     <span aria-hidden className="flex shrink-0 items-center">
       {agentIds.slice(0, MARKS).map((agentId) => (
-        <AgentInitials
+        <AgentMark
           key={agentId}
-          name={agentName(agentId, deployment)}
+          agentDid={agentId}
+          deployment={deployment}
           className={mark}
         />
       ))}

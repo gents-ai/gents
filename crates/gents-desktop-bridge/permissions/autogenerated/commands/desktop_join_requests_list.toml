@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-join-requests-list"
+description = "Enables the desktop_join_requests_list command without any pre-configured scope."
+commands.allow = ["desktop_join_requests_list"]
+
+[[permission]]
+identifier = "deny-desktop-join-requests-list"
+description = "Denies the desktop_join_requests_list command without any pre-configured scope."
+commands.deny = ["desktop_join_requests_list"]

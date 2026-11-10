@@ -482,7 +482,7 @@ fn readme(
          ## Origin\n\n- Source: {source}\n- Pin: {pin_line}\n- License: {license}\n\n\
          ## Converted\n\n{converted}\n## Needs a port\n\n{needs}\n## Dropped\n\n{dropped}\n\
          ## Installation\n\nReview this directory, port what is listed above, then:\n\n\
-         ```sh\ngents pack check ./{name}\ngents pack build ./{name}\n```\n",
+         ```sh\ngents config pack check ./{name}\ngents config pack build ./{name}\n```\n",
         pin = pin.map(|pin| format!(" at {pin}")).unwrap_or_default(),
         description = manifest["description"].as_str().unwrap_or(""),
         pin_line = pin.unwrap_or("a local directory, not pinned"),

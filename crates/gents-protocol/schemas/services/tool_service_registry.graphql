@@ -8,6 +8,7 @@ type ToolServiceRegistry @policy(id: "202ce2df1b18d27183b29b653e2c06654178b2e79d
     lan_ip: String
     mcp_port: Int
     mcp_path: String
+    endpoint_url: String
     send_node_did: Boolean
     enabled: Boolean @index
     tags: [String]

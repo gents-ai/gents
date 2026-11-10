@@ -197,4 +197,51 @@ theorem scope_is_own_only_when_exclusive (invoking : String) :
     scopeOf invoking invoking false = .own := by
   simp [scopeOf]
 
+/-! ### The yolo agent -/
+
+/-- The yolo agent's self-config group.
+
+Decision (maintainer, 2026-11-10): `gents --yolo` creates, as the User, the
+User's own unrestricted agent: one that configures itself is the point of it.
+It differs from a clone, which never inherits self-configuration
+(`clone_inherits_no_self_config`): its group is not copied with the Tools
+document but granted by the User's explicit act at `--yolo`, which keeps the
+Engineer's group on its Tools and writes `config_writer` for it on its own
+Agent document, as `gents init` does for the Engineer. Nothing else is
+granted: its grant sets are the agent baseline alone
+(`Identity.GrantSets.yolo_receives_agent_baseline_only`), so it holds no
+policy delegation and writes no other Agent natively. Native authorization
+decides every write, so its catalog category reaches no Agent it does not
+write. -/
+def yoloGroup : SelfConfigGroup := engineerGroup
+
+/-- An edit is made when the categories admit it and the actor natively writes
+the target document. -/
+def mayWrite (categories : List String) (category : String) (scope : Scope)
+    (writesTarget : Bool) : Bool :=
+  mayEdit categories category scope && writesTarget
+
+/-- The yolo agent natively writes its own configuration only. -/
+def yoloWrites : Scope → Bool
+  | .own => true
+  | .foreign => false
+
+theorem yolo_edits_own_configuration (c : String) (h : c ∈ selfConfigCategories) :
+    mayWrite (effectiveCategories yoloGroup) c .own (yoloWrites .own) = true := by
+  simp [mayWrite, yoloWrites, own_edit_needs_only_its_category, effectiveCategories,
+    yoloGroup, engineerGroup, h]
+
+theorem yolo_edits_own_tools :
+    mayWrite (effectiveCategories yoloGroup) "tools" .own (yoloWrites .own) = true := by
+  decide
+
+theorem yolo_cannot_edit_another_agent (c : String) :
+    mayWrite (effectiveCategories yoloGroup) c .foreign (yoloWrites .foreign) = false := by
+  simp [mayWrite, yoloWrites]
+
+/-- An ordinary clone still edits nothing, whatever it natively writes. -/
+theorem clone_still_edits_nothing (c : String) (s : Scope) (writes : Bool) :
+    mayWrite (effectiveCategories (cloneGroup engineerGroup)) c s writes = false := by
+  simp [mayWrite, clone_of_engineer_edits_nothing]
+
 end SelfConfig

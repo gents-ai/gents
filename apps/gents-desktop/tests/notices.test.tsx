@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import type { GoalView } from "@source-inc/gents-desktop-client";
+import type { GoalControlView } from "@source-inc/gents-desktop-client";
 import type { RenderedToolCallView } from "@source-inc/gents-desktop-client/generated/RenderedToolCallView";
 import {
   cancelCauseText,
@@ -66,10 +66,10 @@ describe("words for what the runtime reports", () => {
   it("never offers a command to type", () => {
     expect(
       withoutCommandHints(
-        "no other Claude account offers claude-sonnet-5-5; add one with `gents claude-login --label <label>`",
+        "no other Claude account offers claude-sonnet-5-5; add one with `gents accounts login claude --label <label>`",
       ),
     ).toBe("no other Claude account offers claude-sonnet-5-5");
-    expect(reasonText("sign in with `gents claude-login`")).toBe("");
+    expect(reasonText("sign in with `gents accounts login claude`")).toBe("");
   });
 
   it("reads a coded reason by its code, and an unknown one by its message", () => {
@@ -119,15 +119,15 @@ describe("words for what the runtime reports", () => {
 
 describe("where the words are used", () => {
   it("draws a goal's status and reasons as words, not codes", () => {
-    const goal: GoalView = {
+    const goal: GoalControlView = {
       goalId: "g",
+      revision: { document: "goal-doc", composite: "cid" },
       objective: "Make the import resumable",
       status: "usage_limited",
       tokenBudget: null,
-      tokensUsed: 0,
-      activeTimeSeconds: 0,
-      consecutiveBlockedAudits: 0,
-      continuationSequence: 0,
+      tokensUsed: "0",
+      activeTimeSeconds: "0",
+      continuationSequence: "0",
       wrapupRequested: false,
       wrapupCompleted: false,
       lastBlockedReason: "verification_failed: the resume test still fails",
@@ -135,7 +135,7 @@ describe("where the words are used", () => {
       completionEvidence: null,
     };
     render(<Goal goal={goal} />);
-    screen.getByRole("button", { name: "Show goal detail" }).click();
+    screen.getByRole("button", { name: "Show Goal detail" }).click();
     return screen.findByText("Stopped at the account's usage limit").then(() => {
       expect(screen.queryByText(/usage_limited/)).toBeNull();
       expect(

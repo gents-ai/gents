@@ -1,4 +1,9 @@
-import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
+import { useMemo } from "react";
+import {
+  sessionGoalShown,
+  type DesktopSessionSnapshot,
+  type SessionGoalShown,
+} from "@source-inc/gents-desktop-client";
 
 import {
   heldFor,
@@ -51,5 +56,26 @@ export function useSessionFacts(): SessionFacts | null {
   const { store, selection } = useHeld();
   return useSessionValue(store, (state) =>
     selectedIn(state, selection) ? state.facts : null,
+  );
+}
+
+/** What the open chat is told about its Goal (Lean `SessionObservation.shown`). */
+export function useSelectedSessionGoal(): SessionGoalShown {
+  const { store, selection } = useHeld();
+  const held = useSessionValue(store, (state) =>
+    selectedIn(state, selection) ? state.goal : null,
+  );
+  const sessionId = useSessionValue(
+    store,
+    (state) => selectedIn(state, selection)?.sessionId ?? null,
+  );
+  const nodeDid = useSessionValue(
+    store,
+    (state) => selectedIn(state, selection)?.nodeDid ?? null,
+  );
+  return useMemo(
+    () =>
+      sessionId ? sessionGoalShown(held, sessionId, nodeDid) : { kind: "pending" },
+    [held, sessionId, nodeDid],
   );
 }

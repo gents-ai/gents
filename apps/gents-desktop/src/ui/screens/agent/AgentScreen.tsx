@@ -4,6 +4,7 @@ import { useNodeConfigReadOnly } from "@/hooks/useClient";
 import { useFleet } from "@/hooks/useFleet";
 import { nodeOf } from "../../../hooks/fleetStore";
 import { SectionedScreen } from "../SectionedScreen";
+import { ReadOnlyConfig } from "./rows";
 import { isListed, useAgentSections } from "./sections";
 
 export function AgentScreen({
@@ -77,15 +78,9 @@ function NodeSettings({
         )
       }
     >
-      {/* read-only: values at full strength, and nothing offered that would
-          change them */}
-      <fieldset
-        disabled={Boolean(readOnly)}
-        data-readonly={readOnly ? "" : undefined}
-        className="m-0 min-w-0 border-0 p-0 data-readonly:[&_*:disabled]:opacity-100! data-readonly:[&_[data-disabled]]:opacity-100! data-readonly:[&_[data-readonly-hide]]:hidden"
-      >
+      <ReadOnlyConfig readOnly={Boolean(readOnly)}>
         {Panel && <Panel deployment={deployment} item={item} />}
-      </fieldset>
+      </ReadOnlyConfig>
     </SectionedScreen>
   );
 }
