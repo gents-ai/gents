@@ -122,6 +122,9 @@ pub enum JoinHistoryState {
     Approved,
     Denied,
     Revoked,
+    /// The lease lapsed: no longer a member, as the runtime's lease
+    /// freshness rule decides.
+    Expired,
 }
 
 impl From<ManagedEnrollmentHistoryState> for JoinHistoryState {
@@ -130,6 +133,7 @@ impl From<ManagedEnrollmentHistoryState> for JoinHistoryState {
             ManagedEnrollmentHistoryState::Approved => Self::Approved,
             ManagedEnrollmentHistoryState::Denied => Self::Denied,
             ManagedEnrollmentHistoryState::Revoked => Self::Revoked,
+            ManagedEnrollmentHistoryState::Expired => Self::Expired,
         }
     }
 }
@@ -146,6 +150,7 @@ pub struct JoinHistoryEntryView {
     pub decided_by: String,
     pub revoked_at: Option<String>,
     pub revoked_by: Option<String>,
+    pub expired_at: Option<String>,
 }
 
 impl From<ManagedEnrollmentHistoryEntry> for JoinHistoryEntryView {
@@ -160,6 +165,7 @@ impl From<ManagedEnrollmentHistoryEntry> for JoinHistoryEntryView {
             decided_by: entry.decided_by,
             revoked_at: entry.revoked_at,
             revoked_by: entry.revoked_by,
+            expired_at: entry.expired_at,
         }
     }
 }

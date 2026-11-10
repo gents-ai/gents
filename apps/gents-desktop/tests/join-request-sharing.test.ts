@@ -62,6 +62,7 @@ const entry = (overrides: Partial<HistoryEntry> = {}): HistoryEntry => ({
   decidedBy: "did:key:z6MkOperator",
   revokedAt: null,
   revokedBy: null,
+  expiredAt: null,
   ...overrides,
 });
 
@@ -141,6 +142,16 @@ describe("the runtime's join requests as sharing", () => {
       kind: "revoked",
       by: { did: "did:key:z6MkOtherOperator" },
       at: "2026-11-04T12:00:00Z",
+    });
+  });
+
+  it("maps an approval whose lease lapsed to an ended line of history", () => {
+    expect(
+      decisionOf(entry({ state: "expired", expiredAt: "2026-11-02T12:00:00Z" })),
+    ).toMatchObject({
+      kind: "expired",
+      by: { did: "did:key:z6MkOperator" },
+      at: "2026-11-02T12:00:00Z",
     });
   });
 

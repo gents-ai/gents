@@ -154,14 +154,15 @@ export function memberOf(view: JoinMemberView): SharingMember {
 }
 
 /** one of the runtime's records as a line of history: a revoked record
-    speaks of its revoking */
+    speaks of its revoking, and an approval whose lease lapsed (no longer a
+    member, by the runtime's lease freshness rule) of when it ended */
 export function decisionOf(entry: JoinHistoryView["history"][number]): SharingDecision {
   return {
     kind: entry.state,
     party: partyOf(entry.candidateDid),
     scope: { kind: "node" },
     by: partyOf(entry.revokedBy ?? entry.decidedBy),
-    at: entry.revokedAt ?? entry.decidedAt,
+    at: entry.revokedAt ?? entry.expiredAt ?? entry.decidedAt,
   };
 }
 
