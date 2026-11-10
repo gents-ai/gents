@@ -181,13 +181,24 @@ pub(super) fn close(
     let selected: BTreeSet<(Collection, String)> = queue.iter().cloned().collect();
     let mut documents = BTreeMap::new();
     let mut pulled = Vec::new();
-    let mut collections = selection.collections.clone();
+    let managed = |name: &str| {
+        crate::store::schema::migration::DEFAULT_REGISTRY
+            .managed_names()
+            .any(|managed| managed == name)
+    };
+    let mut collections = BTreeSet::new();
+    for name in &selection.collections {
+        if managed(name) {
+            refusals.push(format!(
+                "collection {name} is managed by Gents; a pack carries application collections only"
+            ));
+        } else {
+            collections.insert(name.clone());
+        }
+    }
     let mut plugins = BTreeSet::new();
     let mut pull_collection = |name: &str, via: String, pulled: &mut Vec<PulledByReference>| {
-        let managed = crate::store::schema::migration::DEFAULT_REGISTRY
-            .managed_names()
-            .any(|managed| managed == name);
-        if !managed && collections.insert(name.to_owned()) {
+        if !managed(name) && collections.insert(name.to_owned()) {
             pulled.push(PulledByReference {
                 part: format!("collection/{name}"),
                 via,
@@ -369,4 +380,26 @@ pub(super) fn close(
         collections,
         plugins,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_gents_managed_collection_named_for_export_is_refused_by_name() {
+        let selection = ExportSelection {
+            collections: ["Agent".to_owned(), "Notes".to_owned()].into(),
+            ..Default::default()
+        };
+        let Err(error) = close("did:key:n", &BTreeMap::new(), &selection) else {
+            panic!("a managed collection was accepted");
+        };
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("collection Agent is managed by Gents"),
+            "{message}"
+        );
+        assert!(!message.contains("Notes"), "{message}");
+    }
 }
