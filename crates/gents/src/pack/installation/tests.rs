@@ -21,13 +21,18 @@ fn pack_cleanup_observation_matches_model() {
 }
 
 #[test]
-fn edited_pack_error_identifies_the_operator_cli() {
-    let error = edited_error("acme/demo", &["Tools/t1".to_owned()]).to_string();
+fn edited_pack_error_names_the_decision_on_both_surfaces() {
+    let error = edited_error("acme/demo", &["Tools/t1".to_owned()]);
+    assert!(matches!(
+        error.downcast_ref::<PackDriftError>(),
+        Some(PackDriftError::Edited { edited, .. }) if edited == &["Tools/t1"]
+    ));
+    let error = error.to_string();
     assert!(error.contains("Tools/t1"));
-    assert!(error.contains("operator CLI `gents pack install`"));
+    assert!(error.contains("`gents pack install`"));
     assert!(error.contains("--overwrite"));
     assert!(error.contains("--keep"));
-    assert!(error.contains("agent pack command does not accept these flags"));
+    assert!(error.contains("options.edited on the agent pack command"));
 }
 
 #[test]

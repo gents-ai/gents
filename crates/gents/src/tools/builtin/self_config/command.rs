@@ -145,7 +145,7 @@ impl ConfigCommandParams {
                 ["datastore" | "agent-target" | "execution", "preview", "create" | "edit", ..]
                 | ["agent", "preview", "edit" | "default", ..]
                 | ["backend" | "profile", "preview", "create", ..]
-                | ["pack", "preview", "install" | "update", ..] => 3,
+                | ["pack", "preview", "install" | "update" | "remove", ..] => 3,
                 ["trigger", "explain", ..] => 2,
                 ["datastore" | "agent-target" | "execution", "get" | "create" | "edit", ..]
                 | ["mcp-service", "get" | "preview" | "edit", ..]

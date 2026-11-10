@@ -209,10 +209,51 @@ impl PackInstaller {
     /// but no plugin bytes or archive; use `gents pack remove` for that.
     /// `with_collections` then also empties and removes each collection the
     /// pack's SDL declared that nothing else on the node names.
+    /// What `pack remove` would do to an installed document pack, read from
+    /// its installation record: nothing is resolved or changed.
+    pub(super) async fn preview_remove(&self, package: &str) -> anyhow::Result<String> {
+        let spec = pack::resolve::parse_pack_spec(package.trim())?;
+        let coordinate = format!("{}/{}", spec.namespace, spec.name);
+        let access = self.core.access()?;
+        let installed = match self.home.as_deref() {
+            Some(home) => pack::read_home_install(home, &coordinate)?
+                .filter(|record| record.kind != pack::PackKind::Documents)
+                .map(serde_json::to_value)
+                .transpose()?,
+            None => None,
+        };
+        let installed = match installed {
+            Some(installed) => Some(installed),
+            None => pack::read_installed_pack(&access, self.core.node_did(), &coordinate)
+                .await?
+                .map(serde_json::to_value)
+                .transpose()?,
+        };
+        let installed =
+            installed.with_context(|| format!("{coordinate} is not installed; see pack list"))?;
+        let edited = self.edited_documents(&coordinate, true).await?;
+        ordered! {
+            "committed": false,
+            "operation": "remove",
+            "pack": coordinate,
+            "installed": installed,
+            "edited_documents": edited,
+            "apply_with": if edited.is_some() {
+                json!({"argv":["pack","remove",coordinate],"options":{"edited":"keep"}})
+            } else {
+                json!({"argv":["pack","remove",coordinate]})
+            },
+            "effect": "Removes the documents the pack created; its collections and their documents stay unless --with-collections is added.",
+        }
+        .pretty()
+    }
+
     pub(super) async fn remove(
         &self,
         package: &str,
         with_collections: bool,
+        edited: pack::DriftPolicy,
+        words: &[String],
     ) -> anyhow::Result<String> {
         let args = PackInstallParams {
             package: package.to_owned(),
@@ -258,13 +299,9 @@ impl PackInstaller {
         } else {
             Default::default()
         };
-        let report = pack::remove_pack(
-            &access,
-            self.core.node_did(),
-            &coordinate,
-            pack::DriftPolicy::Refuse,
-        )
-        .await?;
+        self.require_edited_decision(&coordinate, true, edited, words)
+            .await?;
+        let report = pack::remove_pack(&access, self.core.node_did(), &coordinate, edited).await?;
         if let Some(home) = self.home.as_deref() {
             pack::forget_home_install(home, &coordinate)?;
             for removed in std::iter::once(&report).chain(&report.dependencies) {

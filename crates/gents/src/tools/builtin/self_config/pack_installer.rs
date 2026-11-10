@@ -345,6 +345,71 @@ impl PackInstaller {
             .await
     }
 
+    /// What a preview says about documents edited since the install: which
+    /// they are and what each `options.edited` choice does to them. Absent
+    /// when nothing was edited.
+    pub(super) async fn edited_documents(
+        &self,
+        coordinate: &str,
+        removal: bool,
+    ) -> anyhow::Result<Option<Value>> {
+        let edited = crate::pack::edited_installed_documents(
+            &self.core.access()?,
+            self.core.node_did(),
+            coordinate,
+            removal,
+        )
+        .await?;
+        Ok((!edited.is_empty()).then(|| {
+            json!({
+                "documents": edited,
+                "decide_with": "options.edited",
+                "overwrite": if removal { "deletes them with the rest of the pack" } else { "replaces them with the pack's versions; the live edits are lost" },
+                "keep": if removal { "leaves them on the node; the rest of the pack is removed" } else { "leaves them as edited; the rest of the pack is installed" },
+            })
+        }))
+    }
+
+    /// Refuses a change that would meet edited documents without a decision,
+    /// as the same call with the decision that loses nothing; the message
+    /// names the other one. `words` is the pack command as it was called.
+    pub(super) async fn require_edited_decision(
+        &self,
+        coordinate: &str,
+        removal: bool,
+        edited: crate::pack::DriftPolicy,
+        words: &[String],
+    ) -> anyhow::Result<()> {
+        if edited != crate::pack::DriftPolicy::Refuse {
+            return Ok(());
+        }
+        let Some(found) = self.edited_documents(coordinate, removal).await? else {
+            return Ok(());
+        };
+        let call = |decision: &str| {
+            let mut argv = vec!["pack".to_owned()];
+            argv.extend(words.iter().cloned());
+            json!({"argv": argv, "options": {"edited": decision}})
+        };
+        let documents = found["documents"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>()
+            .join(", ");
+        Err(command::CommandGuidance {
+            message: format!(
+                "nothing was changed: {documents} of {coordinate} were edited since it was installed. Repeat the call with options.edited: \"keep\" {}; \"overwrite\" {}. Overwrite: {}",
+                found["keep"].as_str().unwrap_or_default(),
+                found["overwrite"].as_str().unwrap_or_default(),
+                call("overwrite")
+            ),
+            next_call: call("keep"),
+        }
+        .into())
+    }
+
     pub(super) async fn preview(
         &self,
         operation: &str,
@@ -359,7 +424,10 @@ impl PackInstaller {
             );
         }
         match distribution.manifest().metadata.kind {
-            PackKind::Documents => self.documents(operation, &args, &distribution, false).await,
+            PackKind::Documents => {
+                self.documents(operation, &args, &distribution, false, Default::default())
+                    .await
+            }
             PackKind::Plugins | PackKind::Assets => {
                 self.plugins_pack(operation, &args, &distribution, false)
                     .await
@@ -371,6 +439,8 @@ impl PackInstaller {
         &self,
         operation: &str,
         args: PackInstallParams,
+        edited: crate::pack::DriftPolicy,
+        words: &[String],
     ) -> anyhow::Result<String> {
         let distribution = self.resolve(operation, &args).await?;
         let expected = args.expected_digest.as_deref().context(
@@ -382,7 +452,18 @@ impl PackInstaller {
             distribution.digest()
         );
         match distribution.manifest().metadata.kind {
-            PackKind::Documents => self.documents(operation, &args, &distribution, true).await,
+            PackKind::Documents => {
+                let manifest = distribution.manifest();
+                self.require_edited_decision(
+                    &format!("{}/{}", manifest.metadata.namespace, manifest.name),
+                    false,
+                    edited,
+                    words,
+                )
+                .await?;
+                self.documents(operation, &args, &distribution, true, edited)
+                    .await
+            }
             PackKind::Plugins | PackKind::Assets => {
                 self.plugins_pack(operation, &args, &distribution, true)
                     .await

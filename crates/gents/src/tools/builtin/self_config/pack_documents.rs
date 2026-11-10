@@ -7,6 +7,7 @@ impl PackInstaller {
         args: &PackInstallParams,
         distribution: &ConfigPackDistribution,
         commit: bool,
+        edited: crate::pack::DriftPolicy,
     ) -> anyhow::Result<String> {
         let access = self.core.access()?;
         let node_binding = self.core.refresh_node_binding().await?;
@@ -164,6 +165,7 @@ impl PackInstaller {
                     "repeat_inference_slots": args.inference_slots, "repeat_variables": args.variables,
                 })),
                 "installation_blockers": blockers,
+                "edited_documents": self.edited_documents(&format!("{}/{}", distribution.manifest().metadata.namespace, distribution.manifest().name), false).await?,
                 "would_grant": authority,
                 "operation": operation,
                 "package": distribution.manifest().name, "version": distribution.manifest().version,
@@ -194,7 +196,7 @@ impl PackInstaller {
             self.home.as_deref(),
             self.grants_authority(),
             crate::pack::InstalledVia::SelfConfig,
-            crate::pack::DriftPolicy::Refuse,
+            edited,
         )
         .await?;
         let effective = self

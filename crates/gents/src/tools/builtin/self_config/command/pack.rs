@@ -156,35 +156,60 @@ impl ConfigCommandTool {
             "preview" => {
                 let operation = argv
                     .get(1)
-                    .context("pack preview requires install or update")?;
+                    .context("pack preview requires install, update or remove")?;
+                if operation == "remove" {
+                    anyhow::ensure!(argv.len() == 3, "pack preview remove takes one PACKAGE");
+                    return installer.preview_remove(&argv[2]).await;
+                }
                 anyhow::ensure!(
                     matches!(operation.as_str(), "install" | "update"),
-                    "pack preview supports install and update"
+                    "pack preview supports install, update and remove"
                 );
-                installer
-                    .preview(operation, parse_pack_change(&argv[2..])?)
-                    .await
+                let (change, _) = parse_pack_change(&argv[2..])?;
+                installer.preview(operation, change).await
             }
             "install" | "update" => {
-                let change = parse_pack_change(&argv[1..])?;
+                let (change, edited) = parse_pack_change(&argv[1..])?;
                 self.execution.enter_mutation();
-                installer.apply(verb, change).await
+                installer.apply(verb, change, edited, argv).await
             }
             "remove" => {
-                let with_collections = argv.get(2).is_some_and(|flag| flag == "--with-collections");
+                let rest = argv[1..]
+                    .iter()
+                    .filter(|word| *word != "--with-collections")
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let with_collections = rest.len() + 1 < argv.len();
+                let parsed = ParsedArgs::parse(&rest)?;
                 anyhow::ensure!(
-                    argv.len() == 2 || (argv.len() == 3 && with_collections),
-                    "pack remove takes one PACKAGE and optionally --with-collections"
+                    parsed.positionals.len() == 1
+                        && parsed.switches.is_empty()
+                        && parsed.options.keys().all(|name| name == "edited"),
+                    "pack remove takes one PACKAGE and optionally --with-collections and options.edited (overwrite or keep)"
                 );
+                let edited = parse_edited(&parsed)?;
                 self.execution.enter_mutation();
-                installer.remove(&argv[1], with_collections).await
+                installer
+                    .remove(&parsed.positionals[0], with_collections, edited, argv)
+                    .await
             }
             other => bail!("unknown pack command {other:?}; see [\"help\",\"pack\"]"),
         }
     }
 }
 
-fn parse_pack_change(argv: &[String]) -> Result<PackInstallParams> {
+/// `options.edited`: what an install, update or removal does with documents
+/// edited since the pack was installed. Absent refuses them.
+fn parse_edited(parsed: &ParsedArgs) -> Result<crate::pack::DriftPolicy> {
+    match parsed.one("edited")? {
+        None => Ok(crate::pack::DriftPolicy::Refuse),
+        Some(word) => crate::pack::DriftPolicy::parse(word).with_context(|| {
+            format!("options.edited is \"overwrite\" or \"keep\", not {word:?}; pack preview says what each does")
+        }),
+    }
+}
+
+fn parse_pack_change(argv: &[String]) -> Result<(PackInstallParams, crate::pack::DriftPolicy)> {
     let package = argv
         .first()
         .context("pack operation requires PACKAGE")?
@@ -196,8 +221,11 @@ fn parse_pack_change(argv: &[String]) -> Result<PackInstallParams> {
     );
     for name in parsed.options.keys() {
         anyhow::ensure!(
-            matches!(name.as_str(), "var" | "inference-slot" | "digest"),
-            "unknown pack option --{name}; accepted: --inference-slot, --var, --digest"
+            matches!(
+                name.as_str(),
+                "var" | "inference-slot" | "digest" | "edited"
+            ),
+            "unknown pack option --{name}; accepted: --inference-slot, --var, --digest, --edited"
         );
     }
     let pairs = |name: &str| -> Result<BTreeMap<String, String>> {
@@ -217,10 +245,13 @@ fn parse_pack_change(argv: &[String]) -> Result<PackInstallParams> {
         }
         Ok(values)
     };
-    Ok(PackInstallParams {
-        package,
-        variables: pairs("var")?,
-        inference_slots: pairs("inference-slot")?,
-        expected_digest: parsed.one("digest")?.map(ToOwned::to_owned),
-    })
+    Ok((
+        PackInstallParams {
+            package,
+            variables: pairs("var")?,
+            inference_slots: pairs("inference-slot")?,
+            expected_digest: parsed.one("digest")?.map(ToOwned::to_owned),
+        },
+        parse_edited(&parsed)?,
+    ))
 }

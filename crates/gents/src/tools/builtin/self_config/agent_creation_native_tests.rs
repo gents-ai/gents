@@ -1774,7 +1774,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     };
     let pack: Value = serde_json::from_str(
         &installer
-            .documents("install", &args, &distribution, true)
+            .documents("install", &args, &distribution, true, Default::default())
             .await?,
     )?;
     let pack_child = pack["install"]["agents"]["worker"]

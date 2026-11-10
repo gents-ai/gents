@@ -84,6 +84,49 @@ pub enum DriftPolicy {
     Keep,
 }
 
+impl DriftPolicy {
+    /// The decision as its word on every surface that takes it.
+    pub fn parse(word: &str) -> Option<Self> {
+        match word {
+            "overwrite" => Some(Self::Overwrite),
+            "keep" => Some(Self::Keep),
+            _ => None,
+        }
+    }
+}
+
+/// An install, update or removal that met documents whose content is not what
+/// the pack recorded, under [`DriftPolicy::Refuse`]. The decision is the
+/// caller's: the operator CLI's `--overwrite`/`--keep`, the agent pack
+/// command's `options.edited`.
+#[derive(Debug, thiserror::Error)]
+pub enum PackDriftError {
+    #[error(
+        "{} of {coordinate}'s documents were edited since it was installed: {}. Overwrite replaces \
+         them with the pack's versions (a removal deletes them); keep leaves them as edited. \
+         Decide with --overwrite or --keep on `gents pack install`, `gents pack update` or \
+         `gents pack remove`, or options.edited on the agent pack command",
+        edited.len(),
+        edited.join(", ")
+    )]
+    Edited {
+        coordinate: String,
+        edited: Vec<String>,
+    },
+    #[error(
+        "{} of {coordinate}'s documents already exist on this node with different content: {}; \
+         the pack adopts an existing document only when it matches. Rename or remove them, or \
+         decide: overwrite replaces them with the pack's versions, keep leaves them as they are \
+         (--overwrite or --keep on `gents pack install`, options.edited on the agent pack command)",
+        differing.len(),
+        differing.join(", ")
+    )]
+    Differing {
+        coordinate: String,
+        differing: Vec<String>,
+    },
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum PackRemovalError {
     #[error("pack-owned {collection} {id:?} is unavailable to the removing actor")]
@@ -274,12 +317,56 @@ async fn live_digests<'a>(
 }
 
 fn edited_error(coordinate: &str, edited: &[String]) -> anyhow::Error {
-    anyhow::anyhow!(
-        "{} of {coordinate}'s documents were edited since it was installed: {}; \
-         use the operator CLI `gents pack install`, `gents pack update`, or `gents pack remove` with --overwrite or --keep to decide how to handle them; the agent pack command does not accept these flags",
-        edited.len(),
-        edited.join(", ")
-    )
+    PackDriftError::Edited {
+        coordinate: coordinate.to_owned(),
+        edited: edited.to_vec(),
+    }
+    .into()
+}
+
+/// The documents `coordinate` installed whose live content is no longer what
+/// the installation recorded: the ones an install, update or removal under
+/// [`DriftPolicy::Refuse`] stops at. `removal` narrows them to the documents a
+/// removal would delete. Empty when the pack is not installed.
+pub async fn edited_installed_documents(
+    access: &ConfigAccess,
+    owner: &str,
+    coordinate: &str,
+    removal: bool,
+) -> Result<Vec<String>> {
+    access
+        .transact_readonly("pack.edited_documents", |txn| {
+            Box::pin(async move {
+                let record = read_record(txn, owner, coordinate).await?;
+                let recorded: Vec<(&String, &RecordedDocument, Collection)> = record
+                    .documents
+                    .iter()
+                    .filter(|(_, document)| {
+                        (document.created || !removal) && !is_reserved(document)
+                    })
+                    .filter_map(|(name, document)| {
+                        Some((name, document, managed_collection(&document.collection)?))
+                    })
+                    .collect();
+                let live = live_digests(
+                    txn,
+                    owner,
+                    recorded
+                        .iter()
+                        .map(|(_, document, collection)| (*collection, document.id.as_str())),
+                )
+                .await?;
+                Ok(recorded
+                    .into_iter()
+                    .filter(|(_, document, collection)| {
+                        live.get(&(*collection, document.id.clone()))
+                            .is_some_and(|digest| *digest != document.digest)
+                    })
+                    .map(|(name, _, _)| name.clone())
+                    .collect())
+            })
+        })
+        .await
 }
 
 #[expect(
@@ -544,15 +631,13 @@ pub(crate) async fn install_in_txn(
     if !edited.is_empty() {
         return Err(edited_error(&pack.coordinate, &edited));
     }
-    anyhow::ensure!(
-        differing.is_empty(),
-        "{} of {}'s documents already exist on this node with different content: {}; \
-         the pack adopts an existing document only when it matches. Rename or remove them, or use the operator CLI \
-         `gents pack install` with --overwrite or --keep; the agent pack command does not accept these flags",
-        differing.len(),
-        pack.coordinate,
-        differing.join(", ")
-    );
+    if !differing.is_empty() {
+        return Err(PackDriftError::Differing {
+            coordinate: pack.coordinate.clone(),
+            differing,
+        }
+        .into());
+    }
 
     let applied: Vec<_> = documents
         .into_iter()

@@ -6853,6 +6853,163 @@ async fn pack_install_blocks_a_dependency_plugin_without_operator_authority() {
     );
 }
 
+/// Editing an installed document live and installing again is the agent's
+/// loop: the preview lists the edited documents and what each choice does,
+/// the refusal names the same call with the choice, and each choice does
+/// what the operator CLI's `--keep` and `--overwrite` do.
+#[tokio::test]
+async fn an_agent_decides_what_a_pack_does_with_documents_edited_live() {
+    let (_fixture, directory) =
+        crate::test_support::fixture_pack_copy("documents_fixture", &json!({}));
+    let manifest_path = directory.join("manifest.json");
+    let mut manifest: Value =
+        serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+    manifest.as_object_mut().unwrap().remove("schemas");
+    std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let (_home, plugins) = crate::test_support::home_with_pack_dir(&directory);
+    let (fixture, tools) = signed_pack_tool("pack-edited-documents", plugins).await;
+    let slot = format!("worker={}:inference", fixture.agent_did());
+    let pack = "fixture/documents_fixture";
+    let pinned = "fixture/documents_fixture@1.0.0";
+    async fn slotted(
+        tools: &[Box<dyn ToolDyn>],
+        slot: &str,
+        words: &[&str],
+    ) -> Result<String, crate::inference::llm::tool::ToolError> {
+        let mut argv = words.to_vec();
+        argv.extend(["--inference-slot", slot]);
+        config_call(tools, &argv).await
+    }
+    let json_of = |text: String| serde_json::from_str::<Value>(&text).unwrap();
+    let preview = json_of(
+        slotted(&tools, &slot, &["pack", "preview", "install", pack])
+            .await
+            .unwrap(),
+    );
+    let digest = preview["artifact_digest"].as_str().unwrap().to_owned();
+    assert_eq!(preview["edited_documents"], Value::Null, "{preview}");
+    slotted(
+        &tools,
+        &slot,
+        &["pack", "install", pack, "--digest", &digest],
+    )
+    .await
+    .unwrap();
+
+    let task_name = || async {
+        fixture
+            .user_access
+            .execute(r#"{ Task(filter: {task_id: {_eq: "fixture-worker-task"}}) { _docID display_name } }"#)
+            .await
+            .unwrap()["data"]["Task"][0]
+            .clone()
+    };
+    let doc = task_name().await["_docID"].as_str().unwrap().to_owned();
+    fixture
+        .user_access
+        .transact_write("test.pack.edit_task", |txn| {
+            let doc = &doc;
+            Box::pin(async move {
+                txn.execute_client_signed_update(
+                    &format!(r#"mutation($input: TaskMutationInputArg!) {{ update_Task(docID: "{doc}", input: $input) {{ _docID }} }}"#),
+                    &json!({"input": {"display_name": "edited live"}}),
+                    gents_protocol::schemas::TASK,
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
+
+    let preview = json_of(
+        slotted(&tools, &slot, &["pack", "preview", "update", pinned])
+            .await
+            .unwrap(),
+    );
+    let edited = &preview["edited_documents"];
+    assert_eq!(
+        edited["documents"],
+        json!(["Task/fixture-worker-task"]),
+        "{preview}"
+    );
+    assert!(
+        edited["keep"].as_str().unwrap().contains("as edited"),
+        "{preview}"
+    );
+    assert!(
+        edited["overwrite"]
+            .as_str()
+            .unwrap()
+            .contains("pack's versions"),
+        "{preview}"
+    );
+
+    let refused = slotted(
+        &tools,
+        &slot,
+        &["pack", "update", pinned, "--digest", &digest],
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    let refused = refused.strip_prefix("ToolCallError: ").unwrap_or(&refused);
+    let failure: Value = serde_json::from_str(&refused[refused.find('{').unwrap()..]).unwrap();
+    assert!(
+        failure["error"]
+            .as_str()
+            .unwrap()
+            .contains("Task/fixture-worker-task of fixture/documents_fixture were edited"),
+        "{failure}"
+    );
+    assert!(!refused.contains("operator CLI"), "{refused}");
+    let next = &failure["recovery"]["next_call"];
+    assert_eq!(next["options"]["edited"], "keep", "{failure}");
+    assert_eq!(next["argv"][1], "update", "{failure}");
+    assert_eq!(task_name().await["display_name"], "edited live");
+
+    let recover = |decision: &'static str| {
+        let tools = &tools;
+        let mut next = next.clone();
+        next["options"]["edited"] = json!(decision);
+        async move {
+            tools
+                .iter()
+                .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+                .unwrap()
+                .call(next.to_string())
+                .await
+                .unwrap_or_else(|error| panic!("{decision}: {error}"))
+        }
+    };
+    let kept = json_of(recover("keep").await);
+    assert_eq!(
+        kept["install"]["kept"],
+        json!(["Task/fixture-worker-task"]),
+        "{kept}"
+    );
+    assert_eq!(task_name().await["display_name"], "edited live");
+    recover("overwrite").await;
+    assert_eq!(task_name().await["display_name"], "fixture-worker-task");
+
+    let bad = config_call(&tools, &["pack", "remove", pack, "--edited", "maybe"])
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(bad.contains("overwrite") && bad.contains("keep"), "{bad}");
+    let removal = json_of(
+        config_call(&tools, &["pack", "preview", "remove", pack])
+            .await
+            .unwrap(),
+    );
+    assert_eq!(removal["committed"], false, "{removal}");
+    assert_eq!(removal["edited_documents"], Value::Null, "{removal}");
+    assert_eq!(
+        removal["apply_with"]["argv"],
+        json!(["pack", "remove", pack]),
+        "{removal}"
+    );
+}
+
 #[tokio::test]
 async fn pack_document_installation_uses_existing_lifecycle() {
     let (_fixture, directory) =
