@@ -600,17 +600,14 @@ mod tests {
     #[tokio::test]
     async fn run_now_uses_the_access_it_is_given() -> Result<()> {
         let home = tempfile::tempdir()?;
-        let key = home.path().join("node.key");
-        let did = gents::KeyIdentity::load_or_create(&key, None)?
-            .did()
-            .to_string();
+        let did = crate::caused_sessions::fixtures::FIXTURE_DID.to_string();
         crate::home_state::write_init_config(
             home.path(),
             &crate::shared::StoredInitConfig {
                 home: home.path().to_string_lossy().into_owned(),
                 node_name: "fixture".into(),
                 node_did: did.clone(),
-                key_path: Some(key.to_string_lossy().into_owned()),
+                key_path: None,
                 identity_backend: None,
                 keychain_label: None,
                 secure_enclave_label: None,
@@ -620,8 +617,8 @@ mod tests {
                 store_encryption: None,
             },
         )?;
-        let (node, graphql) = crate::shared::test_support::served_config(json!({
-            "node": { "node_did": did, "default_agent_id": "engineer" },
+        let served = crate::shared::test_support::served_config(json!({
+            "node": { "node_did": did, "default_agent_did": "engineer" },
             "inference_backends": [{
                 "node_did": did,
                 "backend_id": "backend",
@@ -636,18 +633,18 @@ mod tests {
                 "backend_id": "backend",
                 "model_name": "model",
             }],
-            "agents": [{ "node_did": did, "agent_id": "engineer", "inference_profile_id": "profile" }],
+            "agents": [{ "node_did": did, "agent_did": "engineer", "inference_profile_id": "profile" }],
             "tasks": [{
                 "node_did": did,
                 "task_id": "digest",
-                "agent_id": "engineer",
+                "agent_did": "engineer",
                 "prompt_template": "digest the day",
             }],
         }))
         .await;
 
         let output = enqueue_task_run_on(
-            &ConfigAccess::graphql(graphql),
+            &ConfigAccess::Graphql(served.user.clone()),
             Some(home.path()),
             "digest",
             json!({}),
@@ -656,7 +653,7 @@ mod tests {
         )
         .await?;
 
-        let written = ConfigAccess::local(node.clone())
+        let written = ConfigAccess::Graphql(served.user.clone())
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
                 escape_graphql_string(&output.request_id)
@@ -671,7 +668,7 @@ mod tests {
             !crate::home_state::default_data_dir(home.path()).exists(),
             "the home's store is never opened"
         );
-        node.shutdown().await.expect("node shutdown");
+        served.node.shutdown().await.expect("node shutdown");
         Ok(())
     }
 

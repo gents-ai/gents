@@ -9,26 +9,108 @@ pub(crate) fn node_builder() -> defra_node::NodeBuilder {
     defra_node::Node::builder().with_node_identity_did(identity.did())
 }
 
-/// A node holding `config`, and the URL of the GraphQL it serves as a home's runtime does.
-pub(crate) async fn served_config(config: Value) -> (std::sync::Arc<defra_node::Node>, String) {
+/// A node served as a home's runtime serves it, and the signed endpoint of the User who owns its
+/// household and wrote its config.
+pub(crate) struct Served {
+    pub(crate) node: std::sync::Arc<defra_node::Node>,
+    pub(crate) graphql: String,
+    pub(crate) user: gents::store::config_client::GraphqlEndpoint,
+    _user_key: tempfile::TempDir,
+}
+
+/// `config` names its Node and Agents by placeholders: the Node (`owner`, or `node.node_did`)
+/// becomes the fixture runtime (`FIXTURE_DID`) and each Agent the DID [`fixture_agent_named`]
+/// derives for its name, and every `*_did` value naming one is rewritten to match. The runtime
+/// makes the User its household owner, as setup does, and the User writes the config, its Node
+/// included.
+pub(crate) async fn served_config(mut config: Value) -> Served {
     use gents::documents::apply_desired_state_plan;
     use gents::store::config_client::DesiredStateApplyPlan;
+    use gents::NodeIdentity as _;
+    const OWNER: &str = crate::caused_sessions::fixtures::FIXTURE_DID;
 
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let graphql = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
-    let http = defra_node::HttpConfig::with_listener(listener).unwrap();
-    let node = std::sync::Arc::new(node_builder().with_http(http).build().await.unwrap());
+    if config["node"].is_null() {
+        config["node"] = serde_json::json!({ "node_did": "owner" });
+    }
+    let mut names = std::collections::BTreeMap::from([("owner".to_owned(), OWNER.to_owned())]);
+    if let Some(node) = config["node"]["node_did"].as_str() {
+        names.insert(node.to_owned(), OWNER.to_owned());
+    }
+    let mut nonces = std::collections::BTreeMap::new();
+    for agent in config["agents"].as_array().into_iter().flatten() {
+        let binding = fixture_agent_named(agent["agent_did"].as_str().unwrap());
+        names.insert(
+            agent["agent_did"].as_str().unwrap().to_owned(),
+            binding.agent_did.clone(),
+        );
+        nonces.insert(binding.agent_did, binding.creation_nonce);
+    }
+    rename_placeholders(&mut config, &names, "");
+    for agent in config["agents"].as_array_mut().into_iter().flatten() {
+        agent["creation_nonce"] = nonces[agent["agent_did"].as_str().unwrap()].clone().into();
+    }
+    let (node, graphql) = served_node(fixture_node_builder()).await;
+    // The runtime's migration registers the mailbox policy before the collection naming it.
+    let as_runtime = defra_core::RequestContext::default().with_identity(Some(OWNER.to_owned()));
+    let mailbox = gents_protocol::schemas::MAILBOX_POLICY;
+    let policy = node.add_dac_policy_with_counter_as(&as_runtime, mailbox, 0);
+    assert_eq!(
+        policy.await.unwrap(),
+        gents_protocol::schemas::MAILBOX_POLICY_ID
+    );
     gents::ensure_runtime_schemas(&node).await.unwrap();
+    let runtime = gents::ConfigAccess::local_as(node.clone(), ::identity::Did::new(OWNER).unwrap());
+    let keys = tempfile::tempdir().unwrap();
+    let user = gents::KeyIdentity::load_or_create(keys.path().join("user.key"), None).unwrap();
+    gents::store::identity::GrantSet::HouseholdOwner
+        .grant(&runtime, &::identity::Did::new(user.did()).unwrap())
+        .await
+        .unwrap();
     let plan =
         DesiredStateApplyPlan::from_pack_config(&serde_json::from_value(config).unwrap()).unwrap();
-    gents::store::config_client::ConfigAccess::local(node.clone())
+    user_access(&graphql, &user)
         .transact_write("test.served_config.seed", |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await })
         })
         .await
         .unwrap();
-    (node, graphql)
+    Served {
+        node,
+        user: user_endpoint(&graphql, &user),
+        graphql,
+        _user_key: keys,
+    }
+}
+
+/// The CLI's User, made once per test process: concurrent first makes race on its metadata file.
+pub(crate) async fn cli_user() -> &'static gents_desktop_core::client::PrincipalIdentity {
+    static USER: tokio::sync::OnceCell<gents_desktop_core::client::PrincipalIdentity> =
+        tokio::sync::OnceCell::const_new();
+    USER.get_or_init(|| async { crate::home_state::load_client_identity().await.unwrap() })
+        .await
+}
+
+/// Replaces each string under a `*_did` or `*_dids` key that `names` maps.
+fn rename_placeholders(
+    value: &mut Value,
+    names: &std::collections::BTreeMap<String, String>,
+    key: &str,
+) {
+    match value {
+        Value::String(text) if key.ends_with("_did") || key.ends_with("_dids") => {
+            if let Some(did) = names.get(text.as_str()) {
+                did.clone_into(text);
+            }
+        }
+        Value::Array(items) => items
+            .iter_mut()
+            .for_each(|item| rename_placeholders(item, names, key)),
+        Value::Object(fields) => fields
+            .iter_mut()
+            .for_each(|(key, value)| rename_placeholders(value, names, key)),
+        _ => {}
+    }
 }
 
 /// A node whose runtime is the deterministic fixture signer

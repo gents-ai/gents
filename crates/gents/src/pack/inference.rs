@@ -459,7 +459,7 @@ mod tests {
         assert_eq!(pack, "test_pack");
         assert_eq!(slots, ["coordinator", "worker"]);
         let profiles = profiles.iter().map(|profile| profile.profile_id.as_str());
-        assert_eq!(profiles.collect::<Vec<_>>(), ["only:inference"]);
+        assert_eq!(profiles.collect::<Vec<_>>(), ["profile"]);
         node.shutdown().await.expect("node shutdown");
     }
 

@@ -2355,12 +2355,7 @@ async fn prepare_returns_the_slot_it_cannot_pick_a_model_for() {
         "inference_slots": [{"name": "web_researcher", "description": "researches", "agents": ["web"]}],
     }))
     .unwrap();
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::documents::ensure_node(&node, OWNER).await.unwrap();
-    crate::test_support::install_test_agent(&node, OWNER, "claude").await;
-    crate::test_support::install_test_agent(&node, OWNER, "grok").await;
-    let access = ConfigAccess::local(node);
+    let (node, access) = dependency_fixture().await;
     let refused = prepare_document_pack_install(
         &access,
         OWNER,
@@ -2377,9 +2372,10 @@ async fn prepare_returns_the_slot_it_cannot_pick_a_model_for() {
     .await;
     let Err(PackChangeError::Slots(crate::pack::SlotBindingError::Unbound { slots, .. })) = refused
     else {
-        panic!("two usable profiles leave the slot to the person installing");
+        panic!("more than one usable profile leaves the slot to the person installing");
     };
     assert_eq!(slots, ["web_researcher"]);
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[test]

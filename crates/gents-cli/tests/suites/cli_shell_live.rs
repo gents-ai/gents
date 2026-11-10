@@ -262,7 +262,7 @@ async fn ask_a_question(live: &Live, session: &str, agent: &str) -> Result<Strin
             title: "Release channel", summary: null, payload: "{payload}",
             source_kind: "runtime", source_id: "shell-live", session_id: "{session}",
             request_id: null, cause_doc_id: null,
-            target_node_did: "{did}", target_agent_id: "{agent}",
+            target_node_did: "{did}", target_agent_did: "{agent}",
             expected_collection: null, parent_item_id: null, deadline_at: null,
             created_at: "{now}", updated_at: "{now}",
             resolved_at: null, resolved_doc_id: null

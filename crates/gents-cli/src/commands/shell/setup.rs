@@ -486,7 +486,7 @@ fn redact(text: String, connection: &SetupConnection) -> String {
 
 #[cfg(test)]
 mod tests {
-    use gents::store::config_client::{config_projection, GraphqlEndpoint};
+    use gents::store::config_client::GraphqlEndpoint;
     use gents::Collection;
     use gents_shell::source::Secret;
 
@@ -566,7 +566,7 @@ mod tests {
 
     fn owner_with_anthropic() -> Value {
         json!({
-            "node": { "node_did": "owner", "default_agent_id": "engineer" },
+            "node": { "node_did": "owner", "default_agent_did": "engineer" },
             "inference_backends": [{
                 "node_did": "owner",
                 "backend_id": "anthropic",
@@ -597,14 +597,39 @@ mod tests {
         }
     }
 
-    /// The owner's `collection` documents, whole, as the store projects them.
+    /// The node `served_config` publishes a config's `owner` as.
+    const OWNER: &str = crate::caused_sessions::fixtures::FIXTURE_DID;
+
+    /// The owner's `collection` documents, whole, as the store reads them back.
     async fn stored(access: &ConfigAccess, collection: Collection) -> Vec<Value> {
-        let fields = config_projection(collection, None).unwrap().0.join(" ");
-        let name = collection.graphql_type();
+        let (name, key) = (collection.graphql_type(), collection.unique_field());
         let query =
-            format!(r#"{{ {name}(filter: {{ node_did: {{ _eq: "owner" }} }}) {{ {fields} }} }}"#);
+            format!(r#"{{ {name}(filter: {{ node_did: {{ _eq: "{OWNER}" }} }}) {{ {key} }} }}"#);
         let response = access.execute(&query).await.unwrap();
-        gents_protocol::graphql::graphql_rows_from_response(&response, name)
+        let rows = gents_protocol::graphql::graphql_rows_from_response(&response, name);
+        let ids: Vec<String> = rows
+            .iter()
+            .map(|row| row[key].as_str().unwrap().to_owned())
+            .collect();
+        let ids = &ids;
+        access
+            .transact_readonly("test.setup.stored", |txn| {
+                Box::pin(async move {
+                    let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
+                    let records = gents::store::config_client::read_desired_state_records_in_txn(
+                        txn, collection, OWNER, &ids,
+                    )
+                    .await?;
+                    anyhow::Ok(
+                        records
+                            .into_values()
+                            .map(|(_, value)| value)
+                            .collect::<Vec<_>>(),
+                    )
+                })
+            })
+            .await
+            .unwrap()
     }
 
     fn by(documents: &[Value], field: &str, id: &str) -> Value {
@@ -614,9 +639,8 @@ mod tests {
 
     #[tokio::test]
     async fn saving_adds_a_backend_beside_the_existing_one() {
-        let (node, graphql) =
-            crate::shared::test_support::served_config(owner_with_anthropic()).await;
-        let access = ConfigAccess::Graphql(GraphqlEndpoint::anonymous(graphql));
+        let served = crate::shared::test_support::served_config(owner_with_anthropic()).await;
+        let access = ConfigAccess::Graphql(served.user.clone());
         let backends = stored(&access, Collection::InferenceBackend).await;
         let profiles = stored(&access, Collection::InferenceProfile).await;
         let agents = stored(&access, Collection::Agent).await;
@@ -628,7 +652,7 @@ mod tests {
         ]
         .map(|(key, value)| (key, value.to_string()));
 
-        let saved = save(&access, "owner", &connection, "claude-x", &settings).await;
+        let saved = save(&access, OWNER, &connection, "claude-x", &settings).await;
 
         assert_eq!(saved, Ok("saved anthropic-2: claude-x".to_string()));
         let backends_now = stored(&access, Collection::InferenceBackend).await;
@@ -643,7 +667,19 @@ mod tests {
             existing
         );
         let added = by(&backends_now, "backend_id", "anthropic-2");
-        assert_eq!(added["auth"], json!({ "kind": "api_key", "key": "sk-new" }));
+        assert_eq!(added["auth"]["kind"], json!("credential"));
+        let credential =
+            gents::store::graphql::escape_graphql_string(added["auth"]["id"].as_str().unwrap());
+        let runtime =
+            ConfigAccess::local_as(served.node.clone(), ::identity::Did::new(OWNER).unwrap());
+        let secret = runtime
+            .execute(&format!(
+                r#"{{ BackendCredential(filter: {{ credential_id: {{ _eq: "{credential}" }} }}) {{ secret }} }}"#
+            ))
+            .await
+            .unwrap();
+        let secret = &secret["data"]["BackendCredential"][0]["secret"];
+        assert_eq!(*secret, json!({ "kind": "api_key", "key": "sk-new" }));
         let limits = [&added["max_concurrent"], &added["max_queue_depth"]];
         assert_eq!(limits, [&json!(2), &json!(100)]);
         assert_eq!(added["enabled"], json!(true));
@@ -672,7 +708,7 @@ mod tests {
         let values = [&sampling["temperature"], &sampling["top_p"]];
         assert_eq!(values, [&json!(0.7), &json!(0.95)]);
         assert_eq!(stored(&access, Collection::Agent).await, agents);
-        node.shutdown().await.expect("node shutdown");
+        served.node.shutdown().await.expect("node shutdown");
     }
 
     /// The shell takes a whole number as the desktop's `Number()` does.

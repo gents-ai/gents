@@ -918,10 +918,12 @@ mod tests {
 
     #[tokio::test]
     async fn setting_the_default_and_turning_a_task_off_notice_what_changed() {
-        let (node, graphql) = crate::shared::test_support::served_config(json!({
-            "node": { "node_did": "owner", "default_agent_id": "engineer" },
+        const OWNER: &str = crate::caused_sessions::fixtures::FIXTURE_DID;
+        let did = |name| crate::shared::test_support::fixture_agent_named(name).agent_did;
+        let served = crate::shared::test_support::served_config(json!({
+            "node": { "node_did": OWNER, "default_agent_did": "engineer" },
             "inference_backends": [{
-                "node_did": "owner",
+                "node_did": OWNER,
                 "backend_id": "backend",
                 "name": "Backend",
                 "provider_kind": "OpenAiCompatible",
@@ -929,17 +931,17 @@ mod tests {
                 "auth": { "kind": "unauthenticated" },
             }],
             "inference_profiles": [{
-                "node_did": "owner",
+                "node_did": OWNER,
                 "profile_id": "profile",
                 "backend_id": "backend",
                 "model_name": "model",
             }],
             "agents": [
-                { "node_did": "owner", "agent_did": "engineer", "inference_profile_id": "profile" },
-                { "node_did": "owner", "agent_did": "reviewer", "inference_profile_id": "profile" },
+                { "node_did": OWNER, "agent_did": "engineer", "inference_profile_id": "profile" },
+                { "node_did": OWNER, "agent_did": "reviewer", "inference_profile_id": "profile" },
             ],
             "tasks": [{
-                "node_did": "owner",
+                "node_did": OWNER,
                 "task_id": "digest",
                 "agent_did": "engineer",
                 "prompt_template": "digest the day",
@@ -948,11 +950,11 @@ mod tests {
         .await;
         let home = tempfile::tempdir().unwrap();
         let work = Work {
-            endpoint: gents::store::config_client::GraphqlEndpoint::anonymous(graphql),
+            endpoint: served.user.clone(),
             home: home.path().into(),
         };
         let make_default = MenuAct::SetDefaultAgent {
-            agent: "reviewer".to_string(),
+            agent: did("reviewer"),
             name: "Reviewer".to_string(),
         };
         let off = MenuAct::SetEnabled {
@@ -962,14 +964,14 @@ mod tests {
             enabled: false,
         };
 
-        let made = act(&work, home.path(), "owner", &make_default).await;
-        let turned = act(&work, home.path(), "owner", &off).await;
+        let made = act(&work, home.path(), OWNER, &make_default).await;
+        let turned = act(&work, home.path(), OWNER, &off).await;
 
         assert_eq!(made, Ok("default agent: Reviewer".to_string()));
         assert_eq!(turned, Ok("Digest is off".to_string()));
         let work = Ok(work);
-        let agents = read_menu(&work, home.path(), "owner", MenuId::Agents).await;
-        let tasks = read_menu(&work, home.path(), "owner", MenuId::Tasks).await;
+        let agents = read_menu(&work, home.path(), OWNER, MenuId::Agents).await;
+        let tasks = read_menu(&work, home.path(), OWNER, MenuId::Tasks).await;
         let texts = |rows: Result<Vec<MenuRow>, String>| {
             let rows = rows.unwrap();
             rows.into_iter().map(|row| row.text).collect::<Vec<_>>()
@@ -977,11 +979,14 @@ mod tests {
         assert_eq!(
             texts(agents),
             [
-                " ● reviewer   default   profile · model",
-                "   engineer   profile · model"
+                format!(" ● {}   default   profile · model", did("reviewer")),
+                format!("   {}   profile · model", did("engineer")),
             ]
         );
-        assert_eq!(texts(tasks), [" ○ digest   engineer   off"]);
-        node.shutdown().await.expect("node shutdown");
+        assert_eq!(
+            texts(tasks),
+            [format!(" ○ digest   {}   off", did("engineer"))]
+        );
+        served.node.shutdown().await.expect("node shutdown");
     }
 }

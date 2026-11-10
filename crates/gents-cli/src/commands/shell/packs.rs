@@ -293,8 +293,7 @@ fn installed_rows(pack: &Value, adds: &BTreeMap<String, String>) -> Vec<MenuRow>
         more: more.collect(),
         ..row(format!(" {name}   {version}{status}"), Tone::Plain)
     }];
-    let origin = name.rsplit('/').next().unwrap_or_default();
-    if let Some(kinds) = adds.get(origin) {
+    if let Some(kinds) = adds.get(name) {
         rows.push(row(format!("   Adds {kinds}"), Tone::Label));
     }
     rows

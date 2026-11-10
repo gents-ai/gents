@@ -562,14 +562,14 @@ mod tests {
                 "display_name": null,
                 "tool_refs": null,
                 "enabled": true,
-                "tags": ["gents:pack:git"],
+                "tags": ["gents:pack:acme/git"],
             }),
             json!({
                 "skill_id": "odd",
                 "display_name": "Odd",
                 "tool_refs": [],
                 "enabled": true,
-                "tags": ["gents:pack:a", "gents:pack:b"],
+                "tags": ["gents:pack:acme/a", "gents:pack:acme/b"],
             }),
         ]);
 
@@ -580,7 +580,7 @@ mod tests {
                 (" ● Review   2 tools", Tone::Plain),
                 (" ○ draft   1 tool · disabled", Tone::Label),
                 (" ● Odd   0 tools", Tone::Plain),
-                (" git · 1 from this pack", Tone::Label),
+                (" acme/git · 1 from this pack", Tone::Label),
                 (" ● commit   0 tools", Tone::Plain),
             ]
         );

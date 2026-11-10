@@ -1863,7 +1863,7 @@ mod tests {
 
     /// A source with `work` on, over a home whose runtime does not answer, and the home and its
     /// key's folder.
-    fn without_runtime() -> (
+    async fn without_runtime() -> (
         Source,
         Told,
         mpsc::UnboundedReceiver<Watched>,
@@ -1872,8 +1872,9 @@ mod tests {
         let keys = tempfile::tempdir().unwrap();
         let key = keys.path().join("principal.key");
         let (home, _) = home_serving("http://127.0.0.1:1/api/v0/graphql", Some(&key));
+        crate::shared::test_support::cli_user().await;
         let work = work::work_for(home.path());
-        assert!(work.is_ok(), "the home's node signs: {:?}", work.err());
+        assert!(work.is_ok(), "this CLI's User signs: {:?}", work.err());
         let (updates, told) = std::sync::mpsc::channel();
         let (watching, watched) = mpsc::unbounded_channel();
         let runtime = test_runtime_handle();
@@ -1899,7 +1900,7 @@ mod tests {
     /// which answers no rows for it.
     #[tokio::test]
     async fn packs_are_read_by_their_owner() {
-        let (mut source, told, _watched, _dirs) = without_runtime();
+        let (mut source, told, _watched, _dirs) = without_runtime().await;
 
         source.handle(Intent::ReadMenu(MenuId::Packs)).await;
 
@@ -1933,7 +1934,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_pack_change_waits_for_the_runtime() {
-        let (mut source, told, watched, [home, _]) = without_runtime();
+        let (mut source, told, watched, [home, _]) = without_runtime().await;
 
         source.handle(install_git()).await;
 
@@ -1950,7 +1951,7 @@ mod tests {
     #[tokio::test]
     async fn a_refusal_asks_and_reads_nothing_again() {
         use gents_shell::source::EditedChoice::Refuse;
-        let (source, told, watched, _dirs) = without_runtime();
+        let (source, told, watched, _dirs) = without_runtime().await;
         let refused = PackChangeError::Edited {
             coordinate: "acme/git".to_string(),
             edited: vec!["skill review".to_string()],
@@ -1978,7 +1979,7 @@ mod tests {
     #[tokio::test]
     async fn a_success_reads_packs_again() {
         use gents_shell::source::EditedChoice::Refuse;
-        let (mut source, told, mut watched, _dirs) = without_runtime();
+        let (mut source, told, mut watched, _dirs) = without_runtime().await;
         let answer =
             |done| packs::installed("acme/git".to_string(), Refuse, false, Vec::new(), done);
 
@@ -2058,7 +2059,7 @@ mod tests {
     #[tokio::test]
     async fn sign_in_saves_the_token_and_refuses_an_empty_one() {
         use gents_shell::source::FormError;
-        let (mut source, told, _watched, _dirs) = without_runtime();
+        let (mut source, told, _watched, _dirs) = without_runtime().await;
         let save = |token: &str| Intent::SaveForm {
             form: FormRef::PackSignIn,
             opening: 1,
@@ -2102,7 +2103,7 @@ mod tests {
     /// do not.
     #[tokio::test]
     async fn pack_writes_wait_their_turn_and_reads_do_not() {
-        let (mut source, told, _watched, _dirs) = without_runtime();
+        let (mut source, told, _watched, _dirs) = without_runtime().await;
         let running = source.pack_changes.clone().try_lock_owned().unwrap();
         let plugin = || "acme/git".to_string();
         let writes = [
@@ -2126,7 +2127,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_keyword_searches_from_page_one() {
-        let (mut source, told, _watched, _dirs) = without_runtime();
+        let (mut source, told, _watched, _dirs) = without_runtime().await;
         source.pack_page = 3;
 
         source

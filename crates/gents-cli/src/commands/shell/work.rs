@@ -26,16 +26,11 @@ impl Work {
     }
 }
 
-/// Signs as the home's node, as `gents automation mailbox` does. Never
+/// Signs as this CLI's User, as `gents automation mailbox` does. Never
 /// `resolve_config_access`: with no runtime answering, it opens and claims the embedded store.
 pub(super) fn work_for(home: &Path) -> Result<Work, String> {
     let endpoint = crate::resolve_graphql_endpoint(None, Some(home))
         .map_err(|error| format!("jobs and the mailbox are off: {error:#}"))?;
-    if endpoint.is_anonymous() {
-        return Err(format!(
-            "jobs and the mailbox are off: check this home's identity with `gents status` (the shell cannot sign as its node at {endpoint})"
-        ));
-    }
     Ok(Work {
         endpoint,
         home: home.to_path_buf(),
@@ -613,7 +608,7 @@ mod tests {
             "session_id": "s1",
             "request_id": "r1",
             "target_node_did": "did:key:z",
-            "target_agent_id": "a",
+            "target_agent_did": "a",
             "expected_collection": "Review",
             "created_at": "2026-11-05T12:00:00Z",
         }))

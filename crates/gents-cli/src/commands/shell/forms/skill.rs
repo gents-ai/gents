@@ -177,7 +177,7 @@ mod tests {
             "interface_json": "{\"args\":[]}",
             "enabled": null,
             "created_at": "2026-01-01T00:00:00Z",
-            "tags": ["gents:pack:git", "vcs", "daily"],
+            "tags": ["gents:pack:acme/git", "vcs", "daily"],
         });
         let users = ["Engineer".to_string(), "Reviewer".to_string()];
 
@@ -185,7 +185,7 @@ mod tests {
 
         assert_eq!(edit.form, FormRef::Edit(Doc::Skill, "commit".to_string()));
         assert_eq!(edit.title, "Commit");
-        assert_eq!(edit.note, ["Used by Engineer, Reviewer · From git"]);
+        assert_eq!(edit.note, ["Used by Engineer, Reviewer · From acme/git"]);
         assert_eq!(
             shown_values(&edit),
             [

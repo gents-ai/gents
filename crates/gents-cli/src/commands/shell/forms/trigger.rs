@@ -567,10 +567,6 @@ mod tests {
             agent("analyst", "Analyst", true, false),
             agent("engineer", "Engineer", true, true),
         ]);
-        let conventional = who(vec![
-            agent("analyst", "Analyst", true, false),
-            agent("owner:default", "Default", true, false),
-        ]);
         let first_enabled = who(vec![
             agent("scout", "Scout", false, false),
             agent("analyst", "Analyst", true, false),
@@ -581,7 +577,6 @@ mod tests {
         ]);
 
         assert_eq!(default_second, ["engineer"]);
-        assert_eq!(conventional, ["owner:default"]);
         assert_eq!(first_enabled, ["analyst"]);
         assert_eq!(all_off, ["scout"]);
     }

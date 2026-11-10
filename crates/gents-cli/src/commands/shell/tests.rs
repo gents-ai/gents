@@ -81,9 +81,12 @@ pub(super) struct FakeRuntime {
     authority: String,
 }
 
-/// No jobs and no background calls.
-fn no_work(_: &str) -> Value {
-    json!({ "data": { "AgentToolCall": [] } })
+/// No jobs, no background calls and an empty mailbox.
+fn no_work(query: &str) -> Value {
+    match query.contains("MailboxItem") {
+        true => json!({ "data": { "MailboxItem": [] } }),
+        false => json!({ "data": { "AgentToolCall": [] } }),
+    }
 }
 
 impl FakeRuntime {
@@ -618,6 +621,17 @@ struct Shell {
     updates: Arc<Mutex<std::sync::mpsc::Receiver<Input>>>,
 }
 
+/// A User's signed endpoint on `graphql`; the key lives as long as the process.
+fn fake_user_endpoint(graphql: &str) -> GraphqlEndpoint {
+    static USER: std::sync::LazyLock<(tempfile::TempDir, gents::KeyIdentity)> =
+        std::sync::LazyLock::new(|| {
+            let keys = tempfile::tempdir().unwrap();
+            let user = gents::KeyIdentity::load_or_create(keys.path().join("user.key"), None);
+            (keys, user.unwrap())
+        });
+    crate::shared::test_support::user_endpoint(graphql, &USER.1)
+}
+
 fn open_shell(fake: &FakeRuntime) -> Shell {
     open_shell_answering(fake, ANSWER_WAIT)
 }
@@ -633,9 +647,8 @@ fn open_shell_with(
     prompt: Option<&str>,
     answer_wait: Duration,
 ) -> Shell {
-    // `work_for` refuses an anonymous endpoint; the fake checks no bearer.
-    let endpoint = GraphqlEndpoint::with_delegated_authorization(fake.graphql(), "Bearer shell")
-        .expect("a bearer");
+    // Signed by a User, as `work_for`'s endpoint is; the fake checks no signature.
+    let endpoint = fake_user_endpoint(&fake.graphql());
     let home = std::path::PathBuf::new();
     let work = Work {
         endpoint,
@@ -718,12 +731,17 @@ impl Shell {
 
     /// Reads `Agents`, `Ready` and the first session list.
     async fn opened(&self) -> Vec<Session> {
+        self.opened_as(&["a", "b"]).await
+    }
+
+    /// [`Shell::opened`], on a runtime whose agents are `ids`.
+    async fn opened_as(&self, ids: &[&str]) -> Vec<Session> {
         let update = self.next().await;
         let Update::Agents(agents) = update else {
             panic!("{update:?}");
         };
-        let ids: Vec<_> = agents.iter().map(|agent| agent.id.as_str()).collect();
-        assert_eq!(ids, ["a", "b"]);
+        let shown: Vec<_> = agents.iter().map(|agent| agent.id.as_str()).collect();
+        assert_eq!(shown, ids);
         assert_eq!(self.next().await, Update::Connection(Connection::Ready));
         let update = self.next().await;
         let Update::Sessions(sessions) = update else {
@@ -1873,25 +1891,26 @@ struct OnNode {
     node: Arc<defra_node::Node>,
     work: Work,
     did: String,
-    _dirs: [tempfile::TempDir; 2],
+    _served: crate::shared::test_support::Served,
+    _home: tempfile::TempDir,
 }
 
 async fn on_node<F>(script: F) -> OnNode
 where
     F: Fn(&str, &str, &Value) -> Answer + Send + Sync + 'static,
 {
-    let keys = tempfile::tempdir().unwrap();
-    let key = keys.path().join("node.key");
-    let signer = gents::store::identity::KeyIdentity::load_or_create(&key, None).unwrap();
-    let did = gents::store::identity::NodeIdentity::did(&signer).to_string();
-    let (node, graphql) = crate::shared::test_support::served_config(skill_settings(&did)).await;
-    let (home, _) = home_serving(&graphql, Some(&key));
+    let served = crate::shared::test_support::served_config(skill_settings(OWNER)).await;
+    let (home, _) = home_serving(&served.graphql, None);
+    let did = OWNER.to_string();
+    let node = served.node.clone();
     let work = Work {
-        endpoint: GraphqlEndpoint::anonymous(graphql),
+        endpoint: served.user.clone(),
         home: home.path().into(),
     };
-    let mut runtime = identity(Some(&["a", "b"]));
+    let (a, b) = (self::did("a"), self::did("b"));
+    let mut runtime = identity(Some(&[a.as_str(), b.as_str()]));
     runtime.node_did = did.clone();
+    runtime.bound_agent = a.clone();
     let fake = FakeRuntime::start(Some(runtime), script).await;
     let shell = open_shell_on(
         &fake,
@@ -1901,13 +1920,14 @@ where
         Ok(work.clone()),
         home.path().into(),
     );
-    shell.opened().await;
+    shell.opened_as(&[&a, &b]).await;
     OnNode {
         shell,
         node,
         work,
         did,
-        _dirs: [keys, home],
+        _served: served,
+        _home: home,
     }
 }
 
@@ -1925,11 +1945,11 @@ async fn skills_list_only_what_the_agents_context_allows() {
     })
     .await;
 
-    on.shell.intend(read_skills("a"));
+    on.shell.intend(read_skills(&did("a")));
     let told = on.shell.until(is_skills).await;
 
     let allowed = Update::Skills {
-        agent: "a".to_string(),
+        agent: did("a"),
         skills: vec![shown_skill("commit", "Writes commits")],
     };
     assert_eq!(told.last(), Some(&allowed));
@@ -1944,11 +1964,11 @@ async fn an_agent_with_no_context_offers_no_skills() {
     })
     .await;
 
-    on.shell.intend(read_skills("b"));
+    on.shell.intend(read_skills(&did("b")));
     let told = on.shell.until(is_skills).await;
 
     let none = Update::Skills {
-        agent: "b".to_string(),
+        agent: did("b"),
         skills: Vec::new(),
     };
     assert_eq!(told.last(), Some(&none));
@@ -2059,11 +2079,11 @@ async fn a_failed_skills_read_leaves_no_rows_to_show_or_send() {
     assert_eq!(missed.last(), Some(&unknown));
 }
 
-fn set_goal(session: Option<&str>, objective: &str) -> Intent {
+fn set_goal(agent: &str, session: Option<&str>, objective: &str) -> Intent {
     Intent::SetGoal {
         tab: 7,
         session: session.map(str::to_string),
-        agent: "a".to_string(),
+        agent: agent.to_string(),
         objective: objective.to_string(),
     }
 }
@@ -2088,7 +2108,7 @@ async fn a_goal_starts_with_its_objective_as_the_sessions_next_message() {
     })
     .await;
 
-    on.shell.intend(set_goal(Some("s1"), "ship it"));
+    on.shell.intend(set_goal(&did("a"), Some("s1"), "ship it"));
     let told = on.shell.until(is_goal_answer).await;
 
     let opened = told.iter().position(|update| is_opened(update, "s1"));
@@ -2123,14 +2143,14 @@ async fn a_goal_with_no_session_starts_one_first() {
     let on = on_node(|agent, method, params| match method {
         "thread/start" => Some(Ok(thread_answer(thread("s-new", 100)))),
         "thread/resume" => resumed(params, &[]),
-        "thread/list" if agent == "a" && !is_child_list(method, params) => {
+        "thread/list" if agent == did("a") && !is_child_list(method, params) => {
             page(&[thread("s-new", 100)], None)
         }
         _ => quiet(method),
     })
     .await;
 
-    on.shell.intend(set_goal(None, "ship it"));
+    on.shell.intend(set_goal(&did("a"), None, "ship it"));
     let told = on.shell.until(is_goal_answer).await;
 
     let started = Update::Started {
@@ -2168,12 +2188,13 @@ async fn a_refused_goal_shows_the_owners_reason() {
         _ => quiet(method),
     })
     .await;
-    on.shell.intend(set_goal(Some("s1"), "ship it"));
+    on.shell.intend(set_goal(&did("a"), Some("s1"), "ship it"));
     let first = on.shell.until(is_goal_answer).await;
     let set = Update::Notice(source::GOAL_SET.to_string());
     assert_eq!(first.last(), Some(&set), "the first goal is set");
 
-    on.shell.intend(set_goal(Some("s1"), "ship more"));
+    on.shell
+        .intend(set_goal(&did("a"), Some("s1"), "ship more"));
     let told = on.shell.until(is_goal_answer).await;
 
     let Some(Update::StartFailed { tab: 7, message }) = told.last() else {
@@ -2184,13 +2205,14 @@ async fn a_refused_goal_shows_the_owners_reason() {
         retry_key: Some(format!("goal-request:{request_id}")),
         ..Default::default()
     };
+    let agent = did("a");
     let (did, work) = (&on.did, &on.work);
     let prepared = crate::prepare_agent_request_with_input(
         &work.endpoint,
         did,
         "ship more",
         Some("s1"),
-        Some("a"),
+        Some(agent.as_str()),
         Some(request_id),
         options,
     );
@@ -2212,7 +2234,7 @@ async fn goal_is_off_without_work() {
     let shell = open_shell_on(&fake, None, None, ANSWER_WAIT, work, home.path().into());
     shell.opened().await;
 
-    shell.intend(set_goal(None, "ship it"));
+    shell.intend(set_goal("a", None, "ship it"));
     let told = shell.until(is_goal_answer).await;
 
     let refused = Update::StartFailed {
@@ -2472,7 +2494,7 @@ pub(super) fn home_serving(
             .unwrap();
             did
         }
-        None => "did:key:z6MkuNotThisShells".to_string(),
+        None => OWNER.to_string(),
     };
     crate::home_state::write_runtime_state(
         home.path(),
@@ -2492,31 +2514,20 @@ pub(super) fn home_serving(
     (home, node_did)
 }
 
-#[test]
-fn work_for_signs_as_this_homes_node() {
-    let keys = tempfile::tempdir().unwrap();
-    let key = keys.path().join("principal.key");
+#[tokio::test]
+async fn work_for_signs_as_this_clis_user() {
     let graphql = "http://127.0.0.1:39999/api/v0/graphql";
-    let (home, did) = home_serving(graphql, Some(&key));
+    let (home, _) = home_serving(graphql, None);
+    let user = crate::shared::test_support::cli_user().await;
 
-    let work = work::work_for(home.path()).expect("this home's node signs");
+    let work = work::work_for(home.path()).expect("this CLI's User signs");
 
-    assert_eq!(work.endpoint, GraphqlEndpoint::as_principal(graphql, did));
+    assert_eq!(work.access().actor_did().as_deref(), Some(user.did()));
 }
 
-/// A recorded runtime without an initialized identity would be read anonymously, and an
-/// anonymous read shows nothing.
+/// With no runtime recorded there is nothing to read.
 #[test]
-fn work_for_turns_off_when_the_endpoint_would_be_anonymous() {
-    let (home, _) = home_serving("http://127.0.0.1:39999/api/v0/graphql", None);
-
-    let off = work::work_for(home.path())
-        .err()
-        .expect("no node to sign as");
-
-    assert!(off.starts_with("jobs and the mailbox are off: "), "{off}");
-    assert!(off.contains("gents status"), "{off}");
-
+fn work_for_turns_off_with_no_runtime_recorded() {
     let bare = tempfile::tempdir().unwrap();
     let off = work::work_for(bare.path())
         .err()
@@ -2637,6 +2648,8 @@ fn work_answer(query: &str, jobs: &[Value], calls: &[Value]) -> Value {
         json!({ "data": { "AgentToolCall": jobs } })
     } else if query.contains("await_mode") {
         json!({ "data": { "AgentToolCall": calls } })
+    } else if query.contains("MailboxItem") {
+        json!({ "data": { "MailboxItem": [] } })
     } else {
         json!({ "data": { "AgentRequest": [], "AgentOutputSegment": [] } })
     }
@@ -3295,7 +3308,7 @@ pub(super) fn mailbox_item(
         "request_id": null,
         "cause_doc_id": null,
         "target_node_did": node,
-        "target_agent_id": "a",
+        "target_agent_did": "a",
         "expected_collection": null,
         "parent_item_id": null,
         "deadline_at": null,
@@ -3353,7 +3366,7 @@ fn is_prompts(update: &Update) -> bool {
     matches!(update, Update::Prompts { .. })
 }
 
-const MAILBOX_LIST: &str = r#"requester_did: { _eq: "did:key:z" }, status: { _eq: "open" }"#;
+const MAILBOX_LIST: &str = r#"MailboxItem(filter: { status: { _eq: "open" } },"#;
 
 /// Runs `fake`'s threads as plain sessions, with `items` in its mailbox.
 async fn with_mailbox<G>(graphql: G) -> FakeRuntime
@@ -3482,55 +3495,50 @@ async fn a_subagent_waiting_on_a_question_says_so_in_its_parents_row() {
 
 #[tokio::test]
 async fn dismissing_sends_the_mailbox_dismiss_and_shows_the_rest() {
-    let gone = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let dismissed = gone.clone();
-    let fake = with_mailbox(move |query| {
-        if query.contains("update_MailboxItem") {
-            dismissed.store(true, std::sync::atomic::Ordering::SeqCst);
-            return json!({ "data": { "update_MailboxItem": [{ "_docID": "i1" }] } });
-        }
-        let mut first = mailbox_item("i1", "s1", "gate", "ack", "did:key:z", 1);
-        if dismissed.load(std::sync::atomic::Ordering::SeqCst) {
-            first["status"] = json!("dismissed");
-        }
-        let items = [
-            first,
-            mailbox_item("i2", "s1", "ask", "start_request", "did:key:z", 2),
-        ];
-        mailbox_answer(query, &items)
-    })
+    use gents::session::mailbox::{MailboxAction, MailboxKind};
+    let (node, work, home) = served_settings().await;
+    let gate = filed(
+        &node,
+        &work,
+        "i1 title",
+        MailboxKind::Gate,
+        MailboxAction::Ack,
+    )
     .await;
-    let shell = open_shell(&fake);
+    let ask = MailboxAction::StartRequest;
+    let question = filed(&node, &work, "i2 title", MailboxKind::Ask, ask).await;
+    let fake = on_the_served_node().await;
+    let access = work.access();
+    let shell = open_shell_on(&fake, None, None, ANSWER_WAIT, Ok(work), home.path().into());
     shell.ready().await;
     open_s1(&shell);
     opening(&shell, "s1").await;
     let read = reread_and(&shell, is_prompts).await;
-    let both = vec![
+    let titled = |prompt: Prompt, item: &str, title: &str| Prompt {
+        item: item.to_string(),
+        title: title.to_string(),
+        ..prompt
+    };
+    let gated = titled(
         asked("i1", PromptKind::Gate, PromptAnswer::Ack),
-        asked("i2", PromptKind::Ask, PromptAnswer::Reply),
-    ];
+        &gate,
+        "i1 title",
+    );
+    let asking = asked("i2", PromptKind::Ask, PromptAnswer::Reply);
+    let asking = titled(asking, &question, "i2 title");
     let shown: Vec<_> = read.iter().filter(|update| is_prompts(update)).collect();
-    assert_eq!(shown, [&prompts("s1", both)]);
+    assert_eq!(shown, [&prompts("s1", vec![gated, asking.clone()])]);
 
     shell.intend(Intent::Dismiss {
         session: "s1".to_string(),
-        item: "i1".to_string(),
+        item: gate.clone(),
     });
 
     let read = shell.until(is_prompts).await;
-    let rest = vec![asked("i2", PromptKind::Ask, PromptAnswer::Reply)];
-    assert_eq!(read, [prompts("s1", rest)], "no notice: {read:?}");
-    assert!(gone.load(std::sync::atomic::Ordering::SeqCst));
-    let queries = fake.queries();
-    let mutation = queries
-        .iter()
-        .find(|query| query.contains("update_MailboxItem"))
-        .unwrap();
-    assert!(
-        mutation.contains(r#"_docID: { _eq: "i1" }"#)
-            && mutation.contains(r#"status: "dismissed""#),
-        "{mutation}"
-    );
+    assert_eq!(read, [prompts("s1", vec![asking])], "no notice: {read:?}");
+    let stored = gents::session::mailbox::load_mailbox_item_with_access(&access, &gate).await;
+    assert_eq!(stored.unwrap().unwrap().status, "dismissed");
+    node.shutdown().await.expect("node shutdown");
 }
 
 /// An item closed elsewhere while the mailbox feed is quiet: the refused reply rereads, so the
@@ -3708,26 +3716,84 @@ fn dismiss_from_the_mailbox(item: &str) -> Intent {
     }
 }
 
+/// One open item of `kind` and `action` in session `s1` of the served node, titled `title`,
+/// filed by its agent `engineer` for `work`'s User, as the runtime files one. Returns its id.
+async fn filed(
+    node: &Arc<defra_node::Node>,
+    work: &Work,
+    title: &str,
+    kind: gents::session::mailbox::MailboxKind,
+    action: gents::session::mailbox::MailboxAction,
+) -> String {
+    use gents::session::mailbox::{FileMailboxItemArgs, MailboxSourceKind, MailboxStampContext};
+    let context = MailboxStampContext {
+        requester_did: work.access().actor_did().unwrap(),
+        node_did: OWNER.to_string(),
+        agent_did: did("engineer"),
+        session_id: Some("s1".to_string()),
+    };
+    let args = FileMailboxItemArgs {
+        kind,
+        action,
+        title: title.to_string(),
+        summary: None,
+        payload: None,
+        source_kind: MailboxSourceKind::Session,
+        source_id: "s1".to_string(),
+        session_id: Some("s1".to_string()),
+        request_id: None,
+        cause_doc_id: None,
+        expected_collection: None,
+        parent_item_id: None,
+        deadline_at: None,
+    };
+    let root = crate::caused_sessions::fixtures::fixture_signer();
+    let binding = crate::shared::test_support::fixture_agent_named("engineer");
+    let agent = gents::store::identity::resolve_agent_identity(&root, &binding).unwrap();
+    let actor = ::identity::Did::new(agent.did()).unwrap();
+    let access = gents::ConfigAccess::local_managed_agent(node.clone(), actor, agent.as_ref());
+    let access = access.unwrap();
+    // The runtime projects an Agent's baseline from its live document; no runtime runs here.
+    let runtime = ::identity::Did::new(OWNER).unwrap();
+    let runtime = gents::ConfigAccess::local_as(node.clone(), runtime);
+    let baseline = gents::store::identity::GrantSet::AgentBaseline;
+    let agent_did = ::identity::Did::new(agent.did()).unwrap();
+    baseline.grant(&runtime, &agent_did).await.unwrap();
+    let close = gents::session::mailbox::MAILBOX_CLOSE_COLLECTIONS;
+    let item =
+        gents::session::mailbox::stamp_create_with_access(node, &access, &context, args, close);
+    item.await.unwrap().doc_id
+}
+
+/// The fake runtime for agents `a` and `b` of the served node, whose threads are plain sessions.
+async fn on_the_served_node() -> FakeRuntime {
+    let mut runtime = identity(Some(&["a", "b"]));
+    runtime.node_did = OWNER.to_string();
+    FakeRuntime::start(Some(runtime), |_, method, params| match method {
+        "thread/resume" => resumed(params, &[]),
+        _ => quiet(method),
+    })
+    .await
+}
+
 #[tokio::test]
 async fn an_act_notices_and_rereads_its_menu() {
-    let gone = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let dismissed = gone.clone();
-    let fake = with_mailbox(move |query| {
-        if query.contains("update_MailboxItem") {
-            dismissed.store(true, std::sync::atomic::Ordering::SeqCst);
-            return json!({ "data": { "update_MailboxItem": [{ "_docID": "i1" }] } });
-        }
-        let mut item = mailbox_item("i1", "s1", "finished", "ack", "did:key:z", 1);
-        if dismissed.load(std::sync::atomic::Ordering::SeqCst) {
-            item["status"] = json!("dismissed");
-        }
-        mailbox_answer(query, &[item])
-    })
+    use gents::session::mailbox::{MailboxAction, MailboxKind};
+    let (node, work, home) = served_settings().await;
+    let item = filed(
+        &node,
+        &work,
+        "i1 title",
+        MailboxKind::Finished,
+        MailboxAction::Ack,
+    )
     .await;
-    let shell = open_shell(&fake);
+    let fake = on_the_served_node().await;
+    let access = work.access();
+    let shell = open_shell_on(&fake, None, None, ANSWER_WAIT, Ok(work), home.path().into());
     shell.ready().await;
 
-    shell.intend(dismiss_from_the_mailbox("i1"));
+    shell.intend(dismiss_from_the_mailbox(&item));
 
     let reread = Update::Menu {
         menu: MenuId::Mailbox,
@@ -3737,7 +3803,9 @@ async fn an_act_notices_and_rereads_its_menu() {
         shell.until(is_menu).await,
         [Update::Notice("dismissed".to_string()), reread]
     );
-    assert!(gone.load(std::sync::atomic::Ordering::SeqCst));
+    let stored = gents::session::mailbox::load_mailbox_item_with_access(&access, &item).await;
+    assert_eq!(stored.unwrap().unwrap().status, "dismissed");
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -3895,13 +3963,21 @@ async fn working_tree_reads_land_in_order() {
     assert_eq!(reads, 2, "the two asked while one was out are read once");
 }
 
+/// The fixture runtime `served_config` publishes a config's `owner` as.
+const OWNER: &str = crate::caused_sessions::fixtures::FIXTURE_DID;
+
+/// The DID `served_config` gives the Agent a config names `name`.
+fn did(name: &str) -> String {
+    crate::shared::test_support::fixture_agent_named(name).agent_did
+}
+
 fn node_settings() -> Value {
-    node_settings_of("owner")
+    node_settings_of(OWNER)
 }
 
 fn node_settings_of(did: &str) -> Value {
     json!({
-        "node": { "node_did": did, "default_agent_id": "engineer" },
+        "node": { "node_did": did, "default_agent_did": "engineer" },
         "inference_backends": [{
             "node_did": did,
             "backend_id": "backend",
@@ -3960,19 +4036,19 @@ async fn served_settings() -> (Arc<defra_node::Node>, Work, tempfile::TempDir) {
     served(node_settings()).await
 }
 
-/// A node served with `config`, and the shell's work on it.
+/// A node served with `config`, and the shell's work on it as the User who owns it.
 async fn served(config: Value) -> (Arc<defra_node::Node>, Work, tempfile::TempDir) {
-    let (node, graphql) = crate::shared::test_support::served_config(config).await;
+    let served = crate::shared::test_support::served_config(config).await;
     let home = tempfile::tempdir().unwrap();
     let work = Work {
-        endpoint: GraphqlEndpoint::anonymous(graphql),
+        endpoint: served.user.clone(),
         home: home.path().into(),
     };
-    (node, work, home)
+    (served.node.clone(), work, home)
 }
 
 async fn menu_texts(work: &Work, menu: MenuId) -> Vec<String> {
-    let rows = super::menus::read_menu(&Ok(work.clone()), &work.home, "owner", menu).await;
+    let rows = super::menus::read_menu(&Ok(work.clone()), &work.home, OWNER, menu).await;
     rows.unwrap().into_iter().map(|row| row.text).collect()
 }
 
@@ -3986,7 +4062,7 @@ async fn a_skill_turns_off_on_a_served_node() {
         enabled: false,
     };
 
-    let turned = super::menus::act(&work, home.path(), "owner", &off).await;
+    let turned = super::menus::act(&work, home.path(), OWNER, &off).await;
 
     assert_eq!(turned, Ok("Review is off".to_string()));
     assert_eq!(
@@ -4005,12 +4081,12 @@ async fn a_skill_copy_is_renamed_as_the_desktop_does() {
     let (node, work, home) = served_settings().await;
     let duplicate = |id: &str| MenuAct::Duplicate(Doc::Skill, id.to_string());
 
-    let named = super::menus::act(&work, home.path(), "owner", &duplicate("review")).await;
-    let bare = super::menus::act(&work, home.path(), "owner", &duplicate("lint")).await;
+    let named = super::menus::act(&work, home.path(), OWNER, &duplicate("review")).await;
+    let bare = super::menus::act(&work, home.path(), OWNER, &duplicate("lint")).await;
 
     assert_eq!(named, Ok("Duplicated Review".to_string()));
     assert_eq!(bare, Ok("Duplicated lint".to_string()));
-    let skills = query_collection_sorted(&work.access(), SKILL_SPEC, "owner").await;
+    let skills = query_collection_sorted(&work.access(), SKILL_SPEC, OWNER).await;
     let mut copies: Vec<_> = skills
         .unwrap()
         .into_iter()
@@ -4040,11 +4116,11 @@ async fn a_duplicate_is_a_new_document_off() {
     let (node, work, home) = served_settings().await;
     let duplicate = MenuAct::Duplicate(Doc::Trigger, "nightly".to_string());
 
-    let duplicated = super::menus::act(&work, home.path(), "owner", &duplicate).await;
+    let duplicated = super::menus::act(&work, home.path(), OWNER, &duplicate).await;
 
     assert_eq!(duplicated, Ok("Duplicated Nightly".to_string()));
     let work = Ok(work);
-    let rows = super::menus::read_menu(&work, home.path(), "owner", MenuId::Triggers).await;
+    let rows = super::menus::read_menu(&work, home.path(), OWNER, MenuId::Triggers).await;
     let rows = rows.unwrap();
     let texts: Vec<_> = rows.iter().map(|row| row.text.as_str()).collect();
     assert_eq!(
@@ -4065,20 +4141,29 @@ async fn a_duplicate_is_a_new_document_off() {
 #[tokio::test]
 async fn a_trigger_reads_its_own_nodes_schedule() {
     let (node, work, _home) = served_settings().await;
-    let other = json!({
-        "node": { "node_did": "other" },
+    let keys = tempfile::tempdir().unwrap();
+    let other = gents::KeyIdentity::load_or_create(keys.path().join("other.key"), None).unwrap();
+    let other = gents::NodeIdentity::did(&other).to_string();
+    let theirs = json!({
+        "node": { "node_did": other },
         "schedules": [{
-            "node_did": "other",
+            "node_did": other,
             "schedule_id": "daily",
             "cadence": { "kind": "interval", "interval_secs": 60 },
         }],
     });
-    let other = serde_json::from_value(other).unwrap();
-    gents::documents::ensure_node(&node, "other").await.unwrap();
-    gents_desktop_core::client::apply_config_components_on(&work.access(), &other)
+    let plan = gents::store::config_client::DesiredStateApplyPlan::from_pack_config(
+        &serde_json::from_value(theirs).unwrap(),
+    )
+    .unwrap();
+    work.access()
+        .transact_write("test.other_node", |txn| {
+            let plan = &plan;
+            Box::pin(async move { gents::documents::apply_desired_state_plan(txn, plan).await })
+        })
         .await
         .unwrap();
-    let theirs = query_collection_sorted(&work.access(), SCHEDULE_SPEC, "other").await;
+    let theirs = query_collection_sorted(&work.access(), SCHEDULE_SPEC, &other).await;
     assert_eq!(theirs.unwrap().len(), 1);
 
     assert_eq!(
@@ -4101,7 +4186,7 @@ async fn a_schedule_in_use_is_not_deleted() {
     };
     let daily = delete(Doc::Schedule, "daily", "Daily");
 
-    let refused = super::menus::act(&work, home.path(), "owner", &daily).await;
+    let refused = super::menus::act(&work, home.path(), OWNER, &daily).await;
 
     let Err(refused) = refused else {
         panic!("{refused:?}");
@@ -4115,8 +4200,8 @@ async fn a_schedule_in_use_is_not_deleted() {
         [" + New schedule", " Daily   0 2 * * *"]
     );
     let nightly = delete(Doc::Trigger, "nightly", "Nightly");
-    let trigger = super::menus::act(&work, home.path(), "owner", &nightly).await;
-    let schedule = super::menus::act(&work, home.path(), "owner", &daily).await;
+    let trigger = super::menus::act(&work, home.path(), OWNER, &nightly).await;
+    let schedule = super::menus::act(&work, home.path(), OWNER, &daily).await;
     assert_eq!(trigger, Ok("Deleted Nightly".to_string()));
     assert_eq!(schedule, Ok("Deleted Daily".to_string()));
     assert_eq!(
@@ -4162,7 +4247,7 @@ async fn owner_rules_come_back_in_the_status() {
     let (node, work, _home) = served_settings().await;
     let access = work.access();
     let (grouping, cadence) = (FormRef::New(Doc::EventSource), FormRef::New(Doc::Schedule));
-    let grouped = super::forms::open(&access, "owner", &grouping, "evsrc-a").await;
+    let grouped = super::forms::open(&access, OWNER, &grouping, "evsrc-a").await;
     let grouped = with(
         as_opened(&grouped.unwrap()),
         "correlation_field",
@@ -4171,12 +4256,11 @@ async fn owner_rules_come_back_in_the_status() {
     let grouped = with(grouped, "expected_count", "2");
     let grouped = with(grouped, "timeout_secs", "60");
     let grouped = with(grouped, "min_count", "3");
-    let cron = super::forms::open(&access, "owner", &cadence, "sched-a").await;
+    let cron = super::forms::open(&access, OWNER, &cadence, "sched-a").await;
     let cron = with(as_opened(&cron.unwrap()), "expression", "every day");
 
-    let over =
-        super::forms::save(&access, &work.home, "owner", &grouping, &grouped, "evsrc-a").await;
-    let bad = super::forms::save(&access, &work.home, "owner", &cadence, &cron, "sched-a").await;
+    let over = super::forms::save(&access, &work.home, OWNER, &grouping, &grouped, "evsrc-a").await;
+    let bad = super::forms::save(&access, &work.home, OWNER, &cadence, &cron, "sched-a").await;
 
     let Err(FormError {
         field: None,
@@ -4218,35 +4302,38 @@ async fn owner_rules_come_back_in_the_status() {
 async fn an_edit_keeps_what_the_form_does_not_show() {
     let mut config = node_settings();
     config["contexts"] = json!([
-        { "node_did": "owner", "context_id": "main", "skill_ids": ["commit"] },
+        { "node_did": OWNER, "context_id": "main", "skill_ids": ["commit"] },
     ]);
     config["agents"][0]["context_id"] = json!("main");
     config["skills"].as_array_mut().unwrap().push(json!({
-        "node_did": "owner",
+        "node_did": OWNER,
         "skill_id": "commit",
         "name": "commit",
         "display_name": "Commit",
         "instructions": "Stage, then commit.",
         "created_at": "2026-01-01T00:00:00Z",
-        "tags": ["gents:pack:git", "vcs"],
+        "tags": ["gents:pack:acme/git", "vcs"],
     }));
     let (node, work, _home) = served(config).await;
     let access = work.access();
     let commit = FormRef::Edit(Doc::Skill, "commit".to_string());
 
-    let form = super::forms::open(&access, "owner", &commit, "commit").await;
+    let form = super::forms::open(&access, OWNER, &commit, "commit").await;
     let form = form.unwrap();
     let values = with(as_opened(&form), "display_name", "Commit changes");
     let values = with(values, "tags", "vcs, daily");
-    let saved = super::forms::save(&access, &work.home, "owner", &commit, &values, "commit").await;
+    let saved = super::forms::save(&access, &work.home, OWNER, &commit, &values, "commit").await;
 
-    assert_eq!(form.note, ["Used by Engineer · From git"]);
+    assert_eq!(form.note, ["Used by Engineer · From acme/git"]);
     assert_eq!(saved, Ok("Saved".to_string()));
-    let stored = crate::commands::config::crud::load_one(&access, SKILL_SPEC, "owner", "commit");
+    let stored = crate::commands::config::crud::load_one(&access, SKILL_SPEC, OWNER, "commit");
     let stored = stored.await.unwrap();
     assert_eq!(stored["display_name"], json!("Commit changes"));
     assert_eq!(stored["instructions"], json!("Stage, then commit."));
-    assert_eq!(stored["tags"], json!(["gents:pack:git", "vcs", "daily"]));
+    assert_eq!(
+        stored["tags"],
+        json!(["gents:pack:acme/git", "vcs", "daily"])
+    );
     assert_eq!(stored["created_at"], json!("2026-01-01T00:00:00Z"));
     node.shutdown().await.expect("node shutdown");
 }
@@ -4255,11 +4342,11 @@ async fn an_edit_keeps_what_the_form_does_not_show() {
 async fn new_then_nothing_writes_nothing() {
     let (node, work, _home) = served_settings().await;
     let access = work.access();
-    let skills = || query_collection_sorted(&access, SKILL_SPEC, "owner");
+    let skills = || query_collection_sorted(&access, SKILL_SPEC, OWNER);
     let before = skills().await.unwrap();
 
     let new = FormRef::New(Doc::Skill);
-    let form = super::forms::open(&access, "owner", &new, "skill-new").await;
+    let form = super::forms::open(&access, OWNER, &new, "skill-new").await;
 
     assert_eq!(form.unwrap().title, "New skill");
     assert_eq!(skills().await.unwrap(), before);
@@ -4268,8 +4355,10 @@ async fn new_then_nothing_writes_nothing() {
 
 #[tokio::test]
 async fn a_new_form_saves_under_the_id_it_showed() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| quiet(method)).await;
-    let (node, work, home) = served(node_settings_of("did:key:z")).await;
+    let mut runtime = identity(Some(&["a", "b"]));
+    runtime.node_did = OWNER.to_string();
+    let fake = FakeRuntime::start(Some(runtime), |_, method, _| quiet(method)).await;
+    let (node, work, home) = served(node_settings()).await;
     let access = work.access();
     let shell = open_shell_on(&fake, None, None, ANSWER_WAIT, Ok(work), home.path().into());
     shell.opened().await;
@@ -4326,7 +4415,7 @@ async fn a_new_form_saves_under_the_id_it_showed() {
     };
     assert_eq!(noted.last(), Some(&not_wired));
     assert!(id.starts_with("skill-"), "{id}");
-    let skills = query_collection_sorted(&access, SKILL_SPEC, "did:key:z").await;
+    let skills = query_collection_sorted(&access, SKILL_SPEC, OWNER).await;
     let drafts = skills
         .unwrap()
         .into_iter()
@@ -4341,21 +4430,18 @@ async fn a_new_form_saves_under_the_id_it_showed() {
 
 #[tokio::test]
 async fn a_schedule_runs_now_through_its_trigger() {
-    let keys = tempfile::tempdir().unwrap();
-    let key = keys.path().join("node.key");
-    let identity = gents::store::identity::KeyIdentity::load_or_create(&key, None).unwrap();
-    let did = gents::store::identity::NodeIdentity::did(&identity).to_string();
+    let did = OWNER.to_string();
     let mut config = node_settings_of(&did);
     config["schedules"].as_array_mut().unwrap().push(json!({
         "node_did": did,
         "schedule_id": "weekly",
         "cadence": { "kind": "cron", "expression": "0 9 * * 1", "timezone": "UTC" },
     }));
-    let (node, graphql) = crate::shared::test_support::served_config(config).await;
-    let (home, _) = home_serving(&graphql, Some(&key));
+    let (node, served, _) = served(config).await;
+    let (home, _) = home_serving(served.endpoint.url(), None);
     let work = Work {
-        endpoint: GraphqlEndpoint::anonymous(graphql),
         home: home.path().into(),
+        ..served
     };
     let access = work.access();
     let run = |schedule: &str| FormRef::Edit(Doc::Schedule, schedule.to_string());
@@ -4389,10 +4475,7 @@ async fn a_schedule_runs_now_through_its_trigger() {
         r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ caused_by_trigger_kind retry_key }} }}"#,
         gents::store::graphql::escape_graphql_string(request)
     );
-    let written = gents::store::config_client::ConfigAccess::local(node.clone())
-        .execute(&query)
-        .await
-        .unwrap();
+    let written = access.execute(&query).await.unwrap();
     let fired = &written["data"]["AgentRequest"][0];
     let task = fired["retry_key"].as_str().unwrap_or_default();
     assert_eq!(fired["caused_by_trigger_kind"], "manual", "{written}");
@@ -4408,7 +4491,7 @@ async fn a_new_trigger_on_a_preset_writes_schedule_task_and_trigger() {
     let access = work.access();
     let new = FormRef::New(Doc::Trigger);
 
-    let form = super::forms::open(&access, "owner", &new, "trig-abc").await;
+    let form = super::forms::open(&access, OWNER, &new, "trig-abc").await;
     let form = form.unwrap();
     let sent_with = |pairs: &[(&str, &str)]| {
         let mut form = form.clone();
@@ -4430,7 +4513,7 @@ async fn a_new_trigger_on_a_preset_writes_schedule_task_and_trigger() {
         ("prompt", prompt),
     ]);
     let values = sent_with(&[("prompt", prompt)]);
-    let save = |values| super::forms::save(&access, &work.home, "owner", &new, values, "trig-abc");
+    let save = |values| super::forms::save(&access, &work.home, OWNER, &new, values, "trig-abc");
     let refused = save(&custom).await;
     let saved = save(&values).await;
 
@@ -4458,7 +4541,7 @@ async fn a_new_trigger_on_a_preset_writes_schedule_task_and_trigger() {
     };
     assert!(refused.contains(&owner), "{refused} does not carry {owner}");
     assert_eq!(saved, Ok("Saved".to_string()));
-    let stored = |spec, id| load_one(&access, spec, "owner", id);
+    let stored = |spec, id| load_one(&access, spec, OWNER, id);
     let schedule = stored(SCHEDULE_SPEC, "sched-abc").await.unwrap();
     assert_eq!(schedule["display_name"], json!("Every day at 09:00"));
     assert_eq!(
@@ -4503,7 +4586,7 @@ async fn a_new_trigger_on_a_preset_writes_schedule_task_and_trigger() {
             .collect::<Vec<_>>(),
         [[
             json!("Summarise the inbox."),
-            json!("engineer"),
+            json!(did("engineer")),
             json!(prompt)
         ]]
     );
@@ -4523,12 +4606,12 @@ async fn a_schedule_trigger_refuses_a_concurrency_it_cannot_honour() {
     let (node, work, _home) = served_settings().await;
     let access = work.access();
     let nightly = FormRef::Edit(Doc::Trigger, "nightly".to_string());
-    let form = super::forms::open(&access, "owner", &nightly, "nightly").await;
+    let form = super::forms::open(&access, OWNER, &nightly, "nightly").await;
     let opened = as_opened(&form.unwrap());
     let save = |concurrency: &str| {
         let values = with(opened.clone(), "concurrency", concurrency);
         let (access, home, nightly) = (&access, &work.home, &nightly);
-        async move { super::forms::save(access, home, "owner", nightly, &values, "nightly").await }
+        async move { super::forms::save(access, home, OWNER, nightly, &values, "nightly").await }
     };
 
     let queued = save("queued_serial").await;
@@ -4546,7 +4629,7 @@ async fn a_schedule_trigger_refuses_a_concurrency_it_cannot_honour() {
         "{queued}"
     );
     assert_eq!(serial, Ok("Saved".to_string()));
-    let stored = load_one(&access, TRIGGER_SPEC, "owner", "nightly").await;
+    let stored = load_one(&access, TRIGGER_SPEC, OWNER, "nightly").await;
     assert_eq!(stored.unwrap()["concurrency"], json!("serial"));
     node.shutdown().await.expect("node shutdown");
 }
@@ -4564,9 +4647,9 @@ async fn a_remote_tool_without_a_host_shows_the_owners_reason() {
     let (node, work, home) = served_settings().await;
     let access = work.access();
     let new = FormRef::New(Doc::RemoteTool);
-    let form = super::forms::open(&access, "owner", &new, "mcp-a").await;
+    let form = super::forms::open(&access, OWNER, &new, "mcp-a").await;
     let no_host = with(as_opened(&form.unwrap()), "hostname", " ");
-    let save = |values| super::forms::save(&access, home.path(), "owner", &new, values, "mcp-a");
+    let save = |values| super::forms::save(&access, home.path(), OWNER, &new, values, "mcp-a");
 
     let refused = save(&no_host).await;
     let empty = menu_texts(&work, MenuId::RemoteTools).await;
@@ -4590,7 +4673,7 @@ async fn a_remote_tool_without_a_host_shows_the_owners_reason() {
         ]
     );
     assert_eq!(saved, Ok("Saved".to_string()));
-    let services = query_collection_sorted(&access, MCP_SPEC, "owner")
+    let services = query_collection_sorted(&access, MCP_SPEC, OWNER)
         .await
         .unwrap();
     let service = &services[0];
@@ -4614,11 +4697,11 @@ async fn test_connection_uses_the_forms_values() {
     let home = tempfile::tempdir().unwrap();
     let access = offline(home.path()).access();
     let new = FormRef::New(Doc::RemoteTool);
-    let form = super::forms::open(&access, "owner", &new, "mcp-a").await;
+    let form = super::forms::open(&access, OWNER, &new, "mcp-a").await;
     let opened = as_opened(&form.unwrap());
     let test = gents_shell::source::FormAct::TestConnection;
     let tested =
-        |values| super::forms::act(&access, home.path(), "owner", &new, &test, values, "mcp-a");
+        |values| super::forms::act(&access, home.path(), OWNER, &new, &test, values, "mcp-a");
     let (no_host, far) = (
         with(opened.clone(), "hostname", ""),
         with(opened, "mcp_port", "70000"),
@@ -4639,10 +4722,10 @@ async fn test_connection_uses_the_forms_values() {
 async fn a_node_save_keeps_what_the_form_does_not_show() {
     let mut config = node_settings();
     config["node"] = json!({
-        "node_did": "owner",
+        "node_did": OWNER,
         "display_name": "Studio",
         "avatar": "7",
-        "default_agent_id": "engineer",
+        "default_agent_did": "engineer",
         "created_at": "2026-01-01T00:00:00Z",
         "created_by": "did:key:zMaker",
         "tags": ["gents:pack:home", "desk"],
@@ -4650,17 +4733,16 @@ async fn a_node_save_keeps_what_the_form_does_not_show() {
     let (node, work, home) = served(config).await;
     let access = work.access();
     let stored = || async {
-        let nodes = query_collection(&access, NODE_SPEC, "owner", None).await;
+        let nodes = query_collection(&access, NODE_SPEC, OWNER, None).await;
         nodes.unwrap().remove(0)
     };
     let before = stored().await;
 
-    let form = super::forms::open(&access, "owner", &FormRef::Node, "").await;
+    let form = super::forms::open(&access, OWNER, &FormRef::Node, "").await;
     let form = form.unwrap();
     let values = with(as_opened(&form), "display_name", " Workshop ");
     let values = with(values, "tags", "desk, bench");
-    let saved =
-        super::forms::save(&access, home.path(), "owner", &FormRef::Node, &values, "").await;
+    let saved = super::forms::save(&access, home.path(), OWNER, &FormRef::Node, &values, "").await;
 
     assert_eq!(form.note, ["Studio"]);
     assert_eq!(saved, Ok("Saved".to_string()));
@@ -4672,7 +4754,7 @@ async fn a_node_save_keeps_what_the_form_does_not_show() {
         "avatar",
         "created_at",
         "created_by",
-        "default_agent_id",
+        "default_agent_did",
         "enabled",
     ] {
         assert_eq!(after[kept], before[kept], "{kept}");
@@ -4684,7 +4766,7 @@ async fn a_node_save_keeps_what_the_form_does_not_show() {
 async fn changing_the_default_agent_enables_it() {
     let mut config = node_settings();
     config["agents"].as_array_mut().unwrap().push(json!({
-        "node_did": "owner",
+        "node_did": OWNER,
         "agent_did": "scout",
         "display_name": "Scout",
         "inference_profile_id": "profile",
@@ -4693,30 +4775,31 @@ async fn changing_the_default_agent_enables_it() {
     let (node, work, home) = served(config).await;
     let access = work.access();
     let scout = || async {
-        let state = gents_desktop_core::inference::load_inference_setup_state(&access, "owner");
+        let state = gents_desktop_core::inference::load_inference_setup_state(&access, OWNER);
         let agents = state.await.unwrap().agents;
-        let scout = agents.into_iter().find(|agent| agent.agent_did == "scout");
+        let scout = agents
+            .into_iter()
+            .find(|agent| agent.agent_did == did("scout"));
         let scout = scout.unwrap();
         (scout.enabled, scout.is_default)
     };
     let before = scout().await;
 
-    let form = super::forms::open(&access, "owner", &FormRef::Node, "").await;
+    let form = super::forms::open(&access, OWNER, &FormRef::Node, "").await;
     let form = form.unwrap();
-    let values = with(as_opened(&form), "default_agent_id", "scout");
+    let values = with(as_opened(&form), "default_agent_did", &did("scout"));
     let values = with(values, "display_name", "Studio");
-    let saved =
-        super::forms::save(&access, home.path(), "owner", &FormRef::Node, &values, "").await;
+    let saved = super::forms::save(&access, home.path(), OWNER, &FormRef::Node, &values, "").await;
 
     let default = form
         .fields
         .iter()
-        .find(|field| field.key == "default_agent_id");
+        .find(|field| field.key == "default_agent_did");
     let gents_shell::source::FieldKind::Choice(agents) = &default.unwrap().kind else {
         panic!("{default:?}");
     };
     let scout_label = (
-        "scout".to_string(),
+        did("scout"),
         "Scout · disabled, enabled when saved as default".to_string(),
     );
     assert!(agents.contains(&scout_label), "{agents:?}");
@@ -4748,10 +4831,10 @@ async fn folder_rows_toggle_and_remove() {
     let work = offline(home.path());
     let read = || async {
         let off = Err("work is off".to_string());
-        super::menus::read_menu(&off, home.path(), "owner", MenuId::AllowedFolders).await
+        super::menus::read_menu(&off, home.path(), OWNER, MenuId::AllowedFolders).await
     };
     let (work, at) = (&work, home.path());
-    let act = |act: MenuAct| async move { super::menus::act(work, at, "owner", &act).await };
+    let act = |act: MenuAct| async move { super::menus::act(work, at, OWNER, &act).await };
     let (notes_at, repos_at) = (notes.display().to_string(), repos.display().to_string());
 
     let listed = read().await.unwrap();
@@ -4839,13 +4922,11 @@ async fn adding_a_folder_writes_the_homes_file() {
     let add = FormRef::AddFolder;
     let typed = |path: String| vec![("path".to_string(), path)];
 
-    let form = super::forms::open(&access, "owner", &add, "")
-        .await
-        .unwrap();
+    let form = super::forms::open(&access, OWNER, &add, "").await.unwrap();
     let saved = super::forms::save(
         &access,
         home.path(),
-        "owner",
+        OWNER,
         &add,
         &typed(format!(" {} ", folder.path().display())),
         "",
@@ -4855,7 +4936,7 @@ async fn adding_a_folder_writes_the_homes_file() {
     let refused = super::forms::save(
         &access,
         home.path(),
-        "owner",
+        OWNER,
         &add,
         &typed(missing.display().to_string()),
         "",
@@ -4902,7 +4983,7 @@ fn profile_of(
     model: &str,
 ) -> gents::documents::InferenceProfile {
     let mut profile = json!({
-        "node_did": "owner", "profile_id": id, "backend_id": "backend", "model_name": model,
+        "node_did": OWNER, "profile_id": id, "backend_id": "backend", "model_name": model,
     });
     if let Some(name) = display_name {
         profile["display_name"] = json!(name);
@@ -4926,18 +5007,18 @@ fn two_profiles() -> Value {
         .as_array_mut()
         .unwrap()
         .push(json!({
-            "node_did": "owner", "profile_id": "other", "backend_id": "backend",
+            "node_did": OWNER, "profile_id": "other", "backend_id": "backend",
             "model_name": "other-model", "display_name": "Other",
         }));
     config["agents"].as_array_mut().unwrap().push(json!({
-        "node_did": "owner", "agent_did": "scout", "display_name": "Scout",
+        "node_did": OWNER, "agent_did": "scout", "display_name": "Scout",
         "inference_profile_id": "profile",
     }));
     config
 }
 
 async fn profile_rows(work: &Work, agent: &str) -> Vec<gents_shell::source::MenuRow> {
-    super::menus::read_profiles(&Ok(work.clone()), "owner", agent)
+    super::menus::read_profiles(&Ok(work.clone()), OWNER, agent)
         .await
         .unwrap()
 }
@@ -4945,8 +5026,7 @@ async fn profile_rows(work: &Work, agent: &str) -> Vec<gents_shell::source::Menu
 #[tokio::test]
 async fn choosing_a_profile_moves_only_that_agent() {
     let (node, work, home) = served(two_profiles()).await;
-    let rows =
-        super::menus::read_menu(&Ok(work.clone()), &work.home, "owner", MenuId::Agents).await;
+    let rows = super::menus::read_menu(&Ok(work.clone()), &work.home, OWNER, MenuId::Agents).await;
     let rows = rows.unwrap();
     let texts: Vec<_> = rows.iter().map(|row| row.text.as_str()).collect();
     assert_eq!(
@@ -4965,9 +5045,9 @@ async fn choosing_a_profile_moves_only_that_agent() {
             },
         )]
     };
-    assert_eq!(rows[0].more, choose("engineer", "Engineer"));
-    assert_eq!(rows[1].more, choose("scout", "Scout"));
-    let engineer = profile_rows(&work, "engineer").await;
+    assert_eq!(rows[0].more, choose(&did("engineer"), "Engineer"));
+    assert_eq!(rows[1].more, choose(&did("scout"), "Scout"));
+    let engineer = profile_rows(&work, &did("engineer")).await;
     assert_eq!(
         shown_rows(&engineer),
         [
@@ -4975,12 +5055,16 @@ async fn choosing_a_profile_moves_only_that_agent() {
             (" ● profile · model", Tone::Accent)
         ]
     );
-    let choose = profile_rows(&work, "scout").await.remove(0).enter.unwrap();
+    let choose = profile_rows(&work, &did("scout"))
+        .await
+        .remove(0)
+        .enter
+        .unwrap();
 
-    let done = super::menus::act(&work, home.path(), "owner", &choose).await;
+    let done = super::menus::act(&work, home.path(), OWNER, &choose).await;
 
     assert_eq!(done, Ok("Saved".to_string()));
-    let scout = profile_rows(&work, "scout").await;
+    let scout = profile_rows(&work, &did("scout")).await;
     assert_eq!(
         shown_rows(&scout),
         [
@@ -4988,7 +5072,7 @@ async fn choosing_a_profile_moves_only_that_agent() {
             ("   profile · model", Tone::Plain)
         ]
     );
-    assert_eq!(profile_rows(&work, "engineer").await, engineer);
+    assert_eq!(profile_rows(&work, &did("engineer")).await, engineer);
     node.shutdown().await.expect("node shutdown");
 }
 
@@ -5035,7 +5119,9 @@ async fn a_failed_key_save_says_so() {
 
 #[tokio::test]
 async fn choosing_a_profile_rereads_the_agents_not_the_profiles() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| quiet(method)).await;
+    let mut runtime = identity(Some(&["a", "b"]));
+    runtime.node_did = OWNER.to_string();
+    let fake = FakeRuntime::start(Some(runtime), |_, method, _| quiet(method)).await;
     let mut config = node_settings_of("did:key:z");
     config["inference_profiles"]
         .as_array_mut()
@@ -5055,7 +5141,7 @@ async fn choosing_a_profile_rereads_the_agents_not_the_profiles() {
     );
     shell.opened().await;
     let choose = MenuAct::SetAgentProfile {
-        agent: "engineer".into(),
+        agent: did("engineer"),
         name: "Engineer".into(),
         profile: "other".into(),
         label: "Other · other-model".into(),
@@ -5084,7 +5170,7 @@ fn found(packs: Value, has_more: bool) -> Value {
 fn pack_rows_mirror_the_desktop() {
     use super::packs::{adds, pack_rows};
     use Tone::{Label, Plain, Warn};
-    let git = || vec!["gents:pack:git".to_string()];
+    let git = || vec!["gents:pack:acme/git".to_string()];
     let adds = adds(&[vec![git(), git()], vec![git(), vec!["other".to_string()]]]);
     let installed = json!({ "packs": [
         { "pack": "acme/git", "installed": "1.0.0", "latest": "1.1.0", "outdated": true, "error": null },
@@ -5277,10 +5363,11 @@ async fn packs_wait_for_the_runtime() {
     let keys = tempfile::tempdir().unwrap();
     let key = keys.path().join("principal.key");
     let (home, did) = home_serving("http://127.0.0.1:1/api/v0/graphql", Some(&key));
+    crate::shared::test_support::cli_user().await;
     let work = work::work_for(home.path());
     assert!(
         work.is_ok(),
-        "the home's node signs: {:?}",
+        "this CLI's User signs: {:?}",
         work.as_ref().err()
     );
     let off: Result<Work, String> = Err("jobs and the mailbox are off: no runtime".to_string());

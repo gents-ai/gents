@@ -119,7 +119,7 @@ async fn mailbox_dismiss_refuses_a_question_that_needs_an_answer() -> Result<()>
             title: "Release channel", summary: null, payload: "{payload}",
             source_kind: "runtime", source_id: "request-doc", session_id: null,
             request_id: null, cause_doc_id: null,
-            target_node_did: "{did}", target_agent_id: "default",
+            target_node_did: "{did}", target_agent_did: "default",
             expected_collection: null, parent_item_id: null, deadline_at: null,
             created_at: "2026-08-25T12:00:00Z", updated_at: "2026-08-25T12:00:00Z",
             resolved_at: null, resolved_doc_id: null

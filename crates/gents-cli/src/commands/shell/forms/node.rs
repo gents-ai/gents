@@ -29,8 +29,8 @@ pub(super) async fn save(
 ) -> Result<(), FormError> {
     let before = stored(access, node_did).await.map_err(refused)?;
     document(&before, values)?;
-    let default = value(values, "default_agent_id");
-    if before["default_agent_id"] != default {
+    let default = value(values, "default_agent_did");
+    if before["default_agent_did"] != default {
         let set = set_default_agent_on(access, node_did, default).await;
         set.map_err(refused)?;
     }
@@ -65,10 +65,10 @@ pub(super) fn form(node: &Value, agents: &[AgentView]) -> Form {
         (agent.agent_did.clone(), label)
     });
     let default = field(
-        "default_agent_id",
+        "default_agent_did",
         "Default agent",
         choice(agents),
-        &shown(&node["default_agent_id"]),
+        &shown(&node["default_agent_did"]),
     );
     let created = node["created_at"].as_str();
     let created = created.map_or(String::new(), |at| sections::local(at, "%Y-%m-%d"));
@@ -113,7 +113,7 @@ pub(super) fn document(current: &Value, values: &[(String, String)]) -> Result<N
     }
     let fields = json!({
         "display_name": name,
-        "default_agent_id": optional(value(values, "default_agent_id")),
+        "default_agent_did": optional(value(values, "default_agent_did")),
         "enabled": value(values, "enabled") == "on",
         "max_request_hop": hop(value(values, "max_request_hop"))?,
         "tags": tags(Some(current), values),
@@ -150,7 +150,7 @@ mod tests {
             "node_did": "did:key:zNode",
             "display_name": "Studio",
             "avatar": "7",
-            "default_agent_id": "engineer",
+            "default_agent_did": "engineer",
             "enabled": false,
             "created_at": "2026-01-01T12:00:00Z",
             "created_by": "did:key:zMaker",
@@ -177,7 +177,7 @@ mod tests {
                 ("tags", "desk"),
                 ("enabled", "off"),
                 ("details", ""),
-                ("default_agent_id", "engineer"),
+                ("default_agent_did", "engineer"),
                 ("max_request_hop", "3"),
                 ("identity", ""),
                 ("node_did", "did:key:zNode"),
@@ -191,10 +191,10 @@ mod tests {
             ("engineer", "Engineer"),
             ("scout", "Scout · disabled, enabled when saved as default"),
         ];
-        assert_eq!(options(&shown, "default_agent_id"), agents);
+        assert_eq!(options(&shown, "default_agent_did"), agents);
         assert_eq!(shown.actions, []);
 
-        let bare = json!({ "node_did": "did:key:zNode", "default_agent_id": "engineer" });
+        let bare = json!({ "node_did": "did:key:zNode", "default_agent_did": "engineer" });
         let bare = form(&bare, &[]);
         assert_eq!(bare.note, ["did:key:zNode"]);
         let enabled = bare.fields.iter().find(|field| field.key == "enabled");
@@ -203,12 +203,12 @@ mod tests {
 
     #[test]
     fn a_request_hop_is_whole_or_blank() {
-        let node = json!({ "node_did": "did:key:zNode", "default_agent_id": "engineer" });
+        let node = json!({ "node_did": "did:key:zNode", "default_agent_did": "engineer" });
         let typed = |name: &str, hop: &str| {
             sent(&[
                 ("display_name", name),
                 ("enabled", "on"),
-                ("default_agent_id", "engineer"),
+                ("default_agent_did", "engineer"),
                 ("max_request_hop", hop),
             ])
         };
