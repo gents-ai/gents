@@ -457,6 +457,37 @@ impl SelfConfigFixture {
             .unwrap();
     }
 
+    /// The User makes the Agent an `administrator` of `target`'s Agent, the
+    /// relation that manages `session_writer` there.
+    async fn grant_agent_administration(&self, target: &str) {
+        self.user_access
+            .transact_write("test.self_config.grant_agent_administration", |txn| {
+                let owner = self.db.node_identity.did();
+                let actor = &self.agent_did;
+                Box::pin(async move {
+                    let (doc_id, _) =
+                        crate::store::config_client::read_desired_state_record_in_txn(
+                            txn,
+                            crate::Collection::Agent,
+                            owner,
+                            target,
+                        )
+                        .await?
+                        .expect("target Agent exists");
+                    txn.add_actor_relationship(
+                        "Agent",
+                        &doc_id,
+                        "administrator",
+                        &identity::Did::new(actor)?,
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await
+            .unwrap();
+    }
+
     async fn grant_pack_install(&self) {
         self.grant_pack_install_to(&self.agent_did).await;
     }
@@ -5975,6 +6006,10 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
     let caller = fixture.install_sibling("caller").await;
     fixture.grant_sibling_configuration(&lead).await;
     fixture.grant_sibling_configuration(&caller).await;
+    // Lean `AgentTargetAccess.authorized`: selecting the `gatekeeper` target
+    // declares `session_writer` on `lead`, so the Engineer must natively
+    // manage that relation (`engineer_with_authority_applies_the_same_relation`).
+    fixture.grant_agent_administration(&lead).await;
     let owner = fixture.node_did().to_owned();
     let setup_did = fixture.agent_did().to_owned();
     let setup = fixture.core();

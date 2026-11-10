@@ -7,12 +7,12 @@ use std::time::{Duration, Instant};
 
 use gents::runtime::agent::p2p_reconcile::{
     enrollment_authority_channel, run_enrollment_reconciler, run_pairing_reconciler,
-    EnrollmentRenewalPolicy, GraphqlEnrollmentStore,
+    GraphqlEnrollmentStore,
 };
 use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::escape_graphql_string;
 use gents_protocol::enrollment::{
-    AuthorizationLease, AuthorizationLeaseState, EnrollmentDecisionKind,
+    AuthorizationLease, AuthorizationLeaseState, EnrollmentDecisionKind, EnrollmentRenewalPolicy,
 };
 use tokio_util::sync::CancellationToken;
 

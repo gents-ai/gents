@@ -697,7 +697,6 @@ async fn existing_child_message_uses_calling_agent_native_claim() {
                 child.request(),
                 &verifier,
                 Some(fixture.child.as_ref()),
-                &[],
             )
             .await;
             let error = blocked
@@ -713,7 +712,6 @@ async fn existing_child_message_uses_calling_agent_native_claim() {
                 child.request(),
                 &verifier,
                 Some(fixture.child.as_ref()),
-                &[],
             )
             .await
             .unwrap();

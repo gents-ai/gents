@@ -1299,7 +1299,6 @@ struct SteeringInputSource {
     verifier: crate::request::admission::AgentRequestAdmissionVerifier,
     agent_identity: Arc<dyn crate::store::identity::NodeIdentity>,
     natural_finish_allowed: bool,
-    unanswered_selection: Vec<String>,
 }
 
 enum PolicyDecision {
@@ -1347,14 +1346,12 @@ impl DefraSessionHook {
         verifier: crate::request::admission::AgentRequestAdmissionVerifier,
         agent_identity: Arc<dyn crate::store::identity::NodeIdentity>,
         natural_finish_allowed: bool,
-        unanswered_selection: Vec<String>,
     ) -> Self {
         self.steering_input_source = Some(Arc::new(SteeringInputSource {
             request,
             verifier,
             agent_identity,
             natural_finish_allowed,
-            unanswered_selection,
         }));
         self
     }
@@ -2275,7 +2272,6 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
             &source.request,
             &source.verifier,
             Some(source.agent_identity.as_ref()),
-            &source.unanswered_selection,
         )
         .await?)
     }
@@ -2297,7 +2293,6 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
                 &source.request,
                 &source.verifier,
                 Some(source.agent_identity.as_ref()),
-                &source.unanswered_selection,
             )
             .await?,
         ))

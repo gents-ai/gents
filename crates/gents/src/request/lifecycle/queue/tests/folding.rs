@@ -754,7 +754,6 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
                             turn.lifecycle.request(),
                             &verifier,
                             None,
-                            &[],
                         )
                         .await
                         .unwrap();
@@ -1029,7 +1028,6 @@ async fn direct_user_steer_passes_ordinary_queue_without_consuming_it() {
         active.lifecycle.request(),
         &verifier,
         None,
-        &[],
     )
     .await
     .unwrap();
@@ -1126,7 +1124,6 @@ async fn expired_or_malformed_steering_is_a_modelled_publication_barrier() {
             active.lifecycle.request(),
             &verifier,
             None,
-            &[],
         )
         .await
         .unwrap();

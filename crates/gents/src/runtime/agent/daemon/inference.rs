@@ -285,22 +285,20 @@ where
                         self.agent_config.tools.goal_tools_requested(),
                         self.agent_config.tools.goal_creation_requested(),
                     )
-                    .with_output_obligation_gate(output_obligation_gate.clone())
-                    .with_steering_inputs(
-                        request.clone(),
-                        self.request_admission.clone(),
-                        self.agent_config.agent_identity.clone(),
-                        lifecycle.natural_finish_allowed(),
-                        if resume_from_history {
-                            lifecycle
-                                .folded_selection()
-                                .iter()
-                                .map(|selected| selected.request_doc_id.clone())
-                                .collect()
-                        } else {
-                            Vec::new()
-                        },
-                    );
+                    .with_output_obligation_gate(output_obligation_gate.clone());
+                    // Lean `CurrentInput.answersSelection`: a resumed retry
+                    // publishes no authored input, so steered messages stay
+                    // queued for their own turn instead of folding into it.
+                    let hook = if resume_from_history {
+                        hook
+                    } else {
+                        hook.with_steering_inputs(
+                            request.clone(),
+                            self.request_admission.clone(),
+                            self.agent_config.agent_identity.clone(),
+                            lifecycle.natural_finish_allowed(),
+                        )
+                    };
                     let hook = match &self.job_driver {
                         Some(driver) => hook.with_job_driver(driver.clone()),
                         None => hook,
