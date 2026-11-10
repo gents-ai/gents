@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{anyhow, Result};
 use gents_server::native_service::{
     CommandOutput, CommandRunner, NativeServiceConfig, NativeServiceManager, NativeServicePlatform,
+    SYSTEMD_UNIT,
 };
 
 #[cfg(target_os = "macos")]
@@ -91,11 +92,12 @@ fn manager(
 fn linux_status_preserves_runtime_enabled_service() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let config = config(temp.path(), "gents");
-    fs::create_dir_all(&config.service_config_dir)?;
-    fs::write(
-        config.definition_path(NativeServicePlatform::Linux),
-        "[Service]\n",
-    )?;
+    manager(
+        config.clone(),
+        NativeServicePlatform::Linux,
+        ScriptedRunner::with_outputs([ok(), ok()]),
+    )
+    .install()?;
     for (success, unit_state, expected) in [
         (true, "enabled", true),
         (true, "enabled-runtime", true),
@@ -106,9 +108,18 @@ fn linux_status_preserves_runtime_enabled_service() -> Result<()> {
             output(true, "active", ""),
             output(success, unit_state, ""),
         ]);
-        let status = manager(config.clone(), NativeServicePlatform::Linux, runner).status()?;
+        let status =
+            manager(config.clone(), NativeServicePlatform::Linux, runner.clone()).status()?;
         assert_eq!(status.enabled, expected, "{unit_state}");
         assert!(status.running, "{unit_state}");
+        assert_eq!(
+            runner.calls(),
+            [
+                ["systemctl", "--user", "is-active", SYSTEMD_UNIT],
+                ["systemctl", "--user", "is-enabled", SYSTEMD_UNIT],
+            ],
+            "{unit_state}"
+        );
     }
     Ok(())
 }
