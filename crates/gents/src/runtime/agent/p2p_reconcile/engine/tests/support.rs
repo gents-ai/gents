@@ -50,6 +50,7 @@ struct MockStore {
     list_peer_ids_retry_started: Option<Arc<tokio::sync::Notify>>,
     list_peer_ids_retry_release: Option<Arc<tokio::sync::Notify>>,
     persist_applied_completed: Option<Arc<tokio::sync::Notify>>,
+    enrollment_closed: bool,
 }
 
 impl Default for MockStore {
@@ -64,6 +65,7 @@ impl Default for MockStore {
             list_peer_ids_retry_started: None,
             list_peer_ids_retry_release: None,
             persist_applied_completed: None,
+            enrollment_closed: false,
         }
     }
 }
@@ -85,6 +87,10 @@ impl PairingStateStore for MockStore {
             .unwrap()
             .clone()
             .map_err(|message| anyhow!(message))
+    }
+
+    async fn peer_enrollment_closed(&self, _peer_id: &str) -> Result<bool> {
+        Ok(self.enrollment_closed)
     }
 
     async fn load_applied(&self, _peer_id: &str) -> Result<LoadedPairingApplied> {

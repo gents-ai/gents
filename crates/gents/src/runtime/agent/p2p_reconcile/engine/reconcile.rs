@@ -66,6 +66,16 @@ pub(super) async fn prepare_pairing_peer(
 ) -> PairingPeerPreparation {
     let loaded_desired = match store.load_desired_with_authority(&peer_id).await {
         Ok(desired) => desired,
+        // A failed read still honours a closed enrollment: its route, and any
+        // application collections on it, come down.
+        Err(error) if matches!(store.peer_enrollment_closed(&peer_id).await, Ok(true)) => {
+            tracing::warn!(target: "gents::runtime::agent::p2p_reconcile::engine",
+                peer_id = %peer_id,
+                error = %error,
+                "pairing desired state read failed and the enrollment is closed; tearing the route down"
+            );
+            super::LoadedPairingDesired::default()
+        }
         Err(error) => {
             tracing::warn!(target: "gents::runtime::agent::p2p_reconcile::engine",
                 peer_id = %peer_id,

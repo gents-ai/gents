@@ -16,11 +16,16 @@ pub fn is_managed_collection(name: &str) -> bool {
         || crate::schemas::RUNTIME_COLLECTION_NAMES.contains(&name)
 }
 
+/// The tool permission source purpose that carries the P2P mutation grant
+/// (Lean `Identity.Configuration.toolOperationSources`, `p2p-pairing`).
+pub const P2P_PAIRING_SOURCE_PURPOSE: &str = "p2p-pairing";
+
 /// What admitting one application collection to a pairing reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AppCollectionFacts {
     pub managed: bool,
     pub has_policy: bool,
+    pub is_view: bool,
 }
 
 /// Why an application collection is refused for replication. The decision is
@@ -34,6 +39,8 @@ pub enum AppCollectionRefusal {
          their signer on the peer and grants do not replicate, so only that signer could read them"
     )]
     PolicyProtected,
+    #[error("a view is derived from other collections and cannot carry its own document policy")]
+    View,
 }
 
 /// Refused collections never reach the transport, so this is the one place
@@ -41,6 +48,8 @@ pub enum AppCollectionRefusal {
 pub fn decide_app_collection(facts: AppCollectionFacts) -> Result<(), AppCollectionRefusal> {
     if facts.managed {
         Err(AppCollectionRefusal::Managed)
+    } else if facts.is_view {
+        Err(AppCollectionRefusal::View)
     } else if facts.has_policy {
         Err(AppCollectionRefusal::PolicyProtected)
     } else {

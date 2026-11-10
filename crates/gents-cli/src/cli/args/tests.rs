@@ -64,3 +64,42 @@ fn pairing_reader_commands_require_a_physical_document_and_reason() {
     ])
     .is_err());
 }
+
+/// The operator stop: the User lists application pairings and removes one by
+/// peer through the signed CLI path.
+#[test]
+fn operator_lists_and_removes_application_pairings() {
+    let cli = Cli::try_parse_from([
+        "gents", "p2p", "pairings", "remove", "peer-1", "--home", "/h",
+    ])
+    .expect("remove should parse");
+    let Command::P2p {
+        command:
+            P2pCommand::Pairings {
+                command: P2pPairingsCommand::Remove(args),
+            },
+    } = cli.command
+    else {
+        panic!("expected a pairing removal")
+    };
+    assert_eq!(args.peer_id, "peer-1");
+    assert_eq!(args.home.as_deref(), Some(std::path::Path::new("/h")));
+    assert!(Cli::try_parse_from(["gents", "p2p", "pairings", "remove"]).is_err());
+    let cli = Cli::try_parse_from([
+        "gents",
+        "p2p",
+        "pairings",
+        "applications",
+        "--output",
+        "json",
+    ])
+    .expect("applications should parse");
+    assert!(matches!(
+        cli.command,
+        Command::P2p {
+            command: P2pCommand::Pairings {
+                command: P2pPairingsCommand::Applications(_),
+            },
+        }
+    ));
+}

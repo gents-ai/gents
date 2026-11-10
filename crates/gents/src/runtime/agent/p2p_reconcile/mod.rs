@@ -17,6 +17,7 @@ pub mod enrollment_store;
 pub mod error_class;
 mod graphql_helpers;
 pub mod intervals;
+pub mod overlay_binding;
 pub mod policy;
 pub mod profiles;
 pub mod registry;

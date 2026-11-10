@@ -191,11 +191,25 @@ async fn local_collection_identity(
     access: &crate::store::config_client::ConfigAccess,
     name: &str,
 ) -> Result<Option<ReplicatedCollectionIdentity>, crate::store::config_client::ConfigClientError> {
-    Ok(access
-        .collection_version(name)
+    Ok(local_collection_facts(access, name)
         .await?
-        .as_ref()
-        .and_then(ReplicatedCollectionIdentity::from_collection_version))
+        .map(|(identity, _)| identity))
+}
+
+/// The collection's replicated identity and whether it is a view (a version
+/// with a query source).
+async fn local_collection_facts(
+    access: &crate::store::config_client::ConfigAccess,
+    name: &str,
+) -> Result<
+    Option<(ReplicatedCollectionIdentity, bool)>,
+    crate::store::config_client::ConfigClientError,
+> {
+    Ok(access.collection_version(name).await?.and_then(|version| {
+        let is_view = version.get("Query").is_some_and(|query| !query.is_null());
+        ReplicatedCollectionIdentity::from_collection_version(&version)
+            .map(|identity| (identity, is_view))
+    }))
 }
 
 /// Why a requested application collection could not join a pairing. The tool
@@ -237,7 +251,7 @@ pub async fn admit_app_collections(
                 refusal: AppCollectionRefusal::Managed,
             });
         }
-        let identity = local_collection_identity(&access, collection)
+        let (identity, is_view) = local_collection_facts(&access, collection)
             .await
             .map_err(|source| AppCollectionAdmissionError::Unreadable {
                 collection: collection.clone(),
@@ -249,6 +263,7 @@ pub async fn admit_app_collections(
         decide_app_collection(AppCollectionFacts {
             managed: false,
             has_policy: identity.policy_resource.is_some(),
+            is_view,
         })
         .map_err(|refusal| AppCollectionAdmissionError::Refused {
             collection: collection.clone(),

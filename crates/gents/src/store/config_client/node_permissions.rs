@@ -103,13 +103,17 @@ impl ConfigAccess {
     ) -> Result<Vec<acp::nac::PermissionProvenance>, ConfigClientError> {
         match self {
             Self::Local(local) => {
-                local
-                    .agent_signer()
-                    .ok_or(ConfigClientError::ManagedAgentSignerRequired)?;
                 let actor = local
                     .identity()
                     .cloned()
                     .ok_or(ConfigClientError::NodePermissionActorRequired)?;
+                // The runtime asks as the Node identity it holds; any other
+                // local actor must hold its own managed signer.
+                if local.agent_signer().is_none()
+                    && local.node().node_identity_did() != Some(actor.as_str())
+                {
+                    return Err(ConfigClientError::ManagedAgentSignerRequired);
+                }
                 let subject = subject.clone();
                 local
                     .run_owned(move |node| async move {

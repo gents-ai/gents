@@ -1866,7 +1866,7 @@ def json : Json := Json.mkObj
       Json.mkObj [("collection", toJson collection),
         ("supported", toJson (Configuration.clientSignedCreateCollection collection)),
         ("update_supported", toJson (Configuration.clientSignedUpdateSupported collection))])),
-   ("configuration_signed_delete_collections", toJson (["Node", "Agent", "AgentContext", "Tools", "Schedule", "PackInstallation", "Goal", "GoalCreationClaim", "InferenceBackend", "InferenceBackendMetadata", "InferenceBackendObservation", "BackendCredential", "AgentSession", "NotBundled"].map fun collection =>
+   ("configuration_signed_delete_collections", toJson (["Node", "Agent", "AgentContext", "Tools", "Schedule", "PackInstallation", "Goal", "GoalCreationClaim", "InferenceBackend", "InferenceBackendMetadata", "InferenceBackendObservation", "BackendCredential", "DataPlanePairingDesired", "AgentSession", "NotBundled"].map fun collection =>
       Json.mkObj [("collection", toJson collection), ("supported", toJson (Configuration.clientSignedDeleteCollection collection))])),
    ("ordinary_client_mutation_cases", toJson ([(false, false), (false, true), (true, false), (true, true)].map fun (intent, mutation) =>
       Json.mkObj [("intent", toJson intent), ("mutation", toJson mutation),

@@ -34,25 +34,43 @@ impl EmbeddedRemoteP2pAdmin {
         Self { node, timeout }
     }
 
-    /// Keeps managed collections on their own protocol routes. Application
-    /// collections pass here because the overlay owner already admitted them;
-    /// `templates::admit_app_collections` is the owner of which data replicates.
-    fn require_replicable_collections(&self, collections: &[String]) -> RemoteP2pAdminResult<()> {
+    /// Keeps managed collections on their own protocol routes and asks the
+    /// application admission owner (`templates::admit_app_collections`) about
+    /// every other name, so a collection the overlay owner would refuse (one
+    /// with a document policy, a view, an unregistered name) never reaches the
+    /// transport even if a caller skipped admission.
+    async fn require_replicable_collections(
+        &self,
+        collections: &[String],
+    ) -> RemoteP2pAdminResult<()> {
         if collections.is_empty() {
             return Err(RemoteP2pAdminError::LocalError(
                 "replication requires explicit collections".into(),
             ));
         }
+        let mut application = std::collections::BTreeSet::new();
         for token in collections {
             let name = resolve_embedded_collection_name(&self.node, token)?
                 .unwrap_or_else(|| token.clone());
-            if !gents_protocol::schemas::is_replicated_protocol_collection(&name)
-                && gents_protocol::peer_schema::is_managed_collection(&name)
-            {
+            if gents_protocol::schemas::is_replicated_protocol_collection(&name) {
+                continue;
+            }
+            if gents_protocol::peer_schema::is_managed_collection(&name) {
                 return Err(RemoteP2pAdminError::RuntimeLocalCollection(name));
             }
+            application.insert(name);
         }
-        Ok(())
+        if application.is_empty() {
+            return Ok(());
+        }
+        match super::templates::admit_app_collections(self.node.clone(), &application).await {
+            Ok(_) => Ok(()),
+            Err(
+                super::templates::AppCollectionAdmissionError::Refused { collection, .. }
+                | super::templates::AppCollectionAdmissionError::NotRegistered { collection },
+            ) => Err(RemoteP2pAdminError::RuntimeLocalCollection(collection)),
+            Err(error) => Err(RemoteP2pAdminError::LocalError(error.to_string())),
+        }
     }
 
     #[cfg(test)]
@@ -148,7 +166,7 @@ impl RemoteP2pAdmin for EmbeddedRemoteP2pAdmin {
         collections: &[String],
         filters: &PairingFilters,
     ) -> RemoteP2pAdminResult<()> {
-        self.require_replicable_collections(collections)?;
+        self.require_replicable_collections(collections).await?;
         let p2p = self.p2p()?;
         let addr = addresses.first().map(String::as_str);
         let defra_filters =

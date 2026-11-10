@@ -98,17 +98,19 @@ fn app_collection_admission_matches_executable_model() {
         decide_app_collection, AppCollectionFacts, AppCollectionRefusal,
     };
     let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
-    assert_eq!(snapshot.scope_app_collection_cases.len(), 4);
+    assert_eq!(snapshot.scope_app_collection_cases.len(), 8);
     for case in &snapshot.scope_app_collection_cases {
         let facts = AppCollectionFacts {
             managed: case["managed"].as_bool().unwrap(),
             has_policy: case["has_policy"].as_bool().unwrap(),
+            is_view: case["is_view"].as_bool().unwrap(),
         };
         let refusal = decide_app_collection(facts)
             .err()
             .map(|refusal| match refusal {
                 AppCollectionRefusal::Managed => "managed",
                 AppCollectionRefusal::PolicyProtected => "policy_protected",
+                AppCollectionRefusal::View => "view",
             });
         assert_eq!(refusal, case["refusal"].as_str(), "{case}");
     }
@@ -156,5 +158,65 @@ fn runtime_data_has_no_replication_template_or_app_escape() {
             gents_protocol::schemas::is_replicated_protocol_collection(collection),
             allowed.iter().any(|name| name == collection)
         );
+    }
+}
+
+/// Binding currency is the model's: cases carry revision histories, bound and
+/// current generations, and the executable `bindingCurrent` verdict.
+#[test]
+fn overlay_binding_matches_executable_model() {
+    use gents::runtime::agent::p2p_reconcile::overlay_binding::{
+        binding_is_current, OverlayBinding, RevisionFact,
+    };
+    let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
+    assert!(snapshot.scope_overlay_binding_cases.len() >= 10);
+    for case in &snapshot.scope_overlay_binding_cases {
+        let history = case["history"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|revision| RevisionFact {
+                sequence: revision["sequence"].as_u64().unwrap(),
+                active: revision["active"].as_bool().unwrap(),
+                issued_at: revision["issued_at"].as_i64().unwrap(),
+                expires_at: revision["expires_at"].as_i64().unwrap(),
+            })
+            .collect::<Vec<_>>();
+        let binding = OverlayBinding {
+            member_did: case["binding_member"].as_str().unwrap().to_owned(),
+            sequence: case["binding_sequence"].as_u64().unwrap(),
+        };
+        assert_eq!(
+            binding_is_current(
+                &history,
+                &binding,
+                case["current_member"].as_str().unwrap(),
+                case["current_sequence"].as_u64().unwrap(),
+            ),
+            case["current"].as_bool().unwrap(),
+            "{case}"
+        );
+    }
+}
+
+/// The order of preconditions and the reason reported are the model's.
+#[test]
+fn overlay_contribution_matches_executable_model() {
+    use gents::runtime::agent::p2p_reconcile::overlay_binding::{decide_overlay, OverlayFacts};
+    let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
+    assert_eq!(snapshot.scope_overlay_facts_cases.len(), 32);
+    for case in &snapshot.scope_overlay_facts_cases {
+        let flag = |name: &str| case[name].as_bool().unwrap();
+        let facts = OverlayFacts {
+            enrollment_fresh: flag("enrollment_fresh"),
+            binding_current: flag("binding_current"),
+            author_live_agent: flag("author_live_agent"),
+            author_holds_grant: flag("author_holds_grant"),
+            collections_admitted: flag("collections_admitted"),
+        };
+        let reason = decide_overlay(facts)
+            .err()
+            .and_then(|reason| reason.model_name());
+        assert_eq!(reason, case["inactive"].as_str(), "{case}");
     }
 }

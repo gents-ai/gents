@@ -1040,6 +1040,16 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             &snapshot.scope_app_collection_cases,
         ),
         (
+            "scope_overlay_binding_cases",
+            "ScopeOverlayBindingCases",
+            &snapshot.scope_overlay_binding_cases,
+        ),
+        (
+            "scope_overlay_facts_cases",
+            "ScopeOverlayFactsCases",
+            &snapshot.scope_overlay_facts_cases,
+        ),
+        (
             "file_review_subscription_cases",
             "FileReviewSubscriptionCases",
             &snapshot.file_review_subscription_cases,

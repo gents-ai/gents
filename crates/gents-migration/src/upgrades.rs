@@ -89,6 +89,14 @@ pub(crate) fn include_existing_by_version(
             handoff_route_patch!("WorkspaceReceipt"),
             &HANDOFF_ROUTE_FIELDS[..],
         ),
+        (
+            "DataPlanePairingDesired",
+            "bafyreiex7t6xtyuyodmeueehwh7xdimgcjnpfoobcgsi3vbgpff7x64mli",
+            "bafyreiaunbekwy2ucuap5uqhqfkafm2cc3m2yabebu3tpaon7djqhqhixi",
+            "data-plane-pairing-add-enrollment-binding",
+            r#"[{"op":"add","path":"/DataPlanePairingDesired/Fields/-","value":{"Name":"enrollment_member_did","Kind":"String"}},{"op":"add","path":"/DataPlanePairingDesired/Fields/-","value":{"Name":"enrollment_sequence","Kind":"Int"}}]"#,
+            &["enrollment_member_did", "enrollment_sequence"][..],
+        ),
     ] {
         let Some(current) = get_version(name)? else {
             continue;

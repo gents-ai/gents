@@ -104,8 +104,11 @@ Accepted limits (maintainer decisions, 2026-11-09):
 - Receiver consent is enrollment. The route exists only toward a peer that
   currently holds an approved enrollment in the sending node's network, which
   the peer obtained by requesting to join with that node's offer; the
-  reconciler replaces the overlay's peer and address with that enrollment's,
-  and the route closes when the enrollment is revoked or its lease expires.
+  reconciler replaces the overlay's peer and address with that enrollment's.
+  The overlay is bound to the enrollment it was applied under
+  (`PairingReconcile.OverlayBinding.bindingCurrent`): a revocation or an expiry
+  ends it for good, and a later approval of the same peer starts with no
+  application sync until a pairing is applied again.
   Enrollment does not imply that the peer wants any particular application
   collection, and the peer is not asked again: replicator pushes skip DefraDB's
   receiver-side collection check (external premise, pinned DefraDB). Receiver
@@ -118,7 +121,12 @@ Accepted limits (maintainer decisions, 2026-11-09):
   on the peer. It affects whether data arrives, not which data is sent.
 - Which collections an Agent may pair is bounded only by `decideAppCollection`
   and the P2P mutation grant (`Identity.Configuration.toolOperationSources`);
-  there is no per-collection pairing grant. -/
+  there is no per-collection pairing grant.
+- On the receiver, data that arrives through a pairing is untrusted peer
+  content. In a collection without a document policy it has no owner and every
+  local actor can read it; an update or delete with a matching document ID
+  merges into the receiver's own document; triggers on that collection fire on
+  it. There is no receiver gating (maintainer decision, 2026-11-10). -/
 def appCollectionsTemplate : Template :=
   { id := "app-collections", collections := [], scope := .perCollection [],
     delivery := .push }
@@ -129,11 +137,13 @@ def builtinCatalog : Catalog := [machineTemplate, clientTemplate, appCollections
 structure AppCollectionFacts where
   managed : Bool
   hasPolicy : Bool
+  isView : Bool := false
   deriving DecidableEq, Repr
 
 inductive AppCollectionRefusal where
   | managed
   | policyProtected
+  | view
   deriving DecidableEq, Repr
 
 /-- Decision (maintainer, 2026-11-09): a node may replicate application data over
@@ -151,9 +161,19 @@ on the receiver only that signer can read a replica of a policy-bearing
 collection. Any local reader would need a receiving-side grant the policy never
 delegated, for a relation name a foreign policy need not define. Replicating it
 would deliver data nobody may read, and granting it would widen access, so a
-collection with a document policy is refused rather than replicated. -/
+collection with a document policy is refused rather than replicated.
+
+A view is refused (security review, 2026-11-10): it is derived from other
+collections, and a materialized view cannot carry a document policy of its own,
+so pairing it could carry data its sources' policies protect.
+
+A collection a document pack created is application data like any other
+(decision, 2026-11-10): it is refused when it carries a document policy and is
+otherwise pairable only by this explicit opt-in. Installing a pack never pairs
+its collections. -/
 def decideAppCollection (facts : AppCollectionFacts) : Option AppCollectionRefusal :=
   if facts.managed then some .managed
+  else if facts.isView then some .view
   else if facts.hasPolicy then some .policyProtected
   else none
 

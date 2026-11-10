@@ -143,6 +143,12 @@ pub trait PairingStateStore: Send + Sync {
         Ok(true)
     }
 
+    /// Whether the peer is known to hold no fresh enrollment. A failed desired
+    /// read consults it so a closed enrollment still tears its route down.
+    async fn peer_enrollment_closed(&self, _peer_id: &str) -> Result<bool> {
+        Ok(false)
+    }
+
     async fn load_applied(&self, peer_id: &str) -> Result<LoadedPairingApplied>;
 
     async fn load_applied_many(

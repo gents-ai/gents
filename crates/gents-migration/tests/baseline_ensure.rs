@@ -805,6 +805,15 @@ async fn added_route_and_reader_columns_preserve_existing_rows() {
             r#"mutation {create_RepositoryPlacement(input: {repository_id: "retained", node_did: "owner"}) {_docID}}"#,
             &[("readers", false)][..],
         ),
+        (
+            schemas::DATA_PLANE_PAIRING_DESIRED_NAME,
+            schemas::DATA_PLANE_PAIRING_DESIRED,
+            r#"mutation {create_DataPlanePairingDesired(input: {peer_id: "retained", node_did: "owner", actor_did: "agent", collections: ["Note"], replicator_addresses: ["addr"]}) {_docID}}"#,
+            &[
+                ("enrollment_member_did", false),
+                ("enrollment_sequence", false),
+            ][..],
+        ),
     ] {
         let node = fresh_node().await;
         let old = sdl

@@ -331,7 +331,10 @@ impl ToolPolicySurface {
             }
         }
         if self.permits_p2p_mutation() {
-            emit("p2p-pairing", &[NodePermission::DocumentDelete]);
+            emit(
+                gents_protocol::peer_schema::P2P_PAIRING_SOURCE_PURPOSE,
+                &[NodePermission::DocumentDelete],
+            );
         }
         sources
     }

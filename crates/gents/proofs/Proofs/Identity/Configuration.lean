@@ -97,9 +97,12 @@ unreachable (`pairing_overlay_delete_is_owner_scoped`). It is the only
 permission that source adds (`p2p_pairing_grants_only_delete_document`). There
 is no per-collection pairing grant, so an Agent holding P2P mutation may pair
 any collection `ScopeTemplates.decideAppCollection` admits. Withdrawing the
-grant withdraws `delete-document` but does not remove an overlay the Agent
-already wrote: the reconciler keeps applying it until its owner or the Node's
-user owner deletes it, or the peer's enrollment ends. -/
+grant does not delete an overlay the Agent already wrote, but the overlay then
+contributes nothing (`PairingReconcile.OverlayBinding.withdrawn_grant_contributes_nothing`)
+and the Node's user owner can delete it. `delete-document` is node-wide in
+name and bounded by each document's ACP: the theorems below pin which
+permission name the source adds, not which documents it reaches; document ACP
+decides that per document (`pairing_overlay_delete_is_owner_scoped`). -/
 def toolOperationSources (surface : ToolPolicy.Surface) (packInstall : Bool) : List (String × String) :=
   let emit (purpose : String) (enabled : Bool) (permissions : List String) : List (String × String) :=
     if enabled then permissions.map (fun permission => (purpose, permission)) else []
@@ -488,18 +491,25 @@ def clientSignedUpdateSupported (collection : String) : Bool :=
   clientSignedCreateCollection collection
 
 /-- A client signs deletes only for bundled configuration schemas or the
-pack installation, Goal and GoalCreationClaim records. Native delete permission
-remains required; session deletion has a separate product owner. -/
+pack installation, Goal, GoalCreationClaim and application pairing overlay
+records. Native delete permission remains required; session deletion has a
+separate product owner. The overlay is included as the operator stop (security
+review, 2026-11-10): the Node's user owner removes any Agent's pairing through
+the signed client path, and document ACP admits it through the Node parent
+(`pairing_overlay_delete_is_owner_scoped`). -/
 def clientSignedDeleteCollection (collection : String) : Bool :=
   (clientSignedCreateCollection collection && collection != "InferenceBackend") ||
     ["PackInstallation", "InferenceBackendMetadata", "InferenceBackendObservation",
-      "BackendCredential", "Goal", "GoalCreationClaim"].contains collection
+      "BackendCredential", "Goal", "GoalCreationClaim", "DataPlanePairingDesired"].contains collection
 
 theorem client_delete_includes_goal : clientSignedDeleteCollection "Goal" = true := by decide
 
 theorem client_delete_includes_goal_claim : clientSignedDeleteCollection "GoalCreationClaim" = true := by decide
 
 theorem client_delete_excludes_session : clientSignedDeleteCollection "AgentSession" = false := by decide
+
+theorem client_delete_includes_pairing_overlay :
+    clientSignedDeleteCollection "DataPlanePairingDesired" = true := by decide
 
 /-- The legacy inline-secret collection is never selected by the new deletion owner. -/
 theorem client_delete_excludes_legacy_backend : clientSignedDeleteCollection "InferenceBackend" = false := by decide

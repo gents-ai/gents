@@ -22,8 +22,16 @@ source consistency checks, not a separate runtime compatibility version.
   `p2p` tool's `pairings_list`, `pairings_get`, `pairings_preview`, `pairings_apply`
   and `pairings_revoke` replicate application collections with no document policy
   from this node to one enrolled peer; enrollment alone starts no sync. Protocol,
-  runtime and credential collections are always refused, and policy-bearing
-  collections are refused because replicas would be unreadable on the peer.
+  runtime and credential collections, views and policy-bearing collections are
+  refused. A pairing is bound to the enrollment it was applied under: a lease
+  renewal keeps it, a revocation or expiry ends it, and a later approval of the
+  same peer restores only discovery. It contributes only while its author is an
+  enabled Agent holding the P2P mutation grant. `gents p2p pairings
+  applications` lists pairings and `gents p2p pairings remove <PEER_ID>` lets
+  the node's User delete any of them. `DataPlanePairingDesired` gains
+  `enrollment_member_did` and `enrollment_sequence`; existing stores take a
+  versioned patch, and a pairing written before it is inactive until applied
+  again.
 - Breaking: the agent-facing `sync_documents` action and
   `Tools.built_ins.p2p_collections` grant are removed; a Tools document that
   still sets the field is rejected, and `gents pack wire` no longer writes it:

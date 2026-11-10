@@ -109,15 +109,22 @@ theorem managed_collection_is_refused (facts : AppCollectionFacts) (managed : fa
     decideAppCollection facts = some .managed := by
   simp [decideAppCollection, managed]
 
-theorem policy_collection_is_refused (facts : AppCollectionFacts) (unmanaged : facts.managed = false)
-    (guarded : facts.hasPolicy = true) :
-    decideAppCollection facts = some .policyProtected := by
-  simp [decideAppCollection, unmanaged, guarded]
+theorem view_is_refused (facts : AppCollectionFacts) (unmanaged : facts.managed = false)
+    (view : facts.isView = true) :
+    decideAppCollection facts = some .view := by
+  simp [decideAppCollection, unmanaged, view]
 
-theorem admitted_iff_unmanaged_and_unprotected (facts : AppCollectionFacts) :
-    decideAppCollection facts = none ↔ facts.managed = false ∧ facts.hasPolicy = false := by
+theorem policy_collection_is_refused (facts : AppCollectionFacts) (unmanaged : facts.managed = false)
+    (table : facts.isView = false) (guarded : facts.hasPolicy = true) :
+    decideAppCollection facts = some .policyProtected := by
+  simp [decideAppCollection, unmanaged, table, guarded]
+
+theorem admitted_iff_unmanaged_unprotected_table (facts : AppCollectionFacts) :
+    decideAppCollection facts = none ↔
+      facts.managed = false ∧ facts.hasPolicy = false ∧ facts.isView = false := by
   cases facts with
-  | mk managed hasPolicy => cases managed <;> cases hasPolicy <;> decide
+  | mk managed hasPolicy isView =>
+    cases managed <;> cases hasPolicy <;> cases isView <;> decide
 
 theorem client_route_carries_only_registry (direction : RouteDirection) :
     clientRouteCollections direction = ["PeerRegistry"] := by

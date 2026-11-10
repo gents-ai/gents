@@ -180,6 +180,43 @@ async fn read_failure_noops_without_remote_reads() {
     assert!(admin.emitted.lock().unwrap().is_empty());
 }
 
+/// A desired read that fails (for example on one unreadable overlay) still
+/// consults the enrollment fence: a closed enrollment tears its route down,
+/// application collections included.
+#[tokio::test]
+async fn read_failure_with_closed_enrollment_tears_route_down() {
+    let store = MockStore {
+        desired: Mutex::new(Err("unreadable pairing state".into())),
+        enrollment_closed: true,
+        ..Default::default()
+    };
+    *store.applied.lock().unwrap() = PairingApplied {
+        replicator_addresses: set(&["addr1"]),
+        ..Default::default()
+    };
+    let admin = MockAdmin::default();
+    admin.replicators.lock().unwrap().insert(
+        "addr1".into(),
+        RemoteReplicator {
+            id: Some("id-addr1".into()),
+            collections: vec!["col_DeploymentNote_id".into()],
+            address: Some("addr1".into()),
+            filters: Some(Default::default()),
+        },
+    );
+
+    let outcome = reconcile_peer_tick(&admin, &store, "peer-a")
+        .await
+        .expect("tick result");
+
+    assert!(!outcome.desired_read_failed);
+    assert_eq!(
+        outcome.ops_applied,
+        vec![DiffOp::TeardownReplicator("addr1".into())]
+    );
+    assert!(store.applied.lock().unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn peer_reconnect_between_sweeps_replays_on_connection_event() {
     let filter = one_filter("AgentRequest", "requester_did", "did:key:peer");

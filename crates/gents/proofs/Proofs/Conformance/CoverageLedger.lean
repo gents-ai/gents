@@ -1679,6 +1679,16 @@ def caseCoverage : List CoverageEntry :=
       "ScopeAppCollectionCases"
       "conformance::scope_templates::app_collection_admission_matches_executable_model")
       "pairing-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "scope_overlay_binding_cases"
+      "ScopeOverlayBindingCases"
+      "conformance::scope_templates::overlay_binding_matches_executable_model")
+      "pairing-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "scope_overlay_facts_cases"
+      "ScopeOverlayFactsCases"
+      "conformance::scope_templates::overlay_contribution_matches_executable_model")
+      "pairing-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "file_inventory_order_window_cases"
       "FileInventoryOrderWindowCases"

@@ -8,4 +8,6 @@ type DataPlanePairingDesired @policy(id: "202ce2df1b18d27183b29b653e2c06654178b2
     source: String @index
     created_at: DateTime @index(direction: DESC)
     updated_at: DateTime @index(direction: DESC)
+    enrollment_member_did: String
+    enrollment_sequence: Int
 }

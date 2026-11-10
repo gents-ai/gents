@@ -8,8 +8,8 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::cli::args::{
-    P2pAccessArgs, P2pPairingsListArgs, P2pPairingsReaderArgs, PairingObservationArg,
-    PairingReadReasonArg,
+    P2pAccessArgs, P2pPairingsListArgs, P2pPairingsReaderArgs, P2pPairingsRemoveArgs,
+    PairingObservationArg, PairingReadReasonArg,
 };
 use crate::cli::output_format::OutputFormat;
 use crate::{graphql_rows, print_json, resolve_config_access};
@@ -92,6 +92,47 @@ pub(super) async fn pairing_reader_targets(args: P2pAccessArgs) -> Result<()> {
         .and_then(Value::as_array)
         .context("pairing response omitted applied observations")?;
     print_json(&json!({"desired": desired, "applied": applied}))
+}
+
+pub(super) async fn application_pairings(args: P2pPairingsListArgs) -> Result<()> {
+    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
+    let pairings = access.list_application_pairings().await?;
+    match args.output {
+        OutputFormat::Json | OutputFormat::Ndjson => print_json(&json!({"pairings": pairings})),
+        OutputFormat::Text | OutputFormat::Table | OutputFormat::Tree => {
+            let mut out = io::stdout().lock();
+            if pairings.is_empty() {
+                writeln!(out, "no application pairings")?;
+            }
+            for pairing in &pairings {
+                let collections = pairing["collections"]
+                    .as_array()
+                    .map(|names| {
+                        names
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    })
+                    .unwrap_or_default();
+                writeln!(
+                    out,
+                    "{}\tauthor={}\tcollections={}\tenrollment_sequence={}",
+                    pairing["peer_id"].as_str().unwrap_or("-"),
+                    pairing["actor_did"].as_str().unwrap_or("-"),
+                    collections,
+                    pairing["enrollment_sequence"]
+                )?;
+            }
+            Ok(())
+        }
+    }
+}
+
+pub(super) async fn remove_application_pairing(args: P2pPairingsRemoveArgs) -> Result<()> {
+    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
+    let removed = access.remove_application_pairing(&args.peer_id).await?;
+    print_json(&json!({"peer_id": args.peer_id, "removed": removed}))
 }
 
 pub(super) async fn pairing_reader(args: P2pPairingsReaderArgs, grant: bool) -> Result<()> {

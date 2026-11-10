@@ -3,15 +3,18 @@ use std::time::{Duration, Instant};
 use gents::defra_node::Node as EmbeddedNode;
 use gents::inference::llm::tool::Tool;
 use gents::runtime::agent::p2p_reconcile::{
-    EmbeddedRemoteP2pAdmin, GraphqlEnrollmentStore, RemoteP2pAdmin,
+    EmbeddedRemoteP2pAdmin, GraphqlEnrollmentStore, PairingFilters, RemoteP2pAdmin,
+    RemoteP2pAdminError,
 };
-use gents::store::config_client::NodePermission;
 use gents::store::graphql::escape_graphql_string;
 use gents::tools::builtin::p2p::P2pTool;
 use gents::{DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};
 use serde_json::{json, Value};
 
-use crate::support::enrollment::{authorize_enrollment_peer, wait_for_peer_identity};
+use crate::support::enrollment::{
+    authorize_enrollment_generation, authorize_enrollment_peer, wait_for_peer_identity,
+    EnrollmentGeneration,
+};
 use crate::support::fixtures::bind_default_agent_backend;
 use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::{install_managed_agent, load_managed_fixture_user, test_p2p_db, TestDb};
@@ -65,60 +68,43 @@ async fn fetch_pairing_applied(node: &EmbeddedNode, peer_id: &str) -> Option<Vec
     Some(addresses)
 }
 
-async fn fetch_subscribed_collection_names(node: &EmbeddedNode) -> Vec<String> {
-    // Subscription listing is authorized for the node's own identity only.
-    let Some(p2p) = gents::store::identity::node_p2p(node) else {
-        return Vec::new();
-    };
-    p2p.get_collections()
-        .await
-        .expect("list subscribed collections")
-}
-
-async fn wait_for_subscribed_collections(
-    node: &EmbeddedNode,
-    expected: &[String],
-    timeout: Duration,
-) -> Vec<String> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        let subscribed = fetch_subscribed_collection_names(node).await;
-        if expected
-            .iter()
-            .all(|collection| subscribed.contains(collection))
-        {
-            return subscribed;
-        }
-        if Instant::now() >= deadline {
-            panic!(
-                "timed out waiting for subscribed collections {expected:?}; last={subscribed:?}"
-            );
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-}
-
-/// Several pairing sweeps pass without the application collection being
-/// subscribed, and the control pairing stays applied.
-async fn assert_app_collection_refused(
-    node: &EmbeddedNode,
+/// Several sweeps pass with the control route applied and no replicator
+/// toward the peer carrying `collection`.
+async fn assert_never_carried(
+    node: &std::sync::Arc<EmbeddedNode>,
     peer_id: &str,
     collection: &str,
-    control: &[String],
 ) {
     let deadline = Instant::now() + Duration::from_secs(4);
     while Instant::now() < deadline {
         fetch_pairing_applied(node, peer_id)
             .await
             .expect("control pairing stays applied");
-        let subscribed = fetch_subscribed_collection_names(node).await;
         assert!(
-            !subscribed.iter().any(|name| name == collection),
-            "{collection} was subscribed: {subscribed:?}"
+            !replicator_carries(node, peer_id, collection).await,
+            "{collection} was carried toward {peer_id}"
         );
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
-    wait_for_subscribed_collections(node, control, Duration::from_secs(30)).await;
+}
+
+/// The transport guard refuses `collection` before any replicator exists.
+async fn refuse_at_transport(
+    node: &std::sync::Arc<EmbeddedNode>,
+    peer_address: &str,
+    collection: &str,
+) {
+    let refused = EmbeddedRemoteP2pAdmin::new(node.clone())
+        .add_replicator(
+            &[peer_address.to_owned()],
+            &[collection.to_owned()],
+            &PairingFilters::default(),
+        )
+        .await;
+    assert!(
+        matches!(&refused, Err(RemoteP2pAdminError::RuntimeLocalCollection(name)) if name == collection),
+        "{collection} must not reach the transport: {refused:?}"
+    );
 }
 
 /// Holds `local` across several sync rounds; replication would break it.
@@ -143,11 +129,9 @@ async fn wait_for_enrollment_route_applied(
     let mut last = String::from("<none>");
     loop {
         if let Some(addresses) = fetch_pairing_applied(node, peer_id).await {
-            let subscribed = fetch_subscribed_collection_names(node).await;
-            last = format!("addresses={addresses:?} subscribed={subscribed:?}");
-            let has_addr = addresses.iter().any(|a| !a.trim().is_empty());
-            if has_addr {
-                return Vec::new();
+            last = format!("addresses={addresses:?}");
+            if addresses.iter().any(|a| !a.trim().is_empty()) {
+                return addresses;
             }
         }
         if Instant::now() >= deadline {
@@ -210,6 +194,80 @@ async fn wait_for_current_route_receipt(
         }
         if Instant::now() >= deadline {
             panic!("timed out waiting for directly delivered current route receipt: {diagnostic}");
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+/// The server drops the member's enrollment route and the member holds the
+/// signed revocation.
+async fn wait_for_revoked_route_teardown(
+    server: &EmbeddedNode,
+    member: &EmbeddedNode,
+    request_id: &str,
+    member_peer: &str,
+    timeout: Duration,
+) {
+    let request_id = escape_graphql_string(request_id);
+    let member_peer = escape_graphql_string(member_peer);
+    let deadline = Instant::now() + timeout;
+    loop {
+        let server_response = server
+            .execute(&format!(
+                r#"{{
+                    PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{member_peer}" }} }}) {{ peer_id }}
+                    PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{member_peer}" }} }}) {{ peer_id }}
+                }}"#
+            ))
+            .await;
+        let member_response = member
+            .execute(&format!(
+                r#"{{ NetworkAuthorizationRevision(
+                    filter: {{ request_id: {{ _eq: "{request_id}" }}, kind: {{ _eq: "revoked" }} }}
+                ) {{ sequence kind signer_did admin_sig }} }}"#
+            ))
+            .await;
+        let empty = |response: &gents::defra_node::QueryResponse, field: &str| {
+            !response.has_errors()
+                && response
+                    .data
+                    .as_ref()
+                    .and_then(|data| data.get(field))
+                    .and_then(Value::as_array)
+                    .is_some_and(Vec::is_empty)
+        };
+        let revoked = !member_response.has_errors()
+            && member_response
+                .data
+                .as_ref()
+                .and_then(|data| data.get("NetworkAuthorizationRevision"))
+                .and_then(Value::as_array)
+                .is_some_and(|rows| {
+                    rows.len() == 1
+                        && rows[0].get("kind").and_then(Value::as_str) == Some("revoked")
+                        && rows[0]
+                            .get("signer_did")
+                            .and_then(Value::as_str)
+                            .is_some_and(|did| !did.is_empty())
+                        && rows[0]
+                            .get("admin_sig")
+                            .and_then(Value::as_str)
+                            .is_some_and(|signature| !signature.is_empty())
+                });
+        if empty(&server_response, "PeerPairingDesired")
+            && empty(&server_response, "PeerPairingApplied")
+            && revoked
+        {
+            return;
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "timed out waiting for signed revocation and route teardown: server={:?} {:?} member={:?} {:?}",
+                server_response.data,
+                server_response.errors,
+                member_response.data,
+                member_response.errors
+            );
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
@@ -374,24 +432,177 @@ async fn replicator_carries(
         })
 }
 
-/// The Agent that runs the `p2p` tool. Its overlay delete uses the node
-/// permission the Tools projection grants for `p2p_mutate`; the projection
-/// itself is pinned by `covered_tool_operations_follow_executable_identity_model`.
-async fn pairing_agent(db: &TestDb) -> std::sync::Arc<dyn NodeIdentity> {
+/// An Agent that runs the `p2p` tool, configured by the node's User the way
+/// an operator does: its Context selects a Tools document whose built-ins
+/// enable the P2P tool and its mutations, and the tool permission projection
+/// grants it the `p2p-pairing` source. Nothing is granted by hand.
+struct PairingAgent {
+    identity: std::sync::Arc<dyn NodeIdentity>,
+    binding: gents_protocol::agent_identity::AgentIdentityBinding,
+    user: gents::KeyIdentity,
+    label: String,
+}
+
+impl PairingAgent {
+    async fn configure(&self, db: &TestDb, p2p_mutations: bool, enabled: bool) {
+        use gents::documents::apply_desired_state_plan;
+        use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+        let runtime = db.node_identity.did();
+        let tools_id = format!("{}-tools", self.label);
+        let context_id = format!("{}-context", self.label);
+        let documents = [
+            (
+                gents::Collection::Tools,
+                json!({"node_did": runtime, "tools_id": tools_id,
+                    "built_ins": {"enable_p2p_tool": true, "enable_p2p_mutations": p2p_mutations}}),
+            ),
+            (
+                gents::Collection::AgentContext,
+                json!({"node_did": runtime, "context_id": context_id, "tools_id": tools_id}),
+            ),
+            (
+                gents::Collection::Agent,
+                json!({"node_did": runtime, "agent_did": self.binding.agent_did,
+                    "creation_nonce": self.binding.creation_nonce, "display_name": self.label,
+                    "inference_profile_id": format!("{}:inference", self.binding.agent_did),
+                    "enabled": enabled, "context_id": context_id}),
+            ),
+        ];
+        let plan = DesiredStateApplyPlan::new(
+            documents
+                .into_iter()
+                .map(|(collection, value)| DesiredStateApplyDocument {
+                    collection,
+                    add: value.clone(),
+                    update: value,
+                })
+                .collect(),
+        )
+        .expect("render pairing Agent");
+        db.client_access(&self.user)
+            .transact_write("test.pairing_agent", |txn| {
+                let plan = &plan;
+                Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            })
+            .await
+            .expect("configure pairing Agent as the User");
+    }
+}
+
+async fn pairing_agent(db: &TestDb, label: &str) -> PairingAgent {
     let user = load_managed_fixture_user(db).await;
     let access = db.client_access(&user);
-    let (agent, _) = install_managed_agent(db, &access, &user, "Pairing agent").await;
-    gents::ConfigAccess::local_as(
+    let (identity, binding) = install_managed_agent(db, &access, &user, label).await;
+    let agent = PairingAgent {
+        identity,
+        binding,
+        user,
+        label: label.to_owned(),
+    };
+    agent.configure(db, true, true).await;
+    agent
+}
+
+/// The first application pairing `pairings_get` reports for `peer`.
+async fn pairing_status(tool: &P2pTool, peer: &str) -> Value {
+    let listed = p2p_call(tool, json!({"action":"pairings_get","peer_id":peer}))
+        .await
+        .expect("pairings_get");
+    listed["outcome"]["desired"][0].clone()
+}
+
+async fn wait_for_status(tool: &P2pTool, peer: &str, reason: Option<&str>) {
+    let deadline = Instant::now() + Duration::from_secs(45);
+    loop {
+        let status = pairing_status(tool, peer).await;
+        let matches = match reason {
+            None => status["status"] == "active",
+            Some(reason) => status["status"] == "inactive" && status["inactive_reason"] == reason,
+        };
+        if matches {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "pairing toward {peer} never reached {reason:?}: {status}"
+        );
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+/// The peer's current authorization in this node's network: member DID and
+/// sequence, as `pairings_apply` binds them.
+async fn current_authorization(db: &TestDb, peer: &str) -> (String, u64) {
+    let projection = GraphqlEnrollmentStore::new(db.node.clone(), db.node_identity.clone())
+        .load_projection()
+        .await
+        .expect("enrollment projection");
+    let active = projection
+        .active
+        .iter()
+        .find(|entry| entry.request.candidate_peer == peer)
+        .expect("peer is enrolled");
+    (
+        active.request.candidate_did.clone(),
+        active.revision.sequence,
+    )
+}
+
+/// Writes an overlay directly as `agent`, parented to the Node, without the
+/// tool's admission: the reconciler must still refuse what it names.
+async fn write_direct_overlay(db: &TestDb, agent: &PairingAgent, peer: &str, collection: &str) {
+    let (member, sequence) = current_authorization(db, peer).await;
+    let runtime = gents::ConfigAccess::local_as(
         db.node.clone(),
         identity::Did::new(db.node_identity.did()).expect("runtime DID"),
+    );
+    let nodes = runtime
+        .execute(&format!(
+            r#"{{ Node(filter: {{node_did: {{_eq: "{}"}}}}) {{ _docID }} }}"#,
+            escape_graphql_string(db.node_identity.did())
+        ))
+        .await
+        .expect("read Node");
+    let node_doc = nodes["data"]["Node"][0]["_docID"]
+        .as_str()
+        .expect("Node document")
+        .to_owned();
+    let create = format!(
+        r#"mutation {{ create_DataPlanePairingDesired(input: {{peer_id: "{}", node_did: "{}", actor_did: "{}", collections: ["{}"], replicator_addresses: ["direct"], template: "app-collections", source: "engineer", enrollment_member_did: "{}", enrollment_sequence: {sequence}}}) {{ _docID }} }}"#,
+        escape_graphql_string(peer),
+        escape_graphql_string(db.node_identity.did()),
+        escape_graphql_string(agent.identity.did()),
+        escape_graphql_string(collection),
+        escape_graphql_string(&member),
+    );
+    gents::ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        identity::Did::new(agent.identity.did()).expect("agent DID"),
+        agent.identity.as_ref(),
     )
-    .grant_node_permission(
-        &identity::Did::new(agent.did()).expect("agent DID"),
-        NodePermission::DocumentDelete,
-    )
+    .expect("agent access")
+    .transact_write("test.direct_overlay", |txn| {
+        let create = &create;
+        let node_doc = &node_doc;
+        Box::pin(async move {
+            let created = txn.execute(create).await?;
+            let doc = gents_protocol::graphql::extract_mutation_doc_id(
+                &created,
+                "DataPlanePairingDesired",
+            )?;
+            txn.add_resource_relationship(
+                "DataPlanePairingDesired",
+                &doc,
+                "parent",
+                "nodes",
+                node_doc,
+            )
+            .await?;
+            Ok::<_, anyhow::Error>(())
+        })
+    })
     .await
-    .expect("grant p2p pairing delete");
-    agent
+    .expect("write a direct overlay as the Agent");
 }
 
 fn pairing_tool(
@@ -438,11 +649,11 @@ async fn application_collections_replicate_only_after_each_node_opts_in() {
     bind_default_agent_backend(&db_a, "backend-app-collection-a", mock_a.endpoint()).await;
     bind_default_agent_backend(&db_b, "backend-app-collection-b", mock_b.endpoint()).await;
 
-    let opting_agent_a = pairing_agent(&db_a).await;
-    let opting_agent_b = pairing_agent(&db_b).await;
+    let opting_agent_a = pairing_agent(&db_a, "pairer-a").await.identity;
+    let opting_agent_b = pairing_agent(&db_b, "pairer-b").await.identity;
     let tool_a = pairing_tool(&db_a, Some(opting_agent_a.clone()), true);
     let tool_b = pairing_tool(&db_b, Some(opting_agent_b), true);
-    let other_agent = pairing_agent(&db_a).await;
+    let other_agent = pairing_agent(&db_a, "sibling-a").await.identity;
     let other_agent_tool = pairing_tool(&db_a, Some(other_agent.clone()), true);
 
     let agent_a = Gents::from_default_agent_documents(
@@ -564,6 +775,7 @@ async fn application_collections_replicate_only_after_each_node_opts_in() {
     .expect("apply pairing");
     assert_eq!(applied["outcome"]["unchanged"], false);
     assert_eq!(applied["next_call"]["action"], "pairings_get");
+    wait_for_status(&tool_a, &peer_b, None).await;
     wait_for_change(db_b.node.as_ref(), "before-opt-in").await;
     write_change_proposed(db_a.node.as_ref(), "after-opt-in", "signup").await;
     write_change_note(db_a.node.as_ref(), "non-branchable note").await;
@@ -630,6 +842,32 @@ async fn application_collections_replicate_only_after_each_node_opts_in() {
         .await
         .unwrap();
     assert_eq!(kept["outcome"]["desired"], overlay["outcome"]["desired"]);
+    // The sibling cannot rewrite what the overlay names, either.
+    let updated = sibling
+        .write(
+            "test.pairing.sibling_update",
+            &format!(
+                r#"mutation {{ update_DataPlanePairingDesired(filter: {{peer_id: {{_eq: "{}"}}}}, input: {{collections: ["ChangeNote", "GuardedChange"]}}) {{ _docID }} }}"#,
+                escape_graphql_string(&peer_b)
+            ),
+        )
+        .await;
+    assert!(
+        !updated
+            .as_ref()
+            .is_ok_and(|value| value["data"]["update_DataPlanePairingDesired"]
+                .as_array()
+                .is_some_and(|rows| !rows.is_empty())),
+        "{updated:?}"
+    );
+    let unchanged = p2p_call(&tool_a, json!({"action":"pairings_get","peer_id":peer_b}))
+        .await
+        .unwrap();
+    assert_eq!(
+        unchanged["outcome"]["desired"],
+        overlay["outcome"]["desired"]
+    );
+    assert_eq!(overlay["outcome"]["desired"][0]["status"], "active");
 
     write_change_proposed(db_b.node.as_ref(), "b-before-its-opt-in", "signup").await;
     assert_stays_local(
@@ -700,6 +938,68 @@ async fn application_collections_replicate_only_after_each_node_opts_in() {
     write_change_proposed(db_b.node.as_ref(), "b-still-flows", "signup").await;
     wait_for_change(db_a.node.as_ref(), "b-still-flows").await;
 
+    // A pairing does not survive its enrollment: revoking B's enrollment tears
+    // the route down, and approving B again restores only discovery.
+    p2p_call(&tool_a, pairing("pairings_apply", &["ChangeProposed"]))
+        .await
+        .expect("apply again before the enrollment ends");
+    wait_until("the route to carry the collection again", || async {
+        replicator_carries(&db_a.node, &peer_b, "ChangeProposed").await
+    })
+    .await;
+    GraphqlEnrollmentStore::new(db_a.node.clone(), identity_a.clone())
+        .revoke_request(&enrollment_a_to_b.request_id)
+        .await
+        .expect("revoke exact approved enrollment generation");
+    wait_for_revoked_route_teardown(
+        db_a.node.as_ref(),
+        db_b.node.as_ref(),
+        &enrollment_a_to_b.request_id,
+        &peer_b,
+        Duration::from_secs(60),
+    )
+    .await;
+    assert!(!replicator_carries(&db_a.node, &peer_b, "ChangeProposed").await);
+    authorize_enrollment_generation(
+        db_a.node.clone(),
+        EnrollmentGeneration {
+            network_id: NETWORK_ID,
+            network_name: NETWORK_NAME,
+            label: "-again",
+            lease: Duration::from_secs(
+                gents_protocol::enrollment::DEFAULT_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS,
+            ),
+        },
+        identity_a.clone(),
+        identity_b.clone(),
+        &peer_b,
+        &addr_b,
+    )
+    .await;
+    wait_for_enrollment_route_applied(db_a.node.as_ref(), &peer_b, Duration::from_secs(60)).await;
+    wait_for_status(&tool_a, &peer_b, Some("binding_ended")).await;
+    write_change_proposed(db_a.node.as_ref(), "after-reapproval", "signup").await;
+    assert_never_carried(&db_a.node, &peer_b, "ChangeProposed").await;
+    assert!(
+        !change_ids(db_b.node.as_ref())
+            .await
+            .contains(&"after-reapproval".to_owned()),
+        "a pairing revived after its enrollment was revoked and approved again"
+    );
+
+    // The node's User can remove any Agent's pairing through the signed path.
+    let user_a = load_managed_fixture_user(&db_a).await;
+    let removed = db_a
+        .client_access(&user_a)
+        .remove_application_pairing(&peer_b)
+        .await
+        .expect("the User removes the Agent's pairing");
+    assert_eq!(removed.len(), 1, "{removed:?}");
+    let gone = p2p_call(&tool_a, json!({"action":"pairings_get","peer_id":peer_b}))
+        .await
+        .unwrap();
+    assert_eq!(gone["outcome"]["desired"], json!([]));
+
     let _ = shutdown_a_tx.send(true);
     let _ = shutdown_b_tx.send(true);
     handle_a.await.unwrap().unwrap();
@@ -709,7 +1009,7 @@ async fn application_collections_replicate_only_after_each_node_opts_in() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn empty_app_collection_row_does_not_stall_control_pairing() {
+async fn authorless_overlay_is_skipped_and_control_route_stands() {
     let _p2p_guard = crate::P2P_E2E_LOCK.lock().await;
     std::env::set_var("GENTS_PAIRING_SWEEP_MS", "1000");
 
@@ -811,10 +1111,20 @@ async fn empty_app_collection_row_does_not_stall_control_pairing() {
         before, after,
         "control replicator addresses should be unchanged"
     );
-    let subscribed = fetch_subscribed_collection_names(db_a.node.as_ref()).await;
+    // The authorless row is skipped on its own: the base route still
+    // reconciles and nothing it names is carried.
+    let admin = EmbeddedRemoteP2pAdmin::new(db_a.node.clone());
     assert!(
-        !subscribed.iter().any(|c| c == "ChangeProposed"),
-        "blank app-collections must not subscribe ChangeProposed: {subscribed:?}"
+        admin
+            .list_replicators()
+            .await
+            .expect("list replicators")
+            .iter()
+            .all(|replicator| replicator
+                .collections
+                .iter()
+                .all(|collection| !collection.trim().is_empty())),
+        "a blank collection name reached the transport"
     );
 
     let _ = shutdown_a_tx.send(true);
@@ -923,7 +1233,7 @@ async fn fixture_moves(db: &crate::support::TestDb, id: &str) -> Vec<Value> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn document_pack_collections_stay_local_under_explicit_pairing() {
+async fn document_pack_collections_pair_only_by_explicit_opt_in() {
     let _p2p_guard = crate::P2P_E2E_LOCK.lock().await;
     std::env::set_var("GENTS_PAIRING_SWEEP_MS", "1000");
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -990,8 +1300,7 @@ async fn document_pack_collections_stay_local_under_explicit_pairing() {
         &address_a,
     )
     .await;
-    let control_a =
-        wait_for_enrollment_route_applied(a.node.as_ref(), &peer_b, Duration::from_secs(60)).await;
+    wait_for_enrollment_route_applied(a.node.as_ref(), &peer_b, Duration::from_secs(60)).await;
     wait_for_current_route_receipt(
         b.node.as_ref(),
         &enrollment.request_id,
@@ -1000,10 +1309,13 @@ async fn document_pack_collections_stay_local_under_explicit_pairing() {
         Duration::from_secs(60),
     )
     .await;
-    let control_b =
-        wait_for_enrollment_route_applied(b.node.as_ref(), &peer_a, Duration::from_secs(60)).await;
-    assert_app_collection_refused(a.node.as_ref(), &peer_b, "SharedFixtureMove", &control_a).await;
-    assert_app_collection_refused(b.node.as_ref(), &peer_a, "SharedFixtureMove", &control_b).await;
+    wait_for_enrollment_route_applied(b.node.as_ref(), &peer_a, Duration::from_secs(60)).await;
+    // Installing a pack pairs nothing; the transport still refuses Gents
+    // collections outright.
+    assert_never_carried(&a.node, &peer_b, "SharedFixtureMove").await;
+    assert_never_carried(&b.node, &peer_a, "SharedFixtureMove").await;
+    refuse_at_transport(&a.node, &address_b, "AgentSession").await;
+    refuse_at_transport(&b.node, &address_a, "AgentSession").await;
 
     write_fixture_move(&a, "move-a", "X").await;
     write_fixture_move(&b, "move-b", "O").await;
@@ -1018,10 +1330,221 @@ async fn document_pack_collections_stay_local_under_explicit_pairing() {
     assert_eq!(fixture_moves(&a, "move-a").await.len(), 1);
     assert_eq!(fixture_moves(&b, "move-b").await.len(), 1);
 
+    // A pack collection without a document policy is application data: an
+    // explicit opt-in pairs it in that direction only (Lean
+    // `ScopeTemplates.decideAppCollection`).
+    let pairer = pairing_agent(&a, "pack-pairer").await;
+    let tool = pairing_tool(&a, Some(pairer.identity.clone()), true);
+    p2p_call(
+        &tool,
+        pairing_args(
+            "pairings_apply",
+            &peer_b,
+            b.node_identity.did(),
+            &["SharedFixtureMove"],
+        ),
+    )
+    .await
+    .expect("pair the pack collection");
+    wait_for_status(&tool, &peer_b, None).await;
+    wait_until("the pack document to arrive", || async {
+        !fixture_moves(&b, "move-a").await.is_empty()
+    })
+    .await;
+    assert!(fixture_moves(&a, "move-b").await.is_empty());
+
     let _ = stop_a.send(true);
     let _ = stop_b.send(true);
     task_a.await.unwrap().unwrap();
     task_b.await.unwrap().unwrap();
     a.node.shutdown().await.unwrap();
     b.node.shutdown().await.unwrap();
+}
+
+/// A pairing contributes only while its author is an enabled Agent holding the
+/// P2P mutation grant and its enrollment is the one it was applied under; a
+/// lease renewal keeps it. Enrollment here runs one way, and a direct overlay
+/// that skipped the tool's admission is still refused by the reconciler.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn application_pairing_follows_author_authority_and_enrollment_lease() {
+    let _p2p_guard = crate::P2P_E2E_LOCK.lock().await;
+    std::env::set_var("GENTS_PAIRING_SWEEP_MS", "1000");
+
+    let db_a = test_p2p_db("app-pairing-authority-a").await;
+    let db_b = test_p2p_db("app-pairing-authority-b").await;
+    for db in [&db_a, &db_b] {
+        register_change_proposed_schema(db.node.as_ref()).await;
+        db.node
+            .add_collection(&format!(
+                r#"type GuardedChange @policy(id: "{}", resource: "configuration") {{ text: String }}"#,
+                gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID
+            ))
+            .await
+            .expect("add_collection GuardedChange");
+    }
+    let mock_a = MockModelEndpoint::start("default").unwrap();
+    let mock_b = MockModelEndpoint::start("default").unwrap();
+    bind_default_agent_backend(&db_a, "backend-authority-a", mock_a.endpoint()).await;
+    bind_default_agent_backend(&db_b, "backend-authority-b", mock_b.endpoint()).await;
+    let pairer_a = pairing_agent(&db_a, "authority-a").await;
+    let pairer_b = pairing_agent(&db_b, "authority-b").await;
+    let tool_a = pairing_tool(&db_a, Some(pairer_a.identity.clone()), true);
+    let tool_b = pairing_tool(&db_b, Some(pairer_b.identity.clone()), true);
+
+    let options = |db: &TestDb| DocumentRuntimeOptions {
+        backend_admission: Some(db.home.backend_admission()),
+        tool_ceiling: ToolCeiling::meta_only(),
+        ..Default::default()
+    };
+    let runtime_a = Gents::from_default_agent_documents(
+        db_a.node.clone(),
+        db_a.node_identity.clone(),
+        options(&db_a),
+    )
+    .await
+    .unwrap();
+    let runtime_b = Gents::from_default_agent_documents(
+        db_b.node.clone(),
+        db_b.node_identity.clone(),
+        options(&db_b),
+    )
+    .await
+    .unwrap();
+    let (stop_a, receiver_a) = tokio::sync::watch::channel(false);
+    let (stop_b, receiver_b) = tokio::sync::watch::channel(false);
+    let task_a = tokio::spawn(runtime_a.run(receiver_a));
+    let task_b = tokio::spawn(runtime_b.run(receiver_b));
+
+    let (peer_a, _) = wait_for_peer_identity(db_a.node.as_ref()).await;
+    let (peer_b, addr_b) = wait_for_peer_identity(db_b.node.as_ref()).await;
+    // One way only: B joins A's network; A never joins B's.
+    authorize_enrollment_peer(
+        db_a.node.clone(),
+        NETWORK_ID,
+        NETWORK_NAME,
+        db_a.node_identity.clone(),
+        db_b.node_identity.clone(),
+        &peer_b,
+        &addr_b,
+    )
+    .await;
+    wait_for_enrollment_route_applied(db_a.node.as_ref(), &peer_b, Duration::from_secs(60)).await;
+    let one_way = p2p_call(
+        &tool_b,
+        pairing_args(
+            "pairings_apply",
+            &peer_a,
+            db_a.node_identity.did(),
+            &["ChangeProposed"],
+        ),
+    )
+    .await
+    .unwrap_err();
+    assert!(one_way.contains("enrollment"), "{one_way}");
+    let listed = p2p_call(&tool_b, json!({"action":"pairings_list"}))
+        .await
+        .expect("pairings_list");
+    assert_eq!(listed["outcome"]["desired"], json!([]));
+
+    p2p_call(
+        &tool_a,
+        pairing_args(
+            "pairings_apply",
+            &peer_b,
+            db_b.node_identity.did(),
+            &["ChangeProposed"],
+        ),
+    )
+    .await
+    .expect("apply pairing");
+    wait_for_status(&tool_a, &peer_b, None).await;
+    write_change_proposed(db_a.node.as_ref(), "first", "signup").await;
+    wait_for_change(db_b.node.as_ref(), "first").await;
+    wait_for_status(&tool_a, &peer_b, None).await;
+
+    // A lease renewal is the same enrollment: the pairing keeps syncing.
+    authorize_enrollment_generation(
+        db_a.node.clone(),
+        EnrollmentGeneration {
+            network_id: NETWORK_ID,
+            network_name: NETWORK_NAME,
+            label: "-renewal",
+            lease: Duration::from_secs(
+                gents_protocol::enrollment::DEFAULT_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS,
+            ),
+        },
+        db_a.node_identity.clone(),
+        db_b.node_identity.clone(),
+        &peer_b,
+        &addr_b,
+    )
+    .await;
+    let (_, renewed) = current_authorization(&db_a, &peer_b).await;
+    assert!(renewed > 1, "renewal took the next sequence");
+    write_change_proposed(db_a.node.as_ref(), "after-renewal", "signup").await;
+    wait_for_change(db_b.node.as_ref(), "after-renewal").await;
+    wait_for_status(&tool_a, &peer_b, None).await;
+
+    // Withdrawing the author's P2P mutation grant stops the route; granting it
+    // again resumes it while the binding is still current.
+    pairer_a.configure(&db_a, false, true).await;
+    wait_for_status(&tool_a, &peer_b, Some("author_lacks_grant")).await;
+    wait_until("the route to drop the collection", || async {
+        !replicator_carries(&db_a.node, &peer_b, "ChangeProposed").await
+    })
+    .await;
+    write_change_proposed(db_a.node.as_ref(), "while-withdrawn", "signup").await;
+    assert_stays_local(
+        || async {
+            !change_ids(db_b.node.as_ref())
+                .await
+                .contains(&"while-withdrawn".to_owned())
+        },
+        "a pairing whose author lost the grant replicated",
+    )
+    .await;
+    pairer_a.configure(&db_a, true, true).await;
+    wait_for_status(&tool_a, &peer_b, None).await;
+    write_change_proposed(db_a.node.as_ref(), "after-regrant", "signup").await;
+    wait_for_change(db_b.node.as_ref(), "after-regrant").await;
+
+    // Disabling the author stops it too.
+    pairer_a.configure(&db_a, true, false).await;
+    wait_for_status(&tool_a, &peer_b, Some("author_not_agent")).await;
+    wait_until("the route to drop the collection", || async {
+        !replicator_carries(&db_a.node, &peer_b, "ChangeProposed").await
+    })
+    .await;
+    pairer_a.configure(&db_a, true, true).await;
+    wait_for_status(&tool_a, &peer_b, None).await;
+
+    // The User removes the pairing; a direct overlay naming a managed or a
+    // policy-bearing collection is refused by the reconciler itself.
+    let user = load_managed_fixture_user(&db_a).await;
+    let operator = db_a.client_access(&user);
+    assert_eq!(
+        operator
+            .remove_application_pairing(&peer_b)
+            .await
+            .expect("remove")
+            .len(),
+        1
+    );
+    for collection in ["AgentSession", "GuardedChange"] {
+        write_direct_overlay(&db_a, &pairer_a, &peer_b, collection).await;
+        wait_for_status(&tool_a, &peer_b, Some("collections_refused")).await;
+        assert_never_carried(&db_a.node, &peer_b, collection).await;
+        refuse_at_transport(&db_a.node, &addr_b, collection).await;
+        operator
+            .remove_application_pairing(&peer_b)
+            .await
+            .expect("remove direct overlay");
+    }
+
+    let _ = stop_a.send(true);
+    let _ = stop_b.send(true);
+    task_a.await.unwrap().unwrap();
+    task_b.await.unwrap().unwrap();
+    db_a.node.shutdown().await.expect("node shutdown");
+    db_b.node.shutdown().await.expect("node shutdown");
 }

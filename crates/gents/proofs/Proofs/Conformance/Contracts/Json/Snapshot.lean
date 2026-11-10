@@ -160,6 +160,7 @@ import Proofs.Conformance.Contracts.Json.PayloadPresentation
 import Proofs.Conformance.Eval
 import Proofs.Conformance.Optimization
 import Proofs.ScopeTemplates.Derivation
+import Proofs.PairingReconcile.OverlayBinding
 
 namespace Conformance.Contracts
 
@@ -202,12 +203,15 @@ def scopeTemplateCasesJson : String :=
         "did:key:reader" "did:key:owner").map scopePredicateJson) ++ "}")
 
 def appCollectionAdmissionCasesJson : String :=
-  jsonArray (([false, true].flatMap fun managed => [false, true].map fun hasPolicy =>
-    (managed, hasPolicy)).map fun (managed, hasPolicy) =>
+  jsonArray (([false, true].flatMap fun managed => [false, true].flatMap fun hasPolicy =>
+    [false, true].map fun isView => (managed, hasPolicy, isView)).map
+      fun (managed, hasPolicy, isView) =>
       "{\"managed\":" ++ boolJson managed ++ ",\"has_policy\":" ++ boolJson hasPolicy ++
-      ",\"refusal\":" ++ (match ScopeTemplates.decideAppCollection { managed, hasPolicy } with
+      ",\"is_view\":" ++ boolJson isView ++
+      ",\"refusal\":" ++ (match ScopeTemplates.decideAppCollection { managed, hasPolicy, isView } with
         | some .managed => jsonString "managed"
         | some .policyProtected => jsonString "policy_protected"
+        | some .view => jsonString "view"
         | none => "null") ++ "}")
 
 /-- The snapshot's concatenation chains are bounded to keep model execution
@@ -1035,6 +1039,8 @@ def snapshotPluginCasesJson : String :=
     ++ "\"scope_node_route_cases\":" ++ nodeRouteCasesJson ++ ","
     ++ "\"scope_template_cases\":" ++ scopeTemplateCasesJson ++ ","
     ++ "\"scope_app_collection_cases\":" ++ appCollectionAdmissionCasesJson ++ ","
+    ++ "\"scope_overlay_binding_cases\":" ++ PairingReconcile.OverlayBinding.bindingCasesJson ++ ","
+    ++ "\"scope_overlay_facts_cases\":" ++ PairingReconcile.OverlayBinding.factsCasesJson ++ ","
     ++ "\"causal_hop_contract\":"
       ++ Conformance.CausalHopContracts.contractJson ++ ","
     ++ "\"operator_base_freeze_cases\":"

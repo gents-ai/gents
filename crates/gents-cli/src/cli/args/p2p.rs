@@ -237,6 +237,31 @@ pub(crate) enum P2pPairingsCommand {
     GrantReader(P2pPairingsReaderArgs),
     #[command(about = "Revoke one reason an Agent can read a pairing observation")]
     RevokeReader(P2pPairingsReaderArgs),
+    #[command(
+        about = "List application-collection pairings Agents opted into on this node",
+        after_help = "\
+Each row is one Agent's opt-in to replicate application collections toward one \
+enrolled peer. `gents p2p pairings remove <PEER_ID>` deletes one as you."
+    )]
+    Applications(P2pPairingsListArgs),
+    #[command(
+        about = "Remove the application-collection pairing toward one peer",
+        after_help = "\
+Deletes the pairing as you, under native document access control: the Node's \
+user owner may remove any Agent's pairing. New data stops at the next \
+reconcile; documents already delivered stay on the peer."
+    )]
+    Remove(P2pPairingsRemoveArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct P2pPairingsRemoveArgs {
+    /// Transport peer ID the pairing replicates toward.
+    pub(crate) peer_id: String,
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
