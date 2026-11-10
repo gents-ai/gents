@@ -1,6 +1,9 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { ChatSendRequest } from "@source-inc/gents-desktop-client";
+import type {
+  ChatSendRequest,
+  RequestAttachment,
+} from "@source-inc/gents-desktop-client";
 import { ChatDeliveryFeedback } from "../src/ui/screens/session/ChatDeliveryFeedback";
 import { retainChatDraft, saveChatDraft } from "../src/hooks/chatDrafts";
 import { acceptedChat } from "./chat-delivery-fixture";
@@ -9,6 +12,8 @@ import { loadChatDrafts } from "../src/hooks/chatDrafts";
 import { navigate } from "../src/ui/lib/router";
 import { node, testApp, withApp } from "./app-fixture";
 import { writeSession } from "../src/hooks/sessionStore";
+import { sessionDraftKey } from "../src/hooks/shellView";
+import { deferred } from "./deferred";
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
 
 vi.mock("@/lib/router", async (original) => ({
@@ -21,16 +26,23 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-function fixture(sending = false) {
+/* `sentFrom` is the session whose composer sent the message, which is the
+   one shown; null is the new session composer */
+function fixture(
+  sending = false,
+  sentFrom: string | null = null,
+  attachments: RequestAttachment[] = [],
+) {
   const nodeDid = node().nodeDid;
   const request: ChatSendRequest = {
     clientDid: "client",
     nodeDid,
     requestId: "original-request",
-    sessionId: "original-session",
+    sessionId: sentFrom ?? "original-session",
     agentDid: "default",
     content: "Original message",
     cwd: "/original",
+    ...(attachments.length ? { attachments } : {}),
   };
   const control = vi.fn(async (request: ChatSendRequest) => acceptedChat(request));
   const app = testApp({
@@ -39,7 +51,7 @@ function fixture(sending = false) {
       fetchSessionSnapshot: vi.fn().mockResolvedValue(null),
     },
     deployments: [node()],
-    selection: { nodeDid, sessionId: null },
+    selection: { nodeDid, sessionId: sentFrom },
   });
   app.stores.client.setState((state) => ({
     snapshot: {
@@ -51,9 +63,9 @@ function fixture(sending = false) {
   saveChatDraft(
     app.stores.chat,
     sending
-      ? { ...retainChatDraft(request, null), pendingUntil: Date.now() + 60_000 }
+      ? { ...retainChatDraft(request, sentFrom), pendingUntil: Date.now() + 60_000 }
       : {
-          ...retainChatDraft(request, null),
+          ...retainChatDraft(request, sentFrom),
           failure: { message: "The runtime connection was lost", error: null },
         },
   );
@@ -116,6 +128,37 @@ it("leaves text typed since the send in the composer when the message is discard
     expect(screen.queryByRole("status", { name: "Saved message" })).toBeNull(),
   );
   expect(f.app.drafts.getState().drafts[key]).toBe("Something new");
+});
+
+it("hands a discarded message and its attachments back to its own session while another is shown", async () => {
+  const notes: RequestAttachment = {
+    name: "notes.txt",
+    mediaType: "text/plain",
+    data: btoa("notes"),
+  };
+  const f = fixture(false, "original-session", [notes]);
+  const own = sessionDraftKey(f.request.nodeDid, "original-session");
+  const discarding = deferred();
+  const discard = f.app.actions.discardChatMessage;
+  vi.spyOn(f.app.actions, "discardChatMessage").mockImplementation(
+    async (requestId) => {
+      await discarding.promise;
+      return discard(requestId);
+    },
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "Discard message" }));
+  act(() => f.app.stores.selection.setState({ sessionId: "another-session" }));
+  const shown = f.app.view.getState().draftKey;
+  expect(shown).not.toBe(own);
+  await act(async () => discarding.resolve());
+  await waitFor(() =>
+    expect(f.app.drafts.getState().drafts[own]).toBe("Original message"),
+  );
+  expect(f.app.drafts.getState().attachments[own]).toEqual([
+    expect.objectContaining({ name: "notes.txt", content: notes }),
+  ]);
+  expect(f.app.drafts.getState().drafts[shown]).toBeUndefined();
+  expect(f.app.drafts.getState().attachments[shown]).toBeUndefined();
 });
 
 it("keeps a failed retry saved with its new cause", async () => {

@@ -4,8 +4,14 @@ import { useStore } from "zustand";
 import { Button } from "@gents/ui/components/button";
 import { errorWords } from "../../../lib/reasonText";
 import { Notice } from "../../components/Notice";
-import { useApp, useView } from "@/app/AppContext";
-import { writeDraft } from "../../../hooks/draftStore";
+import { useApp } from "@/app/AppContext";
+import {
+  writeAttachments,
+  writeDraft,
+  type DraftStore,
+} from "../../../hooks/draftStore";
+import { newSessionDraftKey, sessionDraftKey } from "../../../hooks/shellView";
+import { restoredAttachment } from "../../../hooks/useAttachments";
 import { workspace } from "@/app/workspace";
 import { StorageFullRecovery } from "./StorageFullRecovery";
 import { navigate } from "@/lib/router";
@@ -91,6 +97,23 @@ export function ChatDeliveryFeedback({
   );
 }
 
+/** The composer gave a sent message its text and attachments, so Discard
+ * hands them back to that composer (the message's own session, or the new
+ * session composer for its agent), whichever screen is shown, unless
+ * something new was composed there since. */
+function handBack(drafts: DraftStore, draft: ChatDraft) {
+  const request = chatDraftRequest(draft);
+  const key = draft.selectedSessionId
+    ? sessionDraftKey(draft.nodeDid, draft.selectedSessionId)
+    : newSessionDraftKey(draft.nodeDid, request.agentDid ?? null);
+  const state = drafts.getState();
+  if (state.drafts[key] || state.attachments[key]?.length) return;
+  if (request.content) writeDraft(drafts, key, request.content);
+  const attachments = request.attachments ?? [];
+  if (attachments.length)
+    writeAttachments(drafts, key, () => attachments.map(restoredAttachment));
+}
+
 function SavedMessage({
   draft,
   status,
@@ -101,7 +124,6 @@ function SavedMessage({
   disabled: boolean;
 }) {
   const { actions, stores, drafts } = useApp();
-  const draftKey = useView((view) => view.draftKey);
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -151,10 +173,7 @@ function SavedMessage({
         await actions.discardMailboxAnswer(draft.mailbox.itemId, draft.requestId);
       else {
         await actions.discardChatMessage(draft.requestId);
-        /* the composer gave the text to the saved message when it was sent,
-           so discarding hands it back unless something new was typed since */
-        const text = chatDraftRequest(draft).content;
-        if (text) writeDraft(drafts, draftKey, (current) => current || text);
+        handBack(drafts, draft);
       }
     } catch (error) {
       if (mounted.current)
