@@ -5,6 +5,7 @@ import { listViews, useListViews } from "../src/ui/app/listViews";
 import { isListed, SECTIONS } from "../src/ui/screens/agent/sections";
 import { mailboxSeen, resetMailboxSeen } from "../src/ui/app/mailboxSeen";
 import { TooltipProvider } from "@gents/ui/components/tooltip";
+import { useExclusivePopover } from "../src/ui/hooks/useExclusivePopover";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -154,6 +155,24 @@ describe("customizing the nav", () => {
       "aria-modal",
       "true",
     );
+  });
+
+  it("waits for a closing popover to go before it opens, so dialogs never stack", () => {
+    /* Bombadil desktop_shell_does_not_stack_dialogs: the startup-node picker,
+       still mounted for its exit animation, and the sheet were both dialogs */
+    const picker = renderHook(() => useExclusivePopover());
+    act(() => picker.result.current.onOpenChange(true));
+    act(() => picker.result.current.popupRef(document.createElement("div")));
+    panel();
+    act(() => openCustomizeNav());
+    expect(screen.queryByRole("dialog", { name: "Customize sidebar" })).toBeNull();
+    expect(picker.result.current.open).toBe(false);
+    act(() => picker.result.current.onOpenChangeComplete(false));
+    act(() => picker.result.current.popupRef(null));
+    expect(
+      screen.getByRole("dialog", { name: "Customize sidebar" }),
+    ).toBeInTheDocument();
+    picker.unmount();
   });
 
   it("draws the default items until the person customizes them", () => {

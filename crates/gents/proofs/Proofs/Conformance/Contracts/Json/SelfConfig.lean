@@ -182,7 +182,8 @@ def selfConfigScopeEditCasesJson : String := Id.run do
 def selfConfigScopeGroupCasesJson : String := Id.run do
   let groups : List (String × SelfConfig.SelfConfigGroup) :=
     [("created", SelfConfig.createdGroup), ("clone-of-engineer", SelfConfig.cloneGroup SelfConfig.engineerGroup),
-     ("engineer", SelfConfig.engineerGroup), ("enabled-default", ⟨true, none⟩),
+     ("engineer", SelfConfig.engineerGroup), ("yolo", SelfConfig.yoloGroup),
+     ("enabled-default", ⟨true, none⟩),
      ("disabled-with-list", ⟨false, some ["node", "tools"]⟩),
      ("enabled-catalog", ⟨true, some ["node"]⟩)]
   let rows := groups.map fun (name, g) =>

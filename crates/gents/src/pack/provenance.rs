@@ -7,30 +7,71 @@ use crate::Collection;
 
 const PACK_ORIGIN_PREFIX: &str = "gents:pack:";
 
-pub fn pack_origin_tag(pack_name: &str) -> Result<String> {
-    anyhow::ensure!(
-        super::is_valid_pack_name(pack_name),
-        "pack origin requires a snake_case pack name"
-    );
-    Ok(format!("{PACK_ORIGIN_PREFIX}{pack_name}"))
+fn is_coordinate(value: &str) -> bool {
+    value.split_once('/').is_some_and(|(namespace, name)| {
+        super::is_valid_pack_name(namespace) && super::is_valid_pack_name(name)
+    })
 }
 
-pub fn pack_origin_from_tags(tags: &[String]) -> Result<Option<&str>> {
+pub fn pack_origin_tag(coordinate: &str) -> Result<String> {
+    anyhow::ensure!(
+        is_coordinate(coordinate),
+        "pack origin requires a namespace/name coordinate"
+    );
+    Ok(format!("{PACK_ORIGIN_PREFIX}{coordinate}"))
+}
+
+/// Why a configuration document's pack origin cannot be read or does not
+/// belong to the pack acting on it.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum PackOriginError {
+    /// Lean `pack_document_unqualified_origin_refused`: a bare name cannot
+    /// be told apart from the same name under another namespace.
+    #[error(
+        "this document carries the pack origin {origin:?}: an earlier Gents tagged pack documents \
+         with the bare pack name, and this version requires a namespace/name coordinate, so it \
+         cannot update, reinstall or remove the documents of a pack installed that way. To start \
+         this node's packs fresh, reset its home (`gents runtime desktop reset` previews the reset \
+         and backs the home up) or set up a new home, then install the pack again"
+    )]
+    Unqualified { origin: String },
+    #[error("configuration document carries more than one pack origin")]
+    Multiple,
+    #[error("configuration document belongs to pack {origin:?}, not {coordinate:?}")]
+    Foreign { origin: String, coordinate: String },
+}
+
+pub fn pack_origin_from_tags(tags: &[String]) -> Result<Option<&str>, PackOriginError> {
     let mut origins = tags
         .iter()
         .filter_map(|tag| tag.strip_prefix(PACK_ORIGIN_PREFIX));
     let origin = origins.next();
-    anyhow::ensure!(
-        origins.next().is_none(),
-        "configuration document carries more than one pack origin"
-    );
+    if origins.next().is_some() {
+        return Err(PackOriginError::Multiple);
+    }
     if let Some(origin) = origin {
-        anyhow::ensure!(
-            super::is_valid_pack_name(origin),
-            "configuration document carries invalid pack origin {origin:?}"
-        );
+        if !is_coordinate(origin) {
+            return Err(PackOriginError::Unqualified {
+                origin: origin.to_owned(),
+            });
+        }
     }
     Ok(origin)
+}
+
+pub(super) fn ensure_origin_owned(
+    tags: &[String],
+    coordinate: &str,
+) -> Result<(), PackOriginError> {
+    if let Some(origin) = pack_origin_from_tags(tags)? {
+        if origin != coordinate {
+            return Err(PackOriginError::Foreign {
+                origin: origin.to_owned(),
+                coordinate: coordinate.to_owned(),
+            });
+        }
+    }
+    Ok(())
 }
 
 pub(super) async fn apply_pack_documents(
@@ -52,9 +93,10 @@ pub(super) async fn apply_pack_documents(
             let guard = &guard;
             Box::pin(async move {
                 crate::documents::apply_desired_state_plan(txn, guard).await?;
-                let report =
-                    super::installation::install_in_txn(txn, owner, pack, documents, policy, None)
-                        .await?;
+                let report = super::installation::install_in_txn(
+                    txn, owner, pack, documents, policy, None, None, None,
+                )
+                .await?;
                 super::installation::validate_plugin_replacements_in_txn(
                     txn,
                     owner,
@@ -152,12 +194,7 @@ fn merge_tags(desired: &mut serde_json::Value, live: &serde_json::Value) -> Resu
                 .context("live document tag must be a string")
         })
         .collect::<Result<Vec<_>>>()?;
-    if let Some(live_origin) = pack_origin_from_tags(&live_strings)? {
-        anyhow::ensure!(
-            live_origin == desired_origin,
-            "configuration document belongs to pack {live_origin:?}, not {desired_origin:?}"
-        );
-    }
+    ensure_origin_owned(&live_strings, desired_origin)?;
     for tag in live
         .get("tags")
         .and_then(serde_json::Value::as_array)
@@ -177,7 +214,8 @@ pub(super) fn stamp_pack_origin(
     manifest: &PackManifest,
     config: &PackConfig,
 ) -> Result<PackConfig> {
-    let origin = pack_origin_tag(&manifest.name)?;
+    let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
+    let origin = pack_origin_tag(&coordinate)?;
     let mut value = serde_json::to_value(config)?;
     let root = value
         .as_object_mut()
@@ -219,9 +257,9 @@ pub(super) fn stamp_pack_origin(
                 .unwrap_or_default();
             if let Some(authored_origin) = pack_origin_from_tags(&tags)? {
                 anyhow::ensure!(
-                    authored_origin == manifest.name,
+                    authored_origin == coordinate,
                     "pack {} document carries origin for another pack {authored_origin:?}",
-                    manifest.name
+                    coordinate
                 );
             }
             if !tags.iter().any(|tag| tag == &origin) {
@@ -233,4 +271,56 @@ pub(super) fn stamp_pack_origin(
         }
     }
     serde_json::from_value(value).context("decoding provenance-stamped pack configuration")
+}
+
+#[cfg(test)]
+mod ownership_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn pack_origins_require_a_full_coordinate() {
+        let bare = pack_origin_from_tags(&["gents:pack:game".into()]).unwrap_err();
+        assert_eq!(
+            bare,
+            PackOriginError::Unqualified {
+                origin: "game".into()
+            }
+        );
+        let message = bare.to_string();
+        for needle in [
+            "namespace/name",
+            "gents runtime desktop reset",
+            "install the pack again",
+        ] {
+            assert!(message.contains(needle), "{message}");
+        }
+        let tags = ["gents:pack:example/game".into()];
+        assert_eq!(pack_origin_from_tags(&tags).unwrap(), Some("example/game"));
+    }
+
+    #[test]
+    fn document_ownership_matches_executable_model() {
+        let cases = &crate::lean_vocab_test::lean_contract_snapshot().pack_document_ownership_cases;
+        assert_eq!(cases.len(), 12);
+        for case in cases {
+            let coordinate = case["coordinate"].as_str().unwrap();
+            let origin = case["origin"].as_str();
+            let mut desired = json!({ "tags": [format!("gents:pack:{coordinate}")] });
+            let live = json!({ "tags": origin.map(|value| vec![format!("gents:pack:{value}")]).unwrap_or_default() });
+            assert_eq!(
+                merge_tags(&mut desired, &live).is_ok(),
+                case["allowed"].as_bool().unwrap(),
+                "{case}"
+            );
+            let tags: Vec<String> = origin
+                .map(|value| vec![format!("gents:pack:{value}")])
+                .unwrap_or_default();
+            assert_eq!(
+                ensure_origin_owned(&tags, coordinate).is_ok(),
+                case["removal_allowed"].as_bool().unwrap(),
+                "{case}"
+            );
+        }
+    }
 }

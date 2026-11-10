@@ -14,8 +14,7 @@ pub struct PluginStageChanges {
     pub(crate) installed: Vec<store::InstalledPlugin>,
 }
 
-/// A local publication and its node notification are driven by one owned task,
-/// so cancellation cannot mistake an unconfirmed commit for a refusal.
+/// A local publication and its node notification share one owned task.
 #[allow(clippy::too_many_arguments)]
 pub async fn install<F>(
     home: &Path,
@@ -23,6 +22,7 @@ pub async fn install<F>(
     consent: bool,
     owner: Option<&str>,
     bindings: &BTreeMap<String, String>,
+    source: super::PackSource,
     notify: impl FnOnce(PackIdentity, PluginStageChanges) -> F + Send + 'static,
 ) -> Result<(HomePackInstall, Vec<store::InstalledPlugin>)>
 where
@@ -35,7 +35,10 @@ where
         ),
         "expected a plugins or assets pack"
     );
-    install_owned(home, archive, consent, owner, bindings, false, notify).await
+    install_owned(
+        home, archive, consent, owner, bindings, false, source, notify,
+    )
+    .await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -43,6 +46,7 @@ pub async fn install_plugin<F>(
     home: &Path,
     archive: &crate::pack::archive::PackArchive,
     consent: bool,
+    source: super::PackSource,
     notify: impl FnOnce(PackIdentity, PluginStageChanges) -> F + Send + 'static,
 ) -> Result<(HomePackInstall, Vec<store::InstalledPlugin>)>
 where
@@ -52,7 +56,17 @@ where
         !archive.manifest().metadata.plugins.is_empty(),
         "pack carries no plugins"
     );
-    install_owned(home, archive, consent, None, &BTreeMap::new(), true, notify).await
+    install_owned(
+        home,
+        archive,
+        consent,
+        None,
+        &BTreeMap::new(),
+        true,
+        source,
+        notify,
+    )
+    .await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -63,6 +77,7 @@ async fn install_owned<F>(
     owner: Option<&str>,
     bindings: &BTreeMap<String, String>,
     operator: bool,
+    source: super::PackSource,
     notify: impl FnOnce(PackIdentity, PluginStageChanges) -> F + Send + 'static,
 ) -> Result<(HomePackInstall, Vec<store::InstalledPlugin>)>
 where
@@ -97,11 +112,13 @@ where
             plugins: plugins.iter().map(|plugin| InstalledPackPlugin { name: plugin.name.clone(), digest: plugin.digest.clone() }).collect(),
             installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             ux: manifest.metadata.ux.clone(), installed_via: operator.then_some(super::InstalledVia::Operator),
+            source: Some(source), source_history: Vec::new(),
         };
         let publish_home = home.clone();
-        let publish_record = record.clone();
+        let mut publish_record = record.clone();
         let previous = tokio::task::spawn_blocking(move || -> Result<_> {
             let previous = super::read_home_install(&publish_home, &publish_record.coordinate)?;
+            super::home_install::record_source(&mut publish_record, previous.as_ref())?;
             let result = if operator {
                 super::record_after_install(&publish_home, publish_record.clone(), super::InstalledVia::Operator, true)
             } else { super::write_home_install(&publish_home, &publish_record) };
@@ -112,9 +129,9 @@ where
                 }
                 return Err(error);
             }
-            Ok(previous)
+            Ok((previous, publish_record))
         }).await?;
-        let previous = match previous {
+        let (previous, record) = match previous {
             Ok(previous) => previous,
             Err(error) => { stage.finish(false).await?; return Err(error).context("publishing the local pack install record"); }
         };
@@ -242,6 +259,43 @@ pub(crate) mod tests {
     use serde_json::json;
 
     #[tokio::test]
+    async fn plugin_install_records_source_and_prior_version() {
+        let home = tempfile::tempdir().unwrap();
+        let (_old, _, old_archive) = fixture("1.0.0", false);
+        let (_new, _, new_archive) = fixture("2.0.0", false);
+        let local = super::super::PackSource::local(Path::new("/private/pack.gents"));
+        install(
+            home.path(),
+            &old_archive,
+            false,
+            None,
+            &BTreeMap::new(),
+            local.clone(),
+            |_, _| async { Ok(()) },
+        )
+        .await
+        .unwrap();
+        let (installed, _) = install(
+            home.path(),
+            &new_archive,
+            false,
+            None,
+            &BTreeMap::new(),
+            super::super::PackSource::Store,
+            |_, _| async { Ok(()) },
+        )
+        .await
+        .unwrap();
+        assert_eq!(installed.source, Some(super::super::PackSource::Store));
+        assert_eq!(installed.source_history[0].source, Some(local));
+        assert_eq!(installed.source_history[0].version, "1.0.0");
+        assert_eq!(
+            super::super::read_home_install(home.path(), &installed.coordinate).unwrap(),
+            Some(installed)
+        );
+    }
+
+    #[tokio::test]
     async fn plugin_bindings_without_owner_are_refused_before_publication() {
         let (_source, _, archive) = fixture("1.0.0", false);
         let home = tempfile::tempdir().unwrap();
@@ -251,6 +305,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::from([("model".into(), "profile".into())]),
+            super::super::PackSource::Local { file_name: None },
             |_, _| async { panic!("refused install must not notify") },
         )
         .await
@@ -324,6 +379,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
+            super::super::PackSource::Local { file_name: None },
             |_, _| async {
                 Err(super::super::PluginStoreChangeError::Unconfirmed(
                     anyhow::anyhow!("notification failed"),
@@ -346,6 +402,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
+            super::super::PackSource::Local { file_name: None },
             |_, _| async { Ok(()) },
         )
         .await
@@ -370,6 +427,7 @@ pub(crate) mod tests {
                     false,
                     None,
                     &BTreeMap::new(),
+                    super::super::PackSource::Local { file_name: None },
                     move |_, _| async move {
                         reached.notify_one();
                         release.notified().await;
@@ -410,6 +468,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
+            super::super::PackSource::Local { file_name: None },
             |_, _| async { Ok(()) }
         )
         .await
@@ -422,6 +481,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
+            super::super::PackSource::Local { file_name: None },
             |_, _| async { Ok(()) },
         )
         .await
@@ -435,6 +495,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
+            super::super::PackSource::Local { file_name: None },
             |_, _| async { Ok(()) }
         )
         .await

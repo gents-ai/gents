@@ -78,7 +78,7 @@ async fn runtime_state_reset_is_explicit() -> Result<()> {
 
     fs::write(&runtime_state, r#"{"status":"stale-again"}"#)
         .context("rewriting stale runtime state")?;
-    let reset = run_cli_json(&home_dir, &["reset"])?;
+    let reset = run_cli_json(&home_dir, &["runtime", "reset"])?;
     assert_eq!(reset.get("status").and_then(Value::as_str), Some("reset"));
     assert_eq!(reset.get("cleared").and_then(Value::as_bool), Some(true));
     assert!(
@@ -187,6 +187,8 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
     let result = run_cli_json(
         &home_dir,
         &[
+            "utils",
+            "debug",
             "request",
             "submit",
             "--graphql",

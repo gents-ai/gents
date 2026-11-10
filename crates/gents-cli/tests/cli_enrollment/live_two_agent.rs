@@ -68,6 +68,7 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
             run_cli_json_with_env(
                 &runtime_home,
                 &[
+                    "runtime",
                     "p2p",
                     "enrollment",
                     "grant",
@@ -81,6 +82,7 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
             run_cli_json_with_env(
                 &runtime_home,
                 &[
+                    "runtime",
                     "p2p",
                     "enrollment",
                     "approve",

@@ -41,7 +41,7 @@ export function StartedSessionsButton({
         onClick={() => (showing ? closeTab(SURFACE) : openSurface(SURFACE))}
       >
         {agents.length > 0 ? (
-          <WorkerAgents names={agents} />
+          <WorkerAgents agents={agents} />
         ) : (
           <SquareStack className="size-3.5" />
         )}

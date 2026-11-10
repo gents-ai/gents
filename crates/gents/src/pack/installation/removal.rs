@@ -24,7 +24,7 @@ where
     for (agent, tools, reference) in selected_plugin_references(access, owner).await? {
         anyhow::ensure!(
             !removed.contains(&reference.plugin),
-            "cannot remove plugin {}: agent {:?} still selects it through Tools {:?}; remove that reference first with `gents pack wire {} --agent {} --remove --home <node-home>`",
+            "cannot remove plugin {}: agent {:?} still selects it through Tools {:?}; remove that reference first with `gents config pack wire {} --agent {} --remove --home <node-home>`",
             reference.plugin, agent, tools, reference.plugin, agent
         );
     }

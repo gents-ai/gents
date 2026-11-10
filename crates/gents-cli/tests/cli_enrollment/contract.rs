@@ -206,7 +206,7 @@ async fn run_contract_with_streaming_cadence(
                 .and_then(Value::as_array)
                 .and_then(|rows| rows.iter().find(|row| row["request_id"] == pending.request_id))
                 .context("runtime did not return the signed enrollment request")?;
-            let queue = run_cli_json(&runtime_home, &["p2p", "enrollment", "pending", "--home", home])?;
+            let queue = run_cli_json(&runtime_home, &["runtime", "p2p", "enrollment", "pending", "--home", home])?;
             let displayed = queue["pending"].as_array()
                 .and_then(|rows| rows.iter().find(|row| row["request_id"] == pending.request_id))
                 .context("operator pending queue omitted the enrollment request")?;
@@ -215,8 +215,8 @@ async fn run_contract_with_streaming_cadence(
                 anyhow::ensure!(displayed[field] == signed_request[field], "pending queue did not preserve signed {field}");
             }
             anyhow::ensure!(displayed["candidate_name"] == "Ivan", "pending queue did not preserve the chosen name");
-            run_cli_json(&runtime_home, &["p2p", "enrollment", "grant", &pending.request_id, "--home", home])?;
-            run_cli_json(&runtime_home, &["p2p", "enrollment", "approve", &pending.request_id, "--home", home])?;
+            run_cli_json(&runtime_home, &["runtime", "p2p", "enrollment", "grant", &pending.request_id, "--home", home])?;
+            run_cli_json(&runtime_home, &["runtime", "p2p", "enrollment", "approve", &pending.request_id, "--home", home])?;
             reached("operator_approved");
             wait_for_chat_ready_enrollment(&core, &node_did).await?;
             reached("chat_ready_route");
@@ -1071,9 +1071,9 @@ async fn inference_activity_enforces_enrollment_and_exact_request_access() -> Re
                 wait_for_runtime_enrollment_request(&graphql, &pending.request_id).await.context("publishing activity enrollment request")?;
                 let home = runtime_home.to_str().context("runtime home UTF-8")?;
                 if administered {
-                    run_cli_json(&runtime_home, &["p2p", "enrollment", "grant", &pending.request_id, "--home", home])?;
+                    run_cli_json(&runtime_home, &["runtime", "p2p", "enrollment", "grant", &pending.request_id, "--home", home])?;
                 }
-                run_cli_json(&runtime_home, &["p2p", "enrollment", "approve", &pending.request_id, "--home", home])?;
+                run_cli_json(&runtime_home, &["runtime", "p2p", "enrollment", "approve", &pending.request_id, "--home", home])?;
                 wait_for_chat_ready_enrollment(&core, &node_did).await.context("activity enrollment approval projection")?;
                 if administered {
                     wait_for_client_node_readiness(&core, &node_did).await.context("activity client readiness")?;

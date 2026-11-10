@@ -29,28 +29,31 @@ async fn mcp_register(args: McpRegisterArgs) -> Result<()> {
     if service_id.is_empty() {
         anyhow::bail!("SERVICE must be a non-empty service id");
     }
-    let endpoint = url::Url::parse(args.endpoint.trim()).context("parsing --endpoint URL")?;
-    if endpoint.scheme() != "http" {
-        anyhow::bail!("--endpoint must use http; the MCP registry currently stores HTTP endpoints");
-    }
-    if !endpoint.username().is_empty() || endpoint.password().is_some() {
-        anyhow::bail!("--endpoint must not contain credentials");
-    }
-    if endpoint.query().is_some() || endpoint.fragment().is_some() {
-        anyhow::bail!("--endpoint must not contain a query string or fragment");
-    }
+    let endpoint = gents::documents::ToolServiceRegistry::parse_endpoint_url(&args.endpoint)
+        .map_err(|error| anyhow::anyhow!("--endpoint: {error}"))?;
     let host = endpoint
         .host_str()
         .filter(|host| !host.trim().is_empty())
         .context("--endpoint must contain a host")?;
-    let port = endpoint
-        .port_or_known_default()
-        .context("--endpoint must contain a port")?;
-    let path = match endpoint.path().trim() {
-        "" | "/" => "/mcp",
-        path => path,
+    // HTTPS cannot be rebuilt from address fields (TLS names the host), so it is
+    // stored verbatim; plain HTTP keeps address selection across LAN and tailnet.
+    let endpoint_url = (endpoint.scheme() == "https").then(|| endpoint.to_string());
+    let port = match endpoint_url {
+        Some(_) => None,
+        None => Some(
+            endpoint
+                .port_or_known_default()
+                .context("--endpoint must contain a port")?,
+        ),
     };
-    let (hostname, lan_ip) = if host.parse::<std::net::Ipv4Addr>().is_ok() {
+    let path = match (&endpoint_url, endpoint.path().trim()) {
+        (Some(_), _) => None,
+        (None, "" | "/") => Some("/mcp"),
+        (None, path) => Some(path),
+    };
+    let (hostname, lan_ip) = if endpoint_url.is_some() {
+        (None, None)
+    } else if host.parse::<std::net::Ipv4Addr>().is_ok() {
         (None, Some(host))
     } else {
         (Some(host), None)
@@ -69,6 +72,7 @@ async fn mcp_register(args: McpRegisterArgs) -> Result<()> {
     access
         .transact_write("cli.mcp.register", |txn| {
             let node_did = &node_did;
+            let endpoint_url = &endpoint_url;
             Box::pin(async move {
                 use gents::documents::apply_desired_state_plan;
                 use gents::store::config_client::{
@@ -94,6 +98,7 @@ async fn mcp_register(args: McpRegisterArgs) -> Result<()> {
                 value.insert("lan_ip".into(), serde_json::json!(lan_ip));
                 value.insert("mcp_port".into(), serde_json::json!(port));
                 value.insert("mcp_path".into(), serde_json::json!(path));
+                value.insert("endpoint_url".into(), serde_json::json!(endpoint_url));
                 value.insert("send_node_did".into(), serde_json::json!(send_node_did));
                 value.insert("enabled".into(), serde_json::json!(true));
                 let value = serde_json::Value::Object(value);
@@ -141,10 +146,10 @@ async fn mcp_probe(args: McpProbeArgs) -> Result<()> {
         items: snapshots,
     };
 
-    match args
-        .output
-        .ensure_supported("mcp probe", &[OutputFormat::Text, OutputFormat::Json])?
-    {
+    match args.output.ensure_supported(
+        "config mcp probe",
+        &[OutputFormat::Text, OutputFormat::Json],
+    )? {
         OutputFormat::Json => print_json(&serde_json::to_value(report)?),
         OutputFormat::Text => {
             print_probe_table(&report.items);
@@ -180,6 +185,7 @@ async fn load_mcp_services(
                 lan_ip
                 mcp_port
                 mcp_path
+                endpoint_url
                 send_node_did
                 updated_at
             }}

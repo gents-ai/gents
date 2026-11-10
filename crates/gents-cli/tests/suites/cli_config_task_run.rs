@@ -104,7 +104,10 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
         Some(1)
     );
 
-    let list = run_cli_json(&home_dir, &["task", "list", "--graphql", &graphql])?;
+    let list = run_cli_json(
+        &home_dir,
+        &["automation", "task", "list", "--graphql", &graphql],
+    )?;
     let listed_task = list
         .get("tasks")
         .and_then(Value::as_array)
@@ -127,7 +130,14 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
 
     let shown = run_cli_json(
         &home_dir,
-        &["task", "show", &task_id, "--graphql", &graphql],
+        &[
+            "automation",
+            "task",
+            "show",
+            &task_id,
+            "--graphql",
+            &graphql,
+        ],
     )?;
     assert_eq!(
         shown.pointer("/task/task_id").and_then(Value::as_str),
@@ -142,6 +152,7 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
     let fire = run_cli_json(
         &home_dir,
         &[
+            "automation",
             "task",
             "run",
             "--task-id",
@@ -303,7 +314,15 @@ async fn config_task_run_rejects_disabled_task() -> Result<()> {
 
     let stderr = run_cli_failure_stderr(
         &home_dir,
-        &["task", "run", "--task-id", &task_id, "--graphql", &graphql],
+        &[
+            "automation",
+            "task",
+            "run",
+            "--task-id",
+            &task_id,
+            "--graphql",
+            &graphql,
+        ],
     )?;
     assert!(
         stderr.contains("disabled"),

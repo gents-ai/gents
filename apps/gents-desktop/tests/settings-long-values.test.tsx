@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -7,6 +7,7 @@ import {
   LongFactRow,
   TagsRow,
 } from "../src/ui/screens/agent/editors";
+import { ReadOnlyConfig } from "../src/ui/screens/agent/rows";
 
 const long = "a-skill-whose-name-runs-well-past-the-width-of-one-chip";
 
@@ -77,5 +78,41 @@ describe("long values in settings rows", () => {
     await userEvent.click(screen.getByRole("button", { name: "Show all" }));
     expect(text.className).not.toContain("line-clamp-3");
     expect(screen.getByRole("button", { name: "Show less" })).toBeVisible();
+  });
+
+  it("still shows a long value in full inside a read-only view", async () => {
+    const observers = new Set<() => void>();
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(private readonly callback: () => void) {}
+        observe() {
+          observers.add(this.callback);
+        }
+        disconnect() {
+          observers.delete(this.callback);
+        }
+      },
+    );
+    const value = "a long value ".repeat(40);
+    render(
+      <ReadOnlyConfig readOnly>
+        <LongFactRow label="Host">{value}</LongFactRow>
+      </ReadOnlyConfig>,
+    );
+    const text = screen.getByText(value.trim());
+    Object.defineProperties(text, {
+      scrollHeight: { configurable: true, get: () => 200 },
+      clientHeight: { configurable: true, get: () => 60 },
+    });
+    act(() => observers.forEach((notify) => notify()));
+    /* user-event won't click anything inside a disabled fieldset; a browser
+       only disables the form controls in it */
+    fireEvent.click(screen.getByRole("button", { name: "Show all" }));
+    expect(text.className).not.toContain("line-clamp-3");
+    fireEvent.keyDown(screen.getByRole("button", { name: "Show less" }), {
+      key: "Enter",
+    });
+    expect(text.className).toContain("line-clamp-3");
   });
 });

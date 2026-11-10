@@ -52,6 +52,8 @@ pub struct GoalControlView {
     pub tokens_used: String,
     pub active_time_seconds: String,
     pub continuation_sequence: String,
+    pub wrapup_requested: bool,
+    pub wrapup_completed: bool,
     pub last_blocked_reason: Option<String>,
     pub last_failure: Option<String>,
     pub completion_evidence: Option<String>,

@@ -419,19 +419,16 @@ async fn agent_apply_in_txn(
                 )?;
                 apply_tool_grant_selection(&mut tools, args.enable_lsp, args.network_mode);
                 // A new Agent DID holds no WorkspaceRoot relationship yet.
-                let root = tools.host.as_ref().and_then(|host| host.root.clone());
-                if let (true, Some(root)) = (
-                    policy.configured
-                        && crate::tools::surface::ResolvedToolSelection::from_document(&tools)?
-                            .requires_filesystem_root(),
-                    root,
-                ) {
-                    let published = crate::tools::surface::published_root_covering_in_txn(
-                        txn,
-                        owner,
-                        std::path::Path::new(&root),
-                    )
-                    .await?;
+                let published = match crate::tools::surface::tools_root_reader_in_txn(
+                    txn, owner, &policy, &tools,
+                )
+                .await?
+                {
+                    crate::tools::surface::ToolRootReader::NotNeeded => None,
+                    crate::tools::surface::ToolRootReader::Published(root) => Some(Some(root)),
+                    crate::tools::surface::ToolRootReader::Unpublished(_) => Some(None),
+                };
+                if let Some(published) = published {
                     root_access =
                         crate::tools::surface::reader_grant_step(&id, published.as_deref(), true);
                 }
@@ -563,4 +560,48 @@ async fn agent_apply_in_txn(
             .await?;
     }
     ordered! {"committed":!preview,"admitted":true,"operation":operation,"agent_did":id,"host_root_access":root_access,"agent":doc,"make_default":args.make_default}.pretty()
+}
+
+/// Lean `SelfConfig.yoloGroup`: the User grants `agent_did`, an Agent the
+/// User created as its own unrestricted agent, the self-configuration of
+/// `source_did` (its Tools' `self_config` group) and native write on its own
+/// selected configuration (`grant_selected_self_configuration`, as `gents
+/// init` grants the Engineer), in one transaction as the User. It grants no
+/// node permission set and no relation on any other Agent. Granting again
+/// changes nothing.
+pub async fn grant_own_self_configuration(
+    access: &ConfigAccess,
+    node_did: &str,
+    agent_did: &str,
+    source_did: &str,
+) -> Result<()> {
+    access
+        .transact_write("self_config.grant_own", |txn| {
+            Box::pin(async move {
+                let source = crate::documents::load_agent_tools_in_txn(txn, node_did, source_did)
+                    .await?
+                    .with_context(|| format!("{source_did} selects no Tools"))?;
+                let mut tools = crate::documents::load_agent_tools_in_txn(txn, node_did, agent_did)
+                    .await?
+                    .with_context(|| format!("{agent_did} selects no Tools"))?;
+                if serde_json::to_value(&tools.self_config)?
+                    != serde_json::to_value(&source.self_config)?
+                {
+                    tools.self_config = source.self_config;
+                    tools.validate()?;
+                    let value = serde_json::to_value(&tools)?;
+                    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+                        collection: crate::Collection::Tools,
+                        add: value.clone(),
+                        update: value,
+                    }])?;
+                    crate::documents::apply_desired_state_plan(txn, &plan).await?;
+                }
+                crate::store::config_client::grant_selected_self_configuration(
+                    txn, node_did, agent_did,
+                )
+                .await
+            })
+        })
+        .await
 }
