@@ -2578,6 +2578,18 @@ pub(crate) struct LeanCausalHopContract {
     pub(crate) deferred_creation_cases: Vec<LeanDeferredCreationCase>,
     pub(crate) write_cases: Vec<LeanSessionMessageWriteCase>,
     pub(crate) session_target_cases: Vec<LeanSessionTargetCase>,
+    pub(crate) session_list_cases: Vec<LeanSessionListCase>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanSessionListCase {
+    pub(crate) target_allowed: bool,
+    pub(crate) caller_starter: bool,
+    pub(crate) interrupt_allowed: bool,
+    pub(crate) expected_listed: bool,
+    pub(crate) expected_can_message: bool,
+    pub(crate) expected_can_interrupt: bool,
 }
 
 #[derive(Debug, Deserialize)]

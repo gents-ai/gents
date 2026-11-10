@@ -9,8 +9,9 @@ namespace DurableLineage
 
 /-- The session-message reader supplies these facts from a canonical session
 visible through DefraDB ACP and the caller's current agent-target grants.
-Listing and inspection use this same target predicate; neither copied session
-labels nor a lineage display grants access outside its requester scope. -/
+Inspection and listed send authority (`listedSession`) use this same target
+predicate; neither copied session labels nor a lineage display grants access
+outside its requester scope. -/
 def sessionTargetAllowed (sameRequester sameNode caused allowedTarget : Bool) : Bool :=
   sameRequester && (sameNode || (caused && allowedTarget))
 
@@ -29,6 +30,43 @@ theorem remote_target_requires_current_grant (caused : Bool) :
 theorem remote_root_target_refused (allowedTarget : Bool) :
     sessionTargetAllowed true false false allowedTarget = false := by
   simp [sessionTargetAllowed]
+
+/-- One `agent_session_list` entry, as its send and interrupt authority. The
+list holds every session `sessionTargetAllowed` admits and, besides them, the
+caller's starter: the scope `AgentSession.observedStarter` reads from the
+caller's own session row. A starter is requested by another actor (a User's
+client key, or the Agent that started it), so it lies outside the caller's
+requester scope: its entry is built from the caller's verified creation
+receipt alone, reads none of the starter's documents, and grants neither a
+send nor an interrupt. A session with neither link is unlisted. -/
+structure ListedSession where
+  canMessage : Bool
+  canInterrupt : Bool
+  deriving DecidableEq, Repr
+
+def listedSession (targetAllowed callerStarter interruptAllowed : Bool) :
+    Option ListedSession :=
+  if targetAllowed then some ⟨true, interruptAllowed⟩
+  else if callerStarter then some ⟨false, false⟩
+  else none
+
+theorem unlinked_session_unlisted (interruptAllowed : Bool) :
+    listedSession false false interruptAllowed = none := rfl
+
+theorem starter_listed_without_authority (interruptAllowed : Bool) :
+    listedSession false true interruptAllowed = some ⟨false, false⟩ := rfl
+
+theorem listed_send_requires_target :
+    ∀ targetAllowed callerStarter interruptAllowed : Bool,
+      (listedSession targetAllowed callerStarter interruptAllowed).any (·.canMessage) =
+        targetAllowed := by
+  decide
+
+theorem listed_interrupt_requires_target_and_interrupt :
+    ∀ targetAllowed callerStarter interruptAllowed : Bool,
+      (listedSession targetAllowed callerStarter interruptAllowed).any (·.canInterrupt) =
+        (targetAllowed && interruptAllowed) := by
+  decide
 
 structure RawLineage where
   hasParentRequestId : Bool

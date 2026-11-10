@@ -893,6 +893,11 @@ def caseCoverage : List CoverageEntry :=
       "SessionTargetAuthorityCases"
       "session_message::agent_tools_tests::session_target_authority_matches_lean_owner")
       "request-lifecycle" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "causal_hop_contract"
+      "SessionListEntryCases"
+      "session_message::agent_tools_tests::session_list_entries_match_lean_owner")
+      "request-lifecycle" [Surface.agentFacing]
   , tagged (followUpCoverage
       "title_request_admission_cases"
       "TitleRequestAdmissionCases"

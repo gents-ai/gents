@@ -1974,6 +1974,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "session_target_authority_matches_lean_owner",
         },
         ConformanceConsumer::RustTest {
+            id: "session_message::agent_tools_tests::session_list_entries_match_lean_owner",
+            package: "gents",
+            source_path: "crates/gents/src/session/message/agent_tools_tests.rs",
+            module_path: "session_message::agent_tools_tests",
+            function: "session_list_entries_match_lean_owner",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::enrollment::generated_causal_hop_cases_match_native_materializer",
             package: "gents",
             source_path: "crates/gents/tests/conformance/enrollment.rs",

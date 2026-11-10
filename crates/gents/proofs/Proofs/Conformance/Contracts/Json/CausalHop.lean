@@ -276,6 +276,26 @@ def sessionTargetCaseJson (c : SessionTargetCase) : String :=
     ++ ",\"expected_allowed\":" ++ toString (DurableLineage.sessionTargetAllowed
       c.sameRequester c.sameNode c.caused c.allowedTarget) ++ "}"
 
+structure SessionListCase where
+  targetAllowed : Bool
+  callerStarter : Bool
+  interruptAllowed : Bool
+
+def sessionListCases : List SessionListCase := do
+  let targetAllowed ← [false, true]
+  let callerStarter ← [false, true]
+  let interruptAllowed ← [false, true]
+  pure ⟨targetAllowed, callerStarter, interruptAllowed⟩
+
+def sessionListCaseJson (c : SessionListCase) : String :=
+  let entry := DurableLineage.listedSession c.targetAllowed c.callerStarter c.interruptAllowed
+  "{\"target_allowed\":" ++ toString c.targetAllowed
+    ++ ",\"caller_starter\":" ++ toString c.callerStarter
+    ++ ",\"interrupt_allowed\":" ++ toString c.interruptAllowed
+    ++ ",\"expected_listed\":" ++ toString entry.isSome
+    ++ ",\"expected_can_message\":" ++ toString (entry.any (·.canMessage))
+    ++ ",\"expected_can_interrupt\":" ++ toString (entry.any (·.canInterrupt)) ++ "}"
+
 structure CapObservationCase where
   name : String
   observation : Option (Option Nat)
@@ -313,7 +333,8 @@ def contractJson : String :=
     ++ ",\"job_creation_cases\":" ++ jsonArray (jobCreationCases.map jobCreationCaseJson)
     ++ ",\"deferred_creation_cases\":" ++ jsonArray (jobCreationCases.map deferredCreationCaseJson)
     ++ ",\"write_cases\":" ++ jsonArray (writeCases.map writeCaseJson)
-    ++ ",\"session_target_cases\":" ++ jsonArray (sessionTargetCases.map sessionTargetCaseJson) ++ "}"
+    ++ ",\"session_target_cases\":" ++ jsonArray (sessionTargetCases.map sessionTargetCaseJson)
+    ++ ",\"session_list_cases\":" ++ jsonArray (sessionListCases.map sessionListCaseJson) ++ "}"
 
 
 theorem step_cases_cover_causes_and_outcomes :
