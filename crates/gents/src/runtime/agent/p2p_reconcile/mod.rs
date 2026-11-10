@@ -49,7 +49,7 @@ pub use enrollment_reconcile::{
 };
 pub use enrollment_store::{
     ActiveEnrollment, DeniedEnrollment, EnrollmentDecisionOutcome, EnrollmentDecisionRefusal,
-    EnrollmentProjection, EnrollmentRenewalPolicy, GraphqlEnrollmentStore, PendingEnrollment,
+    EnrollmentProjection, GraphqlEnrollmentStore, PendingEnrollment,
 };
 pub use error_class::{classify_remote_admin_error, PairingErrorClass};
 pub use policy::{

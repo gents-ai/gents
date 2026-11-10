@@ -12,7 +12,9 @@ use crate::runtime::agent::p2p_reconcile::{
 use crate::store::config_client::ConfigAccess;
 use crate::store::graphql::{escape_graphql_string, validate_collection_identifier};
 use crate::NodeIdentity;
-use gents_protocol::enrollment::{AuthorizationLease, EnrollmentDecisionKind};
+use gents_protocol::enrollment::{
+    AuthorizationLease, EnrollmentDecisionKind, EnrollmentRenewalPolicy,
+};
 
 #[cfg(test)]
 mod tests;
@@ -408,12 +410,10 @@ impl P2pTool {
                     })
                     .transpose()?;
                 GraphqlEnrollmentStore::new(self.node.clone(), actor)
-                    .set_renewal_policy(
-                        crate::runtime::agent::p2p_reconcile::EnrollmentRenewalPolicy {
-                            enabled,
-                            lease_seconds,
-                        },
-                    )
+                    .set_renewal_policy(EnrollmentRenewalPolicy {
+                        enabled,
+                        lease_seconds,
+                    })
                     .await?;
                 Ok(reply(
                     json!({"auto_renew":enabled,"lease_seconds":lease_seconds}),
