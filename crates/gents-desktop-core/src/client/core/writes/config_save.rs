@@ -265,6 +265,22 @@ impl ClientCore {
         }
     }
 
+    pub async fn select_agent_workspace_root(
+        &self,
+        node_did: &str,
+        agent_did: &str,
+        root_path: &str,
+    ) -> Result<crate::workspace_root::AgentWorkspaceRoot> {
+        let access = self.operator_access(node_did)?;
+        let selected = crate::workspace_root::select_agent_workspace_root(
+            &access, node_did, agent_did, root_path,
+        )
+        .await?;
+        self.observe_committed_config(node_did, "select agent workspace root")
+            .await;
+        Ok(selected)
+    }
+
     pub async fn save_tool_service_registry(
         &self,
         row: &gents::documents::ToolServiceRegistry,

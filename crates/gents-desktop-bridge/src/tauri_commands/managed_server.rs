@@ -23,7 +23,7 @@ use authority::{
     runtime_tool_ceiling, validate_ready_runtime, validate_tool_root, EffectiveManagedAuthority,
 };
 use gents_desktop_core::preference::StoredManagedServer;
-use gents_desktop_core::workspace_root::{select_agent_workspace_root, AgentWorkspaceRoot};
+use gents_desktop_core::workspace_root::AgentWorkspaceRoot;
 use launch::{fail_managed_start, install_then_launch, LaunchFailure, NativeLaunch};
 use native::{
     ensure_launchable_here, launchable_native_service, native_error, native_service, run_native,
@@ -73,11 +73,7 @@ pub async fn desktop_agent_workspace_root_select(
     let canonical = validate_tool_root(Path::new(request.path.trim()))?;
     let core = current_core(&state)
         .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
-    let access = core
-        .operator_access(&request.node_did)
-        .map_err(|error| BridgeError::untyped(format!("{error:#}")))?;
-    select_agent_workspace_root(
-        &access,
+    core.select_agent_workspace_root(
         &request.node_did,
         &request.agent_did,
         &canonical.to_string_lossy(),

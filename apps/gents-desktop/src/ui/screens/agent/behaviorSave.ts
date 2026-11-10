@@ -127,19 +127,15 @@ export async function writeAgentDraft({
         },
       ],
     });
-  else if (target && edited) {
-    await changeConfig("patchConfigComponents", {
-      nodeDid: deployment.nodeDid,
-      patches: [
-        {
-          collection: "AgentContext",
-          id: target.context_id,
-          changes: changedFields,
-        },
-      ],
+  else if (target && edited)
+    await changeConfig("applyConfigComponents", {
+      document: {
+        node: { node_did: deployment.nodeDid },
+        contexts: [{ ...target, ...changedFields }],
+        agents: [agentDocument],
+      },
     });
-    await changeConfig("saveAgentConfig", { document: agentDocument });
-  } else await changeConfig("saveAgentConfig", { document: agentDocument });
+  else await changeConfig("saveAgentConfig", { document: agentDocument });
   return { creating, contextId, newName };
 }
 

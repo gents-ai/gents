@@ -475,6 +475,100 @@ mod tests {
         runtime.shutdown().await;
         Ok(())
     }
+
+    #[tokio::test]
+    async fn agent_and_context_save_commits_both_or_neither() -> Result<()> {
+        let runtime = ServedRuntimeHome::start().await;
+        let access = runtime.user_access();
+        let owner = runtime.node_did();
+        let agent = runtime.provision_agent().await;
+        let agent_document = |display_name: &str, profile: &str| json!({"node_did":owner,"agent_did":agent.agent_did,"creation_nonce":agent.creation_nonce,"display_name":display_name,"context_id":"context","inference_profile_id":profile});
+        let context_document = |prompt: &str, tools: &str| json!({"node_did":owner,"context_id":"context","system_prompt":prompt,"tools_id":tools});
+        let save = |context: serde_json::Value, agent: serde_json::Value| {
+            serde_json::from_value::<gents::documents::PackConfig>(json!({
+                "node":{"node_did":owner},
+                "contexts":[context],
+                "agents":[agent],
+            }))
+        };
+        let seed: gents::documents::PackConfig = serde_json::from_value(json!({
+            "node":{"node_did":owner},
+            "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
+            "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
+            "tools":[{"node_did":owner,"tools_id":"tools"}],
+        }))?;
+        let plan = DesiredStateApplyPlan::from_pack_config(&seed)?;
+        access
+            .transact_write("desktop.agent_context.seed", |txn| {
+                let plan = &plan;
+                Box::pin(async move {
+                    apply_desired_state_plan(txn, plan).await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await?;
+        apply_config_components(
+            &access,
+            &save(
+                context_document("initial", "tools"),
+                agent_document("Initial", "profile"),
+            )?,
+        )
+        .await?;
+
+        let agent_refused = save(
+            context_document("from refused agent save", "tools"),
+            agent_document("Refused", "missing-profile"),
+        )?;
+        assert!(apply_config_components(&access, &agent_refused)
+            .await
+            .is_err());
+        let context_refused = save(
+            context_document("refused", "missing-tools"),
+            agent_document("From refused context save", "profile"),
+        )?;
+        assert!(apply_config_components(&access, &context_refused)
+            .await
+            .is_err());
+
+        let agent_did = agent.agent_did.as_str();
+        let stored = || {
+            access.transact_readonly("desktop.agent_context.verify", |txn| {
+                Box::pin(async move {
+                    let (_, context) = read_desired_state_record_in_txn(
+                        txn,
+                        Collection::AgentContext,
+                        owner,
+                        "context",
+                    )
+                    .await?
+                    .unwrap();
+                    let (_, agent) =
+                        read_desired_state_record_in_txn(txn, Collection::Agent, owner, agent_did)
+                            .await?
+                            .unwrap();
+                    Ok::<_, anyhow::Error>((
+                        context["system_prompt"].clone(),
+                        agent["display_name"].clone(),
+                    ))
+                })
+            })
+        };
+        assert_eq!(stored().await?, (json!("initial"), json!("Initial")));
+
+        apply_config_components(
+            &access,
+            &save(
+                context_document("edited", "tools"),
+                agent_document("Edited", "profile"),
+            )?,
+        )
+        .await?;
+        assert_eq!(stored().await?, (json!("edited"), json!("Edited")));
+        runtime.shutdown().await;
+        Ok(())
+    }
+
     #[tokio::test]
     async fn component_patch_preserves_hidden_auth_and_rolls_back_invalid_companion() -> Result<()>
     {
