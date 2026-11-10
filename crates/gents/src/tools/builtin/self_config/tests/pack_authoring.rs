@@ -181,6 +181,14 @@ async fn pack_authority_grants_what_a_plugins_pack_asks_for() {
         let record =
             crate::plugin::store::read_record(home.path(), "fixture", "native_echo").unwrap();
         assert!(record.granted.is_some(), "the store keeps the grant");
+        assert_eq!(
+            crate::pack::read_home_install(home.path(), "fixture/native_echo_pack")
+                .unwrap()
+                .unwrap()
+                .installed_via,
+            Some(crate::pack::InstalledVia::Operator),
+            "pack authority installs as the operator"
+        );
         let ran = tools
             .iter()
             .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -241,6 +249,14 @@ async fn a_shell_less_agent_installs_an_assets_pack_with_a_page() {
     let got = config_json(&tools, &["pack", "get", "./board"]).await;
     assert_eq!(got["installed"]["digest"], digest.as_str(), "{got}");
     assert_eq!(built["out"], "gents.board-0.1.0.pack", "{built}");
+    assert_eq!(
+        crate::pack::read_home_install(home.path(), "gents/board")
+            .unwrap()
+            .unwrap()
+            .installed_via,
+        Some(crate::pack::InstalledVia::SelfConfig),
+        "an agent without pack authority is the recorded installer"
+    );
 
     let removed = config_json(&tools, &["pack", "remove", "gents/board"]).await;
     assert_eq!(removed["removed"]["pages"], json!(["board"]), "{removed}");

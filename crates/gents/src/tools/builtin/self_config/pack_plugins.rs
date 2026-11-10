@@ -1,4 +1,5 @@
 use super::*;
+use crate::pack::{installer_provenance, read_home_install, InstalledVia};
 use crate::plugin::{store, PluginRunner};
 
 fn plugin_discovery_calls(plugins: &[(String, String)]) -> Vec<serde_json::Value> {
@@ -22,7 +23,7 @@ impl PackInstaller {
             .context("plugins and assets packs require a runtime plugin home")?;
         let manifest = distribution.manifest();
         let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
-        let installed = crate::pack::read_home_install(home, &coordinate)?;
+        let installed = read_home_install(home, &coordinate)?;
         anyhow::ensure!(
             operation != "update" || installed.is_some(),
             "pack {coordinate:?} is not installed; use pack preview install"
@@ -115,6 +116,7 @@ impl PackInstaller {
             self.grants_authority(),
             Some(self.core.node_did()),
             &inference.bindings,
+            installer_provenance(InstalledVia::SelfConfig, self.grants_authority()),
             move |identity, changes| {
                 let access = notify_access;
                 let node_did = notify_node;
