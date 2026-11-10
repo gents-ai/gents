@@ -2,6 +2,8 @@
 //! loop; an answer that is not a job ends the call there, and a refusal
 //! completes it failed with the host code and the call that follows.
 
+mod adopt;
+
 use std::path::Path;
 use std::sync::Arc;
 
@@ -497,6 +499,95 @@ fn args_digest(input: &JobStepInput) -> String {
     format!("sha256:{:x}", Sha256::digest(call.to_string()))
 }
 
+#[derive(Clone, Copy)]
+struct StepZero<'a> {
+    runtime: &'a super::driver::JobRuntime,
+    binding: &'a JobBinding,
+    installed: &'a InstalledPlugin,
+    input: &'a JobStepInput,
+    output: &'a JobStepOutput,
+    step0_receipt: &'a PluginExecutionReceipt,
+    effects: Option<&'a gents_protocol::job::JobEffects>,
+    guest: &'a gents_protocol::job::JobGuestPin,
+    scratch: &'a [gents_protocol::job::JobScratch],
+    writes: &'a [gents_protocol::job::DataWrite],
+    resume: Option<&'a gents_protocol::job::JobResume>,
+    coordinate: &'a str,
+    row_doc_id: &'a String,
+    grant: &'a Option<crate::plugin::data::PluginData>,
+    cause: &'a SessionMessageCause,
+    args_digest: &'a String,
+}
+
+async fn refuse_unadoptable(
+    lifecycle: &mut ToolCallLifecycle,
+    c: StepZero<'_>,
+) -> Result<Option<String>> {
+    let StepZero {
+        binding,
+        input,
+        scratch,
+        writes,
+        grant,
+        row_doc_id,
+        coordinate,
+        ..
+    } = c;
+    let caller = &input.caller;
+    if !scratch.is_empty() {
+        if let Err(error) = write_scratch(Path::new(&caller.cwd), &caller.tool_call_id, scratch) {
+            return refuse(
+                lifecycle,
+                FailureClass::PolicyDenied,
+                Refusal::PolicyDenied.code(),
+                &format!("{error:#}"),
+                "Next: return scratch files with plain names under the working folder, or finish without scratch",
+            )
+            .await
+            .map(Some);
+        }
+    }
+    if !writes.is_empty() && grant.is_none() {
+        return refuse(
+            lifecycle,
+            FailureClass::PolicyDenied,
+            Refusal::PolicyDenied.code(),
+            &format!("plugin {coordinate} declares no data, so its answer cannot write"),
+            "Next: finish without writes",
+        )
+        .await
+        .map(Some);
+    }
+    // Admission depends on the grant and the write shape, never on a stamp's
+    // value; checking here keeps a refusal out of the transaction, where an
+    // error would terminate the request instead of failing the call.
+    if let Some(grant) = grant.as_ref().filter(|_| !writes.is_empty()) {
+        let stamps = crate::plugin::data::StampContext::JobStep {
+            caller_did: caller.agent_did.clone(),
+            session_id: caller.session_id.clone(),
+            request_doc_id: caller.request_doc_id.clone(),
+            tool_call_doc_id: row_doc_id.clone(),
+            job_row_doc_id: row_doc_id.clone(),
+            chain_root_doc_id: row_doc_id.clone(),
+        };
+        if crate::plugin::data::admit_write(grant, &stamps, writes.to_vec()).is_err() {
+            return refuse(
+                lifecycle,
+                FailureClass::PolicyDenied,
+                Refusal::PolicyDenied.code(),
+                "plugin data writes were refused and nothing was committed",
+                &format!(
+                    "Next: call `{}` again with writes the plugin's data grant allows",
+                    binding.tool_name
+                ),
+            )
+            .await
+            .map(Some);
+        }
+    }
+    Ok(None)
+}
+
 /// Adopts the pinned step 0 `output` of the running foreground call as a
 /// background job: the flip, `job_pin`, initial `job_progress`, step 0's
 /// evidence, the admitted effects and the background receipt commit in one
@@ -528,55 +619,7 @@ pub async fn adopt_step0(
         .doc_id()
         .context("a job tool call has no physical identity")?
         .to_owned();
-    if !scratch.is_empty() {
-        if let Err(error) = write_scratch(Path::new(&caller.cwd), &caller.tool_call_id, scratch) {
-            return refuse(
-                lifecycle,
-                FailureClass::PolicyDenied,
-                Refusal::PolicyDenied.code(),
-                &format!("{error:#}"),
-                "Next: return scratch files with plain names under the working folder, or finish without scratch",
-            )
-            .await;
-        }
-    }
     let grant = installed.data_grant();
-    if !writes.is_empty() && grant.is_none() {
-        return refuse(
-            lifecycle,
-            FailureClass::PolicyDenied,
-            Refusal::PolicyDenied.code(),
-            &format!("plugin {coordinate} declares no data, so its answer cannot write"),
-            "Next: finish without writes",
-        )
-        .await;
-    }
-    // Admission depends on the grant and the write shape, never on a stamp's
-    // value; checking here keeps a refusal out of the transaction, where an
-    // error would terminate the request instead of failing the call.
-    if let Some(grant) = grant.as_ref().filter(|_| !writes.is_empty()) {
-        let stamps = crate::plugin::data::StampContext::JobStep {
-            caller_did: caller.agent_did.clone(),
-            session_id: caller.session_id.clone(),
-            request_doc_id: caller.request_doc_id.clone(),
-            tool_call_doc_id: row_doc_id.clone(),
-            job_row_doc_id: row_doc_id.clone(),
-            chain_root_doc_id: row_doc_id.clone(),
-        };
-        if crate::plugin::data::admit_write(grant, &stamps, writes.to_vec()).is_err() {
-            return refuse(
-                lifecycle,
-                FailureClass::PolicyDenied,
-                Refusal::PolicyDenied.code(),
-                "plugin data writes were refused and nothing was committed",
-                &format!(
-                    "Next: call `{}` again with writes the plugin's data grant allows",
-                    binding.tool_name
-                ),
-            )
-            .await;
-        }
-    }
     let cause = SessionMessageCause {
         caller_node_did: caller.node_did.clone(),
         caller_agent_did: caller.agent_did.clone(),
@@ -590,247 +633,28 @@ pub async fn adopt_step0(
         correlation: caller.correlation.clone(),
     };
     let args_digest = args_digest(input);
-    let adopted = {
-        let (cause, args_digest, row_doc_id, grant, lifecycle) =
-            (&cause, &args_digest, &row_doc_id, &grant, &*lifecycle);
-        lifecycle
-            .access()?
-            .transact_write("plugin_job.adopt_step0", |txn| {
-                Box::pin(async move {
-                    let adopted_at = u64::try_from(chrono::Utc::now().timestamp_millis())?;
-                    let provisional = HostFacts {
-                        engine_digest: installed.digest.clone(),
-                        plugin_ref: coordinate.to_owned(),
-                        cwd: caller.cwd.clone(),
-                        args_digest: args_digest.clone(),
-                        chain_root: row_doc_id.clone(),
-                        origin: JobOrigin::Dynamic,
-                        adopted_at,
-                        resume_of: None,
-                        replayed_from: None,
-                        ceiling_at_pin: effective_ceiling(None),
-                    };
-                    let (mut ctx, _) = step_context_for(
-                        txn,
-                        runtime,
-                        input,
-                        provisional.clone(),
-                        output,
-                        lifecycle,
-                    )
-                    .await?;
-                    ctx.started_by_job = caller.started_by_job;
-                    if effects.is_some() {
-                        ctx.live_background = u32::try_from(
-                            count_live_backgrounded_rows_in(txn, &caller.request_doc_id).await?,
-                        )
-                        .unwrap_or(u32::MAX);
-                    }
-                    let facts = HostFacts {
-                        origin: call_origin(input.script.as_deref()),
-                        ceiling_at_pin: ctx.live.clone(),
-                        ..provisional
-                    };
-                    ctx.adoption_facts = facts.clone();
-                    ctx.resume_facts = facts;
-                    let mut resumed_by = None;
-                    if let Some(resume) = resume {
-                        let (target, by) =
-                            resume_target_in_txn(txn, coordinate, &resume.row_doc_id).await?;
-                        ctx.resume_targets = vec![target];
-                        resumed_by = by;
-                        ctx.resume_facts.resume_of = Some(resume.row_doc_id.clone());
-                        if let Err(refusal) = validate_resume(
-                            txn,
-                            &ctx.caller_scope,
-                            coordinate,
-                            resume,
-                            guest,
-                            &ctx.resume_facts,
-                        )
-                        .await?
-                        {
-                            return Ok::<_, anyhow::Error>(Adopted::Refused(
-                                refusal, None, resumed_by,
-                            ));
-                        }
-                    }
-                    let mut out = output.clone();
-                    if resume.is_none() {
-                        let taken = taken_handles(
-                            txn,
-                            &caller.session_id,
-                            lifecycle.tool_name(),
-                            row_doc_id,
-                        )
-                        .await?;
-                        if let Some(pin) = pin_mut(&mut out) {
-                            pin.handle = unique_handle(&taken, &pin.handle);
-                        }
-                    }
-                    let view = ToolCallView {
-                        state: lifecycle.state(),
-                        kind: lifecycle.kind(),
-                        await_mode: lifecycle.await_mode(),
-                    };
-                    let row = read_step_row_in_txn(txn, row_doc_id).await?;
-                    let adoption = match adopt(&ctx, &view, &row, &out) {
-                        Ok(adoption) => adoption,
-                        Err(refusal) => {
-                            return Ok(Adopted::Refused(
-                                refusal.refusal,
-                                refusal.detail,
-                                resumed_by,
-                            ))
-                        }
-                    };
-                    let pin = adoption
-                        .row
-                        .pin
-                        .clone()
-                        .context("an adopted row has a pin")?;
-                    // (b) the flip, with the job's wall deadline
-                    let deadline_at = chrono::DateTime::from_timestamp_millis(i64::try_from(
-                        pin.adopted_at + pin.ceiling_at_pin.max_wall_secs * 1000,
-                    )?)
-                    .context("the job deadline is out of range")?;
-                    let flipped = lifecycle
-                        .adopt_plugin_job_in_txn(txn, deadline_at)
-                        .await?
-                        .context("the call is no longer a running foreground call")?;
-                    // (c) the pin
-                    write_pin_in_txn(txn, row_doc_id, &pin).await?;
-                    // (e) initial progress, then step 0's evidence and resume block
-                    let budget = JobBudget {
-                        total: pin.agent_budget,
-                        spent: adoption.row.spent,
-                        remaining: pin.agent_budget.saturating_sub(adoption.row.spent),
-                    };
-                    let origin = serde_json::to_value(pin.origin)?;
-                    let started = progress_of(output).cloned().unwrap_or_else(|| JobProgress {
-                        title: pin.script_id.clone(),
-                        state: JobState::Running,
-                        pause_reason: None,
-                        phases: Vec::new(),
-                        active: Vec::new(),
-                        spawned: 0,
-                        budget: budget.clone(),
-                        last_event: format!("origin: {}", origin.as_str().unwrap_or_default()),
-                        last_event_at: None,
-                        question: None,
-                        observed_terminal_children: 0,
-                        revision: 0,
-                    });
-                    let progress = write_progress_in_txn(
-                        txn,
-                        row_doc_id,
-                        0,
-                        started,
-                        HostProgressFacts {
-                            spawned: adoption.row.spent,
-                            budget,
-                            observed_terminal_children: adoption.row.observed_terminal,
-                            state: JobState::Running,
-                            pause_reason: None,
-                        },
-                    )
-                    .await?;
-                    // The guest state a resume continues from is the prior row's, unless step 0 wrote its own.
-                    let guest = match (guest_state_of(output), adoption.row.resume.as_ref()) {
-                        (Some(state), _) => Some(state.clone()),
-                        (None, Some(resume)) => read_step_state(txn, &resume.row_doc_id)
-                            .await?
-                            .and_then(|state| state.guest),
-                        (None, None) => None,
-                    };
-                    write_step_state_in_txn(
-                        txn,
-                        row_doc_id,
-                        step0_receipt,
-                        adoption.row.resume.as_ref(),
-                        guest.as_ref(),
-                    )
-                    .await?;
-                    // (d) step 0's data writes
-                    if !writes.is_empty() {
-                        let grant = grant
-                            .as_ref()
-                            .context("a plugin without data cannot write")?;
-                        let stamps = crate::plugin::data::StampContext::JobStep {
-                            caller_did: caller.agent_did.clone(),
-                            session_id: caller.session_id.clone(),
-                            request_doc_id: caller.request_doc_id.clone(),
-                            tool_call_doc_id: row_doc_id.clone(),
-                            job_row_doc_id: row_doc_id.clone(),
-                            chain_root_doc_id: pin.chain_root_doc_id.clone(),
-                        };
-                        let agent_identity =
-                            runtime.agent_identity(&caller.node_did, &caller.agent_did)?;
-                        let actor = ::identity::Did::new(agent_identity.did().to_owned())?;
-                        crate::plugin::application_write::apply_plugin_writes_in_txn(
-                            txn,
-                            &actor,
-                            grant,
-                            &stamps,
-                            writes.to_vec(),
-                        )
-                        .await?;
-                    }
-                    if let Some(settlement) = settlement_of(&out) {
-                        // The pinned terminal settles in this transaction; the
-                        // flip wrote `background`, but the settled payload is
-                        // the call's own reply.
-                        let inline = adoption.delivery == Some(Delivery::Inline);
-                        let (_, payload) = terminal_text(&flipped, settlement.clone())
-                            .context("a step 0 answer has no terminal")?;
-                        let terminal = settle_plugin_job_in_txn(txn, &flipped, settlement, inline)
-                            .await?
-                            .context("a step 0 answer has no terminal")?;
-                        return Ok(Adopted::Settled {
-                            lifecycle: flipped,
-                            terminal,
-                            payload,
-                        });
-                    }
-                    let effects = effects.context("only an effects output stays a job")?;
-                    // (f) the admitted effects
-                    let staged_row = StepRow {
-                        pin: Some(pin.clone()),
-                        caller_cwd: pin.cwd.clone(),
-                        ..step_row(&ctx, &row, &out)
-                    };
-                    let fresh = fresh_spawns(&ctx, &staged_row, &out);
-                    let job = JobContext {
-                        ctx: &ctx,
-                        row: &staged_row,
-                        cause,
-                    };
-                    stage_effects_in_txn(txn, &job, &fresh, effects).await?;
-                    // (g) the answer-first background receipt
-                    let address = format!("{}:{}", caller.session_id, caller.tool_call_id);
-                    let receipt = json!({
-                        "status": "running",
-                        "address": address,
-                        "handle": pin.handle,
-                        "script_id": pin.script_id,
-                        "tier": progress.last_event,
-                        "next": format!("Next: `gents automation job show {address}`"),
-                    })
-                    .to_string();
-                    crate::tools::call::lifecycle::publish_background_receipt_in_txn(
-                        txn,
-                        &flipped.background_receipt_binding()?,
-                        &receipt,
-                    )
-                    .await?;
-                    Ok(Adopted::Done {
-                        lifecycle: flipped,
-                        receipt,
-                    })
-                })
-            })
-            .await?
+    let c = StepZero {
+        runtime,
+        binding,
+        installed,
+        input,
+        output,
+        step0_receipt,
+        effects,
+        guest,
+        scratch,
+        writes,
+        resume,
+        coordinate,
+        row_doc_id: &row_doc_id,
+        grant: &grant,
+        cause: &cause,
+        args_digest: &args_digest,
     };
+    if let Some(payload) = refuse_unadoptable(lifecycle, c).await? {
+        return Ok(payload);
+    }
+    let adopted = adopt::commit_adoption(lifecycle, c).await?;
     match adopted {
         Adopted::Refused(refusal, detail, resumed_by) => {
             let resume = out_resume(output).map(|resume| resume.row_doc_id.as_str());
