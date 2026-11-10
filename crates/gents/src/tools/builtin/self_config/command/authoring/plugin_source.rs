@@ -107,7 +107,11 @@ impl ConfigCommandTool {
         );
         let id = required_resource_id(argv.first(), "plugin name")?.clone();
         let target = SelfConfigTarget::PluginSource;
-        let patch = parse_patch(&argv[1..], target)?;
+        // No fields rebuilds the saved document.
+        let patch = match &argv[1..] {
+            [] => Vec::new(),
+            fields => parse_patch(fields, target)?,
+        };
         if !patch.is_empty() {
             let mut request = ApplyRequest::new(target, patch);
             request.allow_create = true;
@@ -211,7 +215,7 @@ impl ConfigCommandTool {
             Box::pin(self.dispatch(&argv)).await.map_err(|error| {
                 CommandGuidance {
                     message: format!(
-                        "plugin {coordinate} built and passed its cases, but nothing was installed: Tools {:?} of agent {} pins the previous build ({}) and could not be moved to {}: {error:#}. Move the pin with the tools update below, then build again.",
+                        "plugin {coordinate} built and passed its cases, but nothing was installed: Tools {:?} of agent {} pins the previous build ({}) and could not be moved to {}: {error:#}. Move the pin with the tools update below, then repeat [\"plugin\",\"build\",{id:?}] with no set: the saved source builds to that same digest.",
                         conflict.tools, conflict.agent, conflict.pin, conflict.replacement
                     ),
                     next_call: call,

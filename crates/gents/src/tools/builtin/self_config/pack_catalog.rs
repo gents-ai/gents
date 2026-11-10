@@ -187,7 +187,9 @@ impl PackInstaller {
                 ),
                 json!({
                     "argv": ["tools", "update"],
-                    "options": {"agent": first.agent, "shared": "acknowledge"},
+                    // Deselecting is the drop the caller's own-Tools guard
+                    // otherwise refuses.
+                    "options": {"agent": first.agent, "shared": "acknowledge", "allow-drop": "integrations"},
                     "set": {"integrations": first.integrations},
                 }),
             ),

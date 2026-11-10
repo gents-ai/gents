@@ -120,6 +120,12 @@ pub fn materialize_plugin_source(
     let plugin = manifest_entry(document);
     plugin.validate()?;
     let name = plugin.name.as_str();
+    // The compiler is not reproducible, so the artifact stays with the
+    // compiler cache: the build owner's stamp reuses it for an unchanged
+    // source tree and replaces it for any other, and a source built twice is
+    // one digest.
+    let artifact_path = dir.join(&plugin.artifact);
+    let built = std::fs::read(&artifact_path).ok();
     if dir.exists() {
         for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
             let entry = entry?;
@@ -146,6 +152,10 @@ pub fn materialize_plugin_source(
             ux: false,
         },
     )?;
+    if let Some(built) = built {
+        std::fs::write(&artifact_path, built)
+            .with_context(|| format!("keeping {}", artifact_path.display()))?;
+    }
     let source_dir = dir.join(plugin.source.as_deref().context("plugin source path")?);
     let entry = super::build::plugin_entry(&plugin.language)
         .with_context(|| format!("gents cannot build {:?} plugins", plugin.language))?;
@@ -277,7 +287,13 @@ mod tests {
             ["double"]
         );
 
+        std::fs::write(dir.join("plugins/double.afb"), b"built").unwrap();
         materialize_plugin_source(&dir, &source, "0.1.4", &BTreeMap::new()).unwrap();
+        assert_eq!(
+            std::fs::read(dir.join("plugins/double.afb")).unwrap(),
+            b"built",
+            "the build owner's stamp decides whether the artifact is reused"
+        );
         assert_eq!(
             crate::pack::authoring::read_manifest(&dir).unwrap().version,
             "0.1.4"

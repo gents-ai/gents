@@ -8,12 +8,23 @@ async fn fileless_tool(
     label: &str,
     home: &std::path::Path,
 ) -> (SelfConfigFixture, Vec<Box<dyn ToolDyn>>) {
+    fileless_tool_guarded(label, home, false).await
+}
+
+/// `no_lockout` is the guard an agent editing its own configuration runs
+/// under, which refuses a Tools edit that drops a setting.
+async fn fileless_tool_guarded(
+    label: &str,
+    home: &std::path::Path,
+    no_lockout: bool,
+) -> (SelfConfigFixture, Vec<Box<dyn ToolDyn>>) {
     let fixture = SelfConfigFixture::new(label).await;
     fixture.grant_selected_configuration().await;
     fixture.grant_pack_install().await;
     let mut tool_config = config(&["tools"]);
     tool_config.agent_did = fixture.agent_did().to_owned();
     tool_config.preview = true;
+    tool_config.no_lockout = no_lockout;
     tool_config.enable_pack_install = true;
     tool_config.enable_pack_authority = true;
     assert_eq!(
@@ -395,7 +406,7 @@ async fn a_rebuild_moves_the_pins_of_the_tools_that_select_the_plugin() {
     let _stub = PLUGIN_BUILDER_STUB.lock().await;
     let _builder =
         crate::test_support::EnvVarGuard::set("GENTS_PLUGIN_BUILDER", builder.to_str().unwrap());
-    let (_fixture, tools) = fileless_tool("live-plugin-pins", &home_path).await;
+    let (_fixture, tools) = fileless_tool_guarded("live-plugin-pins", &home_path, true).await;
     let build = json!({"argv":["plugin","build"],"target_id":"probe","set":{"language":"rust","source":"fn main() {}"}});
 
     write_artifact(br#"{"build":1}"#);
@@ -414,6 +425,8 @@ async fn a_rebuild_moves_the_pins_of_the_tools_that_select_the_plugin() {
     .await;
 
     write_artifact(br#"{"build":2}"#);
+    // The pin move is the builder's own Tools edit, made under the guard
+    // that refuses dropped settings: a moved pin replaces, it drops nothing.
     let second = ok(&tools, build).await;
     assert_ne!(second["digest"], first["digest"], "{second}");
     assert_eq!(
@@ -428,6 +441,23 @@ async fn a_rebuild_moves_the_pins_of_the_tools_that_select_the_plugin() {
     assert_eq!(
         after["document"]["integrations"]["plugins"][0]["digest"], second["digest"],
         "{after}"
+    );
+
+    // The saved source rebuilds with no fields, and an unchanged artifact
+    // leaves the pin where it is.
+    let again = ok(&tools, json!({"argv":["plugin","build","probe"]})).await;
+    assert_eq!(again["digest"], second["digest"], "{again}");
+    assert_eq!(again["selections_moved"], Value::Null, "{again}");
+    // Deselecting the plugin is still a drop.
+    let dropped = call(
+        &tools,
+        json!({"argv":["tools","update"],"set":{"integrations":{"plugins":[]}}}),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        dropped.contains("drop existing settings from your own Tools: integrations.plugins item"),
+        "{dropped}"
     );
 
     // Retiring a plugin is refused on every surface until a complete

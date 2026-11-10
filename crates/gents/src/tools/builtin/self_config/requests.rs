@@ -239,12 +239,26 @@ fn dropped_settings(path: &str, before: &Value, after: &Value, out: &mut Vec<Str
             }
         }
         (Value::Array(before), Value::Array(after)) => {
-            out.extend(
-                before
-                    .iter()
-                    .filter(|item| !after.contains(item))
-                    .map(|item| format!("{path} item {item}")),
-            );
+            for item in before.iter().filter(|item| !after.contains(item)) {
+                // A plugin selection is its coordinate: the same plugin at
+                // another digest is a moved pin, and only what that entry
+                // itself loses is dropped.
+                let kept = (path == "integrations.plugins")
+                    .then(|| item.get("plugin").filter(|plugin| plugin.is_string()))
+                    .flatten()
+                    .and_then(|plugin| {
+                        after
+                            .iter()
+                            .find(|candidate| candidate.get("plugin") == Some(plugin))
+                            .map(|candidate| (plugin, candidate))
+                    });
+                match kept {
+                    Some((plugin, candidate)) => {
+                        dropped_settings(&format!("{path} item {plugin}"), item, candidate, out)
+                    }
+                    None => out.push(format!("{path} item {item}")),
+                }
+            }
         }
         (_, Value::Null) => out.push(path.to_owned()),
         _ => {}
@@ -470,5 +484,42 @@ pub(super) fn automation_target(kind: &str) -> Result<SelfConfigTarget> {
         _ => {
             bail!("unknown automation kind {kind:?}; use task, schedule, trigger, or event_source")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_moved_plugin_pin_is_a_replacement_and_a_removed_selection_is_a_drop() {
+        let dropped = |before: Value, after: Value| {
+            let mut out = Vec::new();
+            dropped_settings("integrations", &before, &after, &mut out);
+            out
+        };
+        let pinned = |digest: &str| json!({"plugin": "node/engine", "digest": digest});
+        let other = json!({"plugin": "node/other"});
+        assert_eq!(
+            dropped(
+                json!({"plugins": [pinned("sha256:a"), other]}),
+                json!({"plugins": [other, pinned("sha256:b")]}),
+            ),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            dropped(
+                json!({"plugins": [pinned("sha256:a"), other]}),
+                json!({"plugins": [pinned("sha256:b")]}),
+            ),
+            ["integrations.plugins item {\"plugin\":\"node/other\"}"]
+        );
+        assert_eq!(
+            dropped(
+                json!({"plugins": [{"plugin": "node/engine", "digest": "sha256:a", "job": {}}]}),
+                json!({"plugins": [pinned("sha256:b")]}),
+            ),
+            ["integrations.plugins item \"node/engine\".job"]
+        );
     }
 }
