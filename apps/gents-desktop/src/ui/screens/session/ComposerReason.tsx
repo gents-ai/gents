@@ -1,14 +1,12 @@
-import { useEffect, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import type { SendStatus } from "@source-inc/gents-desktop-chat";
 import { selectedNodeReadinessDecision } from "@source-inc/gents-desktop-client";
 import { Button, buttonVariants } from "@gents/ui/components/button";
 import { Spinner } from "@gents/ui/components/spinner";
-import { useApp } from "@/app/AppContext";
 import type { NodeView } from "../../../hooks/fleetStore";
-import { useHomeDid, useNodeConfigReadOnly } from "@/hooks/useClient";
-import { isLocalNode } from "@/lib/firstRun";
+import { useNodeConfigReadOnly } from "@/hooks/useClient";
 import { href } from "@/lib/router";
-import { useLocalServerRun } from "../agent/LocalServer";
+import { useStoppedLocalNode } from "../agent/LocalServer";
 
 /** Why nothing typed here could be sent, for as long as that holds: the
     node has no inference it can use, the node is offline, it refuses this
@@ -80,21 +78,6 @@ function SetUp({ deployment }: { deployment: NodeView }) {
       Set up inference
     </a>
   );
-}
-
-/** This computer's own node, stopped, which the person can start from here;
-    null for any other node, or before its state is read. */
-function useStoppedLocalNode(deployment: NodeView | null) {
-  const { actions } = useApp();
-  const homeDid = useHomeDid();
-  const local = useLocalServerRun();
-  const watched =
-    deployment !== null && isLocalNode(deployment, homeDid) && local.offered;
-  useEffect(
-    () => (watched ? actions.watchLocalServer() : undefined),
-    [actions, watched],
-  );
-  return watched && local.known && !local.running ? local : null;
 }
 
 /** The box that stands in the composer's place while `reason` holds; the

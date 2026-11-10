@@ -316,7 +316,7 @@ export function NodeHoverCard({
             />
           }
         >
-          <OnlineStatus runtimeConnection={deployment.runtimeConnection} />
+          <OnlineStatus deployment={deployment} />
         </CardTitle>
         <Facts>
           <NodeReach deployment={deployment} />

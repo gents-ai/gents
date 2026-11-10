@@ -9,6 +9,7 @@ import {
 } from "@source-inc/gents-desktop-client";
 import { ProviderLogo } from "./ProviderLogo";
 import { healthy } from "./agent/inferenceKinds";
+import { useStoppedLocalNode } from "./agent/LocalServer";
 
 type Backends = NodeView["inferenceBackends"];
 
@@ -45,16 +46,15 @@ export function StateDot({
   );
 }
 
-export function OnlineStatus({
-  runtimeConnection,
-}: {
-  runtimeConnection: NodeView["runtimeConnection"];
-}) {
-  const status = projectRuntimeConnectionStatus(runtimeConnection);
+/** How a node's connection stands; this computer's own node, stopped, reads
+    as stopped rather than as a connection being retried. */
+export function OnlineStatus({ deployment }: { deployment: NodeView }) {
+  const stopped = useStoppedLocalNode(deployment);
+  const status = projectRuntimeConnectionStatus(deployment.runtimeConnection);
   return (
     <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
-      <StateDot tone={statusTone(status.kind)} />
-      {status.shortLabel}
+      <StateDot tone={stopped ? "idle" : statusTone(status.kind)} />
+      {stopped ? "Stopped" : status.shortLabel}
     </span>
   );
 }

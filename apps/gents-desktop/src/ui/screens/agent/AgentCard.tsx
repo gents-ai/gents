@@ -326,7 +326,7 @@ export function AgentCard({
               {name}
             </h2>
             {node.enabled === false && <Badge variant="outline">Disabled</Badge>}
-            <OnlineStatus runtimeConnection={deployment.runtimeConnection} />
+            <OnlineStatus deployment={deployment} />
             {edit && (
               <Button
                 size="xs"
