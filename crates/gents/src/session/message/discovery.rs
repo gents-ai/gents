@@ -131,9 +131,10 @@ fn relationship(lineage: &SessionLineage, scope: &SessionScope, caller_node: &st
 }
 
 /// One listed session's send and interrupt authority (Lean
-/// `DurableLineage.listedSession`): a send target keeps its own authority, the
-/// caller's starter outside its requester scope is listed with none, and any
-/// other session is unlisted.
+/// `DurableLineage.listedSession`, with `target_allowed` from
+/// [`session_target_allowed`]): a send target keeps its own authority, the
+/// caller's starter named by its verified creation receipt is listed with
+/// none, and any other session is unlisted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ListedSession {
     pub can_message: bool,
@@ -142,7 +143,7 @@ pub(super) struct ListedSession {
 
 pub(super) fn listed_session(
     target_allowed: bool,
-    caller_starter: bool,
+    verified_starter_receipt: bool,
     interrupt_allowed: bool,
 ) -> Option<ListedSession> {
     if target_allowed {
@@ -151,7 +152,7 @@ pub(super) fn listed_session(
             can_interrupt: interrupt_allowed,
         })
     } else {
-        caller_starter.then_some(ListedSession {
+        verified_starter_receipt.then_some(ListedSession {
             can_message: false,
             can_interrupt: false,
         })
@@ -160,10 +161,10 @@ pub(super) fn listed_session(
 
 /// The caller's starter entry when the starter is not one of its send targets.
 /// It is built from the caller's own verified creation receipt: the starter's
-/// scope, and its Agent, which signed that receipt as the caller's requester.
-/// The starter's session row and requests lie outside the caller's requester
-/// scope and are not read, so the activity, trigger and time filters, which
-/// need them, exclude this entry.
+/// scope, and the receipt's verified signer as its Agent. The starter's
+/// session row and requests lie outside the caller's requester scope and are
+/// not read, so the activity, trigger and time filters, which need them,
+/// exclude this entry.
 async fn starter_entry(
     node: &Arc<EmbeddedNode>,
     caller: &gents_protocol::row::AgentRequest,
@@ -171,7 +172,10 @@ async fn starter_entry(
     lineage: &SessionLineage,
     filter: &SessionFilter,
 ) -> Result<Option<Value>> {
-    let Some(starter) = &lineage.started_by else {
+    let (Some(starter), Some(agent_did)) = (
+        lineage.started_by.as_ref(),
+        lineage.started_by_signer.as_deref(),
+    ) else {
         return Ok(None);
     };
     let target_allowed = starter.scope.requester_did.as_deref() == Some(caller.agent_did.as_str())
@@ -188,10 +192,7 @@ async fn starter_entry(
     if target_allowed {
         return Ok(None);
     }
-    let (Some(entry), Some(agent_did)) = (
-        listed_session(target_allowed, true, false),
-        caller.requester_did.as_deref(),
-    ) else {
+    let Some(entry) = listed_session(target_allowed, true, false) else {
         return Ok(None);
     };
     let agent_matches = |agent: &String| match tools.target(agent) {
@@ -370,7 +371,11 @@ pub(crate) async fn agent_session_list(
             };
             next_cursor = Some(serde_json::to_string(&after)?);
             cursor = Some(after);
-            if !session_target_allowed(&session, &caller.node_did, &caller.agent_did, tools) {
+            // The starter outside the caller's requester scope is listed by
+            // `starter_entry`, so this scan lists only send targets.
+            let target_allowed =
+                session_target_allowed(&session, &caller.node_did, &caller.agent_did, tools);
+            if !target_allowed {
                 continue;
             }
             super::resolve_send_target(
@@ -423,7 +428,7 @@ pub(crate) async fn agent_session_list(
             )
             .await?
             .is_none();
-            let Some(listed) = listed_session(true, false, interrupt_allowed) else {
+            let Some(listed) = listed_session(target_allowed, false, interrupt_allowed) else {
                 continue;
             };
             let agent = tools

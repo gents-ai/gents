@@ -1032,53 +1032,63 @@ async fn agent_lists_separate_targets_from_messageable_sessions() {
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
+/// The caller-visible session and grants one Lean session-target case describes,
+/// as `caller` on node `caller`.
+fn session_target_fixture(
+    same_requester: bool,
+    same_node: bool,
+    caused: bool,
+    allowed_target: bool,
+) -> (gents_protocol::session::AgentSession, AgentToolConfig) {
+    use gents_protocol::session::{AgentSession, SessionProvenance};
+    let session = AgentSession {
+        session_id: "worker-session".to_owned(),
+        node_did: if same_node { "caller" } else { "peer" }.to_owned(),
+        requester_did: Some(if same_requester { "caller" } else { "other" }.to_owned()),
+        agent_did: "worker".to_owned(),
+        created_at: "2026-10-14T00:00:00Z".to_owned(),
+        closed_at: None,
+        archived_at: None,
+        archive_revision: 0,
+        stopped_at: None,
+        title: None,
+        tags: Vec::new(),
+        observation: None,
+        provenance: caused.then(|| SessionProvenance {
+            parent_request_doc_id: Some("parent".to_owned()),
+            ..Default::default()
+        }),
+    };
+    let tools = AgentToolConfig {
+        enabled: true,
+        targets: if allowed_target {
+            vec![crate::documents::AgentTargetDocument {
+                target_id: "worker".to_owned(),
+                node_did: "caller".to_owned(),
+                target_node_did: session.node_did.clone(),
+                agent_did: "worker".to_owned(),
+                name: "worker".to_owned(),
+                description: None,
+                tags: Vec::new(),
+            }]
+        } else {
+            Vec::new()
+        },
+    };
+    (session, tools)
+}
+
 #[test]
 fn session_target_authority_matches_lean_owner() {
-    use gents_protocol::session::{AgentSession, SessionProvenance};
     let cases = &crate::lean_vocab_test::lean_causal_hop_contract().session_target_cases;
     assert_eq!(cases.len(), 16);
     for case in cases {
-        let session = AgentSession {
-            session_id: "worker-session".to_owned(),
-            node_did: if case.same_node { "caller" } else { "peer" }.to_owned(),
-            requester_did: Some(
-                if case.same_requester {
-                    "caller"
-                } else {
-                    "other"
-                }
-                .to_owned(),
-            ),
-            agent_did: "worker".to_owned(),
-            created_at: "2026-10-14T00:00:00Z".to_owned(),
-            closed_at: None,
-            archived_at: None,
-            archive_revision: 0,
-            stopped_at: None,
-            title: None,
-            tags: Vec::new(),
-            observation: None,
-            provenance: case.caused.then(|| SessionProvenance {
-                parent_request_doc_id: Some("parent".to_owned()),
-                ..Default::default()
-            }),
-        };
-        let tools = AgentToolConfig {
-            enabled: true,
-            targets: if case.allowed_target {
-                vec![crate::documents::AgentTargetDocument {
-                    target_id: "worker".to_owned(),
-                    node_did: "caller".to_owned(),
-                    target_node_did: session.node_did.clone(),
-                    agent_did: "worker".to_owned(),
-                    name: "worker".to_owned(),
-                    description: None,
-                    tags: Vec::new(),
-                }]
-            } else {
-                Vec::new()
-            },
-        };
+        let (session, tools) = session_target_fixture(
+            case.same_requester,
+            case.same_node,
+            case.caused,
+            case.allowed_target,
+        );
         assert_eq!(
             session_target_allowed(&session, "caller", "caller", &tools),
             case.expected_allowed,
@@ -1090,11 +1100,17 @@ fn session_target_authority_matches_lean_owner() {
 #[test]
 fn session_list_entries_match_lean_owner() {
     let cases = &crate::lean_vocab_test::lean_causal_hop_contract().session_list_cases;
-    assert_eq!(cases.len(), 8);
+    assert_eq!(cases.len(), 64);
     for case in cases {
+        let (session, tools) = session_target_fixture(
+            case.same_requester,
+            case.same_node,
+            case.caused,
+            case.allowed_target,
+        );
         let entry = super::discovery::listed_session(
-            case.target_allowed,
-            case.caller_starter,
+            session_target_allowed(&session, "caller", "caller", &tools),
+            case.verified_starter_receipt,
             case.interrupt_allowed,
         );
         assert_eq!(entry.is_some(), case.expected_listed, "{case:?}");
@@ -1243,6 +1259,30 @@ async fn session_list_names_the_starter_from_the_callers_own_receipt() {
     assert_eq!(sessions[0]["session_id"], caller.session_id);
     assert_eq!(sessions[0]["node_did"], caller.node_did);
     assert_eq!(sessions[0]["agent_did"], caller.agent_did);
+    let worker_session = crate::session::origin::load_session(
+        &crate::ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(&started.agent_did).unwrap(),
+        ),
+        &started.session_id,
+        started.requester_did.as_deref(),
+    )
+    .await
+    .unwrap()
+    .expect("worker session");
+    let creation = worker_session
+        .provenance
+        .and_then(|provenance| provenance.creation_receipt)
+        .expect("worker creation receipt");
+    assert!(
+        crate::store::identity::verify_did_signature(
+            sessions[0]["agent_did"].as_str().unwrap(),
+            &creation.signing_payload(),
+            &creation.signature,
+        )
+        .unwrap(),
+        "the starter entry's agent_did is the receipt signer"
+    );
     assert_eq!(sessions[0]["relationship"], "started_you");
     assert_eq!(sessions[0]["can_message"], false);
     assert_eq!(sessions[0]["can_interrupt"], false);

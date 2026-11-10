@@ -277,20 +277,24 @@ def sessionTargetCaseJson (c : SessionTargetCase) : String :=
       c.sameRequester c.sameNode c.caused c.allowedTarget) ++ "}"
 
 structure SessionListCase where
-  targetAllowed : Bool
-  callerStarter : Bool
+  target : SessionTargetCase
+  verifiedStarterReceipt : Bool
   interruptAllowed : Bool
 
 def sessionListCases : List SessionListCase := do
-  let targetAllowed ← [false, true]
-  let callerStarter ← [false, true]
+  let target ← sessionTargetCases
+  let verifiedStarterReceipt ← [false, true]
   let interruptAllowed ← [false, true]
-  pure ⟨targetAllowed, callerStarter, interruptAllowed⟩
+  pure ⟨target, verifiedStarterReceipt, interruptAllowed⟩
 
 def sessionListCaseJson (c : SessionListCase) : String :=
-  let entry := DurableLineage.listedSession c.targetAllowed c.callerStarter c.interruptAllowed
-  "{\"target_allowed\":" ++ toString c.targetAllowed
-    ++ ",\"caller_starter\":" ++ toString c.callerStarter
+  let entry := DurableLineage.listedSession c.target.sameRequester c.target.sameNode
+    c.target.caused c.target.allowedTarget c.verifiedStarterReceipt c.interruptAllowed
+  "{\"same_requester\":" ++ toString c.target.sameRequester
+    ++ ",\"same_node\":" ++ toString c.target.sameNode
+    ++ ",\"caused\":" ++ toString c.target.caused
+    ++ ",\"allowed_target\":" ++ toString c.target.allowedTarget
+    ++ ",\"verified_starter_receipt\":" ++ toString c.verifiedStarterReceipt
     ++ ",\"interrupt_allowed\":" ++ toString c.interruptAllowed
     ++ ",\"expected_listed\":" ++ toString entry.isSome
     ++ ",\"expected_can_message\":" ++ toString (entry.any (·.canMessage))

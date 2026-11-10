@@ -2586,8 +2586,11 @@ pub(crate) struct LeanCausalHopContract {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanSessionListCase {
-    pub(crate) target_allowed: bool,
-    pub(crate) caller_starter: bool,
+    pub(crate) same_requester: bool,
+    pub(crate) same_node: bool,
+    pub(crate) caused: bool,
+    pub(crate) allowed_target: bool,
+    pub(crate) verified_starter_receipt: bool,
     pub(crate) interrupt_allowed: bool,
     pub(crate) expected_listed: bool,
     pub(crate) expected_can_message: bool,
