@@ -429,4 +429,38 @@ async fn a_rebuild_moves_the_pins_of_the_tools_that_select_the_plugin() {
         after["document"]["integrations"]["plugins"][0]["digest"], second["digest"],
         "{after}"
     );
+
+    // Retiring a plugin is refused on every surface until a complete
+    // reference inventory exists; the refusal names the Tools that select it
+    // and recovers to the edit that drops that selection.
+    let failure = |error: String| -> Value {
+        serde_json::from_str(&error[error.find('{').unwrap()..]).unwrap()
+    };
+    let remove = json!({"argv":["pack","remove","node/probe"]});
+    let selected = failure(call(&tools, remove.clone()).await.unwrap_err());
+    let message = selected["error"].as_str().unwrap();
+    assert!(message.contains("node/probe was not removed"), "{selected}");
+    assert!(message.contains("Selected by Tools"), "{selected}");
+    let deselect = &selected["recovery"]["next_call"];
+    assert_eq!(deselect["argv"], json!(["tools", "update"]), "{selected}");
+    ok(&tools, deselect.clone()).await;
+    let unselected = failure(call(&tools, remove).await.unwrap_err());
+    let message = unselected["error"].as_str().unwrap();
+    assert!(
+        message.contains("No Tools this agent can read selects it"),
+        "{unselected}"
+    );
+    assert!(
+        message.contains("plugin-source preview delete"),
+        "{unselected}"
+    );
+    assert_eq!(
+        unselected["recovery"]["next_call"]["argv"],
+        json!(["plugin", "get", "node/probe"]),
+        "{unselected}"
+    );
+    assert!(
+        crate::plugin::store::read_record(&home_path, "node", "probe").is_ok(),
+        "the plugin stays installed"
+    );
 }

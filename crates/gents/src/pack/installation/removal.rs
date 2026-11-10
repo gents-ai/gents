@@ -50,6 +50,47 @@ where
         }))
 }
 
+/// A Tools document that selects a plugin, as far as the reading actor can see.
+#[derive(Debug, Clone)]
+pub struct PluginSelection {
+    pub plugin: String,
+    pub agent: String,
+    pub tools: String,
+    /// The selecting Tools' `integrations` without the named plugins.
+    pub integrations: serde_json::Value,
+}
+
+/// The selections of `plugins` the reading actor can see. ACP filters the
+/// read, so an empty answer is not proof that nothing selects them
+/// (Lean `Configuration.pluginRemovalObservedSafe`).
+pub async fn visible_plugin_selections<R>(
+    access: &R,
+    owner: &str,
+    plugins: &BTreeSet<String>,
+) -> Result<Vec<PluginSelection>>
+where
+    R: ConfigRead + ?Sized,
+{
+    let mut selections = Vec::new();
+    for (agent, tools, reference, integrations) in selected_plugin_references(access, owner).await?
+    {
+        if !plugins.contains(&reference.plugin) {
+            continue;
+        }
+        let mut remaining = integrations;
+        if let Some(entries) = remaining.plugins.as_mut() {
+            entries.retain(|entry| !plugins.contains(&entry.plugin));
+        }
+        selections.push(PluginSelection {
+            plugin: reference.plugin,
+            agent,
+            tools,
+            integrations: serde_json::to_value(&remaining)?,
+        });
+    }
+    Ok(selections)
+}
+
 /// A selection whose pin refuses a plugin replacement
 /// (Lean `Configuration.pluginReplacementSafe`).
 #[derive(Debug, Clone)]

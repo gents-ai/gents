@@ -147,6 +147,64 @@ impl PackInstaller {
         }))?)
     }
 
+    /// Why a pack's plugins were not retired, for the model: the Tools it can
+    /// see selecting them, and the call that drops the first such selection.
+    /// Retirement itself stays refused on every surface until a complete
+    /// reference inventory exists (Lean `incomplete_plugin_inventory_refuses`).
+    async fn plugin_retirement_refusal(
+        &self,
+        access: &crate::store::config_client::ConfigAccess,
+        coordinate: &str,
+        plugins: &std::collections::BTreeSet<String>,
+        cause: anyhow::Error,
+    ) -> anyhow::Error {
+        let selections =
+            match pack::visible_plugin_selections(access, self.core.node_did(), plugins).await {
+                Ok(selections) => selections,
+                Err(_) => return cause,
+            };
+        let names = plugins.iter().cloned().collect::<Vec<_>>().join(", ");
+        let source = plugins
+            .iter()
+            .filter_map(|plugin| plugin.strip_prefix("node/"))
+            .map(|name| format!(" To stop building {name}, delete its source document with plugin-source preview delete."))
+            .collect::<String>();
+        let reason = "Retiring a plugin needs proof that no Tools on the node selects it, and a read filtered by document access cannot give that proof, so no surface removes an installed plugin yet";
+        let (seen, next_call) = match selections.first() {
+            Some(first) => (
+                format!(
+                    "Selected by {}. The tools update below drops the first selection, so no model is offered the plugin; it stays installed.",
+                    selections
+                        .iter()
+                        .map(|selection| format!(
+                            "Tools {:?} of agent {} ({})",
+                            selection.tools, selection.agent, selection.plugin
+                        ))
+                        .collect::<std::collections::BTreeSet<_>>()
+                        .into_iter()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                json!({
+                    "argv": ["tools", "update"],
+                    "options": {"agent": first.agent, "shared": "acknowledge"},
+                    "set": {"integrations": first.integrations},
+                }),
+            ),
+            None => (
+                "No Tools this agent can read selects it, so no model is offered it; it stays installed and unused.".to_owned(),
+                json!({"argv": ["plugin", "get", plugins.iter().next()]}),
+            ),
+        };
+        command::CommandGuidance {
+            message: format!(
+                "{coordinate} was not removed ({names}). {reason}. {seen}{source} Cause: {cause:#}"
+            ),
+            next_call,
+        }
+        .into()
+    }
+
     /// Removes an assets or plugins pack: its home record and the plugin
     /// records it owns, released together by the local removal owner, then
     /// the node is told. Retiring plugins needs a complete reference inventory
@@ -165,7 +223,13 @@ impl PackInstaller {
             .iter()
             .map(|plugin| format!("{namespace}/{}", plugin.name))
             .collect();
-        pack::ensure_plugins_unreferenced(access, self.core.node_did(), &plugins).await?;
+        if let Err(cause) =
+            pack::ensure_plugins_unreferenced(access, self.core.node_did(), &plugins).await
+        {
+            return Err(self
+                .plugin_retirement_refusal(access, &coordinate, &plugins, cause)
+                .await);
+        }
         let local_home = home.to_owned();
         let local_coordinate = coordinate.clone();
         let removal = tokio::task::spawn_blocking(move || {

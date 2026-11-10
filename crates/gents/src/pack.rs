@@ -56,9 +56,10 @@ pub use installation::{
     prepare_document_pack_archive, prepare_document_pack_archive_with_runtime,
     prepare_document_pack_install, prepare_hosted_document_pack_archive, read_installed_pack,
     record_plugin_store_change, record_plugin_store_change_as, record_staged_plugin_store_change,
-    referenced_pack_digests, remove_pack, DriftPolicy, HostedDocumentGraph, HostedPackPreparation,
-    InstallReport, InstalledCatalogEntry, InstalledPack, InstalledPackPlugin, PackDriftError,
-    PackIdentity, PackRemovalError, PluginPinConflict, PluginStoreChangeError, PreparedDependency,
+    referenced_pack_digests, remove_pack, visible_plugin_selections, DriftPolicy,
+    HostedDocumentGraph, HostedPackPreparation, InstallReport, InstalledCatalogEntry,
+    InstalledPack, InstalledPackPlugin, PackDriftError, PackIdentity, PackRemovalError,
+    PluginPinConflict, PluginSelection, PluginStoreChangeError, PreparedDependency,
     PreparedDocumentPackInstall, RemoveReport, Retained,
 };
 pub(crate) use installation::{
