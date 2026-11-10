@@ -436,7 +436,7 @@ mod no_model {
             .context("starting the foreground server")?;
         let mut server = ServeProcess::new(child);
         let graphql = graphql_url(HTTP_PORT);
-        crate::support::graphql::register_served_home(&home.home, HTTP_PORT)?;
+        crate::support::graphql::register_served_home(&live.root, &home.home, &[], HTTP_PORT)?;
         wait_for_runtime_state_graphql(&home.home, &graphql, RUNTIME_UP).await?;
 
         let mut terminal = Terminal::spawn(
@@ -1115,7 +1115,7 @@ mod with_model {
         let live = LiveBox::new()?;
         let home = live.init_home("home", &endpoint, &model)?;
         live.bring_up(&home.home).await?;
-        crate::support::graphql::register_served_home(&home.home, HTTP_PORT)?;
+        crate::support::graphql::register_served_home(&live.root, &home.home, &[], HTTP_PORT)?;
         let b = live.clone_agent(&home, "other").await?;
         let graphql = graphql_url(HTTP_PORT);
         // The session starts in Codex, so Codex keeps its own record of it, as it does for
@@ -1175,7 +1175,7 @@ mod with_model {
         let live = LiveBox::new()?;
         let home = live.init_home("home", &endpoint, &model)?;
         live.bring_up(&home.home).await?;
-        crate::support::graphql::register_served_home(&home.home, HTTP_PORT)?;
+        crate::support::graphql::register_served_home(&live.root, &home.home, &[], HTTP_PORT)?;
 
         let mut command = live.bare_gents(&codex, &home.home);
         command.arg("doctor");
@@ -1201,7 +1201,7 @@ mod with_model {
         let live = LiveBox::new()?;
         let home = live.init_home("home", &endpoint, &model)?;
         live.bring_up(&home.home).await?;
-        crate::support::graphql::register_served_home(&home.home, HTTP_PORT)?;
+        crate::support::graphql::register_served_home(&live.root, &home.home, &[], HTTP_PORT)?;
 
         let mut command = live.bare_gents(&codex, &home.home);
         command.arg("--yolo");
@@ -1242,7 +1242,7 @@ mod with_model {
         let live = LiveBox::new()?;
         let home = live.init_home("home", &endpoint, &model)?;
         live.bring_up(&home.home).await?;
-        crate::support::graphql::register_served_home(&home.home, HTTP_PORT)?;
+        crate::support::graphql::register_served_home(&live.root, &home.home, &[], HTTP_PORT)?;
         let pid = live.service_pid().context("the service runs")?;
         let a = home.default_agent_did.clone();
         let b = live.clone_agent(&home, "other").await?;
@@ -1367,7 +1367,7 @@ mod with_model {
         let home = live.init_home("home", &endpoint, &model)?;
         let home_arg = home.home.to_string_lossy();
         live.bring_up(&home.home).await?;
-        crate::support::graphql::register_served_home(&home.home, HTTP_PORT)?;
+        crate::support::graphql::register_served_home(&live.root, &home.home, &[], HTTP_PORT)?;
         let b = live.clone_agent(&home, "other").await?;
         let pid = live.service_pid().context("the service runs")?;
 
@@ -1446,7 +1446,7 @@ mod with_model {
         let mut terminal = set_up(&live, MISSING_BIN, &folder, &endpoint, &model).await?;
         terminal.expect(INSTALL_MESSAGE, RUNTIME_UP).await?;
         terminal.expect_exit(1).await?;
-        crate::support::graphql::register_served_home(&folder, HTTP_PORT)?;
+        crate::support::graphql::register_served_home(&live.root, &folder, &[], HTTP_PORT)?;
 
         let prompt = format!("Reply with exactly this token: {}", uuid::Uuid::new_v4());
         let mut print = live.gents();
@@ -1490,7 +1490,7 @@ mod with_model {
     async fn turn_in_codex(live: &LiveBox, terminal: &mut Terminal, folder: &Path) -> Result<()> {
         wait_for_loaded_thread(terminal, "/", &[]).await?;
         let pid = live.service_pid().context("the service runs")?;
-        crate::support::graphql::register_served_home(folder, HTTP_PORT)?;
+        crate::support::graphql::register_served_home(&live.root, folder, &[], HTTP_PORT)?;
 
         let prompt = format!("Reply with exactly this token: {}", uuid::Uuid::new_v4());
         terminal.send(&prompt)?;
