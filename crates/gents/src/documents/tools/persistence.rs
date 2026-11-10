@@ -1,22 +1,17 @@
 use anyhow::{Context, Result};
 
 use super::Tools;
-use crate::store::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+use crate::store::config_client::{
+    ConfigAccess, ConfigApplyTxn, DesiredStateApplyDocument, DesiredStateApplyPlan,
+};
 use crate::Collection;
 
 /// Replace a complete Tools document; omitted groups revoke their capabilities.
 pub async fn write_tools_document(access: &ConfigAccess, tools: &Tools) -> Result<String> {
-    tools.validate()?;
     access
         .transact_write("config.tools.write", |txn| {
             Box::pin(async move {
-                let value = serde_json::to_value(tools)?;
-                let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-                    collection: Collection::Tools,
-                    add: value.clone(),
-                    update: value,
-                }])?;
-                crate::documents::apply_desired_state_plan(txn, &plan).await?;
+                write_tools_document_in_txn(txn, tools).await?;
                 crate::store::config_client::read_desired_state_record_in_txn(
                     txn,
                     Collection::Tools,
@@ -29,6 +24,20 @@ pub async fn write_tools_document(access: &ConfigAccess, tools: &Tools) -> Resul
             })
         })
         .await
+}
+
+/// Validates and replaces a complete Tools document within the caller's
+/// transaction, so a caller can commit it with the reads that justify it.
+pub async fn write_tools_document_in_txn(txn: &ConfigApplyTxn<'_>, tools: &Tools) -> Result<()> {
+    tools.validate()?;
+    let value = serde_json::to_value(tools)?;
+    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: Collection::Tools,
+        add: value.clone(),
+        update: value,
+    }])?;
+    crate::documents::apply_desired_state_plan(txn, &plan).await?;
+    Ok(())
 }
 
 #[cfg(test)]

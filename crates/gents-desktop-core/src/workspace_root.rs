@@ -9,11 +9,8 @@
 //! root that is not published.
 
 use anyhow::{Context, Result};
-use gents::documents::{apply_desired_state_plan, load_agent_context_and_tools_in_txn, Tools};
-use gents::store::collection::Collection;
-use gents::store::config_client::{
-    ConfigAccess, ConfigApplyTxn, DesiredStateApplyDocument, DesiredStateApplyPlan,
-};
+use gents::documents::{load_agent_context_and_tools_in_txn, write_tools_document_in_txn, Tools};
+use gents::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use gents::store::graphql::escape_graphql_string;
 use serde::Serialize;
 use ts_rs::TS;
@@ -80,14 +77,7 @@ async fn retarget_agent_tools(
             Box::pin(async move {
                 let mut tools = read_unshared_agent_tools(txn, node_did, agent_did).await?;
                 if retarget_host_root(&mut tools, root_path) {
-                    tools.validate()?;
-                    let value = serde_json::to_value(&tools)?;
-                    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-                        collection: Collection::Tools,
-                        add: value.clone(),
-                        update: value,
-                    }])?;
-                    apply_desired_state_plan(txn, &plan).await?;
+                    write_tools_document_in_txn(txn, &tools).await?;
                 }
                 Ok::<String, anyhow::Error>(tools.tools_id)
             })
