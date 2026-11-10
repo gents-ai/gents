@@ -25,4 +25,18 @@ import type { ToolServiceRegistry } from "./ToolServiceRegistry.js";
 import type { Tools } from "./Tools.js";
 import type { TriggerView } from "./TriggerView.js";
 
-export type DeploymentView = { peerId: string, label: string, nodeDid: string, addr: string, source: string | null, graphql: string | null, dialSucceeded: boolean, runtimeConnection?: string, chatSafe: boolean, chatRefusal: ChatRefusalView | null, pairingReady?: boolean, lastError: string | null, node: NodeView, nodeConfig: Node | null, agentConfigs: Array<Agent>, runtime: RuntimeView | null, nodeReadiness: NodeReadinessView, agents: Array<AgentView>, agentEnvironments: Array<AgentEnvironmentView>, inferenceBackends: Array<InferenceBackendView>, inferenceProfiles: Array<InferenceProfile>, inferenceSampling: Array<InferenceSampling>, inferenceExecution: Array<InferenceExecution>, contexts: Array<AgentContext>, compactions: Array<CompactionConfig>, tools: Array<Tools>, toolServiceRegistries: Array<ToolServiceRegistry>, agentTargets: Array<AgentTargetDocument>, datastoreToolSurfaces: Array<DatastoreToolSurfaceDocument>, skills: Array<SkillView>, tasks: Array<TaskView>, schedules: Array<Schedule>, eventSources: Array<EventSource>, triggers: Array<TriggerView>, sessions: Array<SessionSummary>, mailboxItems: Array<MailboxItemView>, };
+export type DeploymentView = { peerId: string, label: string, nodeDid: string, addr: string, source: string | null, graphql: string | null, dialSucceeded: boolean, runtimeConnection?: string, chatSafe: boolean, chatRefusal: ChatRefusalView | null, pairingReady?: boolean,
+/**
+ * When this desktop's enrollment authorization on a joined node runs
+ * out, after which reconciliation removes the node from this desktop;
+ * none for a node this desktop reaches without enrollment. The node's
+ * ACP grant carries no expiry of its own.
+ */
+leaseExpiresAt: string | null,
+/**
+ * Whether this desktop holds the node's signed operator endpoint, the
+ * only path for its writes and operator reads (a fork, account
+ * recovery). A joined node offers it once it advertises one; the node's
+ * ACP still decides each signed request.
+ */
+operatorAccess: boolean, lastError: string | null, node: NodeView, nodeConfig: Node | null, agentConfigs: Array<Agent>, runtime: RuntimeView | null, nodeReadiness: NodeReadinessView, agents: Array<AgentView>, agentEnvironments: Array<AgentEnvironmentView>, inferenceBackends: Array<InferenceBackendView>, inferenceProfiles: Array<InferenceProfile>, inferenceSampling: Array<InferenceSampling>, inferenceExecution: Array<InferenceExecution>, contexts: Array<AgentContext>, compactions: Array<CompactionConfig>, tools: Array<Tools>, toolServiceRegistries: Array<ToolServiceRegistry>, agentTargets: Array<AgentTargetDocument>, datastoreToolSurfaces: Array<DatastoreToolSurfaceDocument>, skills: Array<SkillView>, tasks: Array<TaskView>, schedules: Array<Schedule>, eventSources: Array<EventSource>, triggers: Array<TriggerView>, sessions: Array<SessionSummary>, mailboxItems: Array<MailboxItemView>, };

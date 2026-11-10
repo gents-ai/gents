@@ -6,6 +6,18 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Rendered request captures cut the stable request fields (model, tool
+  schemas, settings) apart from the message list, and close shared manifest
+  groups after four entries at every second content key instead of eight at
+  every sixteenth, choosing group boundaries from block content alone rather
+  than from manifest node bytes. A session no longer stores its tool schemas
+  again while its opening messages change, which previously depended on
+  where the rolling hash fired around the Agent DID in the system prompt; a
+  call rewrites a short manifest tail whose size no longer grows with the
+  calls since its group last closed; and a payload's manifest shape no
+  longer varies with its session's document IDs. Existing captures stay
+  readable; the first capture after upgrading stores its leading block and
+  manifests once more (#3605).
 - Breaking: P2P carries only discovery and enrollment, so the agent-facing
   application-collection pairing and sync surface is removed. The `p2p` tool
   drops `pairings_list`, `pairings_get`, `pairings_preview`, `pairings_apply`,

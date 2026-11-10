@@ -128,7 +128,9 @@ impl Fixture {
         let temp = tempfile::tempdir().unwrap();
         let owner_paths = DesktopPaths::from_root(temp.path().join("owner"));
         let other_paths = DesktopPaths::from_root(temp.path().join("other"));
-        let admin_paths = DesktopPaths::from_root(temp.path().join("admin"));
+        // The admin is the CLI client key under `Fixture::desktop`, as
+        // provisioning makes it for a desktop-created home.
+        let admin_paths = DesktopPaths::from_root(temp.path().join("desktop")).cli_client();
         owner_paths.ensure_root_dirs().await.unwrap();
         other_paths.ensure_root_dirs().await.unwrap();
         admin_paths.ensure_root_dirs().await.unwrap();
@@ -221,6 +223,10 @@ impl Fixture {
 
     fn get(&self, path: &str) -> reqwest::RequestBuilder {
         self.client.get(format!("{}{path}", self.endpoint))
+    }
+
+    fn desktop(&self) -> DesktopPaths {
+        DesktopPaths::from_root(self._temp.path().join("desktop"))
     }
 }
 
@@ -710,6 +716,97 @@ async fn managed_readiness_status_reads_as_the_user_never_the_node_key() {
             "private status reads as the User, not the node"
         );
     }
+}
+
+/// Issue #3609: a desktop-provisioned home's first admin is the CLI client
+/// key, so the readiness read signs with it until the desktop's own key has a
+/// completed enrollment into that Node, including when the desktop key exists
+/// but pairing never finished. A key that is not admin is still refused the
+/// private body, and the choice never retries with another key.
+#[tokio::test]
+async fn hosted_status_reader_is_the_home_admin_before_and_after_desktop_enrollment() {
+    use gents::store::identity::NodeIdentity as _;
+    use gents_desktop_core::local_runtime::{fetch_hosted_runtime_status, hosted_status_signer};
+    let f = Fixture::start().await;
+    let desktop = f.desktop();
+    let node_did = f.owner.did().to_owned();
+    let graphql = format!("{}/api/v0/graphql", f.endpoint);
+    let record =
+        gents_desktop_core::client::PeerRecord::local_standard("Local", "", &node_did, &graphql);
+
+    // Fresh home: no desktop key yet, nothing enrolled.
+    assert!(!desktop.identity_key_path().exists());
+    let fresh = hosted_status_signer(&desktop, Some(&node_did), &[], None)
+        .await
+        .expect("the provisioned CLI admin signs the fresh-home read");
+    assert_eq!(fresh.did(), f.admin.did());
+    let private = fetch_hosted_runtime_status(&record, Some(&fresh))
+        .await
+        .unwrap()
+        .expect("a local runtime record has a status endpoint");
+    assert_eq!(private["tool_root"], "/private/operator/workspace");
+
+    // Crash gap: the desktop key exists and the client runs, but pairing
+    // never completed, so the desktop key is not this home's admin yet.
+    let desktop_user = PrincipalIdentity::load_or_create(&desktop).await.unwrap();
+    let running = desktop_user.client_signing_capability().unwrap();
+    let unpaired = hosted_status_signer(&desktop, Some(&node_did), &[], Some(running.clone()))
+        .await
+        .unwrap();
+    assert_eq!(unpaired.did(), f.admin.did());
+    let private = fetch_hosted_runtime_status(&record, Some(&unpaired))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(private["tool_root"], "/private/operator/workspace");
+
+    // A completed enrollment into this Node selects the desktop key. Here the
+    // record claims it but the runtime never made that key admin: the private
+    // body is refused, and no other key is tried.
+    let mut enrolled = record.clone();
+    enrolled.source = Some("enrollment".into());
+    enrolled.pairing_network_id = Some("network".into());
+    enrolled.enrollment_request_digest = Some("digest".into());
+    enrolled.enrollment_authorization_sequence = Some(1);
+    let other_node = hosted_status_signer(
+        &desktop,
+        Some("did:key:another-node"),
+        std::slice::from_ref(&enrolled),
+        Some(running.clone()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(other_node.did(), f.admin.did(), "enrollment is per Node");
+    let chosen = hosted_status_signer(
+        &desktop,
+        Some(&node_did),
+        std::slice::from_ref(&enrolled),
+        Some(running.clone()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(chosen.did(), desktop_user.did());
+    let stored = hosted_status_signer(&desktop, Some(&node_did), &[enrolled], None)
+        .await
+        .unwrap();
+    assert_eq!(stored.did(), desktop_user.did());
+    let before = f.status_requests.load(std::sync::atomic::Ordering::SeqCst);
+    let public = fetch_hosted_runtime_status(&record, Some(&chosen))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(public["node_did"], node_did.as_str());
+    for key in ["tool_root", "home"] {
+        assert!(
+            public.get(key).is_none(),
+            "a key that is not the home's admin reads only the public body: {key}"
+        );
+    }
+    assert_eq!(
+        f.status_requests.load(std::sync::atomic::Ordering::SeqCst),
+        before + 1,
+        "the public answer is returned, not retried with another key"
+    );
 }
 
 #[tokio::test]

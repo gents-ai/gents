@@ -31,8 +31,12 @@ async fn queue_user_message(
     turn.submit(create).await.unwrap();
 }
 
+/// Lean `Session.ordinary_queued_input_never_folds` and the
+/// `ordinary_queued_inputs_run_in_order` fold case: ordinary messages queued
+/// behind a busy turn are not folded; each is claimed and answered as its own
+/// turn, in queue order, after the busy turn ends.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn messages_queued_behind_a_busy_turn_are_answered_by_one_inference() {
+async fn messages_queued_behind_a_busy_turn_run_as_separate_turns_in_order() {
     let db = test_db("queued-user-messages").await;
     let session_id = "queued-user-messages-session";
     let asking = "queued-user-messages-active";
@@ -101,35 +105,40 @@ async fn messages_queued_behind_a_busy_turn_are_answered_by_one_inference() {
     let first_final = wait_for_request_terminal_on(&turn.client, first, Duration::from_secs(60))
         .await
         .unwrap();
+    let second_final = wait_for_request_terminal_on(&turn.client, second, Duration::from_secs(60))
+        .await
+        .unwrap();
     assert_eq!(active_final, "completed");
     assert_eq!(first_final, "completed");
-    assert_eq!(
-        request_state_on(&turn.client, second)
-            .await
-            .unwrap()
-            .as_deref(),
-        Some("superseded")
-    );
+    assert_eq!(second_final, "completed");
     let escaped = gents::store::graphql::escape_graphql_string(second);
-    let superseded = turn.client.execute(&format!(r#"{{AgentRequest(filter: {{request_id: {{_eq: "{escaped}"}}}}) {{superseded_by_request admission_signature}}}}"#)).await.unwrap();
-    let superseded = &superseded["data"]["AgentRequest"][0];
-    assert_eq!(superseded["superseded_by_request"], first);
-    assert!(superseded["admission_signature"]
+    let queued = turn.client.execute(&format!(r#"{{AgentRequest(filter: {{request_id: {{_eq: "{escaped}"}}}}) {{superseded_by_request admission_signature}}}}"#)).await.unwrap();
+    let queued = &queued["data"]["AgentRequest"][0];
+    assert!(queued["superseded_by_request"].is_null());
+    assert!(queued["admission_signature"]
         .as_str()
         .is_some_and(|signature| !signature.is_empty()));
 
-    let bodies = runtime.backend.observed_completion_bodies();
-    let folded_turns = bodies[before..]
-        .iter()
-        .map(ToString::to_string)
-        .filter(|body| body.contains("how are we looking"))
+    let bodies = runtime
+        .backend
+        .observed_completion_bodies()
+        .split_off(before)
+        .into_iter()
+        .filter(|body| body["stream"] == true)
+        .map(|body| body.to_string())
         .collect::<Vec<_>>();
-    assert_eq!(folded_turns.len(), 1, "one inference answers both messages");
-    let body = &folded_turns[0];
-    let first_at = body.find("how are we looking").unwrap();
-    let second_at = body
-        .find("we should move faster")
-        .expect("the folded message reaches the provider");
-    assert!(first_at < second_at, "folded messages keep queue order");
+    let first_turn = bodies
+        .iter()
+        .position(|body| body.contains("how are we looking"))
+        .expect("the first queued message reaches the provider");
+    assert!(
+        !bodies[first_turn].contains("we should move faster"),
+        "an ordinary queued message is not folded into an earlier turn"
+    );
+    let second_turn = bodies
+        .iter()
+        .position(|body| body.contains("we should move faster"))
+        .expect("the second queued message reaches the provider");
+    assert!(first_turn < second_turn, "queued turns keep queue order");
     runtime.shutdown().await;
 }

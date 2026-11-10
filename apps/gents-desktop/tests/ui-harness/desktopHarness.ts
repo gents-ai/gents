@@ -9,6 +9,7 @@ import { deriveDisplayState } from "@source-inc/gents-desktop-operations";
 import type {
   AllowedFolder,
   DesktopApiAdapter,
+  EndedAccessView,
 } from "@source-inc/gents-desktop-client";
 import type {
   DesktopClientUpdatedHandler,
@@ -261,7 +262,7 @@ function automatedInputItems(): RenderedTimelineItem[] {
     }),
     {
       ...durable("auto-bg-test", 7, "2026-06-03T14:10:00Z"),
-      origin: { kind: "backgroundCompletion" as const },
+      origin: { kind: "backgroundCompletion" as const, notification: true },
       content: completion(
         "call-auto-test",
         "bash",
@@ -271,7 +272,7 @@ function automatedInputItems(): RenderedTimelineItem[] {
     },
     {
       ...durable("auto-bg-lint", 8, "2026-06-03T14:10:00Z"),
-      origin: { kind: "backgroundCompletion" as const },
+      origin: { kind: "backgroundCompletion" as const, notification: true },
       content: completion(
         "call-auto-lint",
         "bash",
@@ -281,7 +282,7 @@ function automatedInputItems(): RenderedTimelineItem[] {
     },
     {
       ...durable("auto-bg-worker", 9, "2026-06-03T14:10:00Z"),
-      origin: { kind: "backgroundCompletion" as const },
+      origin: { kind: "backgroundCompletion" as const, notification: true },
       content: completion(
         "call-auto-worker",
         "agent_new",
@@ -291,7 +292,7 @@ function automatedInputItems(): RenderedTimelineItem[] {
     },
     {
       ...durable("auto-bg-wake", 10, "2026-06-03T14:10:01Z"),
-      origin: { kind: "backgroundCompletion" as const },
+      origin: { kind: "backgroundCompletion" as const, notification: false },
       content:
         "Review the new background completion results and continue the task if needed.",
     },
@@ -304,7 +305,7 @@ function automatedInputItems(): RenderedTimelineItem[] {
     }),
     {
       ...durable("auto-bg-single", 12, "2026-06-03T14:11:00Z"),
-      origin: { kind: "backgroundCompletion" as const },
+      origin: { kind: "backgroundCompletion" as const, notification: true },
       content: completion("call-auto-other", "spawn_process", "completed", "done"),
     },
     harnessAssistantItem({
@@ -347,13 +348,13 @@ function automatedInputItems(): RenderedTimelineItem[] {
     }),
     {
       ...durable("auto-alone-wake", 17, "2026-06-03T14:20:00Z"),
-      origin: { kind: "backgroundCompletion" as const },
+      origin: { kind: "backgroundCompletion" as const, notification: false },
       content:
         "Review the new background completion results and continue the task if needed.",
     },
     {
       ...durable("auto-bg-note", 18, "2026-06-03T14:20:00Z"),
-      origin: { kind: "backgroundCompletion" as const },
+      origin: { kind: "backgroundCompletion" as const, notification: true },
       content:
         "\nThe preview deploy is ready at https://preview.example.test/parser-fix and will stay up for the next twenty-four hours.\n\nNothing else changed.",
     },
@@ -513,9 +514,13 @@ function harnessAssistantItem(
   };
 }
 
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+
 export type DesktopUiHarnessScenario =
   | "default"
   | "active-nodes"
+  | "joined-access"
   | "empty-fleet"
   | "loading"
   | "bridge-unavailable"
@@ -934,6 +939,18 @@ export function createDesktopUiHarness(
     };
   }
   let removed = false;
+  let endedAccess: EndedAccessView[] =
+    scenario === "joined-access"
+      ? [
+          {
+            nodeDid: "did:key:harness-harbor",
+            label: "Harbor",
+            reason: "revoked",
+            endedAt: new Date(Date.now() - HOUR_MS).toISOString(),
+            leaseExpiresAt: new Date(Date.now() + 6 * DAY_MS).toISOString(),
+          },
+        ]
+      : [];
   let provisioned = scenario !== "empty-fleet";
   let pairingStatusReads = 0;
   let pairingAuthorized = scenario === "storage-recovery";
@@ -1702,7 +1719,10 @@ export function createDesktopUiHarness(
       chatSafe: p2pStatus === "healthy",
     };
     const deployments = !provisioned || removed ? [] : [visibleDeployment];
-    if (scenario === "active-nodes" && deployments.length) {
+    if (
+      (scenario === "active-nodes" || scenario === "joined-access") &&
+      deployments.length
+    ) {
       const remoteDid = "did:key:harness-remote";
       deployments.push({
         ...visibleDeployment,
@@ -1711,6 +1731,11 @@ export function createDesktopUiHarness(
         source: "enrollment",
         label: "studio-1",
         graphql: null,
+        operatorAccess: false,
+        leaseExpiresAt:
+          scenario === "joined-access"
+            ? new Date(Date.now() + 2 * DAY_MS + HOUR_MS).toISOString()
+            : null,
         node: {
           ...visibleDeployment.node,
           nodeDid: remoteDid,
@@ -1792,6 +1817,7 @@ export function createDesktopUiHarness(
         approxSerializedBytes: rowCount * 512,
         operatorConfigAuthoritativeNodeDids: freshHome ? [] : [NODE_DID],
         deployments,
+        endedAccess,
       },
     };
     return clone(next);
@@ -2194,6 +2220,11 @@ export function createDesktopUiHarness(
         throw new Error(`peer ${peerId} not found`);
       }
       removed = true;
+      notify("peers");
+      return snapshot();
+    },
+    async dismissEndedAccess(nodeDid) {
+      endedAccess = endedAccess.filter((ended) => ended.nodeDid !== nodeDid);
       notify("peers");
       return snapshot();
     },
@@ -4284,6 +4315,8 @@ function createDeployment(): DeploymentView {
     runtimeConnection: "connected",
     chatSafe: true,
     chatRefusal: null,
+    leaseExpiresAt: null,
+    operatorAccess: true,
     nodeReadiness: {
       source: { state: "current" },
       activeGeneration: 1,
@@ -4618,6 +4651,7 @@ function clone<T>(value: T): T {
 function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
   switch (value) {
     case "active-nodes":
+    case "joined-access":
     case "empty-fleet":
     case "loading":
     case "bridge-unavailable":

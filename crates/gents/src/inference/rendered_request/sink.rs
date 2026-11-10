@@ -800,22 +800,31 @@ async fn encode_payload_tree(
     );
     let leaves = chunks.len();
     let mut entries = payload_entries(chunks, pins)?;
+    let mut boundary_keys = chunks
+        .iter()
+        .map(|chunk| chunk.content_key.clone())
+        .collect::<Vec<_>>();
     let mut height = 0;
     while entries.len() > 1 {
         anyhow::ensure!(
             height < encoding::MAX_MANIFEST_HEIGHT,
             "capture manifest exceeds maximum height"
         );
-        let nodes = encoding::manifest_groups(&entries)
-            .into_iter()
-            .map(|group| {
-                let bytes = serde_json::to_vec(group)?;
+        let groups = encoding::manifest_groups(&boundary_keys);
+        let nodes = groups
+            .iter()
+            .map(|range| {
+                let bytes = serde_json::to_vec(&entries[range.clone()])?;
                 Ok(ChunkedBlock {
                     content_key: encoding::block_content_key(&bytes),
                     bytes,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
+        boundary_keys = groups
+            .into_iter()
+            .map(|range| encoding::manifest_node_boundary_key(&boundary_keys[range]))
+            .collect();
         let blocks = unique_blocks(&[&nodes]);
         pins.extend(pin_blocks_in_txn(txn, scope, &blocks).await?);
         entries = payload_entries(&nodes, pins)?;

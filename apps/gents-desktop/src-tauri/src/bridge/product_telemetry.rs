@@ -17,10 +17,25 @@ impl Config {
         if cfg!(debug_assertions) || cfg!(test) {
             return None;
         }
-        Self::parse(
-            &std::env::var("GENTS_UMAMI_ENDPOINT").ok()?,
-            &std::env::var("GENTS_UMAMI_WEBSITE_ID").ok()?,
+        Self::from_sources(
+            std::env::var("GENTS_UMAMI_ENDPOINT").ok().as_deref(),
+            std::env::var("GENTS_UMAMI_WEBSITE_ID").ok().as_deref(),
+            option_env!("GENTS_UMAMI_ENDPOINT"),
+            option_env!("GENTS_UMAMI_WEBSITE_ID"),
         )
+    }
+
+    fn from_sources(
+        endpoint: Option<&str>,
+        website: Option<&str>,
+        built_endpoint: Option<&str>,
+        built_website: Option<&str>,
+    ) -> Option<Self> {
+        match (endpoint, website) {
+            (Some(endpoint), Some(website)) => Self::parse(endpoint, website),
+            (None, None) => Self::parse(built_endpoint?, built_website?),
+            _ => None,
+        }
     }
 
     fn parse(endpoint: &str, website: &str) -> Option<Self> {
@@ -356,6 +371,22 @@ mod tests {
         }
         assert!(Config::parse("https://metrics.example/api/send", " ").is_none());
         assert!(Config::parse("https://metrics.example/api/send", "not-a-uuid").is_none());
+    }
+
+    #[test]
+    fn release_configuration_uses_complete_sources_without_mixing_them() {
+        let website = "12345678-1234-1234-1234-123456789abc";
+        let endpoint = "https://metrics.example/api/send";
+        assert!(Config::from_sources(None, None, Some(endpoint), Some(website)).is_some());
+        assert!(Config::from_sources(Some(endpoint), Some(website), None, None).is_some());
+        assert!(
+            Config::from_sources(Some(endpoint), None, Some(endpoint), Some(website)).is_none()
+        );
+        assert!(Config::from_sources(None, None, Some(endpoint), None).is_none());
+        assert!(
+            Config::from_sources(None, None, Some("http://invalid/api/send"), Some(website))
+                .is_none()
+        );
     }
 
     #[tokio::test]

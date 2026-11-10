@@ -57,10 +57,10 @@ export const matchesState = (c: SessionSummary, state: SessionState) =>
 
 export const matchesSource = (c: SessionSummary, source: SessionSource) =>
   source === "task"
-    ? Boolean(c.taskId || c.triggerId)
+    ? Boolean(c.taskOrigin || c.taskId || c.triggerId)
     : source === "session"
       ? Boolean(c.startedBy)
-      : !(c.taskId || c.triggerId || c.startedBy);
+      : !(c.taskOrigin || c.taskId || c.triggerId || c.startedBy);
 
 export const passes = (c: SessionSummary, f: SessionFilter) =>
   (f.states.length === 0 || f.states.some((s) => matchesState(c, s))) &&
