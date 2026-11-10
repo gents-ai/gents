@@ -77,7 +77,7 @@ impl ConfigCommandTool {
         let invalid = page.validate().err().map(|error| format!("{error:#}"));
         let admitted = findings.is_empty() && invalid.is_none();
         let listing = ux_page::listing_id(&page.page_id);
-        let renders = crate::observe::ux_preview::renderer_available();
+        let renders = super::super::ux_preview::renders();
         ordered! {
             "page": page.page_id,
             "admitted": admitted,

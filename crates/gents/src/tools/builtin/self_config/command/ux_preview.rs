@@ -19,6 +19,11 @@ PLUGIN is a listing id (page/ID for a page document), a plugin's or page's name,
 The report names console errors, the visible text, elements clipped or past the viewport, CSS variables the sandbox does not define, low-contrast text, and each data call and its rows or error. It writes PNGs and report.json under the home.
 Example: {"argv":["ux","preview","examples/board_pack/board"]}"#;
 
+/// Whether this build can render a page at all.
+pub(super) fn renders() -> bool {
+    preview::renderer_available()
+}
+
 pub(super) fn is_ux_preview(argv: &[String]) -> bool {
     matches!(argv, [resource, verb, ..] if resource == "ux" && verb == "preview")
 }
