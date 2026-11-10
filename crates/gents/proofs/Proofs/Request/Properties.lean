@@ -145,8 +145,7 @@ theorem claimed_coherent_cases
 theorem claim_requires_ttl_open
     {pre post : RequestContext}
     (h_trans : Transition pre post)
-    (h_claimed : post.state = .claimed)
-    (h_pending : pre.state = .pending) :
+    (h_claimed : post.state = .claimed) :
     pre.ttlOpen := by
   cases h_trans with
   | bind_workspace _ _ h_post =>
@@ -163,8 +162,8 @@ theorem claim_requires_ttl_open
       simp [h_post, h_state] at h_claimed
   | park_backend _ _ _ _ _ h_post =>
       simp [h_post] at h_claimed
-  | resume_backend h_state _ _ _ _ _ =>
-      simp [h_state] at h_pending
+  | resume_backend _ _ _ _ _ h_post =>
+      simp [h_post] at h_claimed
   | begin_resumed _ _ _ _ h_post =>
       simp [h_post] at h_claimed
   | interrupt_resuming _ _ _ h_post =>
@@ -195,10 +194,9 @@ theorem claim_with_ttl_bounds_time
     {t : Time}
     (h_trans : Transition pre post)
     (h_claimed : post.state = .claimed)
-    (h_pending : pre.state = .pending)
     (h_ttl : pre.validUntil = some t) :
     pre.currentTime ≤ t := by
-  have h_open := claim_requires_ttl_open h_trans h_claimed h_pending
+  have h_open := claim_requires_ttl_open h_trans h_claimed
   unfold ttlOpen at h_open
   simpa [h_ttl] using h_open
 
@@ -207,7 +205,6 @@ theorem claim_deadline_explicit
     {t : Time}
     (h_trans : Transition pre post)
     (h_claimed : post.state = .claimed)
-    (h_pending : pre.state = .pending)
     (h_requestDeadline : pre.requestDeadline = some t) :
     post.deadline = t := by
   cases h_trans with
@@ -225,8 +222,8 @@ theorem claim_deadline_explicit
       simp [h_post, h_state] at h_claimed
   | park_backend _ _ _ _ _ h_post =>
       simp [h_post] at h_claimed
-  | resume_backend h_state _ _ _ _ _ =>
-      simp [h_state] at h_pending
+  | resume_backend _ _ _ _ _ h_post =>
+      simp [h_post] at h_claimed
   | begin_resumed _ _ _ _ h_post =>
       simp [h_post] at h_claimed
   | interrupt_resuming _ _ _ h_post =>
@@ -256,7 +253,6 @@ theorem claim_deadline_default
     {pre post : RequestContext}
     (h_trans : Transition pre post)
     (h_claimed : post.state = .claimed)
-    (h_pending : pre.state = .pending)
     (h_requestDeadline : pre.requestDeadline = none) :
     post.deadline = pre.currentTime + 1 := by
   cases h_trans with
@@ -274,8 +270,8 @@ theorem claim_deadline_default
       simp [h_post, h_state] at h_claimed
   | park_backend _ _ _ _ _ h_post =>
       simp [h_post] at h_claimed
-  | resume_backend h_state _ _ _ _ _ =>
-      simp [h_state] at h_pending
+  | resume_backend _ _ _ _ _ h_post =>
+      simp [h_post] at h_claimed
   | begin_resumed _ _ _ _ h_post =>
       simp [h_post] at h_claimed
   | interrupt_resuming _ _ _ h_post =>

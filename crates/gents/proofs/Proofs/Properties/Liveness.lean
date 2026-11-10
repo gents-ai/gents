@@ -2,6 +2,11 @@ import Proofs.CrossMachineComposed
 
 open RequestState RequestContext ComposedState
 
+/-- Parking and resuming leave the measure unchanged, so it does not bound
+park/resume cycles: `phase_change_decreases_measure` excludes them by
+hypothesis. Those cycles are bounded only by the request deadline, which
+`park_backend`, `resume_backend` and `begin_resumed` require to be in the
+future and which no transition extends. -/
 def terminationMeasure (r : RequestContext) : Nat :=
   match r.state with
   | .completed => 0
