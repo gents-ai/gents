@@ -27,5 +27,5 @@
       "required": ["script"]
     }
   }],
-  "assets": ["pack_config.json", "plugins/script.afb", "plugins/script/TOOL.md", "plugins/script/tests/compute.json", "plugins/script/tests/sleep.json", "plugins/script/tests/isolation.json", "tests/install.json", "tests/content.json"]
+  "assets": ["README.md", "pack_config.json", "plugins/script.afb", "plugins/script/TOOL.md", "plugins/script/tests/compute.json", "plugins/script/tests/sleep.json", "plugins/script/tests/isolation.json", "tests/install.json", "tests/content.json"]
 }
