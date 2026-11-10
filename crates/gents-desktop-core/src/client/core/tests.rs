@@ -501,17 +501,16 @@ async fn restart_clears_and_defers_persisted_enrollment_until_current_authority(
         core.local_peer_id().to_owned(),
         core.options().operator_identity_interaction,
     ));
-    super::supervisor::run_saved_peer_repair_cycle(
-        core.node().event_bus().as_ref(),
-        &p2p,
-        &owner,
-        &Arc::new(core.node_identity().clone()),
-        &route_manager,
-        true,
-        false,
-        &mut BTreeMap::new(),
-        &BTreeMap::new(),
-    )
+    super::supervisor::FirstRepairCycle {
+        bus: core.node().event_bus().as_ref(),
+        p2p: &p2p,
+        sync_state: &owner,
+        remote_admin_actor: &Arc::new(core.node_identity().clone()),
+        route_manager: &route_manager,
+        install_replicators_on_bootstrap: true,
+        force_repair: false,
+    }
+    .run()
     .await;
     let statuses = owner.snapshot().peers;
     assert_eq!(statuses.len(), 1);

@@ -23,7 +23,7 @@ use super::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct RouteReconcileFence {
+struct RouteReconcileFence {
     record: PeerRecord,
     enrollment: Option<super::enrollment::reconcile::EnrollmentAuthorizationGeneration>,
 }
@@ -221,7 +221,7 @@ fn removal_retry_delay(failures: u32) -> Duration {
     clippy::too_many_arguments,
     reason = "supervisor state borrowed from separate owners"
 )]
-pub(super) async fn run_saved_peer_repair_cycle(
+async fn run_saved_peer_repair_cycle(
     bus: &dyn events::Bus,
     p2p: &Arc<dyn P2POps>,
     sync_state: &ClientSyncStateOwner,
@@ -343,6 +343,37 @@ pub(super) async fn run_saved_peer_repair_cycle(
                 ),
             );
         }
+    }
+}
+
+/// One saved-peer repair cycle as the supervisor runs it, from no route
+/// reconcile history and with no current enrollment authority.
+#[cfg(test)]
+pub(super) struct FirstRepairCycle<'a> {
+    pub(super) bus: &'a dyn events::Bus,
+    pub(super) p2p: &'a Arc<dyn P2POps>,
+    pub(super) sync_state: &'a ClientSyncStateOwner,
+    pub(super) remote_admin_actor: &'a Arc<PrincipalIdentity>,
+    pub(super) route_manager: &'a Arc<ClientRouteManager>,
+    pub(super) install_replicators_on_bootstrap: bool,
+    pub(super) force_repair: bool,
+}
+
+#[cfg(test)]
+impl FirstRepairCycle<'_> {
+    pub(super) async fn run(self) {
+        run_saved_peer_repair_cycle(
+            self.bus,
+            self.p2p,
+            self.sync_state,
+            self.remote_admin_actor,
+            self.route_manager,
+            self.install_replicators_on_bootstrap,
+            self.force_repair,
+            &mut BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .await;
     }
 }
 
