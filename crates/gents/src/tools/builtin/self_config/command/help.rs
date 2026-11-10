@@ -856,7 +856,10 @@ mod accepted_command_tests {
             );
         }
         for accepted in ["page", "plugin-source"] {
-            assert!(listed.contains(&accepted), "{accepted} is accepted but unlisted");
+            assert!(
+                listed.contains(&accepted),
+                "{accepted} is accepted but unlisted"
+            );
         }
     }
 
@@ -871,4 +874,3 @@ mod accepted_command_tests {
         }
     }
 }
-

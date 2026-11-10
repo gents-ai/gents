@@ -162,8 +162,8 @@ impl super::RequestLifecycle {
                 })
             })
             .await?;
-        Ok(resumed_turn_index(records.iter().filter_map(|record| {
-            match (&record.segment.source, &record.segment.close) {
+        Ok(resumed_turn_index(records.iter().filter_map(
+            |record| match (&record.segment.source, &record.segment.close) {
                 (
                     OutputSource::ProviderTurn {
                         scope, turn_index, ..
@@ -174,8 +174,8 @@ impl super::RequestLifecycle {
                     }),
                 ) if scope.kind == CaptureScopeKind::Inference => Some(*turn_index),
                 _ => None,
-            }
-        })))
+            },
+        )))
     }
 
     /// Release local ownership only after the durable parking transaction wins.
