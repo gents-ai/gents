@@ -1,0 +1,31 @@
+{
+  "manifest_version": 1,
+  "namespace": "gents",
+  "name": "script",
+  "version": "0.1.0",
+  "kind": "documents",
+  "description": "Sandboxed JavaScript with optional access to the caller's tools.",
+  "authors": ["gents-ai contributors"],
+  "dependencies": [],
+  "config": "pack_config.json",
+  "plugins": [{
+    "name": "script",
+    "description": "Run JavaScript; return a value. Optional caller tools and async sleep.",
+    "artifact": "plugins/script.afb",
+    "language": "rust",
+    "source": "plugins/script",
+    "instructions": "plugins/script/TOOL.md",
+    "host_imports": ["host_call"],
+    "limits": {"memory_mib": 128, "wall_clock_secs": 300, "max_output_mib": 1},
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "script": {"type": "string", "description": "JavaScript body; use return for the result. Supports await tools.NAME(args) and await sleep(ms)."},
+        "input": {"description": "JSON value available as input."},
+        "with_tools": {"type": "boolean", "description": "Set false for compute-only execution; true never grants permissions."}
+      },
+      "required": ["script"]
+    }
+  }],
+  "assets": ["pack_config.json", "plugins/script.afb", "plugins/script/TOOL.md", "plugins/script/tests/compute.json", "plugins/script/tests/sleep.json", "plugins/script/tests/isolation.json", "tests/install.json", "tests/content.json"]
+}
