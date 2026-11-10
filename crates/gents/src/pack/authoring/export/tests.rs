@@ -525,3 +525,82 @@ async fn a_page_and_a_plugin_source_export_with_the_surface_the_page_is_granted(
         report.schemas
     );
 }
+
+#[tokio::test]
+async fn a_collection_with_defaults_and_a_full_text_index_exports_and_searches_where_it_installs() {
+    let (origin, user, access, _worker) =
+        crate::test_support::signed_test_node("pack-export-fulltext").await;
+    let owner = origin.node_identity.did().to_owned();
+    grant_schema(&origin, &user).await;
+    access
+        .add_collection(
+            "type HelpArticle { title: String @index body: String @fulltext(language: \"english\") status: String @default(value: \"\") views: Int @default(value: 20) }",
+        )
+        .await
+        .unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let report = export_pack(
+        &access,
+        &owner,
+        &out.path().join("help_desk"),
+        "help_desk",
+        "fixture",
+        &ExportSelection {
+            collections: ["HelpArticle".to_owned()].into(),
+            ..ExportSelection::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert!(report.check.problems.is_empty(), "{:#?}", report.check);
+    let sdl = std::fs::read_to_string(report.dir.join(&report.schemas[0])).unwrap();
+    for directive in [
+        "body: String @fulltext(language: \"english\"",
+        "status: String @default(value: \"\")",
+        "views: Int @default(value: 20)",
+    ] {
+        assert!(sdl.contains(directive), "{directive}: {sdl}");
+    }
+
+    let (bytes, _) = pack_dir(&report.dir).unwrap();
+    let archive = PackArchive::from_bytes(&bytes).unwrap();
+    let (second, second_user, second_access) =
+        crate::test_support::signed_test_node_without_agent("pack-export-fulltext-second").await;
+    grant_schema(&second, &second_user).await;
+    install(
+        &second,
+        &second_user,
+        &second_access,
+        &archive,
+        &BTreeMap::new(),
+    )
+    .await
+    .unwrap();
+    for (title, body) in [
+        ("Printer", "The printer jams when the paper tray is full"),
+        ("Badge", "Request a new door badge from the front desk"),
+    ] {
+        ConfigAccess::write_local(
+            &second.node,
+            "test.pack_export.fulltext",
+            &format!(
+                "mutation {{ add_HelpArticle(input: {{title: \"{title}\", body: \"{body}\"}}) {{ _docID }} }}"
+            ),
+        )
+        .await
+        .unwrap();
+    }
+    let found = rows(
+        &second_access,
+        "{ HelpArticle(order: [{_alias: {_score: DESC}}]) { title status views _score: BM25(query: \"printer paper\", fields: [\"body\"]) } }",
+    )
+    .await;
+    assert_eq!(found["HelpArticle"][0]["title"], "Printer", "{found}");
+    assert!(
+        found["HelpArticle"][0]["_score"].as_f64().unwrap() > 0.0,
+        "{found}"
+    );
+    assert_eq!(found["HelpArticle"][1]["_score"], 0.0, "{found}");
+    assert_eq!(found["HelpArticle"][0]["status"], "", "{found}");
+    assert_eq!(found["HelpArticle"][0]["views"], 20, "{found}");
+}
