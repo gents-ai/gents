@@ -17,7 +17,7 @@ use tracing::Instrument;
 mod auth_refusal;
 mod resume;
 
-pub use auth_refusal::{McpAuthRefusal, McpHandshakeRefused};
+pub use auth_refusal::{auth_refusal_of, McpAuthRefusal, McpHandshakeRefused};
 
 pub use resume::McpResumeStats;
 use resume::SessionResumePolicy;

@@ -48,6 +48,16 @@ pub struct McpHandshakeRefused {
     pub refusal: McpAuthRefusal,
 }
 
+/// The authorization refusal behind a pool failure, found on the erased
+/// error's source chain where the handshake recorded it.
+pub fn auth_refusal_of(error: &anyhow::Error) -> Option<McpAuthRefusal> {
+    let error: &(dyn std::error::Error + 'static) = error.as_ref();
+    gents_protocol::error_chain::find_map_source(error, |cause| {
+        cause.downcast_ref::<McpAuthRefusal>()
+    })
+    .cloned()
+}
+
 /// Classifier bound to the client type of `transport`, captured before the
 /// transport is consumed so the downcast names exactly its error type.
 pub(super) fn refusal_classifier<C>(

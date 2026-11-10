@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 use gents_protocol::tool_service_health::ToolServiceHealthProjection;
 
 use crate::store::graphql::escape_graphql_string;
-use crate::tools::mcp::pool::{resolve_mcp_url, McpPool};
+use crate::tools::mcp::pool::{auth_refusal_of, resolve_mcp_url, McpAuthRefusal, McpPool};
 
 /// Node-local service observation settings; these do not change an agent's
 /// remote-tool call deadlines.
@@ -76,6 +76,8 @@ impl From<ToolServiceHealthProjection> for HealthStatus {
 #[derive(Debug, Clone)]
 struct ServiceHealthEntry {
     health: ServiceHealth,
+    /// Set when the last probe failed because the server refused authorization.
+    auth_refusal: Option<McpAuthRefusal>,
     model: ServiceModelInternal,
     endpoint: Option<String>,
     tool_count: Option<i64>,
@@ -89,6 +91,7 @@ impl ServiceHealthEntry {
         let last_probe_at = health.last_seen;
         Self {
             health,
+            auth_refusal: None,
             model,
             endpoint: None,
             tool_count: None,
@@ -99,17 +102,19 @@ impl ServiceHealthEntry {
     fn from_model(
         model: ServiceModelInternal,
         last_seen: DateTime<Utc>,
-        last_error: Option<String>,
+        last_error: Option<(String, Option<McpAuthRefusal>)>,
         endpoint: Option<String>,
         tool_count: Option<i64>,
         last_probe_at: DateTime<Utc>,
     ) -> Self {
+        let (last_error, auth_refusal) = last_error.unzip();
         Self {
             health: ServiceHealth {
                 status: model.state.project().into(),
                 last_seen,
                 last_error,
             },
+            auth_refusal: auth_refusal.flatten(),
             model,
             endpoint,
             tool_count,
@@ -171,6 +176,8 @@ pub struct MCPServiceHealthSnapshot {
     pub last_probe_at: DateTime<Utc>,
     pub last_seen: DateTime<Utc>,
     pub last_error: Option<String>,
+    #[serde(skip)]
+    pub auth_refusal: Option<McpAuthRefusal>,
 }
 
 #[derive(Clone)]
@@ -224,6 +231,7 @@ impl ServiceHealthMap {
                 last_probe_at: entry.last_probe_at,
                 last_seen: entry.health.last_seen,
                 last_error: entry.health.last_error.clone(),
+                auth_refusal: entry.auth_refusal.clone(),
             })
             .collect()
     }
@@ -638,6 +646,7 @@ async fn run_health_check_cycle_with_cancel(
                         endpoint: previous_endpoint,
                         tool_count: previous_tool_count,
                         error: error.to_string(),
+                        auth_refusal: None,
                     },
                     now,
                     options,
@@ -732,6 +741,7 @@ async fn run_health_check_cycle_with_cancel(
                         endpoint: Some(endpoint.clone()),
                         tool_count: previous_tool_count,
                         error: error.to_string(),
+                        auth_refusal: auth_refusal_of(&error),
                     },
                     now,
                     options,
@@ -754,6 +764,7 @@ async fn run_health_check_cycle_with_cancel(
                         endpoint: Some(endpoint.clone()),
                         tool_count: previous_tool_count,
                         error: "probe timed out".to_string(),
+                        auth_refusal: None,
                     },
                     now,
                     options,
@@ -806,6 +817,7 @@ struct ProbeFailure<'a> {
     endpoint: Option<String>,
     tool_count: Option<i64>,
     error: String,
+    auth_refusal: Option<McpAuthRefusal>,
 }
 
 async fn apply_probe_failure(
@@ -822,6 +834,7 @@ async fn apply_probe_failure(
         endpoint,
         tool_count,
         error,
+        auth_refusal,
     } = failure;
     let next_model = step_service(previous_model, ProbeEvent::ProbeFail, now, options)
         .expect("probeFail must preserve the service model");
@@ -834,7 +847,7 @@ async fn apply_probe_failure(
             ServiceHealthEntry::from_model(
                 next_model,
                 previous_last_seen,
-                Some(error),
+                Some((error, auth_refusal)),
                 endpoint,
                 tool_count,
                 now,
@@ -932,13 +945,7 @@ fn parse_updated_at(value: Option<&str>) -> Option<DateTime<Utc>> {
 /// survives only in that wording.
 fn classify_last_error(error: &str) -> &'static str {
     let lower = error.to_lowercase();
-    // Health keeps only the message; these phrases are McpAuthRefusal's own
-    // Display, bound to McpAuthRefusal::class by a test.
-    if lower.contains("authorization required (http 401)") {
-        "auth_required"
-    } else if lower.contains("insufficient scope (http 403)") {
-        "insufficient_scope"
-    } else if lower.contains("timed out") || lower.contains("timeout") {
+    if lower.contains("timed out") || lower.contains("timeout") {
         "timeout"
     } else if lower.contains("connection refused") || lower.contains("refused") {
         "connection_refused"
@@ -1002,7 +1009,11 @@ fn persisted_health_fields(
         "backoff_until": entry.backoff_until,
         "last_probe_at": entry.last_probe_at,
         "last_seen": entry.last_seen,
-        "last_error_class": entry.last_error.as_deref().map(classify_last_error),
+        "last_error_class": entry
+            .auth_refusal
+            .as_ref()
+            .map(McpAuthRefusal::class)
+            .or_else(|| entry.last_error.as_deref().map(classify_last_error)),
         "last_error_message": entry.last_error,
     })
     .as_object()
@@ -1253,8 +1264,8 @@ mod tests {
 
     use super::{
         backoff_duration, run_health_check, run_health_check_cycle, step_service,
-        HealthCheckerOptions, HealthPersistenceContext, HealthStateInternal, McpHealthCheckService,
-        ProbeEvent, ServiceHealth, ServiceHealthMap, ServiceModelInternal,
+        HealthCheckerOptions, HealthPersistenceContext, HealthStateInternal, McpAuthRefusal,
+        McpHealthCheckService, ProbeEvent, ServiceHealth, ServiceHealthMap, ServiceModelInternal,
     };
     use crate::lean_vocab_test::{lean_mcp_health_cases, LeanMcpHealthCase};
     use crate::store::config_client::ConfigAccess;
@@ -1365,6 +1376,7 @@ mod tests {
             last_probe_at: now,
             last_seen: now,
             last_error: None,
+            auth_refusal: None,
         };
         super::upsert_persisted_health_state(&context, None, &entry, now).await?;
         let visible = |response: &serde_json::Value| {
@@ -1519,6 +1531,7 @@ mod tests {
             last_probe_at: now,
             last_seen: now,
             last_error: None,
+            auth_refusal: None,
         };
         super::persist_health_snapshot(&context, &map, &[entry.clone()], now).await;
         let initial = field_commits(&node).await;
@@ -2139,6 +2152,7 @@ mod tests {
             last_probe_at: now,
             last_seen: now,
             last_error: Some("connection refused".into()),
+            auth_refusal: None,
         });
         let map = ServiceHealthMap::new();
         let context = HealthPersistenceContext {
@@ -2289,8 +2303,7 @@ mod tests {
     }
 
     #[test]
-    fn auth_refusals_classify_from_their_own_message() {
-        use crate::tools::mcp::pool::{McpAuthRefusal, McpHandshakeRefused};
+    fn persisted_error_class_comes_from_the_typed_auth_refusal() {
         for refusal in [
             McpAuthRefusal::Required {
                 resource_metadata: Some("https://mcp.example.com/.well-known/x".into()),
@@ -2300,13 +2313,24 @@ mod tests {
                 scope: Some("read".into()),
             },
         ] {
-            let message = McpHandshakeRefused {
+            let now = chrono::Utc::now();
+            let entry = super::MCPServiceHealthSnapshot {
                 service_id: "svc".into(),
-                endpoint: "https://mcp.example.com/mcp".into(),
-                refusal: refusal.clone(),
-            }
-            .to_string();
-            assert_eq!(super::classify_last_error(&message), refusal.class());
+                endpoint: Some("https://mcp.example.com/mcp".into()),
+                status: "degraded".into(),
+                tool_count: None,
+                failure_count: 1,
+                k_max: 3,
+                backoff_until: None,
+                last_probe_at: now,
+                last_seen: now,
+                last_error: Some("server refused".into()),
+                auth_refusal: Some(refusal.clone()),
+            };
+            assert_eq!(
+                super::persisted_health_fields(&entry)["last_error_class"],
+                refusal.class()
+            );
         }
     }
 
@@ -2353,15 +2377,22 @@ mod tests {
         .await
         .unwrap();
         let entry = health_map.get_entry("remote").await.expect("health entry");
-        let error = entry.health.last_error.expect("probe failure recorded");
+        assert!(entry.health.last_error.is_some(), "probe failure recorded");
         assert_eq!(
-            super::classify_last_error(&error),
-            "auth_required",
-            "{error}"
+            entry.auth_refusal,
+            Some(McpAuthRefusal::Required {
+                resource_metadata: None,
+                scope: Some("read".into()),
+            })
         );
         assert_eq!(
             entry.endpoint.as_deref(),
             Some(format!("http://{addr}/mcp").as_str())
+        );
+        let snapshot = health_map.snapshot_full(3).await;
+        assert_eq!(
+            super::persisted_health_fields(&snapshot[0])["last_error_class"],
+            "auth_required"
         );
     }
 }
