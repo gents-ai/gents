@@ -1015,10 +1015,14 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         console::ConsoleChild::spawn(host_command.as_std(), &root.join("client-host.log"))?;
     wait_listener(&mut host, &paths).await?;
     let mut client = Attachment::start_with_binary(&paths, &host_binary).await;
-    // Bearer authorization and client-signed writes need the Node's held key.
+    // The operator observes and configures as the User `init` made the Node's
+    // administrator, whose `session_read` covers the client's sessions and
+    // requests; the Node key holds no relation on them.
+    let operator =
+        gents_desktop_core::client::PrincipalIdentity::load_existing(&homes.cli_identity())?;
     let access = gents::ConfigAccess::Graphql(
-        gents::store::config_client::GraphqlEndpoint::as_principal(graphql, identity.did())
-            .with_client_signing_capability(identity.client_signing_capability()?)?,
+        gents::store::config_client::GraphqlEndpoint::as_principal(graphql, operator.did())
+            .with_client_signing_capability(operator.client_signing_capability()?)?,
     );
     if matches!(journey, Journey::Conversation | Journey::RuntimeReplacement) {
         client
@@ -1076,6 +1080,22 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         })
         .await
         .context("runtime did not observe the enrollment request")??;
+        // Approval admits the route only; the Node's authority for the
+        // enrolled User is the separate explicit grant (Lean
+        // `Identity.EnrollmentGrant`).
+        let granted = Command::new(&cli)
+            .current_dir(root)
+            .envs(homes.env())
+            .args(["p2p", "enrollment", "grant", pending_id, "--home"])
+            .arg(&node_home)
+            .kill_on_drop(true)
+            .output();
+        let granted = tokio::time::timeout(Duration::from_secs(30), granted).await??;
+        ensure!(
+            granted.status.success(),
+            "enrollment grant failed: {}",
+            String::from_utf8_lossy(&granted.stderr)
+        );
         let approved = Command::new(&cli)
             .current_dir(root)
             .envs(homes.env())
