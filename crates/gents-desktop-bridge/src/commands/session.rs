@@ -148,17 +148,20 @@ pub async fn session_snapshot(
             .await
             .map(Some)
     };
-    let goal_read =
-        core.session_goal_observation(node_did.as_deref().unwrap_or_default(), &session_id);
+    let goal_read = crate::commands::session_goal(
+        core.as_ref(),
+        node_did.as_deref().unwrap_or_default(),
+        &session_id,
+    );
     let (context, ownership, goal) = tokio::join!(context_read, ownership_read, goal_read);
     let goal = match goal {
-        Ok(state) => crate::commands::verified_session_goal(state),
+        Ok(state) => Some(state),
         Err(error) => {
             let classified = BridgeError::classify_transport_error(error);
             if classified.code == BridgeErrorCode::PermissionDenied {
                 return Err(classified);
             }
-            tracing::warn!(session_id, error = %classified, "session Goal observation unavailable; showing no Goal");
+            tracing::warn!(session_id, error = %classified, "session Goal observation unavailable; the snapshot carries no Goal state");
             None
         }
     };

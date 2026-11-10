@@ -1,20 +1,29 @@
 import { useState, type KeyboardEvent } from "react";
 import { Target, X } from "lucide-react";
-import type { GoalView } from "@source-inc/gents-desktop-client";
+import type { GoalControlView } from "@source-inc/gents-desktop-client";
+import type { GoalShown } from "../../../hooks/goalState";
 import type { SlashCommand } from "../useSlashMenu";
 
 /** A met or removed goal can be replaced; the runtime refuses to replace any
     other, and starts no goal while the session is busy. */
-export const goalIsLive = (goal: GoalView | null | undefined) =>
+export const goalIsLive = (goal: GoalControlView | null | undefined) =>
   Boolean(goal) && goal?.status !== "complete" && goal?.status !== "stopped";
 
-export const goalIsEditable = (goal: GoalView | null | undefined) =>
+export const goalIsEditable = (goal: GoalControlView | null | undefined) =>
   goal?.status === "active" || goal?.status === "paused";
 
-export function goalCommand(
-  goal: GoalView | null | undefined,
-  busy: boolean,
-): SlashCommand {
+/** `/goal` for what the chat shows; `null` is a new chat, which a goal
+    starts. Only a verified Goal or its verified absence offers it. */
+export function goalCommand(shown: GoalShown | null, busy: boolean): SlashCommand {
+  if (shown?.kind === "unavailable")
+    return { id: "goal", description: shown.hold, disabled: true };
+  if (shown?.kind === "pending")
+    return {
+      id: "goal",
+      description: "Available once this chat's goal is read",
+      disabled: true,
+    };
+  const goal = shown?.kind === "goal" ? shown.goal : null;
   if (goalIsEditable(goal))
     return { id: "goal", description: "Edit this session's goal" };
   if (goalIsLive(goal))

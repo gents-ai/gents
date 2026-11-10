@@ -5,4 +5,4 @@ import type { GoalRevision } from "./GoalRevision.js";
  * Decimal strings preserve the runtime's signed 64-bit budgets and counters
  * through JavaScript display and form editing.
  */
-export type GoalControlView = { goalId: string, revision: GoalRevision, objective: string, status: string, tokenBudget: string | null, tokensUsed: string, activeTimeSeconds: string, continuationSequence: string, lastBlockedReason: string | null, lastFailure: string | null, completionEvidence: string | null, };
+export type GoalControlView = { goalId: string, revision: GoalRevision, objective: string, status: string, tokenBudget: string | null, tokensUsed: string, activeTimeSeconds: string, continuationSequence: string, wrapupRequested: boolean, wrapupCompleted: boolean, lastBlockedReason: string | null, lastFailure: string | null, completionEvidence: string | null, };

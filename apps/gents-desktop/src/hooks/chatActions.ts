@@ -35,6 +35,7 @@ import { ChatViewUpdateError, createChatDelivery } from "./chatDelivery";
 import { chatDraftRequest, type ChatDraft } from "./chatDrafts";
 import { createGoalDelivery } from "./goalDelivery";
 import { goalDraftCommand, type GoalDraft } from "./goalDrafts";
+import { GOAL_NEXT_STEP } from "./goalState";
 
 type ChatActionParams = {
   api: DesktopApiAdapter;
@@ -86,17 +87,6 @@ function queueEditFailure(
     return "The queue changed before it was saved";
   return actionFailure(doing, error);
 }
-
-/** What to do instead when a state's next action is not the one requested.
- * An unknown state carries its own reason from the runtime owner. */
-const GOAL_NEXT_STEP: Record<
-  Exclude<SessionGoalNextAction, "await_publication">,
-  string
-> = {
-  send: "This chat is not open on its runtime yet. Send a message to open it, then change its Goal.",
-  start_goal: "This chat has no Goal to change. Start one first.",
-  control_goal: "This chat already has a Goal. Change it instead.",
-};
 
 /** Only an observed state establishes a Goal or its absence (Lean
  * `SessionObservation`). The runtime owner supplies each state's next action

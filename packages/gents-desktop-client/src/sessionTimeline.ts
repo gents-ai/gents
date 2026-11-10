@@ -169,10 +169,20 @@ function hasDurableSequence(item: RenderedTimelineItem): boolean {
   }
 }
 
+/** A tip whose read of the Goal state did not complete carries no state, so
+ * the chat keeps the last state it read rather than showing a change no read
+ * observed (Lean `SessionObservation`: only a read classifies). */
 export function mergeSessionTipSnapshot(
   current: DesktopSessionSnapshot | null,
-  tip: DesktopSessionSnapshot,
+  read: DesktopSessionSnapshot,
 ): DesktopSessionSnapshot {
+  const tip =
+    read.goal == null &&
+    current?.goal != null &&
+    current.sessionId === read.sessionId &&
+    current.nodeDid === read.nodeDid
+      ? { ...read, goal: current.goal }
+      : read;
   if (
     !current ||
     current.sessionId !== tip.sessionId ||

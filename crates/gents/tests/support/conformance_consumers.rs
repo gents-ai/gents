@@ -1918,6 +1918,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "rust_inference_call_transition_table_matches_lean_contract",
         },
         ConformanceConsumer::TypeScriptTest {
+            id: "apps/gents-desktop/tests/lean-conformance/session-goal-view.test.ts::session Goal view shows each modeled Goal state as its view and offers only its next action",
+            app: "gents-desktop",
+            source_path: "apps/gents-desktop/tests/lean-conformance/session-goal-view.test.ts",
+            suite: "session Goal view",
+            test: "shows each modeled Goal state as its view and offers only its next action",
+        },
+        ConformanceConsumer::TypeScriptTest {
+            id: "apps/gents-desktop/tests/lean-conformance/session-goal-view.test.ts::session Goal view keeps the last read Goal state until another read classifies one",
+            app: "gents-desktop",
+            source_path: "apps/gents-desktop/tests/lean-conformance/session-goal-view.test.ts",
+            suite: "session Goal view",
+            test: "keeps the last read Goal state until another read classifies one",
+        },
+        ConformanceConsumer::TypeScriptTest {
             id: "packages/gents-desktop-chat/src/chat-shell.test.ts::projectChatShell matches generated Lean ClientShell projection contracts",
             app: "gents-desktop-chat",
             source_path: "packages/gents-desktop-chat/src/chat-shell.test.ts",

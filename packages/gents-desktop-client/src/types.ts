@@ -119,7 +119,6 @@ export type {
   SessionRowsWindow,
   SessionProjectionRevisionView,
   FoldedInputView,
-  GoalView,
   MessageView,
   PendingTurnView,
   PendingQueueEditRequest,
