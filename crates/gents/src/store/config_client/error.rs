@@ -460,14 +460,7 @@ impl ConfigClientError {
             ),
             // A local relationship change the actor may not manage is the
             // native counterpart of the HTTP relationship endpoint's 401/403.
-            Self::Node(error) => matches!(
-                error.as_ref(),
-                defra_node::Error::Transaction(query::TransactionError::Storage(
-                    storage::corekv::Error::ProjectionPermissionDenied
-                )) | defra_node::Error::Acp(
-                    acp::Error::NotManager { .. } | acp::Error::NotOwner { .. }
-                )
-            ),
+            Self::Node(error) => native_permission_denied(error),
             Self::EmbeddedGraphqlErrors { errors } => errors.iter().any(|error| {
                 error.code() == Some(gents_protocol::database_error::PERMISSION_DENIED_CODE)
             }),
@@ -643,6 +636,21 @@ impl From<defra_node::Error> for ConfigClientError {
 #[error("DefraDB transaction conflict")]
 pub struct TransactionConflict {
     pub(super) origin: ConflictSource,
+}
+
+/// Native wraps a refused relationship change in `RelationshipAcp`, naming the
+/// add or delete it refused; the refusal itself is the wrapped source.
+fn native_permission_denied(error: &defra_node::Error) -> bool {
+    match error {
+        defra_node::Error::Transaction(query::TransactionError::Storage(
+            storage::corekv::Error::ProjectionPermissionDenied,
+        ))
+        | defra_node::Error::Acp(acp::Error::NotManager { .. } | acp::Error::NotOwner { .. }) => {
+            true
+        }
+        defra_node::Error::RelationshipAcp { source, .. } => native_permission_denied(source),
+        _ => false,
+    }
 }
 
 #[cfg(test)]

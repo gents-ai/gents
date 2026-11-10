@@ -244,33 +244,44 @@ async fn process_command_with_clock(
         })
     }).await?;
     if let Some((receipt_doc, requester_did)) = pending_receipt {
+        // One transaction publishes the committed receipt's links and clears
+        // its pending flag. Native requires `get-collection` for a
+        // relationship change outside a transaction, which an Agent does not
+        // hold.
+        let requester = ::identity::Did::new(&requester_did)?;
         access
-            .add_resource_relationship(
-                "AgentSessionGoalReceipt",
-                &receipt_doc,
-                "parent",
-                "goal_controls",
-                doc_id,
-            )
+            .transact_write("goal.receipt_relationships_published", |txn| {
+                let (receipt_doc, requester) = (&receipt_doc, &requester);
+                Box::pin(async move {
+                    txn.add_resource_relationship(
+                        "AgentSessionGoalReceipt",
+                        receipt_doc,
+                        "parent",
+                        "goal_controls",
+                        doc_id,
+                    )
+                    .await?;
+                    txn.add_actor_relationship(
+                        "AgentSessionGoalReceipt",
+                        receipt_doc,
+                        "reader",
+                        requester,
+                    )
+                    .await?;
+                    let updated = txn.execute(&format!(
+                        r#"mutation {{ update_AgentSessionGoalReceipt(docID: "{}", input: {{ relationships_pending: false }}) {{ _docID }} }}"#,
+                        escape_graphql_string(receipt_doc),
+                    )).await?;
+                    anyhow::ensure!(
+                        updated["data"]["update_AgentSessionGoalReceipt"]
+                            .as_array()
+                            .is_some_and(|rows| rows.len() == 1),
+                        "pending goal receipt was not updated"
+                    );
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
             .await?;
-        access
-            .add_actor_relationship(
-                "AgentSessionGoalReceipt",
-                &receipt_doc,
-                "reader",
-                &::identity::Did::new(&requester_did)?,
-            )
-            .await?;
-        let updated = access.write("goal.receipt_relationships_published", &format!(
-            r#"mutation {{ update_AgentSessionGoalReceipt(docID: "{}", input: {{ relationships_pending: false }}) {{ _docID }} }}"#,
-            escape_graphql_string(&receipt_doc),
-        )).await?;
-        anyhow::ensure!(
-            updated["data"]["update_AgentSessionGoalReceipt"]
-                .as_array()
-                .is_some_and(|rows| rows.len() == 1),
-            "pending goal receipt was not updated"
-        );
     }
     Ok(deferred)
 }
