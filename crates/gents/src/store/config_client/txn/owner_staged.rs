@@ -60,14 +60,29 @@ pub(super) enum OwnerStagedCheckpoint {
     Revoke(Vec<OwnerStagedChange>),
 }
 
+/// Which subjects an operation may grant (`Identity.OwnerStaged.Target`);
+/// revocations only narrow access and are not constrained.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum TargetKind {
+    /// An Agent identity the runtime controls (`controls_agent`).
+    ControlledAgent,
+    /// A reader the RepositoryPlacement itself declares in `readers`.
+    DeclaredReader,
+    /// The `reader` set of this Callback, which must be bound to the Agent.
+    BoundCallback { callback_doc_id: String },
+    /// Any subject: pairing readers, named by an operator with Node authority.
+    Any,
+}
+
 /// What the requester must natively hold before the owner stages a change for
-/// it (`Identity.OwnerStaged.Authority`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// it (`Identity.OwnerStaged.Authority`): `update` on the runtime's own Node
+/// row in both cases, never `update` on the document alone, which `writer`
+/// grants.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Authority {
-    /// `update` on the changed document itself.
-    DocumentUpdate,
-    /// `update` on the runtime's own Node row, only for a pairing
-    /// observation; the runtime stages only one that it owns.
+    /// A configuration relation, granted only to targets of its kind.
+    Configuration(TargetKind),
+    /// A pairing observation's reader; the runtime stages only one it owns.
     PairingNode,
 }
 
@@ -97,7 +112,7 @@ impl StagedRelation {
                 doc_id: cursor_doc_id.clone(),
                 relation: "writer",
                 target: actor(agent_did)?,
-                authority: Authority::DocumentUpdate,
+                authority: Authority::Configuration(TargetKind::ControlledAgent),
             },
             OwnerStagedChange::PlacementReader {
                 placement_doc_id,
@@ -107,7 +122,7 @@ impl StagedRelation {
                 doc_id: placement_doc_id.clone(),
                 relation: "reader",
                 target: actor(reader_did)?,
-                authority: Authority::DocumentUpdate,
+                authority: Authority::Configuration(TargetKind::DeclaredReader),
             },
             OwnerStagedChange::WorkspaceSelection {
                 agent_doc_id,
@@ -121,7 +136,9 @@ impl StagedRelation {
                     callback_doc_id,
                     "reader",
                 )?,
-                authority: Authority::DocumentUpdate,
+                authority: Authority::Configuration(TargetKind::BoundCallback {
+                    callback_doc_id: callback_doc_id.clone(),
+                }),
             },
             OwnerStagedChange::PairingReader {
                 observation,
@@ -156,11 +173,13 @@ impl ConfigApplyTxn<'_> {
         }
     }
 
-    /// Whether this attempt dispatched a client-signed graph.
-    #[cfg(test)]
-    pub(crate) fn client_signed_write_dispatched_for_test(&self) -> bool {
-        self.client_signed_write_dispatched
-            .load(std::sync::atomic::Ordering::Acquire)
+    /// The apply's owner states `SignedConflictRebuild`'s contract for its
+    /// callback: it re-reads its inputs, has no effects outside its
+    /// transaction, and signs afresh on every attempt. Over HTTP this lets
+    /// the transaction owner rerun it after a confirmed PLAN discard.
+    pub(crate) fn authorize_planned_replay(&self) {
+        self.planned_replay_authorized
+            .store(true, std::sync::atomic::Ordering::Release);
     }
 
     /// After a successful callback: commit, revoke the plan first, or refuse
@@ -228,7 +247,7 @@ impl ConfigApplyTxn<'_> {
                     staged.relation,
                     &staged.target,
                     !grant,
-                    staged.authority,
+                    &staged.authority,
                 )
                 .await
             }
@@ -283,7 +302,7 @@ impl ConfigApplyTxn<'_> {
         relation: &str,
         target: &str,
         delete: bool,
-        authority: Authority,
+        authority: &Authority,
     ) -> Result<()> {
         crate::store::graphql::validate_collection_identifier(collection)?;
         let refused = |kind: fn(String, String) -> ConfigClientError| {
@@ -315,12 +334,27 @@ impl ConfigApplyTxn<'_> {
         // nothing about whether the document exists or who owns it
         // (`unauthorized_refusal_independent_of_document`).
         if !self
-            .owner_staged_request_allowed(requester, &runtime, collection, doc_id, authority)
+            .owner_staged_request_allowed(requester, &runtime, collection, authority)
             .await?
         {
             return refused(|collection, doc_id| {
                 ConfigClientError::OwnerStagedRelationshipDenied { collection, doc_id }
             });
+        }
+        // `out_of_kind_grant_is_refused`: after authority, before the owner.
+        if !delete {
+            let kind = match authority {
+                Authority::Configuration(kind) => kind,
+                Authority::PairingNode => &TargetKind::Any,
+            };
+            if !self.admits_target(&runtime, doc_id, target, kind).await? {
+                return refused(
+                    |collection, doc_id| ConfigClientError::OwnerStagedTargetRefused {
+                        collection,
+                        doc_id,
+                    },
+                );
+            }
         }
         // `foundOwner`: as the requester observes it, else as the runtime does,
         // so an authorized requester may change a runtime-owned document it
@@ -349,8 +383,8 @@ impl ConfigApplyTxn<'_> {
         // of its Agents, and the pairing authority reaches only observations
         // the runtime itself owns.
         let managed = match authority {
-            Authority::DocumentUpdate => {
-                owner == runtime || self.controls_agent(node, &runtime, &owner).await?
+            Authority::Configuration(_) => {
+                owner == runtime || self.controls_agent(&runtime, &owner).await?
             }
             Authority::PairingNode => owner == runtime,
         };
@@ -398,20 +432,23 @@ impl ConfigApplyTxn<'_> {
         Ok(())
     }
 
+    /// `authorized`: `update` on the runtime's own Node row, and a pairing
+    /// relation only on a pairing observation collection.
     async fn owner_staged_request_allowed(
         &self,
         requester: &identity::Did,
         runtime: &identity::Did,
         collection: &str,
-        doc_id: &str,
-        authority: Authority,
+        authority: &Authority,
     ) -> Result<bool> {
-        let (collection, doc_id) = match authority {
-            Authority::DocumentUpdate => (collection.to_owned(), doc_id.to_owned()),
-            Authority::PairingNode => match self.runtime_node_doc_id(runtime).await? {
-                Some(node) => ("Node".to_owned(), node),
-                None => return Ok(false),
-            },
+        if matches!(authority, Authority::PairingNode)
+            && !matches!(collection, "PeerPairingDesired" | "PeerPairingApplied")
+        {
+            return Ok(false);
+        }
+        let (collection, doc_id) = match self.runtime_node_doc_id(runtime).await? {
+            Some(node) => ("Node".to_owned(), node),
+            None => return Ok(false),
         };
         let decisions = self
             .observe_document_access(
@@ -460,18 +497,92 @@ impl ConfigApplyTxn<'_> {
         })
     }
 
+    /// `admitsTarget`, read as the runtime in this transaction.
+    async fn admits_target(
+        &self,
+        runtime: &identity::Did,
+        doc_id: &str,
+        target: &str,
+        kind: &TargetKind,
+    ) -> Result<bool> {
+        let read = |query: String| async move {
+            let response = self
+                .execute_local_response_with_actor(&query, Some(runtime.clone()), None)
+                .await?;
+            Ok::<_, ConfigClientError>(response.data.unwrap_or(Value::Null))
+        };
+        match kind {
+            TargetKind::Any => Ok(true),
+            TargetKind::ControlledAgent => match identity::Did::new(target) {
+                Ok(agent) => self.controls_agent(runtime, &agent).await,
+                Err(_) => Ok(false),
+            },
+            TargetKind::DeclaredReader => {
+                let data = read(format!(
+                    r#"{{ RepositoryPlacement(filter: {{_docID: {{_eq: "{}"}}}}, limit: 2) {{readers}} }}"#,
+                    escape_graphql_string(doc_id),
+                ))
+                .await?;
+                let Some([row]) = data["RepositoryPlacement"].as_array().map(Vec::as_slice) else {
+                    return Ok(false);
+                };
+                let readers = match &row["readers"] {
+                    Value::String(raw) => serde_json::from_str(raw).unwrap_or(Value::Null),
+                    other => other.clone(),
+                };
+                Ok(readers.as_array().is_some_and(|readers| {
+                    readers
+                        .iter()
+                        .any(|reader| reader["agent_did"].as_str() == Some(target))
+                }))
+            }
+            TargetKind::BoundCallback { callback_doc_id } => {
+                // The Callback's own configuration selects the Agent, read by
+                // the workspace-selection owner (`selected_agents`).
+                let data = read(format!(
+                    r#"{{ Agent(filter: {{_docID: {{_eq: "{}"}}}}, limit: 2) {{agent_did node_did}} Callback(filter: {{_docID: {{_eq: "{}"}}}}, limit: 2) {{callback_id node_did enabled handler}} }}"#,
+                    escape_graphql_string(doc_id),
+                    escape_graphql_string(callback_doc_id),
+                ))
+                .await?;
+                let (Some([agent]), Some([callback])) = (
+                    data["Agent"].as_array().map(Vec::as_slice),
+                    data["Callback"].as_array().map(Vec::as_slice),
+                ) else {
+                    return Ok(false);
+                };
+                let (Some(agent_did), Some(node_did)) =
+                    (agent["agent_did"].as_str(), callback["node_did"].as_str())
+                else {
+                    return Ok(false);
+                };
+                if agent["node_did"].as_str() != Some(node_did) {
+                    return Ok(false);
+                }
+                let mut value = callback.clone();
+                if let Some(raw) = value["handler"].as_str() {
+                    value["handler"] = serde_json::from_str(raw).unwrap_or(Value::Null);
+                }
+                if value["enabled"] == Value::Bool(false) {
+                    return Ok(false);
+                }
+                Ok(
+                    super::super::desired_state::workspace_selection::selected_agents(
+                        node_did, &value,
+                    )
+                    .is_ok_and(|agents| agents.contains(agent_did)),
+                )
+            }
+        }
+    }
+
     /// Whether `agent` is an Agent identity the runtime controls (`stagesAs`,
     /// `derivedAgents`): exactly one Agent row on the runtime's Node names it,
     /// as the runtime observes it in this transaction, and its DID derives
     /// from the runtime key and that row's creation nonce. A row's
     /// `agent_did` is written unverified, so a row alone never suffices; the
     /// requester's read access never decides it.
-    async fn controls_agent(
-        &self,
-        node: &defra_node::Node,
-        runtime: &identity::Did,
-        agent: &identity::Did,
-    ) -> Result<bool> {
+    async fn controls_agent(&self, runtime: &identity::Did, agent: &identity::Did) -> Result<bool> {
         let response = self
             .execute_local_response_with_actor(
                 &format!(
@@ -496,14 +607,14 @@ impl ConfigApplyTxn<'_> {
         else {
             return Ok(false);
         };
+        let Some(proof) = &self.agent_proof else {
+            return Ok(false);
+        };
         Ok(agent_did == agent.as_str()
-            && crate::store::identity::runtime_derives_agent(
-                node,
-                &gents_protocol::agent_identity::AgentIdentityBinding {
-                    agent_did: agent_did.to_owned(),
-                    creation_nonce: creation_nonce.to_owned(),
-                },
-            ))
+            && proof.derives(&gents_protocol::agent_identity::AgentIdentityBinding {
+                agent_did: agent_did.to_owned(),
+                creation_nonce: creation_nonce.to_owned(),
+            }))
     }
 }
 
@@ -535,15 +646,18 @@ impl ConfigAccess {
             TransactionMode::ConflictRetry,
             move |operation, rollback| {
                 let actor = actor.clone();
+                let proof = local.agent_proof.clone();
                 Box::pin(async move {
-                    ConfigApplyTxn::begin_local_owned(
+                    let mut txn = ConfigApplyTxn::begin_local_owned(
                         local.node(),
                         Some(actor),
                         operation,
                         rollback,
                         EmbeddedTransactionPurpose::VerifiedClient,
                     )
-                    .await
+                    .await?;
+                    txn.agent_proof = proof;
+                    Ok(txn)
                 })
             },
             callback,
@@ -600,8 +714,7 @@ impl ConfigAccess {
                         requester,
                         runtime,
                         staged.collection,
-                        &staged.doc_id,
-                        staged.authority,
+                        &staged.authority,
                     )
                     .await
                 })

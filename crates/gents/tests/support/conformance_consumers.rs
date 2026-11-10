@@ -84,6 +84,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "owner_staged_relationships_follow_the_document_owner",
         },
         ConformanceConsumer::RustTest {
+            id: "store::config_client::owner_staged_route::tests::forged_agent_row_never_makes_the_runtime_stage_as_its_did",
+            package: "gents",
+            source_path: "crates/gents/src/store/config_client/owner_staged_route/tests.rs",
+            module_path: "store::config_client::owner_staged_route::tests",
+            function: "forged_agent_row_never_makes_the_runtime_stage_as_its_did",
+        },
+        ConformanceConsumer::RustTest {
+            id: "store::config_client::owner_staged_route::tests::owner_staged_targets_follow_their_operation_kind",
+            package: "gents",
+            source_path: "crates/gents/src/store/config_client/owner_staged_route/tests.rs",
+            module_path: "store::config_client::owner_staged_route::tests",
+            function: "owner_staged_targets_follow_their_operation_kind",
+        },
+        ConformanceConsumer::RustTest {
             id: "store::config_client::desired_state::agent_target_access::tests::configured_agent_targets_grant_exactly_session_writer",
             package: "gents",
             source_path: "crates/gents/src/store/config_client/desired_state/agent_target_access.rs",

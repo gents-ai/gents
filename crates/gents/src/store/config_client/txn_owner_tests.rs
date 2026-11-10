@@ -636,6 +636,8 @@ async fn cancellation_after_embedded_begin_abandons_before_releasing_the_gate() 
                     owner_staged_revocations: std::sync::Mutex::new(
                         crate::store::config_client::txn::OwnerStagedRevocations::Send,
                     ),
+                    agent_proof: None,
+                    planned_replay_authorized: std::sync::atomic::AtomicBool::new(false),
                     publication_observer: None,
                     pack_approval: None,
                 })

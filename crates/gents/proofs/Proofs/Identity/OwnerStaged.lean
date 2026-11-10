@@ -33,23 +33,52 @@ def mayRequest (state : State) (requester resource id : String) : Bool :=
 
 def pairingResource : String := "pairing_observations"
 
+/-- Which subjects an operation may grant (revocations only narrow access and
+are not constrained). `controlledAgent`: an Agent identity the runtime
+controls (`derivedAgents`); an event cursor's writer is the Agent selected to
+consume it. `declared`: a subject the document's own declaration names
+(`DeclaredAccess`); a placement's readers are its declared `readers`.
+`boundCallback`: the `reader` entity set of a Callback whose own
+configuration selects the Agent (its handler's workspace Agents, read by the
+workspace-selection owner); a workspace selection names such a callback.
+`any`: an operator-named subject, for pairing readers, whose requester already
+holds `update` on the runtime's own Node. -/
+inductive Target where
+  | controlledAgent
+  | declared (subjects : List DID)
+  | boundCallback (callbacks : List String)
+  | any
+  deriving Repr
+
 /-- What the requester must natively hold before the owner stages a change for
-it. `documentUpdate`: `update` on the changed document itself. `pairingNode`:
-`update` on the runtime's own Node row, and only for a relation on a pairing
-observation; a client-requested runtime operation is authorized that way while
-the observation has no reader manager. The row is the single Node the runtime
-reads for its own `node_did` in the same transaction (`none` when it reads no
-row or several); the requester's view never chooses it. Native DefraDB keeps
+it, and which targets it may grant. Both authorities require `update` on the
+runtime's own Node row, the single Node the runtime reads for its own
+`node_did` in the same transaction (`none` when it reads no row or several);
+the requester's view never chooses it. `configuration`: the changed relations
+have no manager in the `configuration` and `agents` policies, so natively only
+the document's owner may change them, and before #2770 only a node
+administrator could. `update` on the document itself is not enough: it comes
+from `writer` (or `agents.config_writer`), and a writer could otherwise have
+the runtime hand `writer` to any DID or revoke the selected one
+(`Automation.rebindEventCursor`: only the cursor's creator rebinds it; the
+runtime creates the cursor for the configuring User, who holds Node
+authority). `pairingNode`: only for a relation on a pairing observation, which
+has no reader manager before its Node parent link. Native DefraDB keeps
 `node_did @index(unique: true)` against every live document on a local write,
 whatever the writer may read, but a replicated merge can keep a second,
 unindexed row, so a duplicate refuses rather than picks one. -/
 inductive Authority where
-  | documentUpdate
+  | configuration (node : Option String) (target : Target)
   | pairingNode (node : Option String)
   deriving Repr
 
+def Authority.target : Authority → Target
+  | .configuration _ target => target
+  | .pairingNode _ => .any
+
 def authorized (state : State) (requester : DID) (relation : Relation) : Authority → Bool
-  | .documentUpdate => mayRequest state requester relation.resource relation.id
+  | .configuration none _ => false
+  | .configuration (some node) _ => allowed 5 state requester "nodes" node "update"
   | .pairingNode none => false
   | .pairingNode (some node) =>
       relation.resource == pairingResource && allowed 5 state requester "nodes" node "update"
@@ -82,7 +111,7 @@ unverified by anyone who may create Agent rows, so a row alone never makes its
 DID an owner the runtime acts as. The requester's read access never decides
 whether an owner is one of the runtime's Agents. -/
 def stagesAs (runtime : DID) (agentsOf : DID → List DID) (owner : DID) : Authority → Bool
-  | .documentUpdate => owner == runtime || (agentsOf runtime).contains owner
+  | .configuration _ _ => owner == runtime || (agentsOf runtime).contains owner
   | .pairingNode _ => owner == runtime
 
 /-- An Agent row on a runtime's Node: the DID it names and its creation nonce. -/
@@ -91,22 +120,40 @@ structure AgentRow where
   nonce : String
   deriving Repr
 
-/-- The Agent identities a runtime controls: the DIDs of its rows that derive
-from its key and the row's nonce (`derive`, native `resolve_agent_identity`). -/
-def derivedAgents (derive : DID → String → DID) (rows : DID → List AgentRow) (runtime : DID) :
-    List DID :=
-  (rows runtime).filterMap fun row => if derive runtime row.nonce == row.did then some row.did else none
+/-- Exactly one of the runtime's rows names `did`. -/
+def namedOnce (rows : List AgentRow) (did : DID) : Bool :=
+  (rows.filter fun row => row.did == did).length == 1
+
+/-- The Agent identities a runtime controls, given its derivation proof (`none`
+when the deciding host holds no runtime key): the DIDs named by exactly one of
+its rows whose nonce derives them (`derive`). `derive` is opaque here; its
+correspondence to native `derive_agent_key` (the DID derived from the runtime
+key and the creation nonce) holds by construction of the conformance cases,
+which replay genuine nonces, forged DIDs, a genuine nonce under a foreign DID,
+a duplicated genuine row and a missing proof against the native check. -/
+def derivedAgents (proof : Option (DID → String → DID)) (rows : DID → List AgentRow)
+    (runtime : DID) : List DID :=
+  match proof with
+  | none => []
+  | some derive => (rows runtime).filterMap fun row =>
+      if derive runtime row.nonce == row.did && namedOnce (rows runtime) row.did then some row.did
+      else none
+
+theorem no_proof_controls_no_agent (rows : DID → List AgentRow) (runtime : DID) :
+    derivedAgents none rows runtime = [] := rfl
 
 theorem derived_agent_has_a_deriving_row (derive : DID → String → DID)
     (rows : DID → List AgentRow) (runtime owner : DID)
-    (h : owner ∈ derivedAgents derive rows runtime) :
-    ∃ row ∈ rows runtime, row.did = owner ∧ derive runtime row.nonce = owner := by
+    (h : owner ∈ derivedAgents (some derive) rows runtime) :
+    ∃ row ∈ rows runtime, row.did = owner ∧ derive runtime row.nonce = owner ∧
+      namedOnce (rows runtime) owner = true := by
   unfold derivedAgents at h
   obtain ⟨row, hrow, hsome⟩ := List.mem_filterMap.mp h
-  by_cases hd : (derive runtime row.nonce == row.did) = true
+  by_cases hd : (derive runtime row.nonce == row.did && namedOnce (rows runtime) row.did) = true
   · simp only [hd, if_true, Option.some.injEq] at hsome
     subst hsome
-    exact ⟨row, hrow, rfl, beq_iff_eq.mp hd⟩
+    simp only [Bool.and_eq_true, beq_iff_eq] at hd
+    exact ⟨row, hrow, rfl, hd.1, hd.2⟩
   · simp [hd] at hsome
 
 inductive Outcome where
@@ -114,6 +161,7 @@ inductive Outcome where
   | unmanaged
   | direct
   | staged (owner : DID)
+  | outOfKind
   deriving BEq, DecidableEq, Repr
 
 def Outcome.name : Outcome → String
@@ -121,6 +169,7 @@ def Outcome.name : Outcome → String
   | .unmanaged => "unmanaged"
   | .direct => "direct"
   | .staged _ => "staged"
+  | .outOfKind => "out_of_kind"
 
 /-- The owner-staged request: authority first, then the owner. A requester that
 owns the document changes it itself and native ACP decides. -/
@@ -134,9 +183,48 @@ def outcome (state : State) (runtime : DID) (agentsOf : DID → List DID) (reque
       else if stagesAs runtime agentsOf owner authority then .staged owner
       else .unmanaged
 
+/-- Whether a grant names a target its operation admits. -/
+def admitsTarget (runtime : DID) (agentsOf : DID → List DID) (relation : Relation) :
+    Target → Bool
+  | .any => true
+  | .controlledAgent => match relation.subject with
+    | .actor did => (agentsOf runtime).contains did
+    | _ => false
+  | .declared subjects => match relation.subject with
+    | .actor did => subjects.contains did
+    | _ => false
+  | .boundCallback callbacks => match relation.subject with
+    | .entitySet "configuration" callback "reader" => callbacks.contains callback
+    | _ => false
+
+/-- The change as decided: authority first (so an unauthorized requester learns
+nothing more), then the grant's target kind, then the owner. -/
+def decision (state : State) (runtime : DID) (agentsOf : DID → List DID) (requester : DID)
+    (authority : Authority) (relation : Relation) (grant : Bool) : Outcome :=
+  if !authorized state requester relation authority then .denied
+  else if grant && !admitsTarget runtime agentsOf relation authority.target then .outOfKind
+  else outcome state runtime agentsOf requester authority relation
+
+theorem revocation_decision_is_the_outcome (state : State) (runtime : DID)
+    (agentsOf : DID → List DID) (requester : DID) (authority : Authority) (relation : Relation) :
+    decision state runtime agentsOf requester authority relation false =
+      outcome state runtime agentsOf requester authority relation := by
+  unfold decision outcome
+  cases authorized state requester relation authority <;> simp
+
+/-- A grant whose target its operation does not admit is never staged or
+applied, whoever owns the document. -/
+theorem out_of_kind_grant_is_refused (state : State) (runtime : DID)
+    (agentsOf : DID → List DID) (requester : DID) (authority : Authority) (relation : Relation)
+    (outside : admitsTarget runtime agentsOf relation authority.target = false) :
+    decision state runtime agentsOf requester authority relation true = .denied ∨
+      decision state runtime agentsOf requester authority relation true = .outOfKind := by
+  unfold decision
+  cases authorized state requester relation authority <;> simp [outside]
+
 def request (state : State) (runtime : DID) (agentsOf : DID → List DID) (requester : DID)
     (authority : Authority) (relation : Relation) (grant : Bool) : State :=
-  match outcome state runtime agentsOf requester authority relation with
+  match decision state runtime agentsOf requester authority relation grant with
   | .direct => apply state (if grant then .grantAs requester relation else .revokeAs requester relation)
   | .staged owner => ownerStaged state true owner relation grant
   | _ => state
@@ -174,14 +262,40 @@ theorem forged_row_owner_is_never_staged_as (state : State) (runtime : DID)
     (authority : Authority) (relation : Relation) (owner : DID)
     (forged : ∀ row ∈ rows runtime, row.did = owner → derive runtime row.nonce ≠ owner)
     (notRuntime : owner ≠ runtime) :
-    outcome state runtime (derivedAgents derive rows) requester authority relation ≠
+    outcome state runtime (derivedAgents (some derive) rows) requester authority relation ≠
       .staged owner := by
   intro h
   rcases staged_owner_is_runtime_or_its_agent state runtime _ requester authority relation owner h
     with hrt | hmem
   · exact notRuntime hrt
-  · obtain ⟨row, hrow, hdid, hder⟩ := derived_agent_has_a_deriving_row derive rows runtime owner hmem
+  · obtain ⟨row, hrow, hdid, hder, _⟩ :=
+      derived_agent_has_a_deriving_row derive rows runtime owner hmem
     exact forged row hrow hdid hder
+
+/-- Without a derivation proof the runtime stages only as itself. -/
+theorem without_proof_stages_only_as_the_runtime (state : State) (runtime : DID)
+    (rows : DID → List AgentRow) (requester : DID) (authority : Authority) (relation : Relation)
+    (owner : DID)
+    (h : outcome state runtime (derivedAgents none rows) requester authority relation =
+      .staged owner) :
+    owner = runtime := by
+  rcases staged_owner_is_runtime_or_its_agent state runtime _ requester authority relation owner h
+    with hrt | hmem
+  · exact hrt
+  · simp [derivedAgents] at hmem
+
+/-- A DID named by two rows is not an Agent the runtime controls, even when a
+row's nonce derives it: anyone who may write Agent rows can copy a genuine
+Agent's public binding into a second row, which refuses staging as that Agent
+(fail closed) rather than choosing a row. -/
+theorem duplicated_row_names_no_agent (derive : DID → String → DID)
+    (rows : DID → List AgentRow) (runtime owner : DID)
+    (duplicated : namedOnce (rows runtime) owner = false) :
+    owner ∉ derivedAgents (some derive) rows runtime := by
+  intro hmem
+  obtain ⟨_, _, _, _, once⟩ := derived_agent_has_a_deriving_row derive rows runtime owner hmem
+  rw [once] at duplicated
+  cases duplicated
 
 /-- The pairing authority stages only on a pairing observation the runtime owns,
 through the runtime's own Node row. -/
@@ -215,25 +329,45 @@ theorem unauthorized_refusal_independent_of_document (state state' : State) (run
         outcome state' runtime agentsOf requester authority relation ∧
       outcome state runtime agentsOf requester authority relation = .denied ∧
       request state runtime agentsOf requester authority relation grant = state := by
-  simp [outcome, request, refused, refused']
+  simp [outcome, decision, request, refused, refused']
 
-/-- The fixture runtime's key derives `creator-agent` from nonce `n1` and
-nothing that any other row names. -/
+theorem out_of_kind_grant_changes_nothing (state : State) (runtime : DID)
+    (agentsOf : DID → List DID) (requester : DID) (authority : Authority) (relation : Relation)
+    (outside : admitsTarget runtime agentsOf relation authority.target = false) :
+    request state runtime agentsOf requester authority relation true = state := by
+  unfold request
+  rcases out_of_kind_grant_is_refused state runtime agentsOf requester authority relation outside
+    with h | h <;> rw [h]
+
+/-- The fixture runtime's key derives one Agent per genuine nonce. -/
 def fixtureDerive : DID → String → DID
   | "runtime", "n1" => "creator-agent"
+  | "runtime", "n2" => "agent"
+  | "runtime", "n3" => "sibling"
+  | "runtime", "n4" => "dup-agent"
   | runtime, nonce => runtime ++ "/derived/" ++ nonce
 
-/-- Agent rows on each Node in these fixtures: a genuine one, and a forged one
-that names the User `user`. -/
+/-- Agent rows on the fixture runtime's Node: genuine rows, a forged row that
+names the User `user`, a genuine nonce under the foreign DID `user2`, and a
+genuine row duplicated. -/
 def fixtureRows : DID → List AgentRow
-  | "runtime" => [⟨"creator-agent", "n1"⟩, ⟨"user", "forged"⟩]
+  | "runtime" => [⟨"creator-agent", "n1"⟩, ⟨"agent", "n2"⟩, ⟨"sibling", "n3"⟩,
+      ⟨"user", "forged"⟩, ⟨"user2", "n1"⟩, ⟨"dup-agent", "n4"⟩, ⟨"dup-agent", "n4"⟩]
   | _ => []
 
-/-- Agent identities each fixture runtime controls. -/
-def agentsOf : DID → List DID := derivedAgents fixtureDerive fixtureRows
+/-- Agent identities each fixture runtime controls, with its derivation proof. -/
+def agentsOf : DID → List DID := derivedAgents (some fixtureDerive) fixtureRows
 
-theorem forged_fixture_row_names_no_agent : agentsOf "runtime" = ["creator-agent"] := by
+theorem forged_fixture_rows_name_no_agent :
+    agentsOf "runtime" = ["creator-agent", "agent", "sibling"] ∧
+      derivedAgents none fixtureRows "runtime" = [] := by
   native_decide
+
+/-- Fixture authorities: Node `update` on the runtime's Node, and per operation
+the targets it may grant. -/
+def cursorAuthority : Authority := .configuration (some "node") .controlledAgent
+def placementAuthority : Authority := .configuration (some "node") (.declared ["writer"])
+def selectionAuthority : Authority := .configuration (some "node") (.boundCallback ["callback"])
 
 def emptyHome : State :=
   { objects := [⟨"nodes", "node", "user"⟩],
@@ -248,9 +382,9 @@ def runtimeCursor : State :=
   Automation.publishEventCursor emptyHome "runtime" "cursor" "node" "agent" true true
 
 def cursorRebound (requester : String) : State :=
-  let revoked := request runtimeCursor "runtime" agentsOf requester .documentUpdate
+  let revoked := request runtimeCursor "runtime" agentsOf requester cursorAuthority
     ⟨"configuration", "cursor", "writer", .actor "agent"⟩ false
-  request revoked "runtime" agentsOf requester .documentUpdate
+  request revoked "runtime" agentsOf requester cursorAuthority
     ⟨"configuration", "cursor", "writer", .actor "sibling"⟩ true
 
 def cursorWritable (state : State) (agent : String) : Bool :=
@@ -279,7 +413,7 @@ def agentPlacement : State :=
     enrolled := [] }
 
 def placementDeclared (requester : String) : State :=
-  request agentPlacement "runtime" agentsOf requester .documentUpdate
+  request agentPlacement "runtime" agentsOf requester placementAuthority
     (DeclaredAccess.readerRelation "configuration" "placement" "writer") true
 
 theorem user_cannot_declare_readers_of_an_agent_placement_directly :
@@ -307,7 +441,7 @@ def selection : Relation :=
   ⟨"agents", "target", "workspace_selected_by", .entitySet "configuration" "callback" "reader"⟩
 
 def agentSelected (requester : String) : State :=
-  request runtimeAgent "runtime" agentsOf requester .documentUpdate selection true
+  request runtimeAgent "runtime" agentsOf requester selectionAuthority selection true
 
 theorem user_cannot_select_a_runtime_agent_directly :
     allowed 8 (apply runtimeAgent (.grantAs "user" selection)) "creator" "agents" "target" "read"
@@ -323,29 +457,51 @@ staged, even for a requester that may update it. -/
 theorem unmanaged_owner_is_not_staged :
     let foreign : State := { agentPlacement with
       objects := [⟨"nodes", "node", "user"⟩, ⟨"configuration", "placement", "stranger"⟩] }
-    outcome foreign "runtime" agentsOf "user" .documentUpdate
+    outcome foreign "runtime" agentsOf "user" placementAuthority
       (DeclaredAccess.readerRelation "configuration" "placement" "writer") = .unmanaged := by
   native_decide
 
-/-- A User-owned placement under a Node that `admin` administers: `admin` may
-update it, and a forged Agent row names its owner `user`. -/
-def userPlacement : State :=
-  { objects := [⟨"nodes", "node", "user"⟩, ⟨"configuration", "placement", "user"⟩],
+/-- A placement owned by `owner` under a Node that `admin` administers, so
+`admin` holds Node `update`. -/
+def placementOwnedBy (owner : String) : State :=
+  { objects := [⟨"nodes", "node", "user"⟩, ⟨"configuration", "placement", owner⟩],
     relations := [⟨"configuration", "placement", "parent", .object "nodes" "node"⟩,
       ⟨"nodes", "node", "administrator", .actor "admin"⟩],
     enrolled := [] }
 
-def forgedRowOutcome (requester : String) : Outcome :=
-  outcome userPlacement "runtime" agentsOf requester .documentUpdate
-    (DeclaredAccess.readerRelation "configuration" "placement" "writer")
+/-- The administrator's declared-reader grant on a placement owned by `owner`,
+with or without the runtime's derivation proof. -/
+def ownerRowOutcome (owner : String) (proof : Bool) : Outcome :=
+  decision (placementOwnedBy owner) "runtime"
+    (derivedAgents (if proof then some fixtureDerive else none) fixtureRows) "admin"
+    placementAuthority (DeclaredAccess.readerRelation "configuration" "placement" "writer") true
 
-/-- The administrator may update the User's placement, but the runtime never
-stages as the User a forged row names. -/
-theorem forged_agent_row_is_refused_as_unmanaged :
-    authorized userPlacement "admin"
-        (DeclaredAccess.readerRelation "configuration" "placement" "writer") .documentUpdate =
-      true ∧
-    forgedRowOutcome "admin" = .unmanaged := by
+/-- The administrator may request the change, but the runtime never stages as
+a DID a forged row names, as a foreign DID under a genuine nonce, as a
+duplicated genuine Agent, or as any Agent without its derivation proof; a
+genuine Agent's placement is staged. -/
+theorem owner_rows_follow_the_derivation_proof :
+    [ownerRowOutcome "user" true, ownerRowOutcome "user2" true, ownerRowOutcome "dup-agent" true,
+     ownerRowOutcome "creator-agent" false] =
+      [.unmanaged, .unmanaged, .unmanaged, .unmanaged] ∧
+    ownerRowOutcome "creator-agent" true = .staged "creator-agent" := by
+  native_decide
+
+/-- Out-of-kind targets: a cursor writer that is no Agent the runtime
+controls, a placement reader the placement does not declare, and a callback
+not bound to the Agent are refused; a writer of the cursor, which holds
+document `update` but no Node authority, is denied. -/
+theorem out_of_kind_targets_are_refused :
+    [decision runtimeCursor "runtime" agentsOf "user" cursorAuthority
+        ⟨"configuration", "cursor", "writer", .actor "outsider"⟩ true,
+     decision agentPlacement "runtime" agentsOf "user" placementAuthority
+        (DeclaredAccess.readerRelation "configuration" "placement" "outsider") true,
+     decision runtimeAgent "runtime" agentsOf "user" selectionAuthority
+        ⟨"agents", "target", "workspace_selected_by", .entitySet "configuration" "unbound" "reader"⟩
+        true] = [.outOfKind, .outOfKind, .outOfKind] ∧
+    allowed 5 runtimeCursor "agent" "configuration" "cursor" "update" = true ∧
+    decision runtimeCursor "runtime" agentsOf "agent" cursorAuthority
+        ⟨"configuration", "cursor", "writer", .actor "outsider"⟩ true = .denied := by
   native_decide
 
 /-! ### Pairing readers (`Operations.pairingReaderFixture`)
@@ -515,10 +671,15 @@ that a separate owner-staged command then modifies. An apply that needs
 owner-staged revocations runs in three steps:
 
 * PLAN: a pass that commits nothing determines the revocations and grants the
-  apply needs (`planPass`). Its transaction, with any client-signed graph it
+  apply needs. Its transaction, with any client-signed graph it
   dispatched, is discarded; only a confirmed discard proves none of its writes
   can commit, so otherwise nothing is revoked and the apply is not run again
-  (`unconfirmed_plan_changes_nothing`). WRITE signs its graph afresh.
+  (`planDiscarded`). A confirmed discard proves the PLAN transaction did not
+  commit, not that its signed graph is invalid; rerunning after a dispatched
+  client-signed write therefore also requires the caller's explicit replay
+  authorization, the residual being exactly `SignedConflictRebuild`'s: the
+  callback re-reads its inputs, has no effects outside its transaction, and
+  every attempt signs afresh. WRITE signs its graph afresh.
   External premise: a client-signed HTTP endpoint refuses unsigned mutations,
   and the revocations an apply needs can depend on its own writes, so PLAN
   cannot skip or unsign them.
@@ -538,7 +699,7 @@ In the requester's embedded transaction the same refusal rolls back the whole
 apply instead, and no plan is needed. -/
 
 def Outcome.refused : Outcome → Bool
-  | .denied | .unmanaged => true
+  | .denied | .unmanaged | .outOfKind => true
   | _ => false
 
 /-- Decide `changes` in order as `requester`, stopping at the first refusal:
@@ -547,7 +708,7 @@ def decideInOrder (runtime : DID) (agentsOf : DID → List DID) (requester : DID
     (authority : Authority) (grant : Bool) : State → List Relation → State × List Relation
   | state, [] => (state, [])
   | state, relation :: rest =>
-    if (outcome state runtime agentsOf requester authority relation).refused then
+    if (decision state runtime agentsOf requester authority relation grant).refused then
       (state, relation :: rest)
     else decideInOrder runtime agentsOf requester authority grant
       (request state runtime agentsOf requester authority relation grant) rest
@@ -576,16 +737,6 @@ structure HttpApplyResult where
   state : State
   committed : Bool
   result : HttpApply
-
-/-- Whether a pass of an HTTP apply may commit its transaction. -/
-structure Pass where
-  commits : Bool
-  deriving DecidableEq, Repr
-
-/-- The planning pass commits nothing; it is discarded before any revocation. -/
-def planPass : Pass := ⟨false⟩
-
-theorem plan_pass_commits_nothing : planPass.commits = false := rfl
 
 /-- PLAN determined `revocations` and `grants`; `planDiscarded` is the native
 observation that its transaction was confirmed discarded; REVOKE decides the
@@ -619,6 +770,7 @@ theorem revocation_request_is_no_wider (state : State) (runtime : DID)
     (h : x ∈ (request state runtime agentsOf requester authority relation false).relations) :
     x ∈ state.relations := by
   unfold request at h
+  rw [revocation_decision_is_the_outcome] at h
   split at h
   · simp only [apply, Bool.false_eq_true, if_false] at h
     split at h
@@ -746,13 +898,6 @@ def applyOverHttp (state : State) (runtime : DID) (agentsOf : DID → List DID) 
     revokeThenWrite state runtime agentsOf requester authority revocations grants planHolds
   else ⟨state, false, .planUnconfirmed⟩
 
-/-- An unconfirmed planning discard revokes, writes and grants nothing. -/
-theorem unconfirmed_plan_changes_nothing (state : State) (runtime : DID)
-    (agentsOf : DID → List DID) (requester : DID) (authority : Authority)
-    (revocations grants : List Relation) (planHolds : Bool) :
-    applyOverHttp state runtime agentsOf requester authority revocations grants false planHolds =
-      ⟨state, false, .planUnconfirmed⟩ := rfl
-
 /-- A refused revocation, a changed plan or an unconfirmed planning discard
 commits no documents, and access ends up no wider than before the apply. -/
 theorem aborted_apply_commits_nothing_and_is_no_wider (state : State) (runtime : DID)
@@ -820,7 +965,7 @@ refused grant pending. -/
 def cursorWriter (agent : String) : Relation := ⟨"configuration", "cursor", "writer", .actor agent⟩
 
 def cursorApply (requester : String) (revocations grants : List Relation) : HttpApplyResult :=
-  applyOverHttp runtimeCursor "runtime" agentsOf requester .documentUpdate revocations grants
+  applyOverHttp runtimeCursor "runtime" agentsOf requester cursorAuthority revocations grants
     true true
 
 theorem cursor_rebind_over_http_follows_the_ordering :
@@ -833,7 +978,7 @@ theorem cursor_rebind_over_http_follows_the_ordering :
     [cursorWritable user.state "agent", cursorWritable user.state "sibling",
      cursorWritable aborted.state "agent", cursorWritable aborted.state "sibling",
      cursorWritable incomplete.state "sibling"] = [false, true, true, false, false] ∧
-    ((applyEmbedded runtimeCursor "runtime" agentsOf "user" .documentUpdate
+    ((applyEmbedded runtimeCursor "runtime" agentsOf "user" cursorAuthority
       [cursorWriter "agent"] [cursorWriter "sibling"]).map State.relations ==
         some user.state.relations) = true := by
   native_decide
@@ -903,28 +1048,37 @@ def casesJson : String :=
     PackPlacementReaders.readable (PackPlacementReaders.install agentPlacement requester [] ["writer"]) "writer"
   let selectionDirect (requester : String) :=
     allowed 8 (apply runtimeAgent (.grantAs requester selection)) "creator" "agents" "target" "read"
-  let cursorOutcome (requester : String) :=
-    outcome runtimeCursor "runtime" agentsOf requester .documentUpdate
-      ⟨"configuration", "cursor", "writer", .actor "sibling"⟩
+  let cursorGrant (requester target : String) :=
+    decision runtimeCursor "runtime" agentsOf requester cursorAuthority
+      ⟨"configuration", "cursor", "writer", .actor target⟩ true
+  let placementGrant (requester reader : String) :=
+    decision agentPlacement "runtime" agentsOf requester placementAuthority
+      (DeclaredAccess.readerRelation "configuration" "placement" reader) true
+  let selectionGrant (requester callback : String) :=
+    decision runtimeAgent "runtime" agentsOf requester selectionAuthority
+      ⟨"agents", "target", "workspace_selected_by", .entitySet "configuration" callback "reader"⟩ true
+  let ownerCase (path owner : String) (proof : Bool) :=
+    let result := ownerRowOutcome owner proof
+    let staged := match result with
+      | .staged _ => true
+      | _ => false
+    caseJson path "admin" false staged result
   (Lean.toJson (
-    (["user", "outsider"].map fun r =>
+    (["user", "outsider", "agent"].map fun r =>
       caseJson "event_cursor_rebind" r (cursorDirect r) (cursorWritable (cursorRebound r) "sibling")
-        (cursorOutcome r)) ++
+        (cursorGrant r "sibling")) ++
+    [caseJson "event_cursor_outsider_writer" "user" false false (cursorGrant "user" "outsider")] ++
     (["user", "outsider"].map fun r =>
       caseJson "declared_placement_readers" r (placementDirect r)
-        (PackPlacementReaders.readable (placementDeclared r) "writer")
-        (outcome agentPlacement "runtime" agentsOf r .documentUpdate
-          (DeclaredAccess.readerRelation "configuration" "placement" "writer"))) ++
-    (["admin"].map fun r =>
-      caseJson "forged_agent_row" r false
-        (PackPlacementReaders.readable
-          (request userPlacement "runtime" agentsOf r .documentUpdate
-            (DeclaredAccess.readerRelation "configuration" "placement" "writer") true) "writer")
-        (forgedRowOutcome r)) ++
+        (PackPlacementReaders.readable (placementDeclared r) "writer") (placementGrant r "writer")) ++
+    [caseJson "placement_undeclared_reader" "user" false false (placementGrant "user" "outsider")] ++
+    [ownerCase "forged_agent_row" "user" true, ownerCase "genuine_nonce_foreign_did" "user2" true,
+     ownerCase "duplicate_agent_row" "dup-agent" true, ownerCase "no_proof" "creator-agent" false,
+     ownerCase "derived_agent_row" "creator-agent" true] ++
     (["user", "outsider"].map fun r =>
       caseJson "workspace_selection" r (selectionDirect r)
-        (allowed 8 (agentSelected r) "creator" "agents" "target" "read")
-        (outcome runtimeAgent "runtime" agentsOf r .documentUpdate selection)) ++
+        (allowed 8 (agentSelected r) "creator" "agents" "target" "read") (selectionGrant r "callback")) ++
+    [caseJson "workspace_unbound_callback" "user" false false (selectionGrant "user" "unbound")] ++
     pairingCasesJson)).compress
 
 end Identity.OwnerStaged

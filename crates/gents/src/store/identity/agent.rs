@@ -141,55 +141,37 @@ pub async fn provision_agent_identity_for_agent(
     provision_agent_identity(runtime).map_err(Into::into)
 }
 
-/// The key of the runtime that owns each embedded node, bound by the host that
-/// serves the node with that key. Store owners use it to prove which Agent
-/// identities the runtime controls (`Identity.OwnerStaged.derivedAgents`); a
-/// node with no bound key proves none.
-type BoundRuntimes = std::sync::Mutex<
-    rapidhash::RapidHashMap<usize, (std::sync::Weak<defra_node::Node>, Arc<dyn NodeIdentity>)>,
->;
+/// Proof of which Agent identities a runtime controls: the one thing a store
+/// owner may ask of the runtime key it is handed explicitly
+/// (`Identity.OwnerStaged.derivedAgents`). It never signs.
+#[derive(Clone)]
+pub struct RuntimeAgentProof(Arc<dyn NodeIdentity>);
 
-fn runtime_identities() -> &'static BoundRuntimes {
-    use rapidhash::{HashMapExt, RapidHashMap};
-    static BOUND: std::sync::OnceLock<BoundRuntimes> = std::sync::OnceLock::new();
-    BOUND.get_or_init(|| std::sync::Mutex::new(RapidHashMap::new()))
-}
-
-/// Bind `runtime` as the key of `node`. A key whose DID is not the node's own
-/// identity is not bound.
-pub fn bind_runtime_identity(node: &Arc<defra_node::Node>, runtime: Arc<dyn NodeIdentity>) {
-    if node.node_identity_did() != Some(runtime.did()) {
-        return;
+impl std::fmt::Debug for RuntimeAgentProof {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_tuple("RuntimeAgentProof")
+            .field(&self.0.did())
+            .finish()
     }
-    let mut bound = runtime_identities()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    bound.retain(|_, (node, _)| node.strong_count() > 0);
-    bound.insert(Arc::as_ptr(node) as usize, (Arc::downgrade(node), runtime));
 }
 
-/// Whether `binding` names an Agent identity that `node`'s bound runtime key
-/// derives (`resolve_agent_identity`). Fails closed without a bound key.
-pub(crate) fn runtime_derives_agent(
-    node: &defra_node::Node,
-    binding: &AgentIdentityBinding,
-) -> bool {
-    let runtime = {
-        let bound = runtime_identities()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        bound
-            .get(&(node as *const defra_node::Node as usize))
-            .filter(|(weak, _)| {
-                weak.upgrade()
-                    .is_some_and(|live| std::ptr::eq(Arc::as_ptr(&live), node))
-            })
-            .map(|(_, runtime)| Arc::clone(runtime))
-    };
-    runtime.is_some_and(|runtime| {
-        node.node_identity_did() == Some(runtime.did())
-            && resolve_agent_identity(runtime.as_ref(), binding).is_ok()
-    })
+impl RuntimeAgentProof {
+    pub fn new(runtime: Arc<dyn NodeIdentity>) -> Self {
+        Self(runtime)
+    }
+
+    /// The DID of the runtime key this proof derives from.
+    pub fn runtime_did(&self) -> &str {
+        self.0.did()
+    }
+
+    /// Whether `binding`'s DID derives from this runtime key and its creation
+    /// nonce. Only the derived DID is compared; no signer is built.
+    pub fn derives(&self, binding: &AgentIdentityBinding) -> bool {
+        derive_agent_key(self.0.as_ref(), &binding.creation_nonce)
+            .is_ok_and(|derived| derived.did() == binding.agent_did)
+    }
 }
 
 pub fn resolve_agent_identity(

@@ -142,13 +142,16 @@ async fn event_configuration_publication_rebinding_and_revocation_use_native_gra
             .unwrap()
     };
     let directory = tempfile::tempdir()?;
-    let root = crate::KeyIdentity::load_or_create(directory.path().join("node.key"), None)?;
-    let owner_binding = crate::store::identity::provision_agent_identity(&root)?;
-    let first_binding = crate::store::identity::provision_agent_identity(&root)?;
-    let second_binding = crate::store::identity::provision_agent_identity(&root)?;
-    let owner = crate::store::identity::resolve_agent_identity(&root, &owner_binding)?;
-    let first = crate::store::identity::resolve_agent_identity(&root, &first_binding)?;
-    let second = crate::store::identity::resolve_agent_identity(&root, &second_binding)?;
+    let root = Arc::new(crate::KeyIdentity::load_or_create(
+        directory.path().join("node.key"),
+        None,
+    )?);
+    let owner_binding = crate::store::identity::provision_agent_identity(root.as_ref())?;
+    let first_binding = crate::store::identity::provision_agent_identity(root.as_ref())?;
+    let second_binding = crate::store::identity::provision_agent_identity(root.as_ref())?;
+    let owner = crate::store::identity::resolve_agent_identity(root.as_ref(), &owner_binding)?;
+    let first = crate::store::identity::resolve_agent_identity(root.as_ref(), &first_binding)?;
+    let second = crate::store::identity::resolve_agent_identity(root.as_ref(), &second_binding)?;
     let node = Arc::new(
         defra_node::Node::builder()
             .with_node_identity_did(root.did())
@@ -156,11 +159,14 @@ async fn event_configuration_publication_rebinding_and_revocation_use_native_gra
             .build()
             .await?,
     );
+    // The configuring access is built by the host that holds the runtime key,
+    // so the owner-staged decision can prove which Agents the runtime controls.
     let user = ConfigAccess::local_managed_agent(
         node.clone(),
         identity::Did::new(owner.did())?,
         owner.as_ref(),
-    )?;
+    )?
+    .with_runtime_agent_proof(crate::store::identity::RuntimeAgentProof::new(root.clone()));
     let runtime = ConfigAccess::local_as(node.clone(), identity::Did::new(root.did())?);
     for did in [owner.did(), first.did(), second.did()] {
         for permission in [

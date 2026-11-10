@@ -58,6 +58,7 @@ impl ConfigAccess {
             agent_signer: None,
             client_signed_writes: false,
             client_endpoint: None,
+            agent_proof: None,
         })))
     }
 

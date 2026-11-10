@@ -9,7 +9,7 @@ mod self_config_inference;
 pub(crate) mod semantics;
 pub(super) mod task_selection;
 pub(super) mod validate;
-mod workspace_selection;
+pub(in crate::store::config_client) mod workspace_selection;
 
 use super::{ConfigApplyTxn, ConfigRelationshipGrant};
 use crate::store::graphql::escape_graphql_string;
@@ -128,6 +128,9 @@ pub(crate) async fn apply_desired_state_plan_with_semantics(
     binding: Option<&ConfigurationNodeBinding>,
     semantics: &dyn DesiredStateSemantics,
 ) -> Result<DesiredStateApplyCounts> {
+    // The apply re-reads every input in its transaction and has no effects
+    // outside it; each attempt signs afresh.
+    txn.authorize_planned_replay();
     ensure_expectations_hold(txn, plan).await?;
     let event_grants = semantics.capture_event_grants(txn, plan).await?;
     let workspace_selection = workspace_selection::capture(txn, plan).await?;

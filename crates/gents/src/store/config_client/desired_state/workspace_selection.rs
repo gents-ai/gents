@@ -8,7 +8,10 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Default)]
 pub(super) struct Capture(BTreeMap<(String, String), BTreeSet<(String, String)>>);
 
-fn selected_agents(owner: &str, callback: &Value) -> Result<BTreeSet<String>> {
+pub(in crate::store::config_client) fn selected_agents(
+    owner: &str,
+    callback: &Value,
+) -> Result<BTreeSet<String>> {
     Ok(references_of(Collection::Callback, callback, owner)?
         .into_iter()
         .filter(|reference| reference.collection == Collection::Agent)
@@ -203,10 +206,13 @@ mod tests {
                     .await?;
             }
         }
-        // The route consumes each command's nonce as the runtime.
+        // The route consumes each command's nonce as the runtime and links it
+        // to the runtime's Node once the runtime reads that Node.
         for permission in [
             acp::nac::NodePermission::DocumentRead,
+            acp::nac::NodePermission::DocumentUpdate,
             acp::nac::NodePermission::DocumentDelete,
+            acp::nac::NodePermission::DacRelationAdd,
             acp::nac::NodePermission::CollectionGet,
         ] {
             node.add_nac_actor_relationship_as(&context, permission.as_str(), runtime.did())
@@ -219,6 +225,15 @@ mod tests {
                 &json!({"input":{"node_did":runtime.did()}}), gents_protocol::schemas::NODE).await
         })).await?;
         let node_doc = crate::store::graphql::created_doc_id(&node_response, "Node")?;
+        // The runtime reads its own Node row, on which Node authority is decided.
+        access
+            .add_actor_relationship(
+                "Node",
+                &node_doc,
+                "runtime_reader",
+                &identity::Did::new(runtime.did())?,
+            )
+            .await?;
         let target_response = access.transact_write("test.workspace_selection.target", |txn| Box::pin(async {
             let response = txn.execute_client_signed_create("mutation($input: AgentMutationInputArg!) { create_Agent(input:$input) {_docID} }",
                 &json!({"input":{"node_did":runtime.did(),"agent_did":target_binding.agent_did,"creation_nonce":target_binding.creation_nonce,"inference_profile_id":format!("{}:inference",target_binding.agent_did),"enabled":true}}), gents_protocol::schemas::AGENT).await?;

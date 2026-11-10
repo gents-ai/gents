@@ -267,8 +267,16 @@ where
                             .http_endpoint()
                             .cloned()
                             .ok_or(ConfigClientError::LocalAccessRequired)?;
-                        // Only a confirmed discard proves nothing PLAN wrote can
-                        // commit; otherwise nothing is revoked or rerun.
+                        // A confirmed discard proves the PLAN transaction did not
+                        // commit, not that a client-signed graph it dispatched is
+                        // invalid. So the callback reruns only after a confirmed
+                        // discard and, once it dispatched a signed graph, only
+                        // with its owner's replay authorization: the residual is
+                        // `SignedConflictRebuild`'s (`Identity.OwnerStaged.applyOverHttp`).
+                        let dispatched = txn.client_signed_write_dispatched.load(Ordering::Acquire);
+                        let replay_authorized =
+                            matches!(mode, TransactionMode::SignedConflictRebuild)
+                                || txn.planned_replay_authorized.load(Ordering::Acquire);
                         let discarded = txn.rollback_inner().await.is_ok();
                         telemetry.record(AttemptReport {
                             outcome: if discarded {
@@ -287,6 +295,12 @@ where
                         });
                         if !discarded {
                             return Err(E::from(ConfigClientError::OwnerStagedPlanUnconfirmed));
+                        }
+                        if !client_signed_write_may_retry(dispatched, discarded, replay_authorized)
+                        {
+                            return Err(E::from(
+                                ConfigClientError::OwnerStagedPlanReplayUnauthorized,
+                            ));
                         }
                         ConfigApplyTxn::send_planned_revocations(&endpoint, &planned).await?;
                         owner_staged_plan = Some(planned);

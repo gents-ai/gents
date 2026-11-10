@@ -71,7 +71,7 @@ impl ConfigAccess {
             }
             WriteRoute::Local(local) => {
                 local.require_mutation_signer()?;
-                ConfigApplyTxn::begin_local_owned_with_signer(
+                let mut txn = ConfigApplyTxn::begin_local_owned_with_signer(
                     local.node(),
                     local.identity().cloned(),
                     local.agent_signer.clone(),
@@ -79,7 +79,9 @@ impl ConfigAccess {
                     cancellation_rollback_scheduled,
                     EmbeddedTransactionPurpose::Mutation,
                 )
-                .await
+                .await?;
+                txn.agent_proof = local.agent_proof.clone();
+                Ok(txn)
             }
         }
     }

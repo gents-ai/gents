@@ -42,6 +42,11 @@ pub struct ConfigApplyTxn<'a> {
     pub(super) client_signed_write_dispatched: AtomicBool,
     pub(super) relationship_grants: Mutex<Vec<ConfigRelationshipGrant>>,
     pub(super) owner_staged_revocations: Mutex<super::OwnerStagedRevocations>,
+    /// The runtime key's derivation proof this transaction's access carried.
+    pub(super) agent_proof: Option<crate::store::identity::RuntimeAgentProof>,
+    /// The apply's owner authorized rerunning its callback after PLAN
+    /// (`Identity.OwnerStaged.applyOverHttp`).
+    pub(super) planned_replay_authorized: AtomicBool,
     pub(super) publication_observer: Option<Arc<dyn AgentPublicationObserver>>,
     pub(super) pack_approval: Option<Arc<super::super::pack_effect::PackInterpreterApproval>>,
 }
@@ -207,6 +212,8 @@ impl<'a> ConfigApplyTxn<'a> {
             client_signed_write_dispatched: AtomicBool::new(false),
             relationship_grants: Mutex::new(Vec::new()),
             owner_staged_revocations: Mutex::new(super::OwnerStagedRevocations::Send),
+            agent_proof: None,
+            planned_replay_authorized: AtomicBool::new(false),
             publication_observer: None,
             pack_approval: None,
             operation: Some(operation.as_str()),
@@ -325,6 +332,8 @@ impl<'a> ConfigApplyTxn<'a> {
                 client_signed_write_dispatched: AtomicBool::new(false),
                 relationship_grants: Mutex::new(Vec::new()),
                 owner_staged_revocations: Mutex::new(super::OwnerStagedRevocations::Send),
+                agent_proof: None,
+                planned_replay_authorized: AtomicBool::new(false),
                 publication_observer: None,
                 pack_approval: None,
                 operation: None,
@@ -349,6 +358,8 @@ impl<'a> ConfigApplyTxn<'a> {
             client_signed_write_dispatched: AtomicBool::new(false),
             relationship_grants: Mutex::new(Vec::new()),
             owner_staged_revocations: Mutex::new(super::OwnerStagedRevocations::Send),
+            agent_proof: None,
+            planned_replay_authorized: AtomicBool::new(false),
             publication_observer: None,
             pack_approval: None,
             operation: None,

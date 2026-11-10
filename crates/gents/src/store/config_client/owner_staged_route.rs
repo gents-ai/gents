@@ -72,6 +72,9 @@ pub(super) async fn request(
         Some(OwnerStagedRefusal::Unmanaged) => {
             ConfigClientError::OwnerStagedRelationshipUnmanaged { collection, doc_id }
         }
+        Some(OwnerStagedRefusal::OutOfKind) => {
+            ConfigClientError::OwnerStagedTargetRefused { collection, doc_id }
+        }
         None => ConfigClientError::OwnerStagedRouteStatus { status, body },
     })
 }
@@ -81,7 +84,12 @@ pub(super) async fn request(
 /// [`Self::serve`] binds it after the node starts.
 #[derive(Clone, Default)]
 pub struct OwnerStagedRoute {
-    served: Arc<OnceLock<Weak<EmbeddedNode>>>,
+    served: Arc<
+        OnceLock<(
+            Weak<EmbeddedNode>,
+            crate::store::identity::RuntimeAgentProof,
+        )>,
+    >,
 }
 
 impl OwnerStagedRoute {
@@ -89,16 +97,28 @@ impl OwnerStagedRoute {
         Self::default()
     }
 
-    /// Bind the started node this route decides on, and the runtime key that
-    /// owns it, which proves the Agent identities the runtime may stage as
-    /// (`Identity.OwnerStaged.derivedAgents`); only the first binding counts.
+    /// Bind the started node this route decides on and the runtime key that
+    /// owns it; the route hands each verified client's decision only that
+    /// key's derivation proof (`Identity.OwnerStaged.derivedAgents`). Only the
+    /// first binding counts, and a key that is not the node's own identity
+    /// leaves the route answering `starting`.
     pub fn serve(
         &self,
         node: &Arc<EmbeddedNode>,
         runtime: Arc<dyn crate::store::identity::NodeIdentity>,
     ) {
-        crate::store::identity::bind_runtime_identity(node, runtime);
-        let _ = self.served.set(Arc::downgrade(node));
+        if node.node_identity_did() != Some(runtime.did()) {
+            tracing::error!(
+                runtime_did = runtime.did(),
+                node_did = node.node_identity_did(),
+                "owner-staged route was handed a key that is not the node's identity"
+            );
+            return;
+        }
+        let _ = self.served.set((
+            Arc::downgrade(node),
+            crate::store::identity::RuntimeAgentProof::new(runtime),
+        ));
     }
 
     /// The route, for `HttpConfig::with_extra_routes`.
@@ -109,8 +129,9 @@ impl OwnerStagedRoute {
         )
     }
 
-    fn node(&self) -> Option<Arc<EmbeddedNode>> {
-        self.served.get().and_then(Weak::upgrade)
+    fn node(&self) -> Option<(Arc<EmbeddedNode>, crate::store::identity::RuntimeAgentProof)> {
+        let (node, proof) = self.served.get()?;
+        Some((node.upgrade()?, proof.clone()))
     }
 }
 

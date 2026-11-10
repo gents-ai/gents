@@ -705,6 +705,8 @@ async fn http_relationships_and_ownership_use_the_transaction_actor() {
         client_signed_write_dispatched: AtomicBool::new(false),
         relationship_grants: Mutex::new(Vec::new()),
         owner_staged_revocations: Mutex::new(super::OwnerStagedRevocations::Send),
+        agent_proof: None,
+        planned_replay_authorized: std::sync::atomic::AtomicBool::new(false),
         publication_observer: None,
         pack_approval: None,
     };

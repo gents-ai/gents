@@ -174,6 +174,8 @@ impl OwnerStagedCommand {
 pub enum OwnerStagedRefusal {
     Denied,
     Unmanaged,
+    /// The grant names a target its operation does not admit.
+    OutOfKind,
 }
 
 #[cfg(test)]

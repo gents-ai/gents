@@ -182,6 +182,10 @@ pub enum ConfigClientError {
     OwnerStagedRelationshipUnmanaged { collection: String, doc_id: String },
     #[error("the requesting actor may not change relationships of {collection} {doc_id}")]
     OwnerStagedRelationshipDenied { collection: String, doc_id: String },
+    /// The grant names a target its operation does not admit
+    /// (`Identity.OwnerStaged.out_of_kind_grant_is_refused`).
+    #[error("{collection} {doc_id} may not grant that target through the runtime")]
+    OwnerStagedTargetRefused { collection: String, doc_id: String },
     /// An HTTP apply revoked its planned owner-staged relations, but the
     /// transaction that then wrote its documents derived different
     /// revocations (`Identity.OwnerStaged.changed_plan_is_refused_and_no_wider`).
@@ -200,6 +204,13 @@ pub enum ConfigClientError {
          confirmed discarded, so no relationship was changed; apply it again"
     )]
     OwnerStagedPlanUnconfirmed,
+    /// The planning pass of an HTTP apply dispatched a client-signed graph and
+    /// its caller did not authorize rerunning it, so nothing was revoked.
+    #[error(
+        "the configuration was not applied: it needs owner-staged revocations, \
+         and its caller does not allow its signed writes to be rebuilt; nothing was changed"
+    )]
+    OwnerStagedPlanReplayUnauthorized,
     #[error("owner-staged route refused the command ({status}): {body}")]
     OwnerStagedRouteStatus {
         status: reqwest::StatusCode,

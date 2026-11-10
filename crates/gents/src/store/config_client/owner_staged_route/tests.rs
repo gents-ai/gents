@@ -508,24 +508,22 @@ async fn http_apply_orders_revocations_before_and_grants_after_commit() {
         // The requester's own concurrent writer, so WRITE can read its row.
         let writer = f.client(key.as_ref());
         let passes = std::sync::atomic::AtomicUsize::new(0);
-        let signed = std::sync::atomic::AtomicUsize::new(0);
         let client = f.client(key.as_ref());
         let applied = client
             .transact_write("test.owner_staged_route.apply", |txn| {
-                let (marker, changed, writer, passes, signed) =
-                    (&marker, &changed, &writer, &passes, &signed);
+                let (marker, changed, writer, passes) = (&marker, &changed, &writer, &passes);
                 let f = &f;
                 Box::pin(async move {
-                    passes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    // This callback states the replay contract: it re-reads
+                    // its inputs and every pass signs afresh.
+                    txn.authorize_planned_replay();
+                    let pass = passes.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
                     txn.execute_client_signed_create(
                         "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
-                        &serde_json::json!({"input": {"node_did": marker}}),
+                        &serde_json::json!({"input": {"node_did": format!("{marker}:{pass}")}}),
                         gents_protocol::schemas::NODE,
                     )
                     .await?;
-                    if txn.client_signed_write_dispatched_for_test() {
-                        signed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    }
                     let seen = txn
                         .execute(&format!(
                             r#"{{ Node(filter: {{node_did: {{_eq: "{changed}"}}}}) {{_docID}} }}"#
@@ -588,30 +586,32 @@ async fn http_apply_orders_revocations_before_and_grants_after_commit() {
         assert_eq!(result, case["result"], "{case}");
         // PLAN commits nothing; WRITE runs only after its revocations were
         // sent, so a refused revocation aborts before any write attempt. Each
-        // pass signs its graph afresh, and only the WRITE graph can commit
-        // (`committed` above counts the one marker row).
-        let expected_passes = if grant || result == "aborted" { 1 } else { 2 };
+        // pass writes its own marker row: only the committing pass's row
+        // exists, and a discarded PLAN's row is absent.
+        let passes = passes.load(std::sync::atomic::Ordering::SeqCst);
         assert_eq!(
-            passes.load(std::sync::atomic::Ordering::SeqCst),
-            expected_passes,
+            passes,
+            if grant || result == "aborted" { 1 } else { 2 },
             "{case}"
         );
-        assert_eq!(
-            signed.load(std::sync::atomic::Ordering::SeqCst),
-            expected_passes,
-            "{case}"
-        );
-        let committed = client
-            .execute(&format!(
-                r#"{{ Node(filter: {{node_did: {{_eq: "{marker}"}}}}) {{_docID}} }}"#
-            ))
-            .await
-            .unwrap();
-        assert_eq!(
-            !gents_protocol::graphql::graphql_rows_from_response(&committed, "Node").is_empty(),
-            case["committed"].as_bool().unwrap(),
-            "{case}"
-        );
+        let mut present = Vec::new();
+        for pass in 1..=passes {
+            let rows = client
+                .execute(&format!(
+                    r#"{{ Node(filter: {{node_did: {{_eq: "{marker}:{pass}"}}}}) {{_docID}} }}"#
+                ))
+                .await
+                .unwrap();
+            if !gents_protocol::graphql::graphql_rows_from_response(&rows, "Node").is_empty() {
+                present.push(pass);
+            }
+        }
+        let expected = if case["committed"].as_bool().unwrap() {
+            vec![passes]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(present, expected, "{case}");
         let readable = f.readable().await == vec![f.route.clone()];
         assert_eq!(readable, case["readable"].as_bool().unwrap(), "{case}");
         if readable {
@@ -624,134 +624,487 @@ async fn http_apply_orders_revocations_before_and_grants_after_commit() {
     f.home.node.shutdown().await.unwrap();
 }
 
-/// Lean `Identity.OwnerStaged.forged_row_owner_is_never_staged_as`: an Agent
-/// row whose DID does not derive from the runtime key never makes the runtime
-/// act as that DID. A User owns a placement an administrator may update and a
-/// forged Agent row names the User: the administrator's reader request over
-/// signed HTTP is `Unmanaged` and nothing is staged. The same request for a
-/// placement owned by an Agent whose row derives is staged.
+async fn runtime_node_doc(f: &Fixture) -> String {
+    let runtime = ConfigAccess::local_as(f.home.node.clone(), did(f.home.identity.did()));
+    let response = runtime
+        .execute(&format!(
+            r#"{{ Node(filter: {{node_did: {{_eq: "{}"}}}}) {{_docID}} }}"#,
+            f.home.identity.did()
+        ))
+        .await
+        .unwrap();
+    gents_protocol::graphql::graphql_rows_from_response(&response, "Node")[0]["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+/// Create one document in `access`'s transaction and link it to the runtime's
+/// Node, as its owner does.
+async fn create_linked(
+    access: &ConfigAccess,
+    collection: &str,
+    input: Value,
+    node_doc: &str,
+) -> String {
+    access
+        .transact_write("test.owner_staged_route.create", |txn| {
+            let input = &input;
+            Box::pin(async move {
+                let created = txn
+                    .execute_with_variables(
+                        &format!(
+                            "mutation($input: {collection}MutationInputArg!) {{ create_{collection}(input: $input) {{ _docID }} }}"
+                        ),
+                        &serde_json::json!({ "input": input }),
+                    )
+                    .await?;
+                let doc = gents_protocol::graphql::extract_mutation_doc_id(&created, collection)?;
+                txn.add_resource_relationship(collection, &doc, "parent", "nodes", node_doc)
+                    .await?;
+                Ok::<_, anyhow::Error>(doc)
+            })
+        })
+        .await
+        .unwrap()
+}
+
+/// A requester's grant over signed HTTP, or in its verified embedded
+/// transaction with or without the runtime's derivation proof.
+async fn staged_grant(
+    f: &Fixture,
+    key: &dyn NodeIdentity,
+    change: &OwnerStagedChange,
+    transport: &str,
+) -> &'static str {
+    let result = match transport {
+        "http" => f.client(key).request_owner_staged(change, true).await,
+        "embedded" | "no_proof" => {
+            let access = ConfigAccess::local_as(f.home.node.clone(), did(key.did()));
+            let access = if transport == "embedded" {
+                access.with_runtime_agent_proof(crate::store::identity::RuntimeAgentProof::new(
+                    f.home.identity.clone(),
+                ))
+            } else {
+                access
+            };
+            access
+                .request_verified_client_owner_staged(change, true)
+                .await
+        }
+        other => panic!("unknown transport {other}"),
+    };
+    match result {
+        Ok(()) => "staged",
+        Err(ConfigClientError::OwnerStagedRelationshipDenied { .. }) => "denied",
+        Err(ConfigClientError::OwnerStagedRelationshipUnmanaged { .. }) => "unmanaged",
+        Err(ConfigClientError::OwnerStagedTargetRefused { .. }) => "out_of_kind",
+        Err(error) => panic!("unexpected owner-staged error {error:#}"),
+    }
+}
+
+async fn genuine_agent(f: &Fixture, runtime_access: &ConfigAccess) -> Arc<dyn NodeIdentity> {
+    let runtime = f.home.identity.clone();
+    let binding = crate::store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
+    agent_row(
+        runtime_access,
+        runtime.did(),
+        &binding.agent_did,
+        &binding.creation_nonce,
+    )
+    .await
+    .unwrap();
+    let agent = crate::store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
+    crate::store::identity::GrantSet::OperatorUser
+        .grant(runtime_access, &did(agent.did()))
+        .await
+        .unwrap();
+    agent
+}
+
+async fn agent_row(
+    runtime_access: &ConfigAccess,
+    node_did: &str,
+    agent_did: &str,
+    nonce: &str,
+) -> Result<String, ConfigClientError> {
+    let created = runtime_access
+        .write(
+            "test.owner_staged_route.agent_row",
+            &format!(
+                r#"mutation {{ create_Agent(input: {{node_did: "{node_did}", agent_did: "{agent_did}", creation_nonce: "{nonce}", inference_profile_id: "profile", enabled: true}}) {{_docID}} }}"#
+            ),
+        )
+        .await?;
+    Ok(gents_protocol::graphql::extract_mutation_doc_id(&created, "Agent").unwrap())
+}
+
+/// Lean `Identity.OwnerStaged.owner_rows_follow_the_derivation_proof`, replayed
+/// on real Agent rows and placements over signed HTTP and embedded: the
+/// runtime never stages as a DID a forged row names, as a foreign DID under a
+/// genuine nonce, or as any Agent without its derivation proof; a genuine
+/// Agent's placement is staged. Local writes keep `agent_did` unique, so a
+/// duplicated genuine row (`duplicate_agent_row`) arises only from a
+/// replicated merge: here its second local write is refused.
 #[tokio::test]
 async fn forged_agent_row_never_makes_the_runtime_stage_as_its_did() {
-    let generated = &crate::lean_vocab_test::lean_contract_snapshot().owner_staged_relation_cases;
-    let modeled = generated
-        .iter()
-        .find(|case| case["path"] == "forged_agent_row")
-        .expect("forged Agent row case");
-    assert_eq!(modeled["outcome"], "unmanaged");
-    assert_eq!(modeled["staged"], false);
+    let cases = &crate::lean_vocab_test::lean_contract_snapshot().owner_staged_relation_cases;
     let f = Fixture::start().await;
     let runtime = f.home.identity.clone();
     let runtime_access = ConfigAccess::local_as(f.home.node.clone(), did(runtime.did()));
-    let node_doc = {
-        let response = runtime_access
-            .execute(&format!(
-                r#"{{ Node(filter: {{node_did: {{_eq: "{}"}}}}) {{_docID}} }}"#,
-                runtime.did()
-            ))
-            .await
-            .unwrap();
-        gents_protocol::graphql::graphql_rows_from_response(&response, "Node")[0]["_docID"]
-            .as_str()
-            .unwrap()
-            .to_owned()
+    let node_doc = runtime_node_doc(&f).await;
+    let key = |name: &str| -> Arc<dyn NodeIdentity> {
+        Arc::new(crate::KeyIdentity::load_or_create(f._keys.path().join(name), None).unwrap())
     };
-    let victim: Arc<dyn NodeIdentity> = Arc::new(
-        crate::KeyIdentity::load_or_create(f._keys.path().join("victim.key"), None).unwrap(),
-    );
-    let binding = crate::store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
-    let agent = crate::store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
-    for actor in [&victim, &agent] {
+    let (victim, foreign) = (key("victim.key"), key("foreign.key"));
+    for actor in [&victim, &foreign] {
         crate::store::identity::GrantSet::OperatorUser
             .grant(&runtime_access, &did(actor.did()))
             .await
             .unwrap();
     }
-    // Agent rows on the runtime's Node: a forged one naming the victim User,
-    // and a genuine one whose DID derives from the runtime key.
-    for (agent_did, nonce) in [
-        (victim.did().to_owned(), "f".repeat(64)),
-        (binding.agent_did.clone(), binding.creation_nonce.clone()),
-    ] {
-        runtime_access
-            .write(
-                "test.owner_staged_route.agent_row",
-                &format!(
-                    r#"mutation {{ create_Agent(input: {{node_did: "{}", agent_did: "{agent_did}", creation_nonce: "{nonce}", inference_profile_id: "profile", enabled: true}}) {{_docID}} }}"#,
-                    runtime.did()
-                ),
-            )
+    let agent = genuine_agent(&f, &runtime_access).await;
+    let genuine_nonce = {
+        let response = runtime_access
+            .execute(&format!(
+                r#"{{ Agent(filter: {{agent_did: {{_eq: "{}"}}}}) {{creation_nonce}} }}"#,
+                agent.did()
+            ))
             .await
             .unwrap();
-    }
-    let placement = |owner: &Arc<dyn NodeIdentity>, repository: &'static str| {
-        let access = f.client(owner.as_ref());
-        let node_doc = node_doc.clone();
-        let runtime_did = runtime.did().to_owned();
-        async move {
-            access
-                .transact_write("test.owner_staged_route.placement", |txn| {
-                    let (node_doc, runtime_did) = (&node_doc, &runtime_did);
-                    Box::pin(async move {
-                        let created = txn
-                            .execute(&format!(
-                                r#"mutation {{ create_RepositoryPlacement(input: {{repository_id: "{repository}", node_did: "{runtime_did}", host_path: "/tmp/{repository}", enabled: true}}) {{_docID}} }}"#
-                            ))
-                            .await?;
-                        let doc = gents_protocol::graphql::extract_mutation_doc_id(
-                            &created,
-                            "RepositoryPlacement",
-                        )?;
-                        txn.add_resource_relationship(
-                            "RepositoryPlacement",
-                            &doc,
-                            "parent",
-                            "nodes",
-                            node_doc,
-                        )
-                        .await?;
-                        Ok::<_, anyhow::Error>(doc)
-                    })
-                })
-                .await
-                .unwrap()
-        }
+        gents_protocol::graphql::graphql_rows_from_response(&response, "Agent")[0]["creation_nonce"]
+            .as_str()
+            .unwrap()
+            .to_owned()
     };
-    let reader = |doc: &str| OwnerStagedChange::PlacementReader {
-        placement_doc_id: doc.to_owned(),
-        reader_did: f.target.to_string(),
-    };
-    let target_reads = |doc: String| {
-        let access = ConfigAccess::local_as(f.home.node.clone(), f.target.clone());
-        async move {
-            let response = access
+    agent_row(
+        &runtime_access,
+        runtime.did(),
+        victim.did(),
+        &"f".repeat(64),
+    )
+    .await
+    .unwrap();
+    agent_row(
+        &runtime_access,
+        runtime.did(),
+        foreign.did(),
+        &genuine_nonce,
+    )
+    .await
+    .unwrap();
+    assert!(
+        agent_row(&runtime_access, runtime.did(), agent.did(), &genuine_nonce)
+            .await
+            .is_err(),
+        "a second local row for a genuine Agent must be refused by its unique index"
+    );
+    let mut replayed = 0;
+    for case in cases.iter().filter(|case| {
+        matches!(
+            case["path"].as_str(),
+            Some(
+                "forged_agent_row"
+                    | "genuine_nonce_foreign_did"
+                    | "no_proof"
+                    | "derived_agent_row"
+                    | "duplicate_agent_row"
+            )
+        )
+    }) {
+        assert_eq!(case["requester"], "admin", "{case}");
+        let owner = match case["path"].as_str().unwrap() {
+            "forged_agent_row" => &victim,
+            "genuine_nonce_foreign_did" => &foreign,
+            "no_proof" | "derived_agent_row" => &agent,
+            _ => {
+                assert_eq!(case["outcome"], "unmanaged", "{case}");
+                continue;
+            }
+        };
+        let transports: &[&str] = if case["path"] == "no_proof" {
+            &["no_proof"]
+        } else {
+            &["http", "embedded"]
+        };
+        for transport in transports {
+            let placement = create_linked(
+                &f.client(owner.as_ref()),
+                "RepositoryPlacement",
+                serde_json::json!({
+                    "repository_id": format!("{}-{transport}", case["path"].as_str().unwrap()),
+                    "node_did": runtime.did(),
+                    "host_path": "/tmp/repository",
+                    "enabled": true,
+                    "readers": [{"agent_did": f.target.as_str()}],
+                }),
+                &node_doc,
+            )
+            .await;
+            let change = OwnerStagedChange::PlacementReader {
+                placement_doc_id: placement.clone(),
+                reader_did: f.target.to_string(),
+            };
+            let outcome = staged_grant(&f, f.admin.as_ref(), &change, transport).await;
+            assert_eq!(outcome, case["outcome"], "{case} {transport}");
+            let response = ConfigAccess::local_as(f.home.node.clone(), f.target.clone())
                 .execute("{ RepositoryPlacement { _docID } }")
                 .await
                 .unwrap();
-            gents_protocol::graphql::graphql_rows_from_response(&response, "RepositoryPlacement")
-                .iter()
-                .any(|row| row["_docID"].as_str() == Some(doc.as_str()))
+            let reads = gents_protocol::graphql::graphql_rows_from_response(
+                &response,
+                "RepositoryPlacement",
+            )
+            .iter()
+            .any(|row| row["_docID"].as_str() == Some(placement.as_str()));
+            assert_eq!(
+                reads,
+                case["staged"].as_bool().unwrap(),
+                "{case} {transport}"
+            );
+            replayed += 1;
         }
+    }
+    assert_eq!(replayed, 7);
+    f.home.node.shutdown().await.unwrap();
+}
+
+/// Lean `Identity.OwnerStaged.out_of_kind_targets_are_refused` and the
+/// generated target cases, replayed on real runtime-owned documents over
+/// signed HTTP and in the requester's embedded transaction: a cursor writer
+/// must be an Agent the runtime controls, a placement reader must be declared
+/// by the placement, a workspace selection must name a Callback bound to the
+/// Agent (its configuration selects the Agent), and a writer of the cursor (document `update` without Node
+/// authority) is denied.
+#[tokio::test]
+async fn owner_staged_targets_follow_their_operation_kind() {
+    let cases = &crate::lean_vocab_test::lean_contract_snapshot().owner_staged_relation_cases;
+    let f = Fixture::start().await;
+    let runtime = f.home.identity.clone();
+    let runtime_did = did(runtime.did());
+    let runtime_access = ConfigAccess::local_as(f.home.node.clone(), runtime_did.clone());
+    let node_doc = runtime_node_doc(&f).await;
+    // The cursor's current writer and the Agent it is rebound to.
+    let writer = genuine_agent(&f, &runtime_access).await;
+    let sibling = genuine_agent(&f, &runtime_access).await;
+    let sibling_doc = {
+        let response = runtime_access
+            .execute(&format!(
+                r#"{{ Agent(filter: {{agent_did: {{_eq: "{}"}}}}) {{_docID}} }}"#,
+                sibling.did()
+            ))
+            .await
+            .unwrap();
+        gents_protocol::graphql::graphql_rows_from_response(&response, "Agent")[0]["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned()
     };
-    let admin = f.client(f.admin.as_ref());
-
-    let victims = placement(&victim, "victim-repository").await;
-    let refused = admin.request_owner_staged(&reader(&victims), true).await;
-    assert!(
-        matches!(
-            &refused,
-            Err(ConfigClientError::OwnerStagedRelationshipUnmanaged { doc_id, .. })
-                if doc_id == &victims
-        ),
-        "{refused:?}"
-    );
-    assert!(!target_reads(victims).await);
-
-    let agents = placement(&agent, "agent-repository").await;
-    admin
-        .request_owner_staged(&reader(&agents), true)
+    runtime_access
+        .transact_write("test.owner_staged_route.agent_parent", |txn| {
+            let (sibling_doc, node_doc) = (&sibling_doc, &node_doc);
+            Box::pin(async move {
+                txn.add_resource_relationship("Agent", sibling_doc, "parent", "nodes", node_doc)
+                    .await
+            })
+        })
         .await
         .unwrap();
-    assert!(target_reads(agents).await);
+    let mut documents = Vec::new();
+    for index in 0..2 {
+        let cursor = create_linked(
+            &runtime_access,
+            "EventSourceCursor",
+            serde_json::json!({
+                "cursor_key": format!("cursor-{index}"),
+                "owner_did": runtime.did(),
+                "consumer": {"agent_did": writer.did()},
+                "source_collection": "Node",
+            }),
+            &node_doc,
+        )
+        .await;
+        runtime_access
+            .transact_write("test.owner_staged_route.cursor_writer", |txn| {
+                let (cursor, writer) = (&cursor, did(writer.did()));
+                Box::pin(async move {
+                    txn.add_actor_relationship("EventSourceCursor", cursor, "writer", &writer)
+                        .await
+                })
+            })
+            .await
+            .unwrap();
+        documents.push(cursor);
+    }
+    let placement = create_linked(
+        &runtime_access,
+        "RepositoryPlacement",
+        serde_json::json!({
+            "repository_id": "declared",
+            "node_did": runtime.did(),
+            "host_path": "/tmp/declared",
+            "enabled": true,
+            "readers": [{"agent_did": f.target.as_str()}],
+        }),
+        &node_doc,
+    )
+    .await;
+    // A Callback selects the workspace Agents its handler names
+    // (`workspace_selection::selected_agents`): `bound` names the sibling,
+    // `unbound` names another Agent.
+    let mut callbacks = Vec::new();
+    for (callback, selected) in [("bound", sibling.did()), ("unbound", writer.did())] {
+        callbacks.push(
+            create_linked(
+                &runtime_access,
+                "Callback",
+                serde_json::json!({
+                    "callback_id": callback, "node_did": runtime.did(), "enabled": true,
+                    "handler": {"kind": "built_in", "emitter": "create_workspace", "workspace_agents": {
+                        "writer_agent_did": selected, "integrator_agent_did": selected}},
+                    "capabilities": ["create_workspace", "observe_dirty_base"],
+                }),
+                &node_doc,
+            )
+            .await,
+        );
+    }
+    let mut replayed = 0;
+    for (transport, cursor) in ["http", "embedded"].into_iter().zip(&documents) {
+        for case in cases.iter() {
+            let path = case["path"].as_str().unwrap();
+            let change = match path {
+                "event_cursor_rebind" => OwnerStagedChange::EventCursorWriter {
+                    cursor_doc_id: cursor.clone(),
+                    agent_did: sibling.did().to_owned(),
+                },
+                "event_cursor_outsider_writer" => OwnerStagedChange::EventCursorWriter {
+                    cursor_doc_id: cursor.clone(),
+                    agent_did: f.outsider.did().to_owned(),
+                },
+                "declared_placement_readers" => OwnerStagedChange::PlacementReader {
+                    placement_doc_id: placement.clone(),
+                    reader_did: f.target.to_string(),
+                },
+                "placement_undeclared_reader" => OwnerStagedChange::PlacementReader {
+                    placement_doc_id: placement.clone(),
+                    reader_did: f.outsider.did().to_owned(),
+                },
+                "workspace_selection" => OwnerStagedChange::WorkspaceSelection {
+                    agent_doc_id: sibling_doc.clone(),
+                    callback_doc_id: callbacks[0].clone(),
+                },
+                "workspace_unbound_callback" => OwnerStagedChange::WorkspaceSelection {
+                    agent_doc_id: sibling_doc.clone(),
+                    callback_doc_id: callbacks[1].clone(),
+                },
+                _ => continue,
+            };
+            let requester: &dyn NodeIdentity = match case["requester"].as_str().unwrap() {
+                "user" => f.user.as_ref(),
+                "outsider" => f.outsider.as_ref(),
+                "agent" => writer.as_ref(),
+                other => panic!("unknown modeled requester {other}"),
+            };
+            let outcome = staged_grant(&f, requester, &change, transport).await;
+            assert_eq!(outcome, case["outcome"], "{case} {transport}");
+            if outcome == "staged" {
+                let revoked = if transport == "http" {
+                    f.client(requester)
+                        .request_owner_staged(&change, false)
+                        .await
+                } else {
+                    ConfigAccess::local_as(f.home.node.clone(), did(requester.did()))
+                        .with_runtime_agent_proof(crate::store::identity::RuntimeAgentProof::new(
+                            runtime.clone(),
+                        ))
+                        .request_verified_client_owner_staged(&change, false)
+                        .await
+                };
+                revoked.unwrap();
+            }
+            replayed += 1;
+        }
+    }
+    assert_eq!(replayed, 2 * 10);
+    f.home.node.shutdown().await.unwrap();
+}
+
+/// `Identity.OwnerStaged.applyOverHttp` with `planDiscarded = false`: when the
+/// PLAN transaction cannot be confirmed discarded, nothing is revoked and the
+/// apply is not run again.
+#[tokio::test]
+async fn unconfirmed_plan_discard_revokes_nothing() {
+    let f = Fixture::start().await;
+    f.client(f.user.as_ref())
+        .request_owner_staged(&f.change(&f.route), true)
+        .await
+        .unwrap();
+    assert_eq!(f.readable().await, vec![f.route.clone()]);
+    let passes = std::sync::atomic::AtomicUsize::new(0);
+    let client = f.client(f.admin.as_ref());
+    let reached = Arc::new(tokio::sync::Notify::new());
+    let cleanup = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let applied =
+        crate::store::config_client::ConfigApplyTxn::with_rollback_failure_retry_boundary(
+            reached,
+            cleanup,
+            client.transact_write("test.owner_staged_route.unconfirmed", |txn| {
+                let (passes, change) = (&passes, f.change(&f.route));
+                Box::pin(async move {
+                    txn.authorize_planned_replay();
+                    passes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    txn.request_owner_staged(&change, false).await
+                })
+            }),
+        )
+        .await;
+    assert!(
+        matches!(applied, Err(ConfigClientError::OwnerStagedPlanUnconfirmed)),
+        "{applied:?}"
+    );
+    assert_eq!(passes.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(f.readable().await, vec![f.route.clone()]);
+    f.home.node.shutdown().await.unwrap();
+}
+
+/// A PLAN pass that dispatched a client-signed graph reruns only with its
+/// owner's replay authorization (`client_signed_write_may_retry`); without it
+/// nothing is revoked.
+#[tokio::test]
+async fn unauthorized_signed_plan_is_not_rerun() {
+    let f = Fixture::start().await;
+    f.client(f.user.as_ref())
+        .request_owner_staged(&f.change(&f.route), true)
+        .await
+        .unwrap();
+    let marker = format!("did:key:z{}", uuid::Uuid::new_v4().simple());
+    let passes = std::sync::atomic::AtomicUsize::new(0);
+    let client = f.client(f.admin.as_ref());
+    let applied = client
+        .transact_write("test.owner_staged_route.unauthorized_replay", |txn| {
+            let (passes, marker, change) = (&passes, &marker, f.change(&f.route));
+            Box::pin(async move {
+                passes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                txn.execute_client_signed_create(
+                    "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
+                    &serde_json::json!({"input": {"node_did": marker}}),
+                    gents_protocol::schemas::NODE,
+                )
+                .await?;
+                txn.request_owner_staged(&change, false).await
+            })
+        })
+        .await;
+    assert!(
+        matches!(
+            applied,
+            Err(ConfigClientError::OwnerStagedPlanReplayUnauthorized)
+        ),
+        "{applied:?}"
+    );
+    assert_eq!(passes.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(f.readable().await, vec![f.route.clone()]);
     f.home.node.shutdown().await.unwrap();
 }
 

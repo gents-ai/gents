@@ -1540,6 +1540,16 @@ def caseCoverage : List CoverageEntry :=
       "store::config_client::txn::owner_staged::tests::owner_staged_relationships_follow_the_document_owner")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerCoverage
+      "owner_staged_relation_cases"
+      "OwnerStagedRelationCases"
+      "store::config_client::owner_staged_route::tests::forged_agent_row_never_makes_the_runtime_stage_as_its_did")
+      "identity-permission" [Surface.runtimeInternal, Surface.api]
+  , tagged (consumerCoverage
+      "owner_staged_relation_cases"
+      "OwnerStagedRelationCases"
+      "store::config_client::owner_staged_route::tests::owner_staged_targets_follow_their_operation_kind")
+      "identity-permission" [Surface.runtimeInternal, Surface.api]
+  , tagged (consumerCoverage
       "pack_placement_reader_cases"
       "PackPlacementReaderCases"
       "pack::installation::tests::pack_install_applies_exactly_the_declared_placement_readers")

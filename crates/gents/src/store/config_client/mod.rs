@@ -447,6 +447,30 @@ impl ConfigAccess {
         Ok(Self::Local(Box::new(local)))
     }
 
+    /// Hand this local access the runtime key's derivation proof, so the
+    /// owner-staged decision may stage as an Agent the runtime controls
+    /// (`Identity.OwnerStaged.derivedAgents`). A proof for another node's
+    /// key is not attached.
+    pub fn with_runtime_agent_proof(
+        self,
+        proof: crate::store::identity::RuntimeAgentProof,
+    ) -> Self {
+        match self {
+            Self::Local(mut local) => {
+                let proof_did = proof.runtime_did().to_owned();
+                if !local.attach_agent_proof(proof) {
+                    tracing::warn!(
+                        proof_did,
+                        node_did = local.node().node_identity_did(),
+                        "runtime agent proof does not match the node; not attached"
+                    );
+                }
+                Self::Local(local)
+            }
+            other => other,
+        }
+    }
+
     pub(crate) fn local_with_optional_agent_signer(
         node: Arc<Node>,
         actor: identity::Did,

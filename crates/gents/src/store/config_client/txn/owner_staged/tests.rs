@@ -101,6 +101,10 @@ async fn owner_staged_relationships_follow_the_document_owner() -> anyhow::Resul
             &identity::Did::new(admin.did())?,
         )
         .await?;
+    // The runtime reads its own Node row, on which Node authority is decided.
+    user_access
+        .add_actor_relationship("Node", &parent, "runtime_reader", &runtime_did)
+        .await?;
     let runtime_access = ConfigAccess::local_as(node.clone(), runtime_did.clone());
     let created = runtime_access
         .write(
@@ -137,12 +141,15 @@ async fn owner_staged_relationships_follow_the_document_owner() -> anyhow::Resul
 
     let cases = &crate::lean_vocab_test::lean_contract_snapshot().owner_staged_relation_cases;
     assert!(!cases.is_empty());
-    // Pairing cases and the forged Agent row case have their own signed-HTTP
-    // replays (`owner_staged_route::tests`).
-    for case in cases
-        .iter()
-        .filter(|case| case["path"] != "pairing_reader" && case["path"] != "forged_agent_row")
-    {
+    // The owner and Node-authority decision on a generic runtime-owned row;
+    // target kinds, Agent-row derivation and pairing readers are replayed on
+    // their real collections over signed HTTP (`owner_staged_route::tests`).
+    for case in cases.iter().filter(|case| {
+        matches!(
+            case["path"].as_str(),
+            Some("event_cursor_rebind" | "declared_placement_readers" | "workspace_selection")
+        ) && matches!(case["requester"].as_str(), Some("user" | "outsider"))
+    }) {
         let (key, did) = match case["requester"].as_str().unwrap() {
             "user" => (&user, user_did.clone()),
             "admin" => (&admin, identity::Did::new(admin.did())?),
@@ -184,7 +191,7 @@ async fn owner_staged_relationships_follow_the_document_owner() -> anyhow::Resul
                 "writer",
                 target_did.as_str(),
                 false,
-                super::Authority::DocumentUpdate,
+                &super::Authority::Configuration(super::TargetKind::Any),
             )
             .await;
         let expected = case["staged"].as_bool().unwrap();
@@ -215,7 +222,7 @@ async fn owner_staged_relationships_follow_the_document_owner() -> anyhow::Resul
                 "writer",
                 target_did.as_str(),
                 true,
-                super::Authority::DocumentUpdate,
+                &super::Authority::Configuration(super::TargetKind::Any),
             )
             .await?;
             txn.commit().await?;
@@ -243,7 +250,7 @@ async fn owner_staged_relationships_follow_the_document_owner() -> anyhow::Resul
                 "writer",
                 target_did.as_str(),
                 false,
-                super::Authority::DocumentUpdate,
+                &super::Authority::Configuration(super::TargetKind::Any),
             )
             .await;
         assert!(

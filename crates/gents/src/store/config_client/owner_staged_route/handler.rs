@@ -34,7 +34,7 @@ async fn decide(
     actor: ExtractIdentity,
     command: OwnerStagedCommand,
 ) -> Response {
-    let Some(node) = route.node() else {
+    let Some((node, proof)) = route.node() else {
         return failure(
             StatusCode::SERVICE_UNAVAILABLE,
             "starting",
@@ -86,7 +86,8 @@ async fn decide(
             "The command signature is invalid or was already used.",
         );
     }
-    let access = ConfigAccess::local_as(node.clone(), requester.clone());
+    let access =
+        ConfigAccess::local_as(node.clone(), requester.clone()).with_runtime_agent_proof(proof);
     // Authority before the nonce: an unauthorized signer is refused with the
     // decision's own fixed denial and makes the runtime write nothing.
     match access
@@ -123,6 +124,11 @@ async fn decide(
         // The refusal text is fixed so the response reveals neither whether
         // the document exists nor who owns it.
         Err(ConfigClientError::OwnerStagedRelationshipDenied { .. }) => denied(),
+        Err(ConfigClientError::OwnerStagedTargetRefused { .. }) => failure(
+            StatusCode::FORBIDDEN,
+            OwnerStagedRefusal::OutOfKind,
+            "This operation may not grant that target.",
+        ),
         Err(ConfigClientError::OwnerStagedRelationshipUnmanaged { .. }) => failure(
             StatusCode::CONFLICT,
             OwnerStagedRefusal::Unmanaged,
