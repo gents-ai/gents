@@ -82,6 +82,16 @@ impl RequestLifecycleState {
         )
     }
 
+    /// A claimed execution that has not settled. It holds its session's head
+    /// whether it is running, parked for its backend or resuming, so later
+    /// input queues behind it and no other request in the session may start.
+    pub const fn is_unsettled_execution(self) -> bool {
+        matches!(
+            self,
+            Self::Claimed | Self::Processing | Self::WaitingForBackend | Self::ResumingBackend
+        )
+    }
+
     pub fn parse(value: &str) -> Result<Self, InvalidRequestLifecycleState> {
         match value {
             "workspaceBindingPending" => Ok(Self::WorkspaceBindingPending),
@@ -126,6 +136,14 @@ impl RequestLifecycleState {
             Self::ALL
                 .into_iter()
                 .filter(|state| state.is_active_runtime()),
+        )
+    }
+
+    pub fn unsettled_execution_graphql_list() -> String {
+        Self::graphql_list(
+            Self::ALL
+                .into_iter()
+                .filter(|state| state.is_unsettled_execution()),
         )
     }
 

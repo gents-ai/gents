@@ -130,6 +130,19 @@ pub fn authorize_finalize(
     can_finalize(observed.request, completed) && is_live(observed, expected_generation, now_ms)
 }
 
+/// Mirrors the outcome guard of Lean `RequestExecutionLease.finalizeParked`: a
+/// parked request holds no lease, so interruption, deadline expiry and policy
+/// supersession settle it here rather than through revocation.
+pub fn can_finalize_parked(request: RequestLifecycleState, outcome: RequestLifecycleState) -> bool {
+    request == RequestLifecycleState::WaitingForBackend
+        && matches!(
+            outcome,
+            RequestLifecycleState::Failed
+                | RequestLifecycleState::Interrupted
+                | RequestLifecycleState::Superseded
+        )
+}
+
 pub fn authorize_execution_revocation(
     observed: LeaseObservation<'_>,
     expected: LeaseObservation<'_>,

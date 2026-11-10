@@ -1594,10 +1594,7 @@ pub async fn supersede_trigger_requests_in_txn(
         )
         .await?;
     }
-    let active = gents_protocol::request_lifecycle::RequestLifecycleState::graphql_list([
-        gents_protocol::request_lifecycle::RequestLifecycleState::Claimed,
-        gents_protocol::request_lifecycle::RequestLifecycleState::Processing,
-    ]);
+    let active = RequestLifecycleState::unsettled_execution_graphql_list();
     let response = txn.execute(&format!(r#"{{ AgentRequest(filter: {{
         node_did: {{ _eq: "{owner_gql}" }}, caused_by_trigger_id: {{ _eq: "{trigger_gql}" }}{excluded},
         lifecycle_state: {{ _in: {active} }}
@@ -1606,15 +1603,20 @@ pub async fn supersede_trigger_requests_in_txn(
     let active: Vec<gents_protocol::row::AgentRequestRow> =
         serde_json::from_value(response["data"]["AgentRequest"].clone())?;
     for row in &active {
-        anyhow::ensure!(
+        let reason = "superseded by a newer trigger fire";
+        let settled = if row.lifecycle_state == Some(RequestLifecycleState::WaitingForBackend) {
+            super::execution_lease::stage_supersede_parked_execution(txn, row, reason).await?
+        } else {
             super::execution_lease::stage_revoke_execution_preserving_output(
                 txn,
                 row,
                 RequestTerminalOutcome::Superseded,
-                "superseded by a newer trigger fire",
+                reason,
             )
             .await?
-                == TerminalizeResult::Won,
+        };
+        anyhow::ensure!(
+            settled == TerminalizeResult::Won,
             "execution changed during atomic trigger supersession",
         );
     }

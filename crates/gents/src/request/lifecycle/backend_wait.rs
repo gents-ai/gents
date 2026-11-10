@@ -161,7 +161,7 @@ impl super::RequestLifecycle {
     pub(crate) async fn wake_for_backend(
         &mut self,
         healthy_at: Option<DateTime<Utc>>,
-    ) -> anyhow::Result<bool> {
+    ) -> anyhow::Result<BackendWake> {
         use anyhow::Context;
         self.ensure_state(&[super::LocalLifecycleState::Pending], "wake_for_backend")?;
         let expected_deadline = DateTime::parse_from_rfc3339(
@@ -179,15 +179,17 @@ impl super::RequestLifecycle {
             Utc::now(),
         )
         .await?;
-        let WakeResult::Resumed {
-            generation,
-            claim_cid,
-            deadline,
-            lease_ms,
-            background_cutoff,
-        } = result
-        else {
-            return Ok(false);
+        let (generation, claim_cid, deadline, lease_ms, background_cutoff) = match result {
+            WakeResult::Resumed {
+                generation,
+                claim_cid,
+                deadline,
+                lease_ms,
+                background_cutoff,
+            } => (generation, claim_cid, deadline, lease_ms, background_cutoff),
+            WakeResult::NotDue => return Ok(BackendWake::NotDue),
+            WakeResult::OtherBackend { bound } => return Ok(BackendWake::OtherBackend { bound }),
+            WakeResult::Lost => return Ok(BackendWake::Lost),
         };
         self.execution_lease = Some(super::RequestExecutionLease::new(
             generation.clone(),
@@ -212,7 +214,43 @@ impl super::RequestLifecycle {
             generation,
             lease_ms,
         ));
-        Ok(true)
+        Ok(BackendWake::Resumed)
+    }
+}
+
+/// What a wake attempt did to a parked request, for the caller's account of
+/// why it holds no claim.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum BackendWake {
+    Resumed,
+    NotDue,
+    OtherBackend { bound: String },
+    Lost,
+}
+
+impl BackendWake {
+    pub(crate) fn resumed(&self) -> bool {
+        matches!(self, Self::Resumed)
+    }
+
+    pub(crate) fn bound_backend(&self) -> Option<&str> {
+        match self {
+            Self::OtherBackend { bound } => Some(bound),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn unclaimed_reason(&self) -> &'static str {
+        match self {
+            Self::Resumed => "parked request resumed",
+            Self::NotDue => {
+                "parked request still waiting: its backend is not observed healthy and its retry is not due"
+            }
+            Self::OtherBackend { .. } => {
+                "parked request still waiting: it stays bound to the backend it was claimed on, which is no longer this agent's backend"
+            }
+            Self::Lost => "parked request not resumed: it was interrupted, settled or resumed elsewhere",
+        }
     }
 }
 
@@ -524,11 +562,45 @@ mod tests {
             assert_eq!(
                 can_repark_expired(
                     case.resuming,
-                    &7,
+                    &case.observed_generation,
                     &case.expected_generation,
-                    10,
+                    case.observed_expiry,
                     case.expected_expiry,
                     case.now
+                ),
+                case.allowed,
+                "{case:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unresumed_wake_says_why_the_request_stays_parked() {
+        use super::BackendWake;
+        let rebound = BackendWake::OtherBackend {
+            bound: "old".to_owned(),
+        };
+        assert_eq!(rebound.bound_backend(), Some("old"));
+        assert!(rebound.unclaimed_reason().contains("bound to the backend"));
+        for wake in [BackendWake::NotDue, rebound, BackendWake::Lost] {
+            assert!(!wake.resumed());
+            assert!(!wake.unclaimed_reason().contains("same-session"));
+        }
+    }
+
+    #[test]
+    fn parked_terminal_outcomes_match_the_generated_model() {
+        use gents_protocol::request_lifecycle::RequestLifecycleState as State;
+        let cases = &crate::lean_vocab_test::lean_contract_snapshot().backend_parked_finalize_cases;
+        assert!(cases
+            .iter()
+            .any(|case| case.allowed && case.outcome == State::Superseded));
+        assert!(cases.iter().any(|case| !case.allowed));
+        for case in cases {
+            assert_eq!(
+                crate::request::lifecycle::execution_policy::can_finalize_parked(
+                    case.request,
+                    case.outcome
                 ),
                 case.allowed,
                 "{case:?}"
@@ -584,6 +656,12 @@ pub(super) enum WakeResult {
         background_cutoff: Option<u32>,
     },
     NotDue,
+    /// Lean `RequestResumeAdmission.claimValid` admits a resumed deadline only
+    /// on the backend of the original claim version, so a request parked
+    /// before its agent was repointed is never rebound.
+    OtherBackend {
+        bound: String,
+    },
     Lost,
 }
 
@@ -696,7 +774,6 @@ async fn wake_in_txn(
         return resumed_receipt(&row, generation, claim_cid, deadline);
     }
     if row.lifecycle_state != Some(State::WaitingForBackend)
-        || row.backend_id.as_deref() != Some(backend_id)
         || row
             .interrupt_requested_at
             .as_deref()
@@ -704,6 +781,11 @@ async fn wake_in_txn(
         || row.terminal_output.is_some()
     {
         return Ok(WakeResult::Lost);
+    }
+    if row.backend_id.as_deref() != Some(backend_id) {
+        return Ok(WakeResult::OtherBackend {
+            bound: row.backend_id.clone().unwrap_or_default(),
+        });
     }
     let claim_cid = Some(metadata.claim_cid.as_str())
         .filter(|cid| !cid.trim().is_empty())

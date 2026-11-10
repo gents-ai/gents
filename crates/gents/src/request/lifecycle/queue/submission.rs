@@ -31,10 +31,7 @@ pub async fn prepare_user_message_input(
         }}) {{ _docID request_id }} }}"#,
             escape_graphql_string(node_did),
             escape_graphql_string(session_id),
-            claimed_or_processing = RequestLifecycleState::graphql_list([
-                RequestLifecycleState::Claimed,
-                RequestLifecycleState::Processing
-            ])
+            claimed_or_processing = RequestLifecycleState::unsettled_execution_graphql_list()
         ))
         .await?;
     let rows: Vec<AgentRequestRow> =

@@ -812,7 +812,10 @@ pub mod __test_internals {
     pub async fn wake_backend(
         lifecycle: &mut crate::request::lifecycle::RequestLifecycle,
     ) -> anyhow::Result<bool> {
-        lifecycle.wake_for_backend(Some(chrono::Utc::now())).await
+        Ok(lifecycle
+            .wake_for_backend(Some(chrono::Utc::now()))
+            .await?
+            .resumed())
     }
 
     pub fn backend_generation(

@@ -211,12 +211,7 @@ pub(crate) async fn interrupt_active_session_in_txn(
             r#"{{ AgentRequest(filter: {{ {scope}, purpose: {{ _eq: "normal" }},
                 lifecycle_state: {{ _in: {claimed_or_processing} }} }}, limit: 2)
                 {{ _docID request_id }} }}"#,
-            claimed_or_processing = RequestLifecycleState::graphql_list([
-                RequestLifecycleState::Claimed,
-                RequestLifecycleState::Processing,
-                RequestLifecycleState::WaitingForBackend,
-                RequestLifecycleState::ResumingBackend
-            ])
+            claimed_or_processing = RequestLifecycleState::unsettled_execution_graphql_list()
         ))
         .await?;
     let rows = response
@@ -261,12 +256,7 @@ fn active_session_request_query(
     let scope = gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
     format!(
         r#"{{AgentRequest(filter:{{{scope},purpose:{{_eq:"normal"}},lifecycle_state:{{_in:{claimed_or_processing}}}}},limit:2){{_docID request_id node_did requester_did session_id lifecycle_state}}}}"#,
-        claimed_or_processing = RequestLifecycleState::graphql_list([
-            RequestLifecycleState::Claimed,
-            RequestLifecycleState::Processing,
-            RequestLifecycleState::WaitingForBackend,
-            RequestLifecycleState::ResumingBackend,
-        ])
+        claimed_or_processing = RequestLifecycleState::unsettled_execution_graphql_list()
     )
 }
 

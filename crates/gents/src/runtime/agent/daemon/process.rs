@@ -96,6 +96,7 @@ where
             lifecycle.set_fold_admitted(self.verified_fold_admissions(&request).await);
         }
 
+        let mut wake = None;
         let claim_result = async {
             if parked {
                 let observed = if let Some(health) = &self.backend_health {
@@ -105,11 +106,14 @@ where
                 } else {
                     None
                 };
-                if lifecycle.wake_for_backend(observed).await? {
-                    Ok(ClaimOutcome::Claimed)
+                let outcome = lifecycle.wake_for_backend(observed).await?;
+                let resumed = outcome.resumed();
+                wake = Some(outcome);
+                Ok(if resumed {
+                    ClaimOutcome::Claimed
                 } else {
-                    Ok(ClaimOutcome::Queued)
-                }
+                    ClaimOutcome::Queued
+                })
             } else {
                 lifecycle.claim_with_identity().await
             }
@@ -163,7 +167,13 @@ where
                     agent_did = %self.agent_config.agent_did,
                     request_id = %request.request_id,
                     session_id = %request.session_id,
-                    "request queued behind an earlier same-session request"
+                    agent_backend = lifecycle.backend_id(),
+                    bound_backend = wake.as_ref().and_then(|wake| wake.bound_backend()),
+                    "{}",
+                    wake.as_ref().map_or(
+                        "request queued behind an earlier same-session request",
+                        |wake| wake.unclaimed_reason(),
+                    )
                 );
                 return Ok(());
             }

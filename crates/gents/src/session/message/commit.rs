@@ -699,7 +699,7 @@ async fn validate_steer_in_txn(
         }} }}"#,
         escape_graphql_string(&create.node_did),
         escape_graphql_string(&create.session_id),
-        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS, claimed_or_processing = RequestLifecycleState::graphql_list([RequestLifecycleState::Claimed, RequestLifecycleState::Processing])
+        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS, claimed_or_processing = RequestLifecycleState::unsettled_execution_graphql_list()
     )).await?;
     let rows: Vec<gents_protocol::row::AgentRequestRow> =
         serde_json::from_value(response["data"]["AgentRequest"].clone())?;

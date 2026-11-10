@@ -29,7 +29,9 @@ inductive Action (Generation : Type) where
       (duration explicitDeadline : Time) (wake : Bool)
   /-- A resumed generation which expires before begin has produced no output. -/
   | reparkExpiredResume (boundary : Boundary) (generation : Generation) (expectedDeadline : Time)
-  /-- Cancellation or deadline expiry terminalizes the parked request once. -/
+  /-- Cancellation, deadline expiry or policy supersession terminalizes the
+  parked request once. A parked request holds no lease, so a newer latest-only
+  fire cannot reach it through `policyRevoke`; this is its only terminal owner. -/
   | finalizeParked (boundary : Boundary) (generation : Generation) (outcome : Outcome)
   | begin (boundary : Boundary) (generation : Generation)
   | appendOutput (boundary : Boundary) (generation : Generation)
@@ -122,7 +124,7 @@ def step? {Generation : Type} [DecidableEq Generation]
       match pre.lease with
       | .vacant =>
           if boundary = .mutationWriteGate ∧ pre.request = .waitingForBackend ∧
-              (outcome = .failed ∨ outcome = .interrupted) ∧ fresh pre generation ∧
+              (outcome = .failed ∨ outcome = .interrupted ∨ outcome = .superseded) ∧ fresh pre generation ∧
               pre.continuationCount = 0 ∧ pre.tokenChargeCount = 0 then
             some (recoveryTerminal pre generation outcome)
           else none

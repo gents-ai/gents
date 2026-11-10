@@ -549,6 +549,35 @@ pub(super) async fn stage_revoke_execution_preserving_output(
     .await
 }
 
+/// A parked row has no lease to revoke; the parked terminal owner settles it
+/// in the superseding fire's transaction.
+pub(super) async fn stage_supersede_parked_execution(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    row: &AgentRequestRow,
+    reason: &str,
+) -> Result<TerminalizeResult> {
+    terminalize_execution_in_txn(
+        txn,
+        &TerminalizeSpec {
+            request_doc_id: row.doc_id.as_deref().context("missing request document")?,
+            authority: TerminalAuthority::Parked {
+                generation: row
+                    .execution_generation
+                    .as_deref()
+                    .context("missing parked generation")?,
+            },
+            outcome: RequestTerminalOutcome::Superseded,
+            selection: None,
+            reason,
+            fixture_now: None,
+            fixture_fresh_generation: None,
+            pending_fence: None,
+        },
+        &ExecutionGeneration::fresh(),
+    )
+    .await
+}
+
 async fn terminalize_execution_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     spec: &TerminalizeSpec<'_>,
@@ -645,7 +674,7 @@ async fn terminalize_execution_in_txn(
                 .as_deref()
                 .map(DateTime::parse_from_rfc3339)
                 .transpose()?;
-            state == RequestLifecycleState::WaitingForBackend
+            super::execution_policy::can_finalize_parked(state, effective_outcome.request_state())
                 && expiry.is_none()
                 && owner == generation
                 && match effective_outcome {
@@ -654,6 +683,7 @@ async fn terminalize_execution_in_txn(
                         !interrupted
                             && deadline.is_some_and(|deadline| now >= deadline.with_timezone(&Utc))
                     }
+                    RequestTerminalOutcome::Superseded => true,
                     _ => false,
                 }
         }

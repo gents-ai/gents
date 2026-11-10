@@ -883,6 +883,7 @@ def snapshotRuntimeCasesJson : String :=
     ++ "\"backend_generation_mark_cases\":" ++ Conformance.BackendWake.generationCasesJson ++ ","
     ++ "\"backend_resume_admission_cases\":" ++ Conformance.BackendWake.admissionCasesJson ++ ","
     ++ "\"backend_repark_cases\":" ++ Conformance.BackendWake.reparkCasesJson ++ ","
+    ++ "\"backend_parked_finalize_cases\":" ++ Conformance.BackendWake.parkedFinalizeCasesJson ++ ","
     ++ "\"completion_retry_cases\":"
       ++ CompletionRetry.Contracts.casesJson ++ ","
     ++ "\"account_rotation_select_cases\":"

@@ -152,6 +152,15 @@ async fn claimed_owner(
     identity: &Arc<dyn crate::store::identity::NodeIdentity>,
     agent: &gents_protocol::agent_identity::AgentIdentityBinding,
 ) -> RequestLifecycle {
+    claimed_owner_caused_by(node, identity, agent, TriggerLineage::default()).await
+}
+
+async fn claimed_owner_caused_by(
+    node: &Arc<EmbeddedNode>,
+    identity: &Arc<dyn crate::store::identity::NodeIdentity>,
+    agent: &gents_protocol::agent_identity::AgentIdentityBinding,
+    lineage: TriggerLineage,
+) -> RequestLifecycle {
     let agent_identity =
         crate::store::identity::resolve_agent_identity(identity.as_ref(), agent).unwrap();
     let mut lifecycle = RequestLifecycle::materialize_pending_with_execution_binding(
@@ -162,7 +171,7 @@ async fn claimed_owner(
         60,
         ExecutionOrigin::Interactive,
         "lease-test",
-        TriggerLineage::default(),
+        lineage,
         Some(agent_identity),
     )
     .await
@@ -2425,6 +2434,118 @@ async fn backend_park_does_not_release_lease_when_interrupted() {
 }
 
 #[tokio::test]
+async fn latest_only_supersession_settles_parked_and_resuming_fires() {
+    use crate::request::lifecycle::backend_wait::{wake_parked_execution, WakeResult};
+    for resuming in [false, true] {
+        let (node, _db, identity, agent) = test_node().await;
+        let access = agent_access(&node, &identity, &agent);
+        let mut lifecycle = claimed_owner_caused_by(
+            &node,
+            &identity,
+            &agent,
+            TriggerLineage {
+                trigger_id: Some("latest".to_owned()),
+                ..Default::default()
+            },
+        )
+        .await;
+        let writer = crate::request::streaming::DefraStreamWriter::new_managed(
+            node.clone(),
+            agent_identity(&identity, &agent).as_ref(),
+            Duration::ZERO,
+        )
+        .unwrap();
+        lifecycle.begin_owned_execution(&writer).await.unwrap();
+        let doc_id = lifecycle.request().doc_id.clone();
+        let node_did = lifecycle.request().node_did.clone();
+        assert!(lifecycle.park_for_backend().await.unwrap());
+        if resuming {
+            assert!(matches!(
+                wake_parked_execution(
+                    &access,
+                    &doc_id,
+                    "lease-test",
+                    Some(chrono::Utc::now()),
+                    chrono::Utc::now(),
+                )
+                .await
+                .unwrap(),
+                WakeResult::Resumed { .. }
+            ));
+        }
+        let owner = &node_did;
+        let superseded = access
+            .transact_write("test.supersede_parked_fire", move |txn| {
+                Box::pin(async move {
+                    crate::request::lifecycle::materialize::supersede_trigger_requests_in_txn(
+                        txn, owner, "latest", None,
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap();
+        assert_eq!(superseded, 1, "resuming={resuming}");
+        let row = request_row(&access, &doc_id).await;
+        assert_eq!(
+            row.lifecycle_state,
+            Some(RequestLifecycleState::Superseded),
+            "resuming={resuming}"
+        );
+        assert!(row.terminalized_at.is_some());
+        assert_eq!(
+            wake_parked_execution(
+                &access,
+                &doc_id,
+                "lease-test",
+                Some(chrono::Utc::now()),
+                chrono::Utc::now(),
+            )
+            .await
+            .unwrap(),
+            WakeResult::Lost,
+            "a superseded fire must not resume"
+        );
+    }
+}
+
+#[tokio::test]
+async fn parked_head_keeps_its_session_closed_to_later_work() {
+    let (_node, _db, identity, _agent, access, mut lifecycle) = parked_fixture().await;
+    let request = lifecycle.request().clone();
+    assert!(lifecycle.park_for_backend().await.unwrap());
+
+    let input = crate::request::lifecycle::queue::prepare_user_message_input(
+        &access,
+        &request.node_did,
+        &request.session_id,
+        gents_protocol::request_input::RequestInput::default(),
+        gents_protocol::request_input::QueueDelivery::Queue,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        input.queue.unwrap().queued_after_request_id.as_deref(),
+        Some(request.request_id.as_str()),
+        "a message sent during parking queues behind the parked head"
+    );
+
+    let (node_did, session_id) = (&request.node_did, &request.session_id);
+    let identity = identity.as_ref();
+    let resume = access
+        .transact_write("test.resume_over_parked_head", move |txn| {
+            Box::pin(async move {
+                crate::goal::stage_session_resume_in_txn(txn, identity, node_did, session_id).await
+            })
+        })
+        .await;
+    assert!(resume
+        .unwrap_err()
+        .to_string()
+        .contains("session work is still settling"));
+}
+
+#[tokio::test]
 async fn parked_request_can_be_interrupted_once_without_a_live_lease() {
     let (_node, _db, _identity, _agent, access, mut lifecycle) = parked_fixture().await;
     let doc_id = lifecycle.request().doc_id.clone();
@@ -2617,7 +2738,8 @@ async fn backend_wake_adopts_fresh_lease_and_preserves_claim_binding() {
     assert!(resumed
         .wake_for_backend(Some(chrono::Utc::now()))
         .await
-        .unwrap());
+        .unwrap()
+        .resumed());
     assert_ne!(resumed.execution_generation().unwrap(), old_generation);
     assert_eq!(resumed.request_commit_cid(), Some(claim_cid.as_str()));
     assert_eq!(resumed.claimed_deadline_at(), deadline);
@@ -2709,7 +2831,9 @@ async fn backend_wait_parks_once_and_fences_the_execution_generation() {
         )
         .await
         .unwrap(),
-        WakeResult::Lost
+        WakeResult::OtherBackend {
+            bound: "lease-test".to_owned()
+        }
     );
     let resumed = wake_parked_execution(
         &access,

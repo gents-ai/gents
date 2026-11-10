@@ -312,7 +312,7 @@ theorem resumed_generation_is_fresh {Generation : Type} [DecidableEq Generation]
   | recoverable owner duration deadline => simp [step?, hlease] at h
   | terminal owner outcome => simp [step?, hlease] at h
 
-/-- Parked cancellation or expiry obtains one fresh terminal generation and
+/-- Parked cancellation, expiry or supersession obtains one fresh terminal generation and
 commits the same terminal effects as the ordinary completion owner. -/
 theorem parked_terminalization_is_fenced_and_single {Generation : Type} [DecidableEq Generation]
     (pre post : World Generation) (generation : Generation) (outcome : Outcome)
@@ -329,5 +329,19 @@ theorem parked_terminalization_is_fenced_and_single {Generation : Type} [Decidab
   | active owner duration deadline => simp [step?, hlease] at h
   | recoverable owner duration deadline => simp [step?, hlease] at h
   | terminal owner prior => simp [step?, hlease] at h
+
+/-- A newer latest-only fire settles an earlier parked fire: the parked request
+cannot later resume, because its terminal lease admits no `resumeBackend`. -/
+theorem parked_request_is_superseded_and_cannot_resume {Generation : Type} [DecidableEq Generation]
+    (pre : World Generation) (generation next : Generation) (duration deadline : Time) (wake : Bool)
+    (h_request : pre.request = .waitingForBackend) (h_lease : pre.lease = .vacant)
+    (h_fresh : fresh pre generation)
+    (h_continuation : pre.continuationCount = 0) (h_charge : pre.tokenChargeCount = 0) :
+    ∃ post, step? pre (.finalizeParked .mutationWriteGate generation .superseded) = some post ∧
+      post.request = .superseded ∧
+      step? post (.resumeBackend .mutationWriteGate next duration deadline wake) = none := by
+  refine ⟨recoveryTerminal pre generation .superseded, ?_, rfl, ?_⟩
+  · simp [step?, h_lease, h_request, h_fresh, h_continuation, h_charge]
+  · simp [step?, recoveryTerminal, terminalize, commitTerminalEffects]
 
 end RequestExecutionLease

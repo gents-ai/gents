@@ -153,10 +153,9 @@ pub(crate) async fn stage_session_resume_in_txn(
     anyhow::ensure!(
         !requests
             .iter()
-            .any(|row| row.lifecycle_state.is_some_and(|state| matches!(
-                state,
-                RequestLifecycleState::Claimed | RequestLifecycleState::Processing
-            ))),
+            .any(|row| row
+                .lifecycle_state
+                .is_some_and(RequestLifecycleState::is_unsettled_execution)),
         "session work is still settling; retry resume after the interrupted request terminates"
     );
     let Some(goal) = load_canonical_goal_in_txn(txn, node_did, session_id).await? else {
