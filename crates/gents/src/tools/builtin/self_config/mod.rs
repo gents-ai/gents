@@ -19,7 +19,11 @@ mod ops;
 mod pack_catalog;
 mod pack_documents;
 mod pack_installer;
-use pack_installer::{pin_move_call, ConfigPackDistribution, PackInstallParams, PackInstaller};
+use crate::pack::node_packs::{
+    self, Distribution, DriftPolicy, HomePackRemovalError, LocalPackError, NodePacks, PackChange,
+    PluginPinConflict,
+};
+use pack_installer::{pin_move_call, PackInstaller};
 mod pack_plugins;
 mod read;
 mod requests;

@@ -1,94 +1,25 @@
 use super::*;
-use crate::pack;
 
 impl PackInstaller {
     pub(super) async fn list(&self, limit: usize, cursor: Option<&str>) -> anyhow::Result<String> {
-        anyhow::ensure!(
-            (1..=50).contains(&limit),
-            "--limit must be between 1 and 50"
-        );
-        let store = self.home.as_deref().map(pack::store::PackStore::new);
-        let mut names: BTreeMap<_, _> = match &store {
-            Some(store) => store.names()?.into_iter().collect(),
-            None => BTreeMap::new(),
-        };
         let access = self.core.access()?;
-        let installed =
-            pack::installed_catalog(&access, self.core.node_did(), self.home.as_deref()).await?;
-        for coordinate in installed.keys() {
-            names.entry(coordinate.clone()).or_default();
-        }
-        let total = names.len();
-        let mut selected = names
-            .into_iter()
-            .filter(|(coordinate, _)| cursor.is_none_or(|cursor| coordinate.as_str() > cursor))
-            .take(limit + 1)
-            .collect::<Vec<_>>();
-        let truncated = selected.len() > limit;
-        selected.truncate(limit);
-        let next_cursor = truncated
-            .then(|| selected.last().map(|(coordinate, _)| coordinate.clone()))
-            .flatten();
-        let mut items = Vec::with_capacity(selected.len());
-        for (coordinate, versions) in selected {
-            let current = installed.get(&coordinate);
-            let listing = pack::store::list_pack_versions(
-                &versions,
-                current.map(|entry| entry.stored.clone()),
-            );
-            let preferred = versions.first();
-            let display = listing.installed.as_ref().or(preferred);
-            let archive = match (&store, display) {
-                (Some(store), Some(entry)) => store.open(&entry.digest).map(Some),
-                _ => Ok(None),
-            };
-            let (manifest, error) = match &archive {
-                Ok(Some(archive)) => (Some(archive.manifest()), None),
-                Ok(None) => (None, None),
-                Err(error) => (
-                    None,
-                    Some(format!("the stored archive could not be opened: {error:#}")),
-                ),
-            };
-            let kind = current
-                .map(|entry| &entry.kind)
-                .or_else(|| manifest.map(|manifest| &manifest.metadata.kind));
-            let installable = manifest.is_some();
-            items.push(json!({
-                "name": coordinate,
-                "version": listing.installed.as_ref().map(|entry| &entry.version),
-                "versions": versions.iter().map(|stored| stored.version.as_str()).collect::<Vec<_>>(),
-                "available_version": preferred.map(|entry| &entry.version),
-                "other_stored_versions": listing.other_stored.iter().map(|entry| json!({"version": entry.version, "digest": entry.digest})).collect::<Vec<_>>(),
-                "description": manifest.map(|manifest| &manifest.description),
-                "kind": kind,
-                "artifact_digest": display.map(|entry| &entry.digest),
-                "installed_digest": listing.installed.as_ref().map(|entry| &entry.digest),
-                "inference_slots": manifest.map(|manifest| &manifest.metadata.inference_slots),
-                "installable": installable,
-                "installed": current.map(|entry| &entry.record),
-                "error": error,
-            }));
-        }
+        let listing = self.packs(&access).list(limit, cursor).await?;
         Ok(serde_json::to_string_pretty(&json!({
             "source": "store_and_installations",
             "page": {
                 "limit": limit,
-                "total": total,
-                "returned": items.len(),
-                "truncated": truncated,
-                "next_cursor": next_cursor,
+                "total": listing.total,
+                "returned": listing.items.len(),
+                "truncated": listing.truncated,
+                "next_cursor": listing.next_cursor,
             },
-            "items": items,
+            "items": listing.items,
             "registry_lookup": "Use pack search to discover registry packages, then pack get NAMESPACE/NAME to inspect one. List shows installed packs and artifacts this home's store already holds.",
         }))?)
     }
 
     pub(super) async fn search(&self, query: &str, page: u32) -> anyhow::Result<String> {
-        let registry = pack::registry::resolve_registry_url(None);
-        let response = pack::registry::RegistryClient::new(registry.clone())
-            .search(query, page)
-            .await?;
+        let (registry, response) = NodePacks::search(query, page).await?;
         let packs = response["packs"]
             .as_array()
             .context("registry search returned no packs array")?;
@@ -116,24 +47,18 @@ impl PackInstaller {
     }
 
     pub(super) async fn get(&self, package: &str) -> anyhow::Result<String> {
-        let args = PackInstallParams {
-            package: package.to_owned(),
-            variables: BTreeMap::new(),
-            inference_slots: BTreeMap::new(),
-            expected_digest: None,
-        };
-        let distribution = self.resolve("get", &args).await?;
+        let distribution = self.resolve("get", &PackChange::of(package)).await?;
         let access = self.core.access()?;
+        let packs = self.packs(&access);
         let node_binding = self.core.refresh_node_binding().await?;
-        let inference = pack::inspect_pack_inference_bindings_with_node_binding(
-            &access,
-            distribution.manifest(),
-            self.core.node_did(),
-            &BTreeMap::new(),
-            node_binding.as_ref(),
-        )
-        .await?;
-        let installed = self.installation_status(distribution.manifest()).await?;
+        let inference = packs
+            .inference(
+                distribution.manifest(),
+                &BTreeMap::new(),
+                node_binding.as_ref(),
+            )
+            .await?;
+        let installed = packs.status(distribution.manifest()).await?;
         Ok(serde_json::to_string_pretty(&json!({
             "source": distribution.source(),
             "manifest": distribution.manifest(),
@@ -142,7 +67,7 @@ impl PackInstaller {
             "inference": inference,
             "installed": installed,
             "installable": true,
-            "installation_blockers": self.plugin_install_blockers(distribution.manifest()),
+            "installation_blockers": packs.install_blockers(distribution.manifest()),
             "supported_operations": ["preview install", "install", "preview update", "update", "remove"],
         }))?)
     }
@@ -151,18 +76,15 @@ impl PackInstaller {
     /// see selecting them, and the call that drops the first such selection.
     /// Retirement itself stays refused on every surface until a complete
     /// reference inventory exists (Lean `incomplete_plugin_inventory_refuses`).
-    async fn plugin_retirement_refusal(
-        &self,
-        access: &crate::store::config_client::ConfigAccess,
+    fn plugin_retirement_refusal(
         coordinate: &str,
-        plugins: &std::collections::BTreeSet<String>,
+        plugins: &BTreeSet<String>,
+        selections: Option<Vec<node_packs::PluginSelection>>,
         cause: anyhow::Error,
     ) -> anyhow::Error {
-        let selections =
-            match pack::visible_plugin_selections(access, self.core.node_did(), plugins).await {
-                Ok(selections) => selections,
-                Err(_) => return cause,
-            };
+        let Some(selections) = selections else {
+            return cause;
+        };
         let names = plugins.iter().cloned().collect::<Vec<_>>().join(", ");
         let source = plugins
             .iter()
@@ -180,7 +102,7 @@ impl PackInstaller {
                             "Tools {:?} of agent {} ({})",
                             selection.tools, selection.agent, selection.plugin
                         ))
-                        .collect::<std::collections::BTreeSet<_>>()
+                        .collect::<BTreeSet<_>>()
                         .into_iter()
                         .collect::<Vec<_>>()
                         .join(", ")
@@ -207,96 +129,16 @@ impl PackInstaller {
         .into()
     }
 
-    /// Removes an assets or plugins pack: its home record and the plugin
-    /// records it owns, released together by the local removal owner, then
-    /// the node is told. Retiring plugins needs a complete reference inventory
-    /// (`ensure_plugins_unreferenced`), so a pack that ships plugins is refused
-    /// where that inventory is unavailable and stays installed.
-    async fn remove_home_pack(
-        &self,
-        access: &crate::store::config_client::ConfigAccess,
-        home: &std::path::Path,
-        coordinate: String,
-        record: pack::HomePackInstall,
-    ) -> anyhow::Result<String> {
-        let (namespace, _) = pack::registry::split_pack_coordinate(&coordinate);
-        let plugins = record
-            .plugins
-            .iter()
-            .map(|plugin| format!("{namespace}/{}", plugin.name))
-            .collect();
-        if let Err(cause) =
-            pack::ensure_plugins_unreferenced(access, self.core.node_did(), &plugins).await
-        {
-            return Err(self
-                .plugin_retirement_refusal(access, &coordinate, &plugins, cause)
-                .await);
-        }
-        let local_home = home.to_owned();
-        let local_coordinate = coordinate.clone();
-        let removal = tokio::task::spawn_blocking(move || {
-            pack::plugin_lifecycle::remove_local(
-                &local_home,
-                &local_coordinate,
-                |current| {
-                    anyhow::ensure!(
-                        *current == record,
-                        "{local_coordinate} changed while checking plugin references; retry removal"
-                    );
-                    Ok(())
-                },
-                |()| Ok(()),
-            )
-        })
-        .await
-        .context("pack removal task did not finish")??;
-        if !removal.plugins.is_empty() {
-            pack::record_plugin_store_change_as(
-                access,
-                self.core.node_did(),
-                self.core.identity().ok(),
-                home,
-                &coordinate,
-                None,
-            )
-            .await?;
-        }
-        ordered! {
-            "pack": coordinate,
-            "removed": json!({"kind": removal.record.kind, "plugins": removal.plugins, "pages": removal.record.ux.iter().map(|page| page.name.clone()).collect::<Vec<_>>()}),
-            "effect": "The pack's install record and plugin records were released. Its cached assets, plugin bytes and archive stay until the operator runs `gents config pack prune`.",
-        }
-        .pretty()
-    }
-
-    /// Removes an installed pack's `PackInstallation` record and everything
-    /// it lists. Never resolves the package (no
-    /// store or registry lookup); releases its home and plugin store records
-    /// but no plugin bytes or archive; use `gents config pack remove` for that.
-    /// `with_collections` then also empties and removes each collection the
-    /// pack's SDL declared that nothing else on the node names.
-    /// What `pack remove` would do to an installed document pack, read from
-    /// its installation record: nothing is resolved or changed.
+    /// What `pack remove` would do to an installed pack, read from its
+    /// installation record: nothing is resolved or changed.
     pub(super) async fn preview_remove(&self, package: &str) -> anyhow::Result<String> {
-        let spec = pack::resolve::parse_pack_spec(package.trim())?;
-        let coordinate = format!("{}/{}", spec.namespace, spec.name);
+        let coordinate = node_packs::coordinate_of(package, false)?;
         let access = self.core.access()?;
-        let installed = match self.home.as_deref() {
-            Some(home) => pack::read_home_install(home, &coordinate)?
-                .filter(|record| record.kind != pack::PackKind::Documents)
-                .map(serde_json::to_value)
-                .transpose()?,
-            None => None,
-        };
-        let installed = match installed {
-            Some(installed) => Some(installed),
-            None => pack::read_installed_pack(&access, self.core.node_did(), &coordinate)
-                .await?
-                .map(serde_json::to_value)
-                .transpose()?,
-        };
-        let installed =
-            installed.with_context(|| format!("{coordinate} is not installed; see pack list"))?;
+        let installed = self
+            .packs(&access)
+            .installed(&coordinate)
+            .await?
+            .with_context(|| format!("{coordinate} is not installed; see pack list"))?;
         let edited = self.edited_documents(&coordinate, true).await?;
         ordered! {
             "committed": false,
@@ -314,6 +156,13 @@ impl PackInstaller {
         .pretty()
     }
 
+    /// Removes an installed pack. An assets or plugins pack releases its home
+    /// record and the plugin records it owns; a documents pack removes its
+    /// `PackInstallation` record and everything it lists. Nothing is resolved
+    /// (no store or registry lookup) and no plugin bytes or archive are
+    /// released; use `gents config pack remove` for that. `with_collections`
+    /// then also empties and removes each collection the pack's SDL declared
+    /// that nothing else on the node names.
     pub(super) async fn remove(
         &self,
         package: &str,
@@ -321,34 +170,29 @@ impl PackInstaller {
         edited: Option<&str>,
         words: &[String],
     ) -> anyhow::Result<String> {
-        let edited = Self::edited_decision(edited)?;
-        let args = PackInstallParams {
-            package: package.to_owned(),
-            variables: BTreeMap::new(),
-            inference_slots: BTreeMap::new(),
-            expected_digest: None,
-        };
-        self.validate(&args)?;
-        let spec = pack::resolve::parse_pack_spec(package.trim())?;
-        anyhow::ensure!(
-            spec.version.is_none(),
-            "pack remove takes a coordinate without a version; remove {}/{}",
-            spec.namespace,
-            spec.name
-        );
-        let coordinate = format!("{}/{}", spec.namespace, spec.name);
+        let edited = node_packs::edited_policy(edited)?;
+        PackChange::of(package).validate()?;
+        let coordinate = node_packs::coordinate_of(package, true)?;
         let access = self.core.access()?;
-        if let Some(home) = self.home.as_deref() {
-            if let Some(record) = pack::read_home_install(home, &coordinate)? {
-                if matches!(
-                    record.kind,
-                    pack::PackKind::Assets | pack::PackKind::Plugins
-                ) {
-                    return self
-                        .remove_home_pack(&access, home, coordinate, record)
-                        .await;
-                }
+        let packs = self.packs(&access);
+        if let Some(record) = packs.home_pack(&coordinate)? {
+            let removal = packs
+                .remove_home_pack(&coordinate, record, self.core.identity().ok())
+                .await
+                .map_err(|error| match error {
+                    HomePackRemovalError::PluginsNotRetired {
+                        plugins,
+                        selections,
+                        cause,
+                    } => Self::plugin_retirement_refusal(&coordinate, &plugins, selections, cause),
+                    HomePackRemovalError::Other(error) => error,
+                })?;
+            return ordered! {
+                "pack": coordinate,
+                "removed": json!({"kind": removal.record.kind, "plugins": removal.plugins, "pages": removal.record.ux.iter().map(|page| page.name.clone()).collect::<Vec<_>>()}),
+                "effect": "The pack's install record and plugin records were released. Its cached assets, plugin bytes and archive stay until the operator runs `gents config pack prune`.",
             }
+            .pretty();
         }
         let declared = if with_collections {
             let home = self
@@ -368,17 +212,7 @@ impl PackInstaller {
         };
         self.require_edited_decision(&coordinate, true, edited, words)
             .await?;
-        let report = pack::remove_pack(&access, self.core.node_did(), &coordinate, edited).await?;
-        if let Some(home) = self.home.as_deref() {
-            pack::forget_home_install(home, &coordinate)?;
-            for removed in std::iter::once(&report).chain(&report.dependencies) {
-                pack::plugin_lifecycle::release_plugin_records(
-                    home,
-                    &removed.pack,
-                    &removed.documents.plugins,
-                )?;
-            }
-        }
+        let report = packs.remove_documents(&coordinate, edited).await?;
         let collections = crate::collection_use::remove_unused_collections(
             &access,
             self.home.as_deref(),

@@ -161,6 +161,94 @@ where
     }).await.context("owned plugin installation task failed")?
 }
 
+/// A plugins or assets pack as installed: its home record and the plugin
+/// records published with it.
+pub struct InstalledHomePack {
+    pub record: HomePackInstall,
+    pub plugins: Vec<store::InstalledPlugin>,
+}
+
+/// What installing `manifest` grants each of its plugins that asks for
+/// anything: a successful install grants exactly what the plugin declares.
+pub fn authority_asked(manifest: &super::PackManifest) -> Result<Vec<serde_json::Value>> {
+    let mut asked = Vec::new();
+    for plugin in &manifest.metadata.plugins {
+        if let Some(description) = install::authority_asked(plugin)? {
+            asked.push(serde_json::json!({
+                "plugin": format!("{}/{}", manifest.metadata.namespace, plugin.name),
+                "granted": description,
+                "manifold": plugin.manifold,
+            }));
+        }
+    }
+    Ok(asked)
+}
+
+/// Why the plugin store refuses `manifest`'s plugins under `consent`: a
+/// plugin that asks for authority needs the operator's consent to it.
+pub fn install_blockers(
+    home: Option<&Path>,
+    manifest: &super::PackManifest,
+    consent: bool,
+) -> Vec<serde_json::Value> {
+    manifest
+        .metadata
+        .plugins
+        .iter()
+        .filter_map(|plugin| {
+            home.context("this runtime has no plugin home")
+                .and_then(|home| {
+                    store::grant_on_install(home, &manifest.metadata.namespace, plugin, consent)
+                })
+                .err()
+                .map(
+                    |error| serde_json::json!({"plugin":plugin.name,"reason":format!("{error:#}")}),
+                )
+        })
+        .collect()
+}
+
+/// The plugins of `archive` another pack already owns in `home`. An artifact
+/// the plugin runtime does not admit is an error, not a blocker.
+pub fn admission_blockers(
+    home: &Path,
+    archive: &crate::pack::archive::PackArchive,
+) -> Result<Vec<serde_json::Value>> {
+    let manifest = archive.manifest();
+    let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
+    let mut blockers = Vec::new();
+    for plugin in &manifest.metadata.plugins {
+        if let Err(error) = store::check_plugin_ownership(
+            home,
+            &manifest.metadata.namespace,
+            &plugin.name,
+            &coordinate,
+        ) {
+            blockers.push(serde_json::json!({"plugin":plugin.name,"reason":format!("{error:#}")}));
+        }
+        install::admit(archive.asset(&plugin.artifact)?, plugin)?;
+    }
+    Ok(blockers)
+}
+
+/// The digest installing `archive` publishes for each of its plugins.
+pub fn published_digests(
+    archive: &crate::pack::archive::PackArchive,
+) -> Result<BTreeMap<String, String>> {
+    let manifest = archive.manifest();
+    let mut digests = BTreeMap::new();
+    for plugin in &manifest.metadata.plugins {
+        digests.insert(
+            format!("{}/{}", manifest.metadata.namespace, plugin.name),
+            format!(
+                "sha256:{}",
+                store::content_digest_hex(archive.asset(&plugin.artifact)?)
+            ),
+        );
+    }
+    Ok(digests)
+}
+
 /// Releases the plugin store records `coordinate` still owns at the digests its
 /// node record lists; records another pack or a newer install took over stay.
 pub fn release_plugin_records(

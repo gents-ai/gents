@@ -178,7 +178,7 @@ impl ConfigCommandTool {
 
         let open_home = home.clone();
         let built = prepared.clone();
-        let distribution = ConfigPackDistribution::resolved(
+        let distribution = Distribution::resolved(
             tokio::task::spawn_blocking(move || {
                 source_pack::open_built_plugin_source(&open_home, &built)
             })
@@ -230,11 +230,9 @@ impl ConfigCommandTool {
                 } else {
                     "install"
                 },
-                &PackInstallParams {
-                    package: coordinate.clone(),
-                    variables: BTreeMap::new(),
-                    inference_slots: Default::default(),
+                &PackChange {
                     expected_digest: Some(distribution.digest().to_owned()),
+                    ..PackChange::of(&coordinate)
                 },
                 &distribution,
                 true,

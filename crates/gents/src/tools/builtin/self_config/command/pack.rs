@@ -1,5 +1,5 @@
 use super::*;
-use crate::plugin::{store, tool::PluginTool};
+use crate::plugin::tool::PluginTool;
 
 impl ConfigCommandTool {
     pub(super) fn plugin(&self, argv: &[String]) -> Result<String> {
@@ -7,10 +7,6 @@ impl ConfigCommandTool {
             self.core.held_grants().pack_install || self.categories.contains("tools"),
             "plugin inspection requires the pack or tools grant"
         );
-        let home = self
-            .plugins
-            .home()
-            .context("this runtime has no plugin home")?;
         match argv.first().map(String::as_str) {
             Some("list") => {
                 let parsed = ParsedArgs::parse(&argv[1..])?;
@@ -25,7 +21,7 @@ impl ConfigCommandTool {
                 );
                 let limit = parse_limit(&parsed)?;
                 let cursor = parsed.one("cursor")?;
-                let mut records = store::list_records(home)?;
+                let mut records = self.plugins.installed()?;
                 records.sort_by_key(|record| format!("{}/{}", record.namespace, record.name));
                 let mut items = records.into_iter().filter(|record| cursor.is_none_or(|cursor| format!("{}/{}", record.namespace, record.name).as_str() > cursor)).take(limit + 1).map(|record| json!({"plugin":format!("{}/{}",record.namespace,record.name),"version":record.version,"digest":record.digest,"owner_pack_coordinate":record.owner_pack_coordinate})).collect::<Vec<_>>();
                 let truncated = items.len() > limit;
@@ -41,8 +37,7 @@ impl ConfigCommandTool {
                 ordered! {"items": items, "next_cursor": next_cursor, "next_call": json!({"argv":["plugin","get","<PLUGIN>"]})}.pretty()
             }
             Some("get") if argv.len() == 2 => {
-                let (namespace, name) = store::parse_coordinate(&argv[1])?;
-                let record = store::read_record(home, namespace, name)?;
+                let record = self.plugins.installed_record(&argv[1])?;
                 ordered! {
                     "plugin": argv[1],
                     "selection": json!({"plugin":argv[1],"digest":record.digest}),
@@ -195,7 +190,7 @@ impl ConfigCommandTool {
     }
 }
 
-fn parse_pack_change(argv: &[String]) -> Result<(PackInstallParams, Option<String>)> {
+fn parse_pack_change(argv: &[String]) -> Result<(PackChange, Option<String>)> {
     let package = argv
         .first()
         .context("pack operation requires PACKAGE")?
@@ -232,7 +227,7 @@ fn parse_pack_change(argv: &[String]) -> Result<(PackInstallParams, Option<Strin
         Ok(values)
     };
     Ok((
-        PackInstallParams {
+        PackChange {
             package,
             variables: pairs("var")?,
             inference_slots: pairs("inference-slot")?,

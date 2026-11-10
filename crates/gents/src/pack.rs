@@ -21,6 +21,7 @@ mod loader;
 pub mod local;
 mod manifest_validation;
 pub mod materialize;
+pub mod node_packs;
 mod plugin;
 pub mod plugin_lifecycle;
 mod plugin_validation;

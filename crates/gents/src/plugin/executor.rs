@@ -560,6 +560,27 @@ impl PluginExecutor {
         (result, receipt)
     }
 
+    /// Every plugin record in this runtime's plugin home.
+    pub fn installed(&self) -> Result<Vec<InstalledPlugin>> {
+        store::list_records(
+            self.home
+                .as_deref()
+                .context("this runtime has no plugin home")?,
+        )
+    }
+
+    /// The record of `coordinate` as the plugin home holds it, staged or not.
+    pub fn installed_record(&self, coordinate: &str) -> Result<InstalledPlugin> {
+        let (namespace, name) = store::parse_coordinate(coordinate)?;
+        store::read_record(
+            self.home
+                .as_deref()
+                .context("this runtime has no plugin home")?,
+            namespace,
+            name,
+        )
+    }
+
     pub fn resolve(&self, coordinate: &str, pinned: Option<&str>) -> Result<InstalledPlugin> {
         let (namespace, name) = store::parse_coordinate(coordinate)?;
         let home = self.home.as_deref().with_context(|| {
