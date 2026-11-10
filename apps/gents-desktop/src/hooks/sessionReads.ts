@@ -10,6 +10,7 @@ import {
   applySessionLiveDelta,
   sessionLiveDeltaRequest,
 } from "@source-inc/gents-desktop-client";
+import { shareUnchanged } from "./fleetStore";
 import { acceptsAsyncResult } from "./observationOrdering";
 import { createContextDetailsCache } from "./sessionContextDetails";
 import { timingConfig } from "./timing";
@@ -56,22 +57,19 @@ export function waitingRereadDelay(used: number): number | null {
   return WAITING_REREAD_MS[used] ?? null;
 }
 
-/* a session's content apart from the store-wide version, which moves when
-   any document in the store changes; its lineage version stays, since live
-   reads apply only over the lineage they were read against */
-const signatures = new WeakMap<DesktopSessionSnapshot, string>();
-const sessionSignature = (snapshot: DesktopSessionSnapshot) => {
-  let signature = signatures.get(snapshot);
-  if (signature === undefined) {
-    signature = JSON.stringify(snapshot, (key, value: unknown) =>
-      key === "projectionRevision"
-        ? (value as DesktopSessionSnapshot["projectionRevision"])?.provenanceVersion
-        : value,
-    );
-    signatures.set(snapshot, signature);
-  }
-  return signature;
-};
+/* A read whose store-wide version alone moved keeps the held revision, which
+   moves when any document in the store changes. Its lineage version counts:
+   live reads apply only over the lineage they were read against. */
+const keepStoreRevision = (
+  held: DesktopSessionSnapshot,
+  merged: DesktopSessionSnapshot,
+): DesktopSessionSnapshot =>
+  held.projectionRevision &&
+  merged.projectionRevision &&
+  held.projectionRevision.provenanceVersion ===
+    merged.projectionRevision.provenanceVersion
+    ? { ...merged, projectionRevision: held.projectionRevision }
+    : merged;
 
 /* the held session took a newer revision while a full read ran: a live read
    landed after the full read was taken */
@@ -105,7 +103,9 @@ export function createSessionReads({
   let readAt = 0;
   let readCost = 0;
   let changedAt = 0;
-  let lastOutcome: string | null = null;
+  /* the last read's session and outcome: a phase, or the session it kept,
+     whose identity says whether the read found anything new */
+  let lastOutcome: { sessionId: string; outcome: unknown } | null = null;
   /* the scheduled re-read of a waiting phase, and the re-reads its streak has
      used; any read the timer did not start begins a new streak */
   let waitingTimer: ReturnType<typeof setTimeout> | undefined;
@@ -116,12 +116,16 @@ export function createSessionReads({
     clearTimeout(waitingTimer);
     waitingTimer = undefined;
   };
-  const noteRead = (sessionId: string, outcome: string, started: number) => {
+  const noteRead = (
+    sessionId: string,
+    outcome: string | DesktopSessionSnapshot,
+    started: number,
+  ) => {
     readAt = performance.now();
     readCost = readAt - started;
-    const keyed = `${sessionId}\0${outcome}`;
-    if (keyed !== lastOutcome) changedAt = readAt;
-    lastOutcome = keyed;
+    if (lastOutcome?.sessionId !== sessionId || lastOutcome.outcome !== outcome)
+      changedAt = readAt;
+    lastOutcome = { sessionId, outcome };
   };
   const quiet = () => readAt - changedAt >= QUIET_AFTER_MS;
   /* A full read of a long session can take over a second, and nothing tells
@@ -251,18 +255,19 @@ export function createSessionReads({
       }
       waitingRereads = 0;
       const held = readSession(sessionStore);
-      let outcome = "missing";
+      let outcome: string | DesktopSessionSnapshot = "missing";
       if (!next) setSession(null);
       else if (held && held !== heldAtStart && supersedes(held, next)) {
-        outcome = sessionSignature(held);
+        outcome = held;
       } else {
         const merged = mergeSessionTipSnapshot(held, next);
         /* a read that finds nothing new keeps the held session, so nothing
-           that shows it renders again; the signature covers its Goal */
-        const kept =
-          held && sessionSignature(held) === sessionSignature(merged) ? held : merged;
+           that shows it renders again; the session holds its Goal */
+        const kept = held
+          ? shareUnchanged(held, keepStoreRevision(held, merged))
+          : merged;
         writeSessionRead(sessionStore, kept, sessionGoalReadOf(next));
-        outcome = sessionSignature(kept);
+        outcome = kept;
       }
       noteRead(nextSessionId, outcome, started);
       setSessionLoad({
