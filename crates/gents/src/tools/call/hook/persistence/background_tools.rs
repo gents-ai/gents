@@ -184,15 +184,41 @@ impl DefraSessionHook {
         let mut lifecycle = match admission {
             Ok(lifecycle) => lifecycle,
             Err(error) => {
-                if let Some(capacity) = error.downcast_ref::<BackgroundCapacityExceeded>() {
-                    return complete_spawn_process_failure(
-                        self,
-                        &mut parent_lifecycle,
-                        FailureClass::ServiceUnavailable,
-                        background_budget_exceeded_payload(SPAWN_PROCESS_TOOL_NAME, capacity.0),
-                        None,
-                    )
-                    .await;
+                match error.downcast_ref::<BackgroundSlotRefusal>() {
+                    Some(BackgroundSlotRefusal::CapacityExceeded(admitted)) => {
+                        return complete_spawn_process_failure(
+                            self,
+                            &mut parent_lifecycle,
+                            FailureClass::ServiceUnavailable,
+                            background_budget_exceeded_payload(SPAWN_PROCESS_TOOL_NAME, *admitted),
+                            None,
+                        )
+                        .await;
+                    }
+                    // A script that outlived its request cannot start background
+                    // work; that is this child's failure, not the script's.
+                    Some(BackgroundSlotRefusal::RequestStopped)
+                        if parent_lifecycle.is_plugin_effect() =>
+                    {
+                        return complete_spawn_process_failure(
+                            self,
+                            &mut parent_lifecycle,
+                            FailureClass::ServiceUnavailable,
+                            json_string(json!({
+                                "ok": false,
+                                "failure_class": "service_unavailable",
+                                "code": "request_stopped",
+                                "path": "/",
+                                "message": "the request that started this script has stopped; a script can start a background process only while that request runs",
+                                "retryable": false,
+                                "service_id": "process",
+                                "tool_name": SPAWN_PROCESS_TOOL_NAME
+                            })),
+                            None,
+                        )
+                        .await;
+                    }
+                    _ => {}
                 }
                 return Err(error);
             }

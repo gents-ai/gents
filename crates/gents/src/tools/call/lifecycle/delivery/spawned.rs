@@ -225,17 +225,21 @@ impl ToolCallLifecycle {
                     anyhow::ensure!(
                         request_row["node_did"].as_str() == Some(node_did.as_str())
                             && request_row["session_id"].as_str() == Some(session_id.as_str())
-                            && request_row["requester_did"].as_str() == requester_did.as_deref()
-                            && RequestLifecycleState::parse_opt(request_row["lifecycle_state"].as_str())
-                                == Some(RequestLifecycleState::Processing)
-                            && request_row["execution_generation"].as_str() == Some(generation.as_str())
-                            && request_row["interrupt_requested_at"].is_null(),
-                        "spawned admission lost live request generation ownership"
+                            && request_row["requester_did"].as_str() == requester_did.as_deref(),
+                        "spawned admission parent request is out of scope"
                     );
                     let expires_at = request_row["execution_lease_expires_at"].as_str()
                         .context("spawned admission request lacks lease")?;
-                    anyhow::ensure!(DateTime::parse_from_rfc3339(expires_at)?.with_timezone(&Utc) > now,
-                        "spawned admission request lease has expired");
+                    // A spawned process spends the live request lease (Lean
+                    // `admitSpawnedBackgroundCore`), even for a script that outlives it.
+                    if RequestLifecycleState::parse_opt(request_row["lifecycle_state"].as_str())
+                        != Some(RequestLifecycleState::Processing)
+                        || request_row["execution_generation"].as_str() != Some(generation.as_str())
+                        || !request_row["interrupt_requested_at"].is_null()
+                        || DateTime::parse_from_rfc3339(expires_at)?.with_timezone(&Utc) <= now
+                    {
+                        return Err(crate::tools::call::hook::persistence::BackgroundSlotRefusal::RequestStopped.into());
+                    }
                     let request_id = request_row["request_id"].as_str()
                         .filter(|id| !id.trim().is_empty()).context("spawned admission request lacks logical identity")?;
                     let deadline = escape_graphql_string(&deadline_at.to_rfc3339_opts(SecondsFormat::Nanos, true));

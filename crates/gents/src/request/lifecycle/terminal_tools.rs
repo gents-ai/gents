@@ -316,11 +316,14 @@ mod tests {
                 tool: mut parent,
                 ..
             } = fixture;
+            if name.starts_with("background_parent") {
+                parent.background().await.unwrap();
+            }
             let mut child = parent
                 .admit_plugin_effect(1, "fixture_effect", "{}")
                 .await
                 .unwrap();
-            if name != "pending_cancel" {
+            if !name.contains("pending") {
                 child.start_running().await.unwrap();
             }
             if name.starts_with("timed_out") {

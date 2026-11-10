@@ -666,8 +666,7 @@ def handoffRunningTool (world : World) (tool : OwnedTool) : OwnedTool :=
 def accountOneOwnedTool (world : World) (generation : Generation)
     (interruptRunning : Bool) (tool : OwnedTool) : OwnedTool × Transcript.TranscriptState :=
   if !ownedByGeneration world generation tool then (tool, world.transcript)
-  else if backgroundInvocationLive (world.toolContexts.length + 1) world tool then
-    (tool, world.transcript)
+  else if backgroundAncestorLive world tool then (tool, world.transcript)
   else match tool.context.state with
   | .pending =>
       match ToolExecution.ToolCallContext.step? tool.context
@@ -855,6 +854,12 @@ def dispatch (world : World) (generation : Generation)
     toolDispatchPublicationValid post generation permit.call && toolProjectionCoherent post)
     (dispatchCore world generation permit)
 
+/-- A spawned process reserves one of its request's background slots and routes
+its completion to that request's session, so its admission always spends the
+live request lease. A script running under a live background invocation may
+still dispatch and compose without the lease (`invocationLease?`), but it
+cannot start further background work once its request has stopped; the refusal
+is that one child's failure, not the script's. -/
 def admitSpawnedBackgroundCore (world : World) (generation : Generation)
     (admission : SpawnedToolAdmission) : Except Error World :=
   if spawnedAdmissionReplayValid world admission then .ok world
@@ -866,8 +871,8 @@ def admitSpawnedBackgroundCore (world : World) (generation : Generation)
   else match installSpawnedTool world admission with
   | none => .error .transcriptRejected
   | some spawned =>
-      match (ownedToolByDocument? world admission.parentToolDoc).bind
-          (invocationLease? world generation) with
+      match RequestExecutionLease.step? world.lease
+          (.authorizeProducerDecision .mutationWriteGate generation .dispatch) with
       | none => .error .leaseRejected
       | some lease =>
           let candidate := { world with

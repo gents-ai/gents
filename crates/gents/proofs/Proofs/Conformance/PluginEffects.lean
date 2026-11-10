@@ -169,11 +169,30 @@ theorem parent_interruption_retains_completed_children :
       child.context.state == .completed && child.terminalOutput == some terminalPayload) = true := by
   native_decide
 
+private def backgroundAdmitted : World := match admitPluginEffect backgroundParent 7 admission with
+  | .ok post => post | .error _ => backgroundParent
+
+private def backgroundRunningChild : World :=
+  match dispatch backgroundAdmitted 7 ⟨601, true, true⟩ with
+  | .ok post => post | .error _ => backgroundAdmitted
+
+/-- Request accounting leaves the children of a running background invocation
+to that invocation, and still hands the background invocation itself off. -/
+theorem live_background_parent_keeps_its_children :
+    ((ownedToolByDocument? (accountOwnedTools backgroundAdmitted 7 true) 601).any fun child =>
+      child.context.state == .pending) = true ∧
+    ((ownedToolByDocument? (accountOwnedTools backgroundRunningChild 7 true) 601).any fun child =>
+      child.context.state == .running && child.stuckSince.isNone) = true ∧
+    ((ownedToolByDocument? (accountOwnedTools backgroundRunningChild 7 true) 600).any fun parent =>
+      parent.context.state == .running && parent.stuckSince.isSome) = true := by native_decide
+
 def accountingCasesJson : Json := toJson <|
   [("pending_cancel", admitted, true), ("running_normal", runningWithCompletedParent, false),
    ("running_exceptional", running, true),
    ("timed_out_normal", completeParent timedOutChild, false),
-   ("completed_exceptional", completedChild, true)].map fun (name, before, exceptional) =>
+   ("completed_exceptional", completedChild, true),
+   ("background_parent_pending", backgroundAdmitted, true),
+   ("background_parent_running", backgroundRunningChild, true)].map fun (name, before, exceptional) =>
     let post := if exceptional then accountOwnedTools before 7 exceptional else before
     let child := (ownedToolByDocument? post 601).getD
       { document := 601, requestDoc := 10, session := 1, acceptedSequence := 0,

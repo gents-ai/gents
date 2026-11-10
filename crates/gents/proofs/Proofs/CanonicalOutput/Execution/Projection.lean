@@ -496,6 +496,18 @@ def backgroundInvocationLive : Nat → World → OwnedTool → Bool
       | some parent => (ownedToolByDocument? world parent).any
           (backgroundInvocationLive fuel world)
 
+/-- A derived invocation under a running background ancestor belongs to that
+ancestor, which outlives its request's terminal accounting and settles its own
+children when it stops. The tool's own mode is deliberately not consulted: a
+running background tool with no such ancestor is still accounted by its request. -/
+def backgroundAncestorLive (world : World) (tool : OwnedTool) : Bool :=
+  ((invocationParent? tool).bind (ownedToolByDocument? world)).any
+    (backgroundInvocationLive (world.toolContexts.length + 1) world)
+
+/-- Dispatching, controlling or composing under a live background invocation
+needs no request lease: the background owner already holds an admitted
+lifetime that survives the request. Admitting a new background process is not
+such a decision (`admitSpawnedBackgroundCore`). -/
 def invocationLease? (world : World) (generation : Generation) (tool : OwnedTool) :
     Option (RequestExecutionLease.World Generation) :=
   if backgroundInvocationLive (world.toolContexts.length + 1) world tool then some world.lease

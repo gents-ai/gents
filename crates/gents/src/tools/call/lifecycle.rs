@@ -551,6 +551,10 @@ impl ToolCallLifecycle {
             && self.plugin_effect.is_none()
     }
 
+    pub(crate) fn is_plugin_effect(&self) -> bool {
+        self.plugin_effect.is_some()
+    }
+
     pub(crate) fn is_spawned_background(&self) -> bool {
         self.spawned_by_tool_call_doc_id.is_some()
     }
