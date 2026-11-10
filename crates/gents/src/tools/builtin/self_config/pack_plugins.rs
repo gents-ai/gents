@@ -113,6 +113,7 @@ impl PackInstaller {
             false,
             Some(self.core.node_did()),
             &inference.bindings,
+            distribution.1.clone(),
             move |identity, changes| {
                 let access = notify_access;
                 let node_did = notify_node;

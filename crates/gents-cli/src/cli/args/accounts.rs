@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use clap::Subcommand;
 
 use crate::cli::output_format::OutputFormat;
-use crate::CLOUD_AFTER_HELP;
 
 #[derive(clap::Args)]
 pub(crate) struct CodexAuthProbeArgs {
@@ -182,16 +181,6 @@ pub(crate) struct ClaudeLoginArgs {
     pub(crate) client_id: Option<String>,
     #[arg(long, help = "OAuth token endpoint override for testing")]
     pub(crate) token_url: Option<String>,
-}
-
-#[derive(Subcommand)]
-pub(crate) enum CloudCommand {
-    #[command(
-        name = "login",
-        about = "Sign in to a gents cloud and store the workspace token in DefraDB",
-        after_help = CLOUD_AFTER_HELP
-    )]
-    Login(CloudLoginArgs),
 }
 
 #[derive(clap::Args)]

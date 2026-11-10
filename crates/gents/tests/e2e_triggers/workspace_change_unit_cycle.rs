@@ -1094,6 +1094,7 @@ async fn install_pack(access: &ConfigAccess, owner: &str, repo: &Path) -> PackAg
         InstalledVia::Operator,
         None,
         &environment,
+        &Default::default(),
     )
     .await
     .expect("prepare the change-unit pack as the User");

@@ -1,16 +1,20 @@
 import { isValidUxPluginId } from "@/sandbox/contract";
 import type { Route } from "./router";
+import { isPackDigest, isPackName, isPackVersion, packPreviewKey } from "./packReview";
 
 /** A place a `gents:` link names, from outside the app (`gents://session/<id>`)
     or inside a message (`gents:session/<id>`), optionally with the node that
-    holds it (`?node=<did>`); or a UX plugin's page (`gents://plugin/<id>`),
-    optionally at a place within it (`gents://plugin/<id>/<path>`). A link to
-    a message waits until a message's sequence is known to be the same on
-    every replica of its session, since a link outlives the copy it was made
-    on. */
+    holds it (`?node=<did>`); a UX plugin's page (`gents://plugin/<id>`),
+    optionally at a place within it (`gents://plugin/<id>/<path>`); or a pack
+    to review installing
+    (`gents://pack/<namespace>/<name>?version=<v>&digest=<sha256:…>`), whose
+    digest pins the archive. A link to a message waits until a message's
+    sequence is known to be the same on every replica of its session, since
+    a link outlives the copy it was made on. */
 export type AppLink =
   | { kind: "session"; sessionId: string; nodeDid?: string }
-  | { kind: "plugin"; pluginId: string; path?: string };
+  | { kind: "plugin"; pluginId: string; path?: string }
+  | { kind: "pack"; pack: string; version?: string; digest?: string };
 
 const LINK = /^gents:(?:\/\/)?([a-z][a-z0-9-]*)\/([^?#]*)(?:\?([^#]*))?/i;
 
@@ -58,6 +62,21 @@ function pluginLink(parts: string[]): AppLink | null {
   return isPluginSubpath(joined) ? { kind: "plugin", pluginId, path: joined } : null;
 }
 
+function packLink(parts: string[], query: string | undefined): AppLink | null {
+  if (parts.length !== 2 || !parts.every(isPackName)) return null;
+  const params = new URLSearchParams(query ?? "");
+  const version = params.get("version")?.trim();
+  const digest = params.get("digest")?.trim();
+  if (version !== undefined && !isPackVersion(version)) return null;
+  if (digest !== undefined && !isPackDigest(digest)) return null;
+  return {
+    kind: "pack",
+    pack: parts.join("/"),
+    ...(version ? { version } : {}),
+    ...(digest ? { digest } : {}),
+  };
+}
+
 export function parseLink(href: string): AppLink | null {
   const match = LINK.exec(href.trim());
   if (!match) return null;
@@ -68,6 +87,8 @@ export function parseLink(href: string): AppLink | null {
       return sessionLink(parts, query);
     case "plugin":
       return pluginLink(parts);
+    case "pack":
+      return packLink(parts, query);
     default:
       return null;
   }
@@ -83,6 +104,15 @@ export function linkRoute(link: AppLink): Route {
       name: "plugin",
       pluginId: link.pluginId,
       ...(link.path ? { path: link.path } : {}),
+    };
+  if (link.kind === "pack")
+    return {
+      name: "packs",
+      review: packPreviewKey({
+        package: link.version ? `${link.pack}@${link.version}` : link.pack,
+        source: "link",
+        ...(link.digest ? { digest: link.digest } : {}),
+      }),
     };
   return {
     name: "session",

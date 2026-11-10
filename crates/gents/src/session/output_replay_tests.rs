@@ -576,6 +576,15 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
     scope_kind: gents_protocol::rendered_request::CaptureScopeKind,
     with_tool: bool,
 ) -> ReplayFixture {
+    fixture_with_provider_payload_options(signed, scope_kind, with_tool, false).await
+}
+
+async fn fixture_with_provider_payload_options(
+    signed: bool,
+    scope_kind: gents_protocol::rendered_request::CaptureScopeKind,
+    with_tool: bool,
+    recovered: bool,
+) -> ReplayFixture {
     use crate::request::lifecycle::{RequestIdentity, RequestSigner, RequestSpec};
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
     let (db, user, user_access, binding) =
@@ -660,7 +669,28 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
         turn_index: 0,
         attempt: 0,
     };
-    let (runs, payload, stream_bytes) = if signed {
+    let (runs, payload, stream_bytes) = if recovered {
+        let declaration = |stream, bytes, block_index, payload| SegmentRun {
+            stream,
+            bytes,
+            declaration: Some(StreamDeclaration {
+                block_index,
+                part_index: 0,
+                payload,
+            }),
+        };
+        (
+            vec![
+                declaration(0, 1, 0, StreamPayload::Reasoning),
+                declaration(1, 1, 0, StreamPayload::ReasoningSignature),
+                declaration(2, 0, 0, StreamPayload::ReasoningStop),
+                declaration(3, 1, 1, StreamPayload::Text),
+                declaration(4, 1, 2, StreamPayload::Reasoning),
+            ],
+            "ASTU".into(),
+            vec![1, 1, 0, 1, 1],
+        )
+    } else if signed {
         let parts = ["思考", "sig-α", "answer", "", "sig-empty", "{\"x\":1}"];
         let mut runs = vec![
             SegmentRun {
@@ -759,7 +789,11 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
         runs,
         payload,
         close: Some(SourceClose::Closed {
-            outcome: OutputOutcome::Complete,
+            outcome: if recovered {
+                OutputOutcome::Partial
+            } else {
+                OutputOutcome::Complete
+            },
             segments: 1,
             stream_bytes,
         }),
@@ -785,14 +819,46 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
         node_did: node_did.clone(),
         requester_did: Some(requester_did.clone()),
         request_doc_id: Some(request_doc_id.clone()),
-        publication: MessagePublication::RequestExecution {
-            execution_generation: "generation".into(),
+        publication: if recovered {
+            MessagePublication::RequestRecovery {
+                execution_generation: "recovery".into(),
+            }
+        } else {
+            MessagePublication::RequestExecution {
+                execution_generation: "generation".into(),
+            }
         },
-        outcome: OutputOutcome::Complete,
+        outcome: if recovered {
+            OutputOutcome::Partial
+        } else {
+            OutputOutcome::Complete
+        },
         sequence: 1,
         role: MessageRole::Assistant,
-        native_id: signed.then(|| "provider-id".into()),
-        blocks: if signed {
+        native_id: (signed && !recovered).then(|| "provider-id".into()),
+        blocks: if recovered {
+            vec![
+                MessageBlock::Reasoning {
+                    id: None,
+                    parts: vec![ReasoningPart::Text {
+                        text: PayloadRef {
+                            close_doc_id: close_doc_id.clone(),
+                            stream: 0,
+                        },
+                        signature: Some("S".into()),
+                    }],
+                },
+                MessageBlock::Text {
+                    text: PresentedPayload {
+                        output: PayloadRef {
+                            close_doc_id: close_doc_id.clone(),
+                            stream: 3,
+                        },
+                        presentation: PayloadPresentation::Full,
+                    },
+                },
+            ]
+        } else if signed {
             let reference = |stream| PayloadRef {
                 close_doc_id: close_doc_id.clone(),
                 stream,
@@ -878,6 +944,146 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
         boundary,
         scope_kind,
     }
+}
+
+#[tokio::test]
+async fn recovered_stopped_reasoning_replays_only_with_its_authenticated_prefix() {
+    use gents_protocol::message::AssistantContent;
+    let fixture = fixture_with_provider_payload_options(
+        true,
+        gents_protocol::rendered_request::CaptureScopeKind::Inference,
+        false,
+        true,
+    )
+    .await;
+    let capture = fixture
+        .insert_capture(RenderedRequestSource::ClaudeCliSubscription)
+        .await
+        .unwrap();
+    let candidate = fixture.candidates().await.unwrap().remove(0);
+    assert!(!candidate.complete);
+    let tag = ReplayTag {
+        request_doc_id: fixture.request_doc_id.clone(),
+        source: OutputSource::ProviderTurn {
+            scope: candidate.coordinate.scope,
+            turn_index: candidate.coordinate.turn_index,
+            attempt: candidate.coordinate.attempt,
+        },
+    };
+    let Message::Assistant { id, content, .. } = candidate.message.clone() else {
+        panic!("expected assistant")
+    };
+    assert_eq!(content.len(), 2);
+    assert!(matches!(content[0], AssistantContent::Reasoning(_)));
+    assert!(matches!(content[1], AssistantContent::Text(_)));
+    let rows = vec![TaggedAssistantRow {
+        source: Some(tag.clone()),
+        physical_header: Some(candidate.header_doc_id),
+        block_indices: candidate.block_indices,
+        id,
+        content: content.clone(),
+    }];
+    let evidence = super::output::replay_tags::resolve_canonical_replay_tag(
+        &fixture.access,
+        fixture.scope(),
+        &fixture.boundary,
+        &tag,
+    )
+    .await
+    .unwrap();
+    assert_eq!(evidence.len(), 1);
+    let resolve = |_: &ReplayTag| evidence.clone();
+    let stage = replay_stage(&rows, &capture.issuer, capture.wire, resolve);
+    assert_eq!(stage, rows);
+    let next_body = |system: &str| {
+        let mut body = capture.body.clone();
+        body["system"] = serde_json::json!([{"type": "text", "text": system}]);
+        body["messages"].as_array_mut().unwrap().push(serde_json::json!({
+            "role": "assistant", "content": gents_loop::claude_messages_body::encode_assistant_content(&stage[0].content).unwrap(),
+        }));
+        flatten(&body, capture.wire).unwrap()
+    };
+    assert_eq!(
+        select_replay(
+            &rows,
+            &capture.issuer,
+            capture.wire,
+            resolve,
+            &next_body("system")
+        ),
+        rows
+    );
+    let stripped = select_replay(
+        &rows,
+        &capture.issuer,
+        capture.wire,
+        resolve,
+        &next_body("changed"),
+    );
+    assert!(stripped[0]
+        .content
+        .iter()
+        .all(|block| !matches!(block, AssistantContent::Reasoning(_))));
+}
+
+/// Lean `claude_reasoning_only_is_not_replayed`: a recovered turn that kept
+/// only its stopped reasoning, with no ordinary content, is no replay base on
+/// the Claude wire, even beside its authenticated capture.
+#[tokio::test]
+async fn recovered_reasoning_without_text_is_not_replayed_on_the_claude_wire() {
+    use gents_protocol::message::AssistantContent;
+    let fixture = fixture_with_provider_payload_options(
+        true,
+        gents_protocol::rendered_request::CaptureScopeKind::Inference,
+        false,
+        true,
+    )
+    .await;
+    let capture = fixture
+        .insert_capture(RenderedRequestSource::ClaudeCliSubscription)
+        .await
+        .unwrap();
+    let candidate = fixture.candidates().await.unwrap().remove(0);
+    let tag = ReplayTag {
+        request_doc_id: fixture.request_doc_id.clone(),
+        source: OutputSource::ProviderTurn {
+            scope: candidate.coordinate.scope,
+            turn_index: candidate.coordinate.turn_index,
+            attempt: candidate.coordinate.attempt,
+        },
+    };
+    let Message::Assistant { id, content, .. } = candidate.message.clone() else {
+        panic!("expected assistant")
+    };
+    assert!(matches!(content[0], AssistantContent::Reasoning(_)));
+    let rows = vec![TaggedAssistantRow {
+        source: Some(tag.clone()),
+        physical_header: Some(candidate.header_doc_id),
+        block_indices: candidate.block_indices[..1].to_vec(),
+        id,
+        content: content[..1].to_vec(),
+    }];
+    let evidence = super::output::replay_tags::resolve_canonical_replay_tag(
+        &fixture.access,
+        fixture.scope(),
+        &fixture.boundary,
+        &tag,
+    )
+    .await
+    .unwrap();
+    let resolve = |_: &ReplayTag| evidence.clone();
+    let no_reasoning = |replayed: &[TaggedAssistantRow]| {
+        replayed.iter().all(|row| {
+            row.content
+                .iter()
+                .all(|block| !matches!(block, AssistantContent::Reasoning(_)))
+        })
+    };
+    let stage = replay_stage(&rows, &capture.issuer, capture.wire, resolve);
+    assert!(no_reasoning(&stage), "{stage:?}");
+    let body = flatten(&capture.body, capture.wire).unwrap();
+    let selected = select_replay(&rows, &capture.issuer, capture.wire, resolve, &body);
+    assert!(no_reasoning(&selected), "{selected:?}");
 }
 
 #[tokio::test]

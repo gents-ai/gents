@@ -9,7 +9,7 @@ import { isWorkingNode, nodeDidOf } from "@/lib/nodes";
 import { NodeAvatar, nodeAvatarOf } from "./AgentAvatar";
 import { AgentHoverCard, NodeHoverCard } from "./HoverCards";
 import { AgentInitials } from "./parts";
-import { agentName } from "./behavior";
+import { agentName, isShared, nameShared, sharedNames } from "./behavior";
 
 export function NodeAgentStack({
   nodeDid,
@@ -61,6 +61,21 @@ export function NodeAgentStack({
   const agentsLeft = workerAgents.length - shownAgents.length;
   const nodesLeft = workerNodes.length - shownNodes.length;
   const leftOut = agentsLeft + nodesLeft;
+  const named = (did: string | null, on: NodeView | null) => ({
+    agentDid: did,
+    displayName: agentName(did, on),
+    onNode: nameShared(did, on),
+  });
+  const lead = named(agentDid ?? null, found);
+  const shownNamed = shownAgents.map(([, [b, on]]) => named(b, on));
+  /* agents sharing a name, in the stack or on their node, are told apart
+     by their DIDs */
+  const shared = sharedNames([lead, ...shownNamed]);
+  const mark = (a: typeof lead) => ({
+    name: a.displayName,
+    agentDid: a.agentDid,
+    shared: a.onNode || isShared(shared, a.displayName),
+  });
   const motion = "transition-[margin,box-shadow] duration-200 ease-out";
   const shifted = cn(
     "cursor-default ring-2 ring-background",
@@ -95,24 +110,18 @@ export function NodeAgentStack({
         {keyboard ? (
           <button
             type="button"
-            aria-label={`About ${agentName(agentDid ?? null, found)} agent`}
+            aria-label={`About ${lead.displayName} agent`}
             className="grid cursor-default place-items-center rounded-full p-0 leading-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none"
           >
-            <AgentInitials
-              name={agentName(agentDid ?? null, found)}
-              className={shifted}
-            />
+            <AgentInitials {...mark(lead)} className={shifted} />
           </button>
         ) : (
-          <AgentInitials
-            name={agentName(agentDid ?? null, found)}
-            className={shifted}
-          />
+          <AgentInitials {...mark(lead)} className={shifted} />
         )}
       </AgentHoverCard>
-      {shownAgents.map(([identity, [b, on]]) => (
+      {shownAgents.map(([identity, [b, on]], i) => (
         <AgentHoverCard key={identity} deployment={on} agentDid={b} side="bottom">
-          <AgentInitials name={agentName(b, on)} className={shifted} />
+          <AgentInitials {...mark(shownNamed[i]!)} className={shifted} />
         </AgentHoverCard>
       ))}
       {shownNodes.map((n) => (

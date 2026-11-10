@@ -51,6 +51,8 @@ pub(crate) struct CanonicalAssistantCandidate {
     pub(crate) sequence: u32,
     pub(crate) message: gents_protocol::message::Message,
     pub(crate) coordinate: CanonicalProviderCoordinate,
+    pub(crate) block_indices: Vec<usize>,
+    pub(crate) complete: bool,
     capture: Option<CanonicalReplayCapture>,
 }
 

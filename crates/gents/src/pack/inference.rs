@@ -33,6 +33,19 @@ pub struct PackInferenceBindingPreview {
     pub automatic: bool,
 }
 
+/// The pack's slots and the owner's profiles, checking only the bindings
+/// requested: unlike [`preview_pack_inference_bindings`], it does not refuse
+/// required slots left unbound, so an install preview can list them.
+pub async fn inspect_pack_inference_bindings(
+    access: &ConfigAccess,
+    manifest: &PackManifest,
+    node_did: &str,
+    requested: &PackInferenceBindings,
+) -> Result<PackInferenceBindingPreview> {
+    inspect_pack_inference_bindings_with_node_binding(access, manifest, node_did, requested, None)
+        .await
+}
+
 pub(crate) async fn inspect_pack_inference_bindings_with_node_binding(
     access: &ConfigAccess,
     manifest: &PackManifest,

@@ -2,7 +2,7 @@
     one by its number. */
 export const AVATARS = 89;
 
-const hash = (seed: string) => {
+export const seedHash = (seed: string) => {
   let h = 0;
   for (const c of seed) h = (h * 31 + c.charCodeAt(0)) >>> 0;
   return h;
@@ -16,7 +16,7 @@ const known = (key: string | null | undefined): key is string => {
 
 /** The portrait a node without a chosen one is drawn with, steady for the
     same name. */
-export const avatarKey = (seed: string) => String((hash(seed) % AVATARS) + 1);
+export const avatarKey = (seed: string) => String((seedHash(seed) % AVATARS) + 1);
 
 /** The portrait to draw: the chosen one, or else the name's. */
 export const shownAvatar = (avatar: string | null | undefined, seed: string) =>
