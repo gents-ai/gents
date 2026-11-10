@@ -403,7 +403,7 @@ mod tests {
                 "coordinate": coordinate, "version": "1.0.0", "digest": "sha256:bb",
                 "kind": "plugins", "assets": "packs/.materialized/acme/engine/bb",
                 "plugins": [], "installed_at": "2026-01-01T00:00:00Z",
-                "installed_via": via,
+                "installed_via": via, "source": null, "source_history": [],
             }))
             .unwrap(),
         )
