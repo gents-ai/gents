@@ -9,12 +9,16 @@
 //! Over HTTP the runtime cannot join the client's transaction (native accepts
 //! a relationship change in a transaction only in one the node itself began),
 //! so each change is its own signed command to the runtime's owner-staged
-//! route, decided there by the same owner as the signer
-//! (`Identity.OwnerStaged.applyOverHttp`). A revocation is sent before the
-//! client's transaction commits: a refusal aborts the apply, and revocations
-//! already decided stay, so access only narrows. A grant is queued and sent
-//! after the commit by the post-commit grant owner; a refusal is the apply's
-//! `CommittedRelationshipsIncomplete` error with the documents committed.
+//! route, decided there by the same owner as the signer. An open HTTP
+//! transaction must not read documents such a command then changes (DefraDB
+//! refuses its commit without an abort receipt), so an apply that needs
+//! revocations runs PLAN, REVOKE, WRITE (`Identity.OwnerStaged.applyOverHttp`):
+//! the transaction owner runs the apply once and discards it to learn its
+//! revocations, sends them before any write transaction is open, then runs the
+//! apply again and commits only if it derives exactly the same revocations. A
+//! grant is queued and sent after the commit by the post-commit grant owner; a
+//! refusal is the apply's `CommittedRelationshipsIncomplete` error with the
+//! documents committed.
 
 use std::sync::Arc;
 
@@ -31,6 +35,30 @@ use crate::store::config_client::write_telemetry::WriteBackend;
 use crate::store::config_client::ConfigRelationshipGrant;
 use crate::store::graphql::escape_graphql_string;
 use gents_protocol::owner_staged::OwnerStagedChange;
+
+/// How an HTTP transaction handles an owner-staged revocation it requests
+/// (`Identity.OwnerStaged.applyOverHttp`). Embedded transactions decide every
+/// change in the transaction and never consult this.
+pub(crate) enum OwnerStagedRevocations {
+    /// Sent to the route when requested: a transaction no owner drives
+    /// through PLAN and WRITE.
+    Send,
+    /// PLAN: record each revocation; the transaction owner discards this
+    /// attempt and sends them before WRITE.
+    Plan(Vec<OwnerStagedChange>),
+    /// WRITE: the planned revocations were sent; record what this attempt
+    /// derives so the owner can revalidate it before committing.
+    Write {
+        planned: Vec<OwnerStagedChange>,
+        derived: Vec<OwnerStagedChange>,
+    },
+}
+
+/// The transaction owner's next step after a successful HTTP callback.
+pub(super) enum OwnerStagedCheckpoint {
+    Commit,
+    Revoke(Vec<OwnerStagedChange>),
+}
 
 /// What the requester must natively hold before the owner stages a change for
 /// it (`Identity.OwnerStaged.Authority`).
@@ -112,6 +140,69 @@ impl StagedRelation {
 }
 
 impl ConfigApplyTxn<'_> {
+    /// Drive this HTTP attempt as PLAN (`None`) or as WRITE of `planned`.
+    pub(super) fn drive_owner_staged(&self, planned: Option<&[OwnerStagedChange]>) {
+        if matches!(self.backend, TxnBackend::Http { .. }) {
+            *self
+                .owner_staged_revocations
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = match planned {
+                None => OwnerStagedRevocations::Plan(Vec::new()),
+                Some(planned) => OwnerStagedRevocations::Write {
+                    planned: planned.to_vec(),
+                    derived: Vec::new(),
+                },
+            };
+        }
+    }
+
+    /// After a successful callback: commit, revoke the plan first, or refuse
+    /// a WRITE that derived other revocations than were sent
+    /// (`Identity.OwnerStaged.changed_plan_is_refused_and_no_wider`).
+    pub(super) fn owner_staged_checkpoint(&self) -> Result<OwnerStagedCheckpoint> {
+        match &*self
+            .owner_staged_revocations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+        {
+            OwnerStagedRevocations::Send => Ok(OwnerStagedCheckpoint::Commit),
+            OwnerStagedRevocations::Plan(planned) if planned.is_empty() => {
+                Ok(OwnerStagedCheckpoint::Commit)
+            }
+            OwnerStagedRevocations::Plan(planned) => {
+                Ok(OwnerStagedCheckpoint::Revoke(planned.clone()))
+            }
+            OwnerStagedRevocations::Write { planned, derived } if planned == derived => {
+                Ok(OwnerStagedCheckpoint::Commit)
+            }
+            OwnerStagedRevocations::Write { planned, .. } => {
+                Err(ConfigClientError::OwnerStagedPlanChanged {
+                    revoked: planned.len(),
+                })
+            }
+        }
+    }
+
+    /// REVOKE: send each planned revocation, in order, before any write
+    /// transaction is open. The first refusal is the apply's error; the
+    /// revocations already decided stay.
+    pub(super) async fn send_planned_revocations(
+        endpoint: &super::GraphqlEndpoint,
+        planned: &[OwnerStagedChange],
+    ) -> Result<()> {
+        for change in planned {
+            super::super::owner_staged_route::request(endpoint, change, false).await?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn http_endpoint(&self) -> Option<&super::GraphqlEndpoint> {
+        match &self.backend {
+            TxnBackend::Http { endpoint, .. } => Some(endpoint),
+            TxnBackend::Embedded { .. } => None,
+        }
+    }
+
     /// Request one owner-staged change (`Identity.OwnerStaged.request`) as
     /// this transaction's actor. An embedded transaction decides it in this
     /// transaction. Over HTTP a revocation is decided by the runtime's route
@@ -136,12 +227,28 @@ impl ConfigApplyTxn<'_> {
             }
             TxnBackend::Http { endpoint, .. } if !endpoint.replays_pack() => {
                 if grant {
-                    self.queue_relationship_grant(ConfigRelationshipGrant::OwnerStaged {
+                    return self.queue_relationship_grant(ConfigRelationshipGrant::OwnerStaged {
                         change: change.clone(),
-                    })
-                } else {
-                    super::super::owner_staged_route::request(endpoint, change, false).await
+                    });
                 }
+                {
+                    let mut revocations = self
+                        .owner_staged_revocations
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    match &mut *revocations {
+                        OwnerStagedRevocations::Send => {}
+                        OwnerStagedRevocations::Plan(planned) => {
+                            planned.push(change.clone());
+                            return Ok(());
+                        }
+                        OwnerStagedRevocations::Write { derived, .. } => {
+                            derived.push(change.clone());
+                            return Ok(());
+                        }
+                    }
+                }
+                super::super::owner_staged_route::request(endpoint, change, false).await
             }
             // A hosted pack's relationship changes are replayed through its
             // interpreter on the runtime, which native ACP decides as the

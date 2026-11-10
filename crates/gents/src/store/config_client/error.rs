@@ -182,6 +182,16 @@ pub enum ConfigClientError {
     OwnerStagedRelationshipUnmanaged { collection: String, doc_id: String },
     #[error("the requesting actor may not change relationships of {collection} {doc_id}")]
     OwnerStagedRelationshipDenied { collection: String, doc_id: String },
+    /// An HTTP apply revoked its planned owner-staged relations, but the
+    /// transaction that then wrote its documents derived different
+    /// revocations (`Identity.OwnerStaged.changed_plan_is_refused_and_no_wider`).
+    /// Nothing was committed; the completed revocations stay.
+    #[error(
+        "the configuration changed while it was applied: {revoked} owner-staged \
+         revocation(s) were completed, but the apply now needs different ones; \
+         nothing was committed, apply it again"
+    )]
+    OwnerStagedPlanChanged { revoked: usize },
     #[error("owner-staged route refused the command ({status}): {body}")]
     OwnerStagedRouteStatus {
         status: reqwest::StatusCode,

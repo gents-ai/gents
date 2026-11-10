@@ -427,20 +427,31 @@ The runtime cannot join a client's HTTP transaction: native DefraDB accepts a
 relationship change inside a transaction only in one the node itself began.
 So each owner-staged change of a client's apply is its own route command,
 decided by `outcome` as the signer, outside the transaction that writes the
-documents implying it. The order keeps access from ever being wider than the
-configuration intends:
+documents implying it.
 
-* Revocations are sent before the client's transaction commits. The first
-  refusal aborts the apply, so its documents are not committed; revocations
-  already decided stay, so access can only end up narrower.
-* Grants are sent after the commit, by the post-commit grant owner
-  (`CommittedRelationshipsIncomplete`). The first refusal is the apply's
-  error; the documents stay committed and that grant and the ones after it
-  are pending, so access is never granted for documents that were not
-  committed.
+External premise: when another committed transaction deletes or changes rows
+an open transaction read, DefraDB refuses that transaction's commit ("a range
+scan lost to a newer delete") without an abort receipt, so the client cannot
+know it may replay. An open HTTP transaction therefore must not read documents
+that a separate owner-staged command then modifies. An apply that needs
+owner-staged revocations runs in three steps:
+
+* PLAN: a pass that commits nothing determines the revocations and grants the
+  apply needs.
+* REVOKE: each planned revocation is its own route command, sent before any
+  write transaction is open. The first refusal aborts the apply before any
+  write; revocations already decided stay, so access can only end up narrower.
+* WRITE: the client's transaction begins, re-reads and recomputes the
+  revocations its state now implies. Unless that is exactly the plan, the
+  apply is refused (`planChanged`): nothing commits and the completed
+  revocations stay; they are never granted back. Grants are sent after the
+  commit, by the post-commit grant owner (`CommittedRelationshipsIncomplete`):
+  the first refusal is the apply's error, the documents stay committed and
+  that grant and the ones after it are pending, so access is never granted for
+  documents that were not committed.
 
 In the requester's embedded transaction the same refusal rolls back the whole
-apply instead. -/
+apply instead, and no plan is needed. -/
 
 def Outcome.refused : Outcome → Bool
   | .denied | .unmanaged => true
@@ -460,27 +471,41 @@ def decideInOrder (runtime : DID) (agentsOf : DID → List DID) (requester : DID
 inductive HttpApply where
   | applied
   | aborted
+  | planChanged
   | committedIncomplete (pending : List Relation)
   deriving BEq, Repr
 
 def HttpApply.name : HttpApply → String
   | .applied => "applied"
   | .aborted => "aborted"
+  | .planChanged => "plan_changed"
   | .committedIncomplete _ => "committed_incomplete"
+
+/-- The apply committed no documents: a refused revocation or a changed plan. -/
+def HttpApply.uncommitted : HttpApply → Bool
+  | .aborted | .planChanged => true
+  | _ => false
 
 structure HttpApplyResult where
   state : State
   committed : Bool
   result : HttpApply
 
+/-- PLAN determined `revocations` and `grants`; REVOKE decides the
+revocations; `planHolds` is WRITE's revalidation, a native observation: the
+revocations it recomputed from the state it read are exactly the plan. WRITE
+commits only when the plan holds. -/
 def applyOverHttp (state : State) (runtime : DID) (agentsOf : DID → List DID) (requester : DID)
-    (authority : Authority) (revocations grants : List Relation) : HttpApplyResult :=
+    (authority : Authority) (revocations grants : List Relation) (planHolds : Bool) :
+    HttpApplyResult :=
   match decideInOrder runtime agentsOf requester authority false state revocations with
   | (revoked, _ :: _) => ⟨revoked, false, .aborted⟩
   | (revoked, []) =>
-    match decideInOrder runtime agentsOf requester authority true revoked grants with
-    | (granted, []) => ⟨granted, true, .applied⟩
-    | (granted, pending) => ⟨granted, true, .committedIncomplete pending⟩
+    if planHolds then
+      match decideInOrder runtime agentsOf requester authority true revoked grants with
+      | (granted, []) => ⟨granted, true, .applied⟩
+      | (granted, pending) => ⟨granted, true, .committedIncomplete pending⟩
+    else ⟨revoked, false, .planChanged⟩
 
 /-- The same apply in the requester's embedded transaction: all or nothing. -/
 def applyEmbedded (state : State) (runtime : DID) (agentsOf : DID → List DID) (requester : DID)
@@ -522,53 +547,86 @@ theorem revocations_are_no_wider (runtime : DID) (agentsOf : DID → List DID) (
     · exact revocation_request_is_no_wider state runtime agentsOf requester authority relation x
         (ih _ h)
 
-/-- A refused revocation aborts the apply before its documents commit, and
-access ends up no wider than before the apply. -/
+/-- A refused revocation or a changed plan commits no documents, and access
+ends up no wider than before the apply. -/
 theorem aborted_apply_commits_nothing_and_is_no_wider (state : State) (runtime : DID)
     (agentsOf : DID → List DID) (requester : DID) (authority : Authority)
-    (revocations grants : List Relation)
-    (h : (applyOverHttp state runtime agentsOf requester authority revocations grants).result =
-      .aborted) :
-    (applyOverHttp state runtime agentsOf requester authority revocations grants).committed =
-        false ∧
+    (revocations grants : List Relation) (planHolds : Bool)
+    (h : (applyOverHttp state runtime agentsOf requester authority revocations grants
+      planHolds).result.uncommitted = true) :
+    (applyOverHttp state runtime agentsOf requester authority revocations grants
+        planHolds).committed = false ∧
       ∀ x ∈ (applyOverHttp state runtime agentsOf requester authority revocations
-        grants).state.relations, x ∈ state.relations := by
+        grants planHolds).state.relations, x ∈ state.relations := by
+  have wider := revocations_are_no_wider runtime agentsOf requester authority revocations state
   unfold applyOverHttp at h ⊢
   split at h
   · rename_i revoked rest hd tl hsplit
-    refine ⟨rfl, fun x hx => ?_⟩
-    have := revocations_are_no_wider runtime agentsOf requester authority revocations state x
-    rw [hsplit] at this
-    exact this hx
-  · split at h <;> cases h
+    rw [hsplit] at wider
+    exact ⟨rfl, fun x hx => wider x hx⟩
+  · rename_i revoked hsplit
+    rw [hsplit] at wider
+    cases planHolds with
+    | false =>
+      simp only [Bool.false_eq_true, if_false] at h ⊢
+      exact ⟨trivial, fun x hx => wider x hx⟩
+    | true =>
+      simp only [if_true] at h
+      split at h <;> simp [HttpApply.uncommitted] at h
+
+/-- Revalidation: when every planned revocation was decided but WRITE no longer
+derives exactly the plan (`planHolds = false`), the apply is refused, commits nothing, keeps the
+completed revocations and is no wider than before. -/
+theorem changed_plan_is_refused_and_no_wider (state : State) (runtime : DID)
+    (agentsOf : DID → List DID) (requester : DID) (authority : Authority)
+    (revocations grants : List Relation)
+    (decided : (decideInOrder runtime agentsOf requester authority false state revocations).2 = []) :
+    let applied := applyOverHttp state runtime agentsOf requester authority revocations grants
+      false
+    applied.result = .planChanged ∧ applied.committed = false ∧
+      applied.state = (decideInOrder runtime agentsOf requester authority false state
+        revocations).1 ∧
+      ∀ x ∈ applied.state.relations, x ∈ state.relations := by
+  have wider := revocations_are_no_wider runtime agentsOf requester authority revocations state
+  unfold applyOverHttp
+  generalize hd : decideInOrder runtime agentsOf requester authority false state revocations = d
+    at decided wider
+  obtain ⟨revoked, rest⟩ := d
+  simp only at decided
+  subst decided
+  exact ⟨rfl, rfl, rfl, fun x hx => wider x hx⟩
 
 /-- A refused grant is reported only after the documents committed, with the
 refused grant and the ones after it pending. -/
 theorem refused_grant_is_reported_after_commit (state : State) (runtime : DID)
     (agentsOf : DID → List DID) (requester : DID) (authority : Authority)
-    (revocations grants pending : List Relation)
-    (h : (applyOverHttp state runtime agentsOf requester authority revocations grants).result =
-      .committedIncomplete pending) :
-    (applyOverHttp state runtime agentsOf requester authority revocations grants).committed =
-        true ∧
+    (revocations grants : List Relation) (planHolds : Bool) (pending : List Relation)
+    (h : (applyOverHttp state runtime agentsOf requester authority revocations grants
+      planHolds).result = .committedIncomplete pending) :
+    (applyOverHttp state runtime agentsOf requester authority revocations grants
+        planHolds).committed = true ∧
       pending ≠ [] := by
   unfold applyOverHttp at h ⊢
   split at h
   · cases h
   · split at h
+    · split at h
+      · cases h
+      · rename_i _ _ _ granted rest hrest _
+        cases h
+        simp only [*]
+        exact ⟨rfl, hrest⟩
     · cases h
-    · rename_i _ granted rest hrest _
-      cases h
-      exact ⟨rfl, hrest⟩
 
-/-- When nothing is refused, the HTTP apply reaches exactly the state of the
-same requester's embedded transaction. -/
+/-- When nothing is refused and no concurrent change makes WRITE derive a
+different plan, the HTTP apply reaches exactly the state of the same
+requester's embedded transaction. -/
 theorem http_apply_agrees_with_embedded (state result : State) (runtime : DID)
     (agentsOf : DID → List DID) (requester : DID) (authority : Authority)
     (revocations grants : List Relation)
     (h : applyEmbedded state runtime agentsOf requester authority revocations grants =
       some result) :
-    applyOverHttp state runtime agentsOf requester authority revocations grants =
+    applyOverHttp state runtime agentsOf requester authority revocations grants true =
       ⟨result, true, .applied⟩ := by
   unfold applyEmbedded at h
   unfold applyOverHttp
@@ -591,6 +649,7 @@ def cursorWriter (agent : String) : Relation := ⟨"configuration", "cursor", "w
 
 def cursorApply (requester : String) (revocations grants : List Relation) : HttpApplyResult :=
   applyOverHttp runtimeCursor "runtime" agentsOf requester .documentUpdate revocations grants
+    true
 
 theorem cursor_rebind_over_http_follows_the_ordering :
     let user := cursorApply "user" [cursorWriter "agent"] [cursorWriter "sibling"]
@@ -612,20 +671,25 @@ observation, for the route's generated cases: a revocation-only apply and a
 grant-only apply of `routeReader`. -/
 def pairingApply (requester direction : String) : HttpApplyResult :=
   if direction == "revoke" then
-    applyOverHttp unlinkedPairing "runtime" agentsOf requester runtimeNode [routeReader] []
-  else applyOverHttp unlinkedPairing "runtime" agentsOf requester runtimeNode [] [routeReader]
+    applyOverHttp unlinkedPairing "runtime" agentsOf requester runtimeNode [routeReader] [] true
+  else if direction == "replan" then
+    -- A concurrent change makes WRITE derive revocations other than the plan.
+    applyOverHttp unlinkedPairing "runtime" agentsOf requester runtimeNode [routeReader] [] false
+  else applyOverHttp unlinkedPairing "runtime" agentsOf requester runtimeNode [] [routeReader] true
 
 theorem pairing_apply_refusals_follow_the_ordering :
     [(pairingApply "admin" "revoke").result.name, (pairingApply "admin" "grant").result.name,
      (pairingApply "outsider" "revoke").result.name,
-     (pairingApply "outsider" "grant").result.name] =
-      ["applied", "applied", "aborted", "committed_incomplete"] ∧
-    [(pairingApply "outsider" "revoke").committed, (pairingApply "outsider" "grant").committed] =
-      [false, true] := by
+     (pairingApply "outsider" "grant").result.name,
+     (pairingApply "admin" "replan").result.name,
+     (pairingApply "outsider" "replan").result.name] =
+      ["applied", "applied", "aborted", "committed_incomplete", "plan_changed", "aborted"] ∧
+    [(pairingApply "outsider" "revoke").committed, (pairingApply "outsider" "grant").committed,
+     (pairingApply "admin" "replan").committed] = [false, true, false] := by
   native_decide
 
 def httpApplyCasesJson : List Lean.Json :=
-  ["revoke", "grant"].flatMap fun direction => pairingRequesters.map fun requester =>
+  ["revoke", "grant", "replan"].flatMap fun direction => pairingRequesters.map fun requester =>
     let applied := pairingApply requester direction
     Lean.Json.mkObj [("requester", Lean.toJson requester), ("direction", Lean.toJson direction),
       ("result", Lean.toJson applied.result.name), ("committed", Lean.toJson applied.committed),

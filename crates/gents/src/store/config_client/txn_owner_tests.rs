@@ -633,6 +633,9 @@ async fn cancellation_after_embedded_begin_abandons_before_releasing_the_gate() 
                     contends_with_request_siblings: std::sync::atomic::AtomicBool::new(false),
                     client_signed_write_dispatched: std::sync::atomic::AtomicBool::new(false),
                     relationship_grants: std::sync::Mutex::new(Vec::new()),
+                    owner_staged_revocations: std::sync::Mutex::new(
+                        crate::store::config_client::txn::OwnerStagedRevocations::Send,
+                    ),
                     publication_observer: None,
                     pack_approval: None,
                 })

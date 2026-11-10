@@ -490,26 +490,59 @@ async fn owner_staged_outcomes_agree_across_embedded_and_http() {
 #[tokio::test]
 async fn http_apply_orders_revocations_before_and_grants_after_commit() {
     let generated = generated();
-    assert_eq!(generated.http_apply.len(), 8);
+    assert_eq!(generated.http_apply.len(), 12);
     let f = Fixture::start().await;
     for case in &generated.http_apply {
         let key = f.requester(case["requester"].as_str().unwrap()).clone();
-        let grant = match case["direction"].as_str().unwrap() {
+        let direction = case["direction"].as_str().unwrap();
+        let grant = match direction {
             "grant" => true,
-            "revoke" => false,
+            "revoke" | "replan" => false,
             other => panic!("unknown modeled direction {other}"),
         };
         let marker = format!("did:key:z{}", uuid::Uuid::new_v4().simple());
+        // `replan`: a concurrent writer commits `changed` between PLAN and
+        // WRITE, after which the apply also derives revoking the foreign
+        // observation's reader.
+        let changed = format!("did:key:z{}", uuid::Uuid::new_v4().simple());
+        // The requester's own concurrent writer, so WRITE can read its row.
+        let writer = f.client(key.as_ref());
+        let passes = std::sync::atomic::AtomicUsize::new(0);
         let client = f.client(key.as_ref());
         let applied = client
             .transact_write("test.owner_staged_route.apply", |txn| {
-                let (marker, change) = (&marker, f.change(&f.route));
+                let (marker, changed, writer, passes) = (&marker, &changed, &writer, &passes);
+                let f = &f;
                 Box::pin(async move {
+                    passes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     txn.execute(&format!(
                         r#"mutation {{ create_Node(input: {{node_did: "{marker}"}}) {{_docID}} }}"#
                     ))
                     .await?;
-                    txn.request_owner_staged(&change, grant).await
+                    let seen = txn
+                        .execute(&format!(
+                            r#"{{ Node(filter: {{node_did: {{_eq: "{changed}"}}}}) {{_docID}} }}"#
+                        ))
+                        .await?;
+                    let seen =
+                        !gents_protocol::graphql::graphql_rows_from_response(&seen, "Node")
+                            .is_empty();
+                    txn.request_owner_staged(&f.change(&f.route), grant).await?;
+                    if direction == "replan" {
+                        if seen {
+                            txn.request_owner_staged(&f.change(&f.foreign), false).await?;
+                        } else {
+                            writer
+                                .write(
+                                    "test.owner_staged_route.concurrent",
+                                    &format!(
+                                        r#"mutation {{ create_Node(input: {{node_did: "{changed}"}}) {{_docID}} }}"#
+                                    ),
+                                )
+                                .await?;
+                        }
+                    }
+                    Ok(())
                 })
             })
             .await;
@@ -520,6 +553,7 @@ async fn http_apply_orders_revocations_before_and_grants_after_commit() {
             {
                 "aborted"
             }
+            Err(ConfigClientError::OwnerStagedPlanChanged { revoked: 1 }) => "plan_changed",
             Err(ConfigClientError::CommittedRelationshipsIncomplete {
                 creator,
                 pending,
@@ -545,6 +579,14 @@ async fn http_apply_orders_revocations_before_and_grants_after_commit() {
             Err(error) => panic!("{case}: unexpected apply error {error:#}"),
         };
         assert_eq!(result, case["result"], "{case}");
+        // PLAN runs once; WRITE runs again only after its revocations were
+        // sent, so a refused revocation aborts before any write attempt.
+        let expected_passes = if grant || result == "aborted" { 1 } else { 2 };
+        assert_eq!(
+            passes.load(std::sync::atomic::Ordering::SeqCst),
+            expected_passes,
+            "{case}"
+        );
         let committed = client
             .execute(&format!(
                 r#"{{ Node(filter: {{node_did: {{_eq: "{marker}"}}}}) {{_docID}} }}"#
