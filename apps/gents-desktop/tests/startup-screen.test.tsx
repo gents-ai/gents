@@ -192,8 +192,10 @@ describe("desktop startup screen", () => {
       expect(screen.getByTestId("setup-screen")).toBeInTheDocument();
     });
     expect(screen.queryByTestId("startup-retry")).not.toBeInTheDocument();
+    /* the failed readiness operation reads the node again, as every failed
+       local-node operation does */
     await waitFor(() => {
-      expect(managedServerStatus).toHaveBeenCalledTimes(2);
+      expect(managedServerStatus).toHaveBeenCalledTimes(3);
     });
   });
 
