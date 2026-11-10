@@ -6,7 +6,7 @@ use gents::store::config_client::ConfigAccess;
 use gents_desktop_core::client::{
     ClientCore, ClientCoreOptions, DesktopPaths, SubmitRequestOptions,
 };
-use gents_desktop_core::test_fixtures::ServedRuntimeHome;
+use gents_desktop_core::test_fixtures::{until, ServedRuntimeHome};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
@@ -124,14 +124,10 @@ async fn submit_request_writes_request_as_the_only_durable_input() -> Result<()>
         Some(submitted.request_id.clone())
     );
     // The send replied without reading its node; the observer's reload shows it.
-    let mut version = core.store().subscribe();
-    tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        while core.store().snapshot().requests.len() != 1 {
-            version.changed().await.expect("store open");
-        }
+    until(&core, "the observer to show the sent request", |core| {
+        core.store().snapshot().requests.len() == 1
     })
-    .await
-    .context("the observer did not show the sent request")?;
+    .await?;
     Arc::new(core).shutdown().await?;
     runtime.shutdown().await;
     Ok(())

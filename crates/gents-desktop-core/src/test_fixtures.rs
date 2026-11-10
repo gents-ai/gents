@@ -421,6 +421,30 @@ impl ServedRuntimeHome {
     }
 }
 
+/// Waits on the store's own update notice until `done` holds.
+pub async fn until<F>(
+    core: &crate::client::ClientCore,
+    what: &str,
+    mut done: F,
+) -> anyhow::Result<()>
+where
+    F: FnMut(&crate::client::ClientCore) -> bool,
+{
+    use anyhow::Context;
+    let mut updates = core.store_updates();
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while !done(core) {
+            updates
+                .changed()
+                .await
+                .context("store update channel closed")?;
+        }
+        Ok::<(), anyhow::Error>(())
+    })
+    .await
+    .with_context(|| format!("timed out waiting for {what}"))?
+}
+
 /// A proxy in front of a runtime's GraphQL endpoint that holds every request
 /// whose body `held` selects until the test releases it, so a test can change
 /// the runtime while that read is in flight. Each held or plain request gets

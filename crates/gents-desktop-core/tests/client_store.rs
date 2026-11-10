@@ -6,7 +6,7 @@ use gents_desktop_core::client::{
     load_session_transcript_page, load_session_transcript_page_on, ClientCore, ClientCoreOptions,
     ClientStore, ClientStoreRows, DesktopPaths,
 };
-use gents_desktop_core::test_fixtures::ServedRuntimeHome;
+use gents_desktop_core::test_fixtures::{until, ServedRuntimeHome};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use tokio::time::timeout;
@@ -367,25 +367,6 @@ async fn served_core() -> Result<(tempfile::TempDir, ClientCore, ServedRuntimeHo
         ServedRuntimeHome::start_unpublished_for(Arc::new(core.node_identity().clone())).await;
     runtime.connect(&core).await;
     Ok((tempdir, core, runtime))
-}
-
-/// Waits on the store's own update notice until `done` holds.
-async fn until<F>(core: &ClientCore, what: &str, mut done: F) -> Result<()>
-where
-    F: FnMut(&ClientCore) -> bool,
-{
-    let mut updates = core.store_updates();
-    timeout(Duration::from_secs(5), async {
-        while !done(core) {
-            updates
-                .changed()
-                .await
-                .context("store update channel closed")?;
-        }
-        Ok::<(), anyhow::Error>(())
-    })
-    .await
-    .with_context(|| format!("timed out waiting for {what}"))?
 }
 
 fn agent_message(alias: &str, key: &str, session: &str, node_did: &str, sequence: usize) -> String {

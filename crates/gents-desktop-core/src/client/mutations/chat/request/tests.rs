@@ -1417,20 +1417,14 @@ async fn retry_request_with_injected_id_rejects_duplicate_new_request_id() -> Re
         )
         .await?;
     // The send replied without reading its node; the observer's reload shows it.
-    let mut version = core.store().subscribe();
-    tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        while !core
-            .store()
+    crate::test_fixtures::until(core, "the observer to show the parent request", |core| {
+        core.store()
             .snapshot()
             .requests
             .iter()
             .any(|row| row.request_id == original.request_id)
-        {
-            version.changed().await.expect("store open");
-        }
     })
-    .await
-    .context("the observer did not show the submitted parent request")?;
+    .await?;
     let mut parent = core
         .store()
         .snapshot()
