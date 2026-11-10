@@ -5,7 +5,6 @@ type PackInstallation @policy(id: "202ce2df1b18d27183b29b653e2c06654178b2e79d4d6
     digest: String @index
     agent_bindings: JSON
     documents: JSON
-    variables: JSON
     plugins: JSON
     history: JSON
     installed_at: String
@@ -14,4 +13,5 @@ type PackInstallation @policy(id: "202ce2df1b18d27183b29b653e2c06654178b2e79d4d6
     plugin_store: Boolean
     source: JSON
     source_history: JSON
+    variables: JSON
 }

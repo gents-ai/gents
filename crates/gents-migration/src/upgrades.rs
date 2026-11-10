@@ -97,6 +97,14 @@ pub(crate) fn include_existing_by_version(
             handoff_route_patch!("WorkspaceReceipt"),
             &HANDOFF_ROUTE_FIELDS[..],
         ),
+        (
+            "PackInstallation",
+            "bafyreia5f6iex3vrzfjzzlpm7jqkqehmnis3vqnbcdyuno2jlafyyrx3vu",
+            "bafyreif63c7rk5p7u66z6wvhab5gjh2544wt6uauq7ndmfszizfixsmwmi",
+            "pack-installation-add-source-and-variables",
+            r#"[{"op":"add","path":"/PackInstallation/Fields/-","value":{"Name":"source","Kind":"JSON"}},{"op":"add","path":"/PackInstallation/Fields/-","value":{"Name":"source_history","Kind":"JSON"}},{"op":"add","path":"/PackInstallation/Fields/-","value":{"Name":"variables","Kind":"JSON"}}]"#,
+            &["source", "source_history", "variables"][..],
+        ),
     ] {
         let Some(current) = get_version(name)? else {
             continue;
