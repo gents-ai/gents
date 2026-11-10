@@ -73,11 +73,15 @@ pub async fn collections_install_creates(
     access: &ConfigAccess,
     archive: &PackArchive,
 ) -> Result<Vec<String>> {
-    let existing = access.collection_names().await?;
-    Ok(archive_declared_collections(archive)?
-        .into_iter()
-        .filter(|collection| !existing.contains(collection))
-        .collect())
+    // One read per declared collection, the read the schema preview makes:
+    // an installer needs no wider collection permission for this.
+    let mut created = Vec::new();
+    for collection in archive_declared_collections(archive)? {
+        if access.collection_version(&collection).await?.is_none() {
+            created.push(collection);
+        }
+    }
+    Ok(created)
 }
 
 /// The fields of a declared collection and the field sets of its unique

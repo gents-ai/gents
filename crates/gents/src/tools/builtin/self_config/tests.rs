@@ -7243,9 +7243,32 @@ async fn pack_document_installation_uses_existing_lifecycle() {
         "fixture/documents_fixture",
         "--with-collections",
     ];
-    config_call(&tools, &install).await.unwrap();
     let admin =
         crate::ConfigAccess::local_as(fixture.db.node.clone(), identity::Did::new(did).unwrap());
+    // A reinstall finds the collection the first install left behind. It did
+    // not create it, so removing the pack with its collections keeps it.
+    config_call(&tools, &install).await.unwrap();
+    let adopted: Value =
+        serde_json::from_str(&config_call(&tools, &with_collections).await.unwrap()).unwrap();
+    assert_eq!(adopted["collections"][0]["removed"], false, "{adopted}");
+    assert!(
+        adopted["collections"][0]["kept_for"][0]["user"]
+            .as_str()
+            .unwrap()
+            .contains("did not create it"),
+        "{adopted}"
+    );
+    assert!(collection().is_some());
+    let drop_collection = || async {
+        admin.truncate_collection("FixtureJob").await.unwrap();
+        admin
+            .remove_collections(&["FixtureJob".to_owned()])
+            .await
+            .unwrap();
+    };
+    drop_collection().await;
+
+    config_call(&tools, &install).await.unwrap();
     admin
         .write(
             "pack_test.seed",
@@ -7264,6 +7287,7 @@ async fn pack_document_installation_uses_existing_lifecycle() {
         collection().is_some(),
         "the Agent's own DID lacks truncate-collection"
     );
+    drop_collection().await;
 
     admin
         .grant_node_permission(
@@ -7273,6 +7297,13 @@ async fn pack_document_installation_uses_existing_lifecycle() {
         .await
         .unwrap();
     config_call(&tools, &install).await.unwrap();
+    admin
+        .write(
+            "pack_test.seed",
+            r#"mutation { create_FixtureJob(input:{job_id:"one"}) { _docID } }"#,
+        )
+        .await
+        .unwrap();
     let removed: Value =
         serde_json::from_str(&config_call(&tools, &with_collections).await.unwrap()).unwrap();
     assert_eq!(
