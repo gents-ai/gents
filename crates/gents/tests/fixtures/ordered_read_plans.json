@@ -944,5 +944,30 @@
         "after": ", intent_id: {_gt: \"probe\"}"
       }
     ]
+  },
+  {
+    "read": {
+      "path": "crates/gents-cli/src/commands/start.rs",
+      "collection": "AgentRequest",
+      "arguments": "filter: {node_did: {_eq: \"$GENTS_0$\"}, agent_did: {_eq: \"$GENTS_1$\"}}, order: {created_at: DESC}, limit: 1"
+    },
+    "bindings": [
+      {
+        "0": "probe",
+        "1": "probe"
+      }
+    ]
+  },
+  {
+    "read": {
+      "path": "crates/gents-cli/src/commands/start/yolo.rs",
+      "collection": "NodeReadiness",
+      "arguments": "filter: {node_did: {_eq: \"$GENTS_0$\"}}, order: {updated_at: DESC}, limit: 1"
+    },
+    "bindings": [
+      {
+        "0": "probe"
+      }
+    ]
   }
 ]

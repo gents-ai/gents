@@ -64,6 +64,7 @@ struct ProviderTail {
     next_ordinal: u32,
     capture_scope: Option<gents_protocol::rendered_request::CaptureScope>,
     pending_flush: Option<PreparedProviderFlush>,
+    stopped_reasoning: std::collections::BTreeSet<u32>,
 }
 
 /// A native commit can outlive its awaiting caller. Retain the exact record
@@ -259,14 +260,29 @@ impl DefraStreamWriter {
         generation: &str,
         message: &gents_protocol::message::Message,
     ) -> Result<bool> {
+        self.flush_owned_partial_with_stop(request, generation, message, None)
+            .await
+    }
+
+    async fn flush_owned_partial_with_stop(
+        &self,
+        request: &gents_protocol::row::AgentRequest,
+        generation: &str,
+        message: &gents_protocol::message::Message,
+        stop: Option<u32>,
+    ) -> Result<bool> {
         use gents_protocol::output::{OutputSegment, OutputSource, OutputWriter};
         let message = &*native_encoding::persisted_native_message(message);
-        let encoded = native_encoding::encode_native_message(message)?;
         let mut tails = self.provider_tails.lock().await;
         let tail = tails
             .get_mut(&request.doc_id)
             .context("provider attempt is not active")?;
         let acknowledged = self.acknowledge_provider_flush(tail, generation).await?;
+        let mut stopped = tail.stopped_reasoning.clone();
+        if let Some(block) = stop {
+            anyhow::ensure!(stopped.insert(block), "reasoning block was already stopped");
+        }
+        let encoded = native_encoding::encode_native_message_with_stops(message, &stopped)?;
         let turn = tail.turn;
         let attempt = tail.attempt;
         let capture_scope = tail
@@ -296,6 +312,7 @@ impl DefraStreamWriter {
             close: None,
             created_at: chrono::Utc::now().to_rfc3339(),
         };
+        tail.stopped_reasoning = stopped;
         tail.pending_flush = Some(PreparedProviderFlush {
             segment,
             streams: encoded.streams,
@@ -417,7 +434,6 @@ impl DefraStreamWriter {
 
         let request = lifecycle.request();
         let message = &*native_encoding::persisted_native_message(message);
-        let encoded = std::sync::Arc::new(native_encoding::encode_native_message(message)?);
         let expected = std::sync::Arc::new(message.clone());
         let mut tails = self.provider_tails.lock().await;
         let tail = tails
@@ -426,6 +442,10 @@ impl DefraStreamWriter {
             .context("provider acceptance has no exact active attempt")?;
         self.acknowledge_provider_flush(tail, lifecycle.execution_generation()?)
             .await?;
+        let encoded = std::sync::Arc::new(native_encoding::encode_native_message_with_stops(
+            message,
+            &tail.stopped_reasoning,
+        )?);
         let created_at = chrono::Utc::now().to_rfc3339();
         let capture_scope = tail
             .capture_scope
@@ -715,6 +735,22 @@ impl gents_loop::stream_writer::CanonicalStreamWriter<crate::request::lifecycle:
         message: &gents_protocol::message::Message,
     ) -> Result<bool, Self::Error> {
         Ok(DefraStreamWriter::flush_native_partial(self, lifecycle, message).await?)
+    }
+
+    async fn flush_reasoning_stop(
+        &self,
+        lifecycle: &crate::request::lifecycle::RequestLifecycle,
+        message: &gents_protocol::message::Message,
+        block_index: u32,
+    ) -> Result<bool, Self::Error> {
+        Ok(self
+            .flush_owned_partial_with_stop(
+                lifecycle.request(),
+                lifecycle.execution_generation()?,
+                message,
+                Some(block_index),
+            )
+            .await?)
     }
 
     async fn close_provider_attempt(

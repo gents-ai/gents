@@ -1,4 +1,5 @@
 import Proofs.GoalAutomation.RequestAssignment
+import Proofs.GoalAutomation.ClientControl
 
 /-!
 The client's read of one session's signed Goal projection, what that read
@@ -197,5 +198,250 @@ theorem publication_resolves_unknown (projection : ProjectionRead) (cause : Unkn
 theorem no_readable_session_binds_nothing :
     bind none .noReadableSession = .prepared none := by
   simp [bind, inputFacts, prepareInput]
+
+/-! ## What the client shows across successive reads
+
+Each session snapshot refresh carries one read of the session's Goal state.
+The client folds those reads, and the fold, not any single read, decides what
+the person is told and which Goal action is offered. A read that did not
+complete classifies nothing, so it never changes what is known; it only makes
+what is held no longer current. Rust supplies each read's outcome
+(`gents_desktop_bridge::commands::session::snapshot_goal`); the TypeScript
+owner is `foldSessionGoalRead`, `sessionGoalShown` and `sessionGoalControl` in
+`@source-inc/gents-desktop-client`. -/
+
+/-- The Goal read one snapshot refresh carried. -/
+inductive ReadOutcome where
+  /-- The read completed and classified (`observe`). `revision` is the
+  composite fence (`ClientControl.Revision`) of the Goal it observed, if any. -/
+  | completed (session : SessionRead) (projection : ProjectionRead)
+      (revision : Option ClientControl.Revision)
+  /-- The Goal read failed for a reason other than a refusal (transport,
+  timeout, unavailable storage) while the rest of the snapshot was read. -/
+  | incomplete
+  /-- The runtime refused this actor the read, so the whole snapshot fails.
+
+  External premise (DefraDB document ACP): a refusal reflects this actor's
+  current authorization, not a transient fault, so nothing read under an
+  earlier authorization may still be shown for the session. -/
+  | refused
+  deriving DecidableEq, Repr
+
+structure Read where
+  session : Nat
+  outcome : ReadOutcome
+  deriving DecidableEq, Repr
+
+/-- A completed read's state and the revision its Goal was shown at. -/
+structure Completed where
+  state : State
+  revision : Option ClientControl.Revision
+  deriving DecidableEq, Repr
+
+/-- What the client holds for the one session it last read. -/
+structure Held where
+  session : Nat
+  /-- The latest completed read of `session`. -/
+  last : Option Completed
+  /-- Whether the latest read of `session` completed. -/
+  current : Bool
+  deriving DecidableEq, Repr
+
+def step : Option Held → Read → Option Held
+  | _, ⟨_, .refused⟩ => none
+  | _, ⟨session, .completed read projection revision⟩ =>
+      some ⟨session, some ⟨observe read projection, revision⟩, true⟩
+  | some held, ⟨session, .incomplete⟩ =>
+      if held.session = session then some { held with current := false }
+      else some ⟨session, none, false⟩
+  | none, ⟨session, .incomplete⟩ => some ⟨session, none, false⟩
+
+def fold (reads : List Read) : Option Held := reads.foldl step none
+
+/-- What the person is told about one session's Goal. -/
+inductive Shown where
+  /-- No read of the session has arrived. -/
+  | pending
+  /-- Reads arrived but none completed: nothing about the Goal is known. -/
+  | unread
+  /-- The latest read completed; its view is current. -/
+  | current (view : View)
+  /-- The latest read did not complete. The last completed read's view is
+  shown, marked as not current, and offers no Goal action. -/
+  | stale (view : View)
+  deriving DecidableEq, Repr
+
+def shown (session : Nat) : Option Held → Shown
+  | none => .pending
+  | some held =>
+      if held.session = session then
+        match held.last, held.current with
+        | none, _ => .unread
+        | some last, true => .current (view last.state)
+        | some last, false => .stale (view last.state)
+      else .pending
+
+/-- The Goal action offered and the revision it fences on: only a current view
+offers one, and it fences on the revision that view shows. -/
+def offered (session : Nat) : Option Held → Option (NextAction × Option ClientControl.Revision)
+  | some ⟨held, some last, true⟩ =>
+      if held = session then some (next last.state, last.revision) else none
+  | _ => none
+
+theorem fold_snoc (reads : List Read) (read : Read) :
+    fold (reads ++ [read]) = step (fold reads) read := by
+  simp [fold, List.foldl_append]
+
+/-- A completed read always replaces what was held, and is current. -/
+theorem completed_read_replaces (held : Option Held) (session : Nat) (read : SessionRead)
+    (projection : ProjectionRead) (revision : Option ClientControl.Revision) :
+    shown session (step held ⟨session, .completed read projection revision⟩) =
+        .current (view (observe read projection)) ∧
+      offered session (step held ⟨session, .completed read projection revision⟩) =
+        some (next (observe read projection), revision) := by
+  cases held <;> simp [step, shown, offered]
+
+/-- A read that did not complete is never shown as current and offers no Goal
+action. -/
+theorem incomplete_is_never_current (held : Option Held) (session : Nat) :
+    (∀ v, shown session (step held ⟨session, .incomplete⟩) ≠ .current v) ∧
+      offered session (step held ⟨session, .incomplete⟩) = none := by
+  rcases held with _ | ⟨other, last, current⟩
+  · simp [step, shown, offered]
+  · by_cases same : other = session
+    · subst same; cases last <;> simp [step, shown, offered]
+    · simp [step, shown, offered, same]
+
+/-- After a read that did not complete, the last completed read's view stays
+shown, marked as not current. -/
+theorem incomplete_keeps_the_last_view_as_stale (session : Nat) (last : Completed)
+    (current : Bool) :
+    shown session (step (some ⟨session, some last, current⟩) ⟨session, .incomplete⟩) =
+      .stale (view last.state) := by
+  simp [step, shown]
+
+/-- What is shown as current is exactly the latest read of that session, which
+completed. -/
+theorem current_is_the_latest_completed_read (held : Option Held) (session : Nat) (v : View)
+    (shownCurrent : shown session held = .current v) :
+    ∃ last, held = some ⟨session, some last, true⟩ ∧ v = view last.state := by
+  rcases held with _ | ⟨other, last, current⟩
+  · simp [shown] at shownCurrent
+  · by_cases same : other = session
+    · subst same
+      cases last <;> cases current <;> simp_all [shown]
+    · simp [shown, same] at shownCurrent
+
+/-- "No Goal" is told as current only right after a completed read of a
+verified envelope without a Goal (`no_goal_only_from_verified_absence`, across
+reads). -/
+theorem current_no_goal_only_from_verified_absence (held : Option Held) (session : Nat)
+    (read : Read) (told : shown session (step held read) = .current .noGoal) :
+    ∃ revision, read = ⟨session, .completed .present (.verified none) revision⟩ := by
+  rcases read with ⟨readSession, outcome⟩
+  cases outcome with
+  | refused => simp [step, shown] at told
+  | incomplete =>
+      by_cases same : readSession = session
+      · subst same; exact absurd told ((incomplete_is_never_current held readSession).1 _)
+      · rcases held with _ | ⟨other, last, current⟩
+        · simp [step, shown, same] at told
+        · by_cases o : other = readSession <;> simp [step, shown, same, o] at told
+  | completed sessionRead projection revision =>
+      by_cases same : readSession = session
+      · subst same
+        rw [(completed_read_replaces held readSession sessionRead projection revision).1] at told
+        obtain ⟨hs, hp⟩ := no_goal_only_from_verified_absence sessionRead projection
+          (Shown.current.inj told)
+        subst hs; subst hp; exact ⟨revision, rfl⟩
+      · cases held <;> simp [step, shown, same] at told
+
+/-- The same, over any history: what is told as current "no Goal" is the latest
+read, and it verified absence. -/
+theorem fold_current_no_goal_only_from_verified_absence (reads : List Read) (session : Nat)
+    (told : shown session (fold reads) = .current .noGoal) :
+    ∃ earlier revision, reads = earlier ++ [⟨session, .completed .present (.verified none) revision⟩] := by
+  rcases List.eq_nil_or_concat reads with empty | ⟨earlier, last, rfl⟩
+  · subst empty; simp [fold, shown] at told
+  · simp only [List.concat_eq_append] at told ⊢
+    rw [fold_snoc] at told
+    obtain ⟨revision, rfl⟩ := current_no_goal_only_from_verified_absence _ session last told
+    exact ⟨earlier, revision, rfl⟩
+
+/-- An unknown state is never told as current absence, across reads. -/
+theorem current_unknown_is_not_absence (held : Option Held) (session : Nat) (last : Completed)
+    (cause : UnknownCause) (latest : held = some ⟨session, some last, true⟩)
+    (unknown : last.state = .unknown cause) :
+    shown session held ≠ .current .noGoal := by
+  subst latest
+  simp [shown, unknown, view]
+
+/-- What is held for one session is never shown for, and never offers an action
+on, another. -/
+theorem never_across_sessions (held : Held) (session : Nat) (other : held.session ≠ session) :
+    shown session (some held) = .pending ∧ offered session (some held) = none := by
+  rcases held with ⟨s, last, current⟩
+  simp only at other
+  refine ⟨by simp [shown, other], ?_⟩
+  cases last <;> cases current <;> simp [offered, other]
+
+/-- Reading another session starts from nothing: no earlier session's state
+carries into it. -/
+theorem a_read_of_another_session_carries_nothing (held : Held) (read : Read)
+    (other : held.session ≠ read.session) :
+    step (some held) read = step none read := by
+  rcases read with ⟨session, outcome⟩
+  cases outcome <;> simp_all [step]
+
+/-- A refusal clears what is held: nothing is shown and no action offered for
+any session until a read completes. -/
+theorem refusal_clears (held : Option Held) (session other : Nat) :
+    step held ⟨session, .refused⟩ = none ∧ shown other none = .pending ∧
+      offered other none = none := by
+  cases held <;> simp [step, shown, offered]
+
+/-- Only a current view offers a Goal action, and it is that view's next action
+fenced on that view's revision. -/
+theorem offered_only_on_the_current_view (held : Option Held) (session : Nat)
+    (action : NextAction) (revision : Option ClientControl.Revision)
+    (offer : offered session held = some (action, revision)) :
+    ∃ last, held = some ⟨session, some last, true⟩ ∧
+      shown session held = .current (view last.state) ∧
+      action = next last.state ∧ revision = last.revision := by
+  rcases held with _ | ⟨s, last, current⟩
+  · simp [offered] at offer
+  · cases last with
+    | none => cases current <;> simp [offered] at offer
+    | some last =>
+        cases current with
+        | false => simp [offered] at offer
+        | true =>
+            by_cases same : s = session
+            · subst same
+              simp [offered] at offer
+              exact ⟨last, rfl, by simp [shown], offer.1.symm, offer.2.symm⟩
+            · simp [offered, same] at offer
+
+/-- A stale view offers no Goal action. -/
+theorem stale_offers_nothing (held : Option Held) (session : Nat) (v : View)
+    (stale : shown session held = .stale v) : offered session held = none := by
+  cases h : offered session held with
+  | none => rfl
+  | some offer =>
+      obtain ⟨_, _, current, _⟩ := offered_only_on_the_current_view held session offer.1 offer.2 h
+      rw [current] at stale; cases stale
+
+/-- A Goal action offered on a shown Goal changes the Goal only at the revision
+the person saw: if the Goal changed since, the runtime's fence refuses it
+(`ClientControl.stale_revision_cannot_change_goal`). -/
+theorem offered_control_applies_only_at_the_displayed_revision (held : Option Held)
+    (session : Nat) (action : NextAction) (revision : ClientControl.Revision)
+    (_offer : offered session held = some (action, some revision))
+    (runtime : ClientControl.Snapshot) (changed : runtime.revision ≠ revision)
+    (nextComposite : String) (operation : ClientControl.Operation)
+    (facts : ClientControl.Facts) :
+    ClientControl.apply? runtime revision nextComposite operation facts = none :=
+  ClientControl.stale_revision_cannot_change_goal runtime revision nextComposite operation facts
+    changed
 
 end GoalAutomation.SessionObservation

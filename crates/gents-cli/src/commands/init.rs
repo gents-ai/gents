@@ -8,7 +8,7 @@ use gents::documents::apply_desired_state_plan;
 use gents::documents::{
     Agent, AgentContext, AgentTools, BackendAuth, BashTools, BuiltInTools,
     DatastoreToolSurfaceDocument, DatastoreTools, FileTools, HostTools, InferenceBackend,
-    InferenceExecution, SurfaceToolDecl, Tools,
+    InferenceExecution, InferenceSampling, SurfaceToolDecl, Tools,
 };
 use gents::store::config_client::{
     read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
@@ -26,11 +26,13 @@ use crate::cli::*;
 use crate::config_writes::ConfigAccess;
 use crate::shared::*;
 use crate::{
-    clear_runtime_state, dangerously_overwrite_home, default_data_dir, default_key_path,
-    format_tool_ceiling, format_tool_package, normalize_optional_string, print_json,
-    read_init_config, resolve_home_dir, write_init_config, BackendResolutionMode,
-    DEFAULT_HTTP_PORT,
+    clear_init_pending, clear_runtime_state, dangerously_overwrite_home, default_data_dir,
+    default_key_path, format_tool_ceiling, format_tool_package, mark_init_pending,
+    normalize_optional_string, print_json, read_init_config, resolve_home_dir, write_init_config,
+    BackendResolutionMode,
 };
+
+mod model_choice;
 
 const STANDARD_READONLY_SYSTEM_PROMPT: &str = r#"You are a terminal-native engineering and operations agent running for the user inside a local DefraDB runtime.
 
@@ -154,19 +156,19 @@ fn overwrite_data_dir(home_dir: &Path, home: &Path, data_dir: &Path) -> Result<P
 }
 
 pub(crate) async fn init(args: InitArgs) -> Result<()> {
+    if matches!(resolve_initial_tool_package(&args)?, ToolPackageArg::Yolo) {
+        eprintln!("{YOLO_WARNING}");
+    }
     print_json(&init_home(args).await?)
 }
 
 /// Normal completion drains the embedded node before releasing its store claim;
 /// aborting background tasks without awaiting them can retain the database.
-async fn init_home(mut args: InitArgs) -> Result<Value> {
+pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
     let home_dir = resolve_home_dir(args.home.as_deref());
     let tool_package = resolve_initial_tool_package(&args)?;
     validate_init_tool_flags(&args, tool_package)?;
-    if matches!(tool_package, ToolPackageArg::Yolo) {
-        eprintln!("{YOLO_WARNING}");
-    }
-    crate::interactive_backend::resolve_backend_interactively(&mut args).await?;
+    crate::interactive_backend::resolve_backend_interactively(&mut args, || {}).await?;
     if !args.identity_only {
         resolve_init_model_name(&args)?;
     }
@@ -227,7 +229,7 @@ async fn init_home(mut args: InitArgs) -> Result<Value> {
             },
             "next_steps": [
                 "gents config apply --root <manifest-root> --home <home> --bind-node-did home",
-                "gents server"
+                "gents runtime server"
             ],
             "init": null
         });
@@ -374,6 +376,7 @@ async fn init_home(mut args: InitArgs) -> Result<Value> {
             initialized_identity.identity.as_ref(),
             tool_package,
             binding,
+            None,
         )
         .await?;
         if fresh_store
@@ -404,6 +407,25 @@ async fn init_home(mut args: InitArgs) -> Result<Value> {
             maybe_inline_grok_login(&access, initialized_identity.identity.did(), &summary).await;
         let claude_login =
             maybe_inline_claude_login(&access, initialized_identity.identity.did(), &summary).await;
+        let summary = match args.picked_connection.as_ref() {
+            Some(connection) => {
+                let node_did = initialized_identity.identity.did();
+                let choice = model_choice::choose(&access, node_did, connection).await?;
+                // The first pass created the default agent, so this pass reuses its binding.
+                initialize_runtime_home(
+                    &access,
+                    &init_node,
+                    &args,
+                    initialized_identity.identity.as_ref(),
+                    tool_package,
+                    None,
+                    Some(&choice),
+                )
+                .await?
+            }
+            None => summary,
+        };
+        clear_init_pending(&home_dir)?;
 
         let output = json!({
             "status": "initialized",
@@ -443,6 +465,7 @@ async fn init_home(mut args: InitArgs) -> Result<Value> {
                 .map(crate::commands::claude_login::claude_login_result_json),
             "next_steps": init_next_steps(
                 &summary,
+                &home_dir,
                 codex_login.is_authenticated(),
                 grok_login.is_authenticated(),
                 claude_login.is_authenticated(),
@@ -731,7 +754,7 @@ async fn maybe_inline_codex_login(
         Err(error) => {
             eprintln!(
                 "ChatGPT login did not complete: {error:#}\n\
-                 The backend is configured; finish later with `gents codex-login` \
+                 The backend is configured; finish later with `gents accounts login codex` \
                  (add --device-auth on a headless machine)."
             );
             InlineCodexLoginState::Unauthenticated
@@ -863,6 +886,7 @@ pub(crate) async fn write_identity_only_home_metadata(
         .await?;
     }
     write_init_config(options.home, &stored)?;
+    clear_init_pending(options.home)?;
     let runtime_state_reset = if options.reset {
         clear_runtime_state(options.home)?
     } else {
@@ -949,6 +973,7 @@ async fn initialize_home_store(
         }
     };
     stored.store_encryption = Some(record.clone());
+    mark_init_pending(home)?;
     write_init_config(home, stored)?;
     Ok(record.initialize(&key_file, data_path)?)
 }
@@ -1052,6 +1077,7 @@ async fn initialize_runtime_home(
     runtime: &dyn NodeIdentity,
     tool_package: ToolPackageArg,
     fresh_binding: Option<gents_protocol::agent_identity::AgentIdentityBinding>,
+    choice: Option<&model_choice::ModelChoice>,
 ) -> Result<InitSummary> {
     let node_did = runtime.did();
     anyhow::ensure!(
@@ -1068,7 +1094,10 @@ async fn initialize_runtime_home(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    let model_name = resolve_init_model_name(args)?;
+    let model_name = match choice {
+        Some(choice) => Some(choice.model_name.as_str()),
+        None => resolve_init_model_name(args)?,
+    };
     let backend = resolve_init_backend_config(args)?;
     let backend_id_was_generated = explicit_backend_id.is_none();
     let backend_id = explicit_backend_id
@@ -1137,7 +1166,9 @@ async fn initialize_runtime_home(
         auth: backend_auth,
         connect_timeout_secs: None,
         discovery_timeout_secs: None,
-        max_concurrent: args.max_concurrent,
+        max_concurrent: choice
+            .and_then(|choice| choice.max_concurrent)
+            .or(args.max_concurrent),
         max_queue_depth: Some(args.max_queue_depth),
         enabled: model_name.is_some(),
         tags: Vec::new(),
@@ -1189,6 +1220,22 @@ async fn initialize_runtime_home(
         model_name.unwrap_or_default(),
     );
     inference_profile.execution_id = Some(inference_execution_id);
+    let sampling = choice
+        .filter(|choice| choice.temperature.is_some() || choice.top_p.is_some())
+        .map(|choice| InferenceSampling {
+            node_did: node_did.to_string(),
+            sampling_id: format!("{inference_profile_id}-sampling"),
+            display_name: Some(format!("{backend_name} recommended sampling")),
+            temperature: choice.temperature,
+            top_p: choice.top_p,
+            ..InferenceSampling::default()
+        });
+    if let Some(choice) = choice {
+        inference_profile.reasoning_effort = choice.reasoning_effort;
+        inference_profile.context_window = choice.context_window;
+        inference_profile.max_output_tokens = choice.max_output_tokens;
+        inference_profile.sampling_id = sampling.as_ref().map(|row| row.sampling_id.clone());
+    }
     let agent = Agent {
         agent_did: default_agent_did.clone(),
         creation_nonce: binding.creation_nonce,
@@ -1223,6 +1270,9 @@ async fn initialize_runtime_home(
     }
     backend_doc.validate()?;
     inference_execution.validate()?;
+    if let Some(sampling) = &sampling {
+        sampling.validate()?;
+    }
     inference_profile.validate()?;
     let wide_open_preset_id = wide_open_tools_id_for_node(node_did);
     let mut documents = vec![
@@ -1230,10 +1280,15 @@ async fn initialize_runtime_home(
         replacement(Collection::Tools, &tools)?,
         replacement(Collection::AgentContext, &context)?,
         replacement(Collection::InferenceExecution, &inference_execution)?,
+    ];
+    if let Some(sampling) = &sampling {
+        documents.push(replacement(Collection::InferenceSampling, sampling)?);
+    }
+    documents.extend([
         replacement(Collection::InferenceProfile, &inference_profile)?,
         replacement(Collection::Agent, &agent)?,
         replacement(Collection::Tools, &wide_open_tools_document(node_did))?,
-    ];
+    ]);
     if let Some(surface) = &engineer_mailbox {
         documents.push(replacement(Collection::DatastoreToolSurface, surface)?);
     }
@@ -1642,21 +1697,22 @@ fn standard_system_prompt(tool_package: ToolPackageArg) -> &'static str {
 
 fn init_next_steps(
     summary: &InitSummary,
+    home: &Path,
     codex_logged_in: bool,
     grok_logged_in: bool,
     claude_logged_in: bool,
 ) -> Vec<String> {
     let mut steps = Vec::new();
     if summary.provider_kind == gents::BackendProviderKind::ChatGptCodex && !codex_logged_in {
-        steps.push("gents codex-login".to_string());
+        steps.push("gents accounts login codex".to_string());
     }
     if summary.provider_kind == gents::BackendProviderKind::XaiGrokOAuth && !grok_logged_in {
-        steps.push("gents grok-login".to_string());
+        steps.push("gents accounts login grok".to_string());
     }
     if summary.provider_kind == gents::BackendProviderKind::ClaudeCliSubscription
         && !claude_logged_in
     {
-        steps.push("gents claude-login".to_string());
+        steps.push("gents accounts login claude".to_string());
     }
     if summary.model_name.is_empty() {
         steps.push(
@@ -1667,11 +1723,12 @@ fn init_next_steps(
     } else if is_probably_llama_server_endpoint(&summary.endpoint) {
         steps.push(format!("llama-server -hf {}", summary.model_name));
     }
-    steps.push("gents server".to_string());
+    steps.push("gents runtime server".to_string());
     steps.push("gents codex".to_string());
+    let home = crate::shell_word(home);
     steps.push(format!(
-        "gents config backend set --graphql http://127.0.0.1:{DEFAULT_HTTP_PORT}/api/v0/graphql --backend-id {} --name {} --endpoint <URL>",
-        summary.backend_id, summary.backend_name
+        "To change the model's address, save the output of `gents config backend show {} --home {home}` without its `_docID`, edit `endpoint`, and load it with `gents config backend set --file <backend.json> --home {home}`.",
+        summary.backend_id
     ));
     steps
 }
@@ -1703,6 +1760,11 @@ fn resolve_init_model_name(args: &InitArgs) -> Result<Option<&str>> {
             anyhow::bail!("--model-name must not be empty");
         }
         return Ok(Some(model_name));
+    }
+
+    // The menu's model is chosen after sign-in, which needs this store to exist first.
+    if args.picked_connection.is_some() {
+        return Ok(None);
     }
 
     if let Some(default) = args.preset_default_model_name() {
@@ -2067,6 +2129,7 @@ mod tests {
             identity.as_ref(),
             tool_package,
             Some(binding),
+            None,
         )
         .await
         .expect("a fresh home initializes");
@@ -2157,6 +2220,7 @@ mod tests {
             identity.as_ref(),
             tool_package,
             Some(binding),
+            None,
         )
         .await
         .expect("a fresh home initializes");
@@ -2746,6 +2810,7 @@ mod tests {
 
     fn init_args() -> InitArgs {
         InitArgs {
+            picked_connection: None,
             home: None,
             data_dir: None,
             dangerously_overwrite: false,

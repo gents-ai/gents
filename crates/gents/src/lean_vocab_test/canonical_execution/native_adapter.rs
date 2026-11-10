@@ -977,6 +977,9 @@ impl NativeCanonicalExecution {
                                         gents_protocol::output::StreamPayload::ReasoningSignature => {
                                             (LeanPayloadKind::Signature, None)
                                         }
+                                        gents_protocol::output::StreamPayload::ReasoningStop => {
+                                            (LeanPayloadKind::ReasoningStop, None)
+                                        }
                                         gents_protocol::output::StreamPayload::ReasoningSummary => {
                                             (LeanPayloadKind::Summary, None)
                                         }
@@ -2861,6 +2864,9 @@ impl NativeCanonicalExecution {
                             }
                             LeanPayloadKind::Signature => {
                                 gents_protocol::output::StreamPayload::ReasoningSignature
+                            }
+                            LeanPayloadKind::ReasoningStop => {
+                                gents_protocol::output::StreamPayload::ReasoningStop
                             }
                             LeanPayloadKind::Summary => {
                                 gents_protocol::output::StreamPayload::ReasoningSummary

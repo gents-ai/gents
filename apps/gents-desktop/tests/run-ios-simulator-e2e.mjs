@@ -178,6 +178,7 @@ async function runEnrollmentDecision(settings, requestId, action) {
   while (true) {
     interruption.signal.throwIfAborted();
     const result = runIssuer(settings, [
+      "runtime",
       "p2p",
       "enrollment",
       action,

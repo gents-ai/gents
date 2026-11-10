@@ -506,12 +506,8 @@ def indexedDeclarations : Streams → Nat → List (Nat × Declaration)
 
 def recoveryRefs (closingId : DocId) (streams : Streams) :
     Except ExtentError (List PayloadRef) := do
-  let text ← recoveryText (indexedDeclarations streams 0)
-  .ok (text.map fun entry => ⟨closingId, entry.1⟩)
-
-def recoveryTextBlock : MessageBlock PayloadSpec → Bool
-  | .text payload => payload.presentation == .full
-  | _ => false
+  let payloads ← recoveryPayloads streams
+  .ok (payloads.map fun entry => ⟨closingId, entry.1⟩)
 
 def recoveryMessageValid (world : World) (generation : Generation)
     (segments : List Segment) (closing : Segment) (streams : Streams)
@@ -529,7 +525,7 @@ def recoveryMessageValid (world : World) (generation : Generation)
             value.header.outcome == .«partial» && value.nativeId.isNone && value.nativeRequestId.isNone &&
             value.header.publication == .requestRecovery generation &&
             value.header.refs == expected && envelopeRefs value == expected &&
-            value.blocks.all recoveryTextBlock &&
+            recoveryBlocksValid value.blocks &&
             match reconstructMessage segments noDeniedDocuments value with
             | .ok _ => true
             | .error _ => false

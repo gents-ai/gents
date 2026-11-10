@@ -1,3 +1,12 @@
+/// `CodexShim.Binding.admitConnection`: whether the route admits a new
+/// connection for `agent`.
+pub fn admits_connection<'a>(
+    agent: &str,
+    runnable_agents: impl IntoIterator<Item = &'a str>,
+) -> bool {
+    runnable_agents.into_iter().any(|id| id == agent)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShimUnboundReason {
     DependencyMissing,

@@ -1,4 +1,4 @@
-import { useState, type ReactElement, type ReactNode } from "react";
+import { useRef, useState, type ReactElement, type ReactNode } from "react";
 import { NodeAvatar, nodeAvatarOf } from "./AgentAvatar";
 import { ArrowUpRight, Copy, MessageSquarePlus, Play } from "lucide-react";
 import { toast } from "sonner";
@@ -12,7 +12,15 @@ import { cn } from "@gents/ui/lib/utils";
 import { href, navigate, type Route } from "@/lib/router";
 import { useApp } from "@/app/AppContext";
 import { agentReadiness } from "@/lib/agent-readiness";
-import { access, agentName, bashAccess, fileAccess, network } from "./behavior";
+import {
+  access,
+  agentName,
+  bashAccess,
+  didTail,
+  fileAccess,
+  nameShared,
+  network,
+} from "./behavior";
 import { agentOf, backendOf } from "@/lib/agents";
 import { ProviderLogo } from "./ProviderLogo";
 import { useProviderUsage } from "../hooks/useProviders";
@@ -267,10 +275,36 @@ export function NodeHoverCard({
   children: ReactElement;
 }) {
   const [open, setOpen] = useState(false);
+  /* a link followed with a mouse or pen leaves that pointer resting on it, and
+     the card must not open over the page it led to, where it covers the
+     controls below the trigger, until the pointer leaves and returns. Keyboard
+     activation (click detail 0) and touch (whose pointerleave precedes its
+     click) park no pointer, so they keep the card's focus and hover opening */
+  const followed = useRef(false);
+  const pressedBy = useRef<string | null>(null);
   const page = nodeSection(deployment.nodeDid, "agent");
   return (
-    <HoverCard open={open} onOpenChange={setOpen}>
-      <HoverCardTrigger delay={500} render={children} />
+    <HoverCard open={open} onOpenChange={(next) => setOpen(next && !followed.current)}>
+      <HoverCardTrigger
+        delay={500}
+        render={children}
+        onPointerDown={(event) => {
+          pressedBy.current = event.pointerType;
+        }}
+        onClick={(event) => {
+          const parked =
+            event.detail > 0 &&
+            pressedBy.current !== null &&
+            pressedBy.current !== "touch";
+          pressedBy.current = null;
+          if (!parked || !event.currentTarget.hasAttribute("href")) return;
+          followed.current = true;
+          setOpen(false);
+        }}
+        onPointerLeave={() => {
+          followed.current = false;
+        }}
+      />
       <HoverCardContent side={side} align="start" className="w-80">
         <CardTitle
           name={deployment.node.displayName ?? deployment.label}
@@ -348,6 +382,7 @@ export function AgentHoverCard({
     : [];
   const summary = description || b.description || undefined;
   const tasks = deployment.tasks.filter((t) => t.agentDid === b.agentDid).length;
+  const sharesName = nameShared(b.agentDid, deployment);
   const settings: Route = {
     name: "agent",
     nodeDid: deployment.nodeDid,
@@ -364,8 +399,11 @@ export function AgentHoverCard({
         data-testid="agent-hover-card"
       >
         <CardTitle name={agentName(agentDid, deployment)} to={settings}>
-          {b.isDefault && (
-            <span className="shrink-0 text-xs text-muted-foreground">Default</span>
+          {(sharesName || b.isDefault) && (
+            <span className="flex shrink-0 gap-2 text-xs text-muted-foreground">
+              {sharesName && <span>{didTail(b.agentDid)}</span>}
+              {b.isDefault && <span>Default</span>}
+            </span>
           )}
         </CardTitle>
         {summary && (

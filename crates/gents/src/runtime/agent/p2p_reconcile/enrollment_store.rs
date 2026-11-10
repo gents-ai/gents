@@ -709,6 +709,8 @@ impl GraphqlEnrollmentStore {
             let request = denied.request.clone();
             let decision_doc_id = denied.decision_doc_id.clone();
             drop(_guard);
+            self.finish_grant_withdrawal(request_id, &request.candidate_did)
+                .await?;
             let delivery_pending = self
                 .deliver_terminal(&request, &decision_doc_id, None, None)
                 .await;
@@ -869,6 +871,12 @@ impl GraphqlEnrollmentStore {
                 })?,
         };
         drop(_guard);
+        /* Lean `Identity.EnrollmentGrant.applyDecision .deny`: a grant whose
+        approval never committed is withdrawn with the denial */
+        if kind == WireDecisionKind::Denied {
+            self.finish_grant_withdrawal(request_id, &pending.request.candidate_did)
+                .await?;
+        }
         let delivery_pending = match &revision_doc_id {
             Some(revision_doc_id) => {
                 self.deliver_terminal(

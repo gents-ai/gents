@@ -17,6 +17,8 @@ import {
   type SessionGoalNextAction,
   type SessionGoalState,
   type SessionGoalView,
+  sessionGoalControl,
+  type SessionGoalControl,
 } from "@source-inc/gents-desktop-client";
 import type { ChatWorkflowState } from "@source-inc/gents-desktop-chat";
 import type { DesktopJobControlRequest } from "@source-inc/gents-desktop-client/generated/DesktopJobControlRequest";
@@ -35,6 +37,7 @@ import { ChatViewUpdateError, createChatDelivery } from "./chatDelivery";
 import { chatDraftRequest, type ChatDraft } from "./chatDrafts";
 import { createGoalDelivery } from "./goalDelivery";
 import { goalDraftCommand, type GoalDraft } from "./goalDrafts";
+import { GOAL_CHANGED, GOAL_NEXT_STEP, GOAL_NOT_CURRENT } from "./goalState";
 
 type ChatActionParams = {
   api: DesktopApiAdapter;
@@ -87,17 +90,6 @@ function queueEditFailure(
   return actionFailure(doing, error);
 }
 
-/** What to do instead when a state's next action is not the one requested.
- * An unknown state carries its own reason from the runtime owner. */
-const GOAL_NEXT_STEP: Record<
-  Exclude<SessionGoalNextAction, "await_publication">,
-  string
-> = {
-  send: "This chat is not open on its runtime yet. Send a message to open it, then change its Goal.",
-  start_goal: "This chat has no Goal to change. Start one first.",
-  control_goal: "This chat already has a Goal. Change it instead.",
-};
-
 /** Only an observed state establishes a Goal or its absence (Lean
  * `SessionObservation`). The runtime owner supplies each state's next action
  * and an unknown state's reason; this boundary acts only on those. */
@@ -123,10 +115,10 @@ function observedGoal(
 }
 
 const GOAL_CONTROL_DOING = {
-  edit: "edit the goal",
-  pause: "pause the goal",
-  resume: "resume the goal",
-  stop: "remove the goal",
+  edit: "edit the Goal",
+  pause: "pause the Goal",
+  resume: "resume the Goal",
+  stop: "remove the Goal",
 } as const;
 const LISTED_ATTEMPTS = 8;
 const LISTED_INTERVAL_MS = 250;
@@ -387,21 +379,29 @@ export function createChatActions({
     try {
       if (!goalClientDid)
         throw new Error("Connect this client before changing a Goal.");
+      const accepts = ["start_goal", "control_goal"] as const;
+      const displayed = selectedSessionId
+        ? displayedGoal(node.nodeDid, selectedSessionId, accepts)
+        : null;
       const current = selectedSessionId
         ? observedGoal(
             await api.fetchSessionGoal(node.nodeDid, selectedSessionId),
             node.nodeDid,
             selectedSessionId,
-            ["start_goal", "control_goal"],
+            accepts,
           )
         : null;
+      const expected =
+        displayed && current && selectedSessionId
+          ? fenceOnDisplayed(displayed, current, selectedSessionId)
+          : null;
       const result = await goalDelivery.submit(
         {
           clientDid: goalClientDid,
           nodeDid: node.nodeDid,
           sessionId: selectedSessionId,
           sessionDocId: current?.sessionDocId ?? null,
-          expected: current?.goal?.revision ?? null,
+          expected,
           agentDid: admission.agentDid,
           action: { kind: "create", objective, tokenBudget: null },
           cwd: goalCwd,
@@ -416,12 +416,52 @@ export function createChatActions({
       if (!acceptsView() || !selection.acceptsIntent(store, intentGeneration))
         return null;
       chat.resetWorkflow(stores.chat);
-      reportFailure(actionFailure("set the goal", err));
+      reportFailure(actionFailure("set the Goal", err));
       return null;
     } finally {
       chat.endSubmission(stores.chat, ownedWorkflow);
       submissionInFlight = false;
     }
+  }
+
+  /* The Goal shown when the person acted: only a current view offers a Goal
+     action, fenced on the revision it shows (Lean
+     `SessionObservation.offered`). */
+  function displayedGoal(
+    nodeDid: string,
+    sessionId: string,
+    accepts: readonly SessionGoalNextAction[],
+  ): SessionGoalControl {
+    const held = stores.session.getState().goal;
+    const control = sessionGoalControl(held, sessionId, nodeDid);
+    if (!control) throw new Error(GOAL_NOT_CURRENT);
+    if (!accepts.includes(control.next))
+      throw new Error(
+        held?.last?.kind === "unknown"
+          ? held.last.reason
+          : control.next === "await_publication"
+            ? GOAL_NOT_CURRENT
+            : GOAL_NEXT_STEP[control.next],
+      );
+    return control;
+  }
+
+  /* A Goal change applies only at the revision the person saw
+     (`offered_control_applies_only_at_the_displayed_revision`); when the Goal
+     changed since, it is refused here and the current state is read. */
+  function fenceOnDisplayed(
+    displayed: SessionGoalControl,
+    current: SessionGoalView,
+    sessionId: string,
+  ) {
+    const shown = displayed.revision;
+    const now = current.goal?.revision ?? null;
+    if (shown?.document === now?.document && shown?.composite === now?.composite)
+      return shown;
+    void Promise.resolve()
+      .then(() => refreshSession(sessionId))
+      .catch(() => {});
+    throw new Error(GOAL_CHANGED);
   }
 
   async function controlGoal(
@@ -438,20 +478,22 @@ export function createChatActions({
       if (!nodeDid) throw new Error("no node holds this session");
       if (!goalClientDid)
         throw new Error("Connect this client before changing a Goal.");
+      const displayed = displayedGoal(nodeDid, sessionId, ["control_goal"]);
       const current = observedGoal(
         await api.fetchSessionGoal(nodeDid, sessionId),
         nodeDid,
         sessionId,
         ["control_goal"],
       );
-      if (!current.goal) throw new Error("this session has no goal");
+      const expected = fenceOnDisplayed(displayed, current, sessionId);
+      if (!current.goal || !expected) throw new Error("this session has no Goal");
       await goalDelivery.submit(
         {
           clientDid: goalClientDid,
           nodeDid,
           sessionId,
           sessionDocId: current.sessionDocId,
-          expected: current.goal.revision,
+          expected,
           agentDid: null,
           action: originalAction,
           cwd: null,

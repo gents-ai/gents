@@ -1,3 +1,9 @@
+import type { SharingAdapter } from "../../src/hooks/sharing";
+import {
+  createHarnessSharing,
+  isSharingScenario,
+  type SharingScenario,
+} from "./sharingHarness";
 import type {
   ChatSendRequest,
   ChatSendResult,
@@ -53,6 +59,19 @@ import type { RenderedTimelineItem } from "@source-inc/gents-desktop-client/gene
 import type { RenderedToolCallView } from "@source-inc/gents-desktop-client/generated/RenderedToolCallView";
 
 const NODE_DID = "did:key:z6MkBombadilAgent";
+
+/** A chat whose Agent verified it holds no Goal (Lean `SessionObservation`). */
+const verifiedNoGoal = (sessionId: string): DesktopSessionSnapshot["goal"] => ({
+  kind: "observed",
+  next: "start_goal",
+  observation: {
+    nodeDid: NODE_DID,
+    sessionId,
+    sessionDocId: `${sessionId}-doc`,
+    observedAt: "2026-11-08T00:00:00Z",
+    goal: null,
+  },
+});
 const DEFAULT_AGENT_DID = "default";
 const STARTED_AT = "2026-06-17T00:00:00.000Z";
 const THIRTY_DAYS_AGO = new Date(Date.now() - 30 * 86_400_000).toISOString();
@@ -540,7 +559,8 @@ export type DesktopUiHarnessScenario =
   | "automated-inputs"
   | "background"
   | "notices"
-  | "startup-port-in-use";
+  | "startup-port-in-use"
+  | SharingScenario;
 
 export type DesktopUiHarnessOptions = {
   scenario?: string | null;
@@ -614,6 +634,9 @@ type DesktopUiHarness = {
   listenerFactory: DesktopClientUpdatedListenerFactory;
   scenario: DesktopUiHarnessScenario;
   performance: MobilePerformanceHarnessController | null;
+  /* the sharing scenarios' stand-in; absent elsewhere, so the app's own
+     default applies */
+  sharing?: SharingAdapter;
 };
 
 const LARGE_SENT_REQUEST_ID = "6f1c2a7e-large-request-sent";
@@ -1027,7 +1050,7 @@ export function createDesktopUiHarness(
     status: "active",
     turnState: activeTurn ? "running" : "completed",
     latestRequestId: "request-intro",
-    goal: null,
+    goal: verifiedNoGoal("session-intro"),
     retryEligibility: { eligible: false, denialReason: null },
     latestRequestOutcome: harnessRequestOutcome(),
     pendingTurn: null,
@@ -1259,7 +1282,7 @@ export function createDesktopUiHarness(
       status: "active",
       turnState: "completed",
       latestRequestId: "request-worker",
-      goal: null,
+      goal: verifiedNoGoal("session-worker"),
       retryEligibility: { eligible: false, denialReason: null },
       latestRequestOutcome: null,
       pendingTurn: null,
@@ -1277,7 +1300,7 @@ export function createDesktopUiHarness(
       status: "active",
       turnState: "completed",
       latestRequestId: "request-reviewer",
-      goal: null,
+      goal: verifiedNoGoal("session-reviewer"),
       retryEligibility: { eligible: false, denialReason: null },
       latestRequestOutcome: null,
       pendingTurn: null,
@@ -1297,7 +1320,7 @@ export function createDesktopUiHarness(
       nodeDid: NODE_DID,
       agentDid: DEFAULT_AGENT_DID,
       status: "active",
-      goal: null,
+      goal: verifiedNoGoal("session-notices"),
       retryEligibility: { eligible: false, denialReason: null },
       pendingTurn: null,
       queuedTurns: [],
@@ -1384,21 +1407,31 @@ export function createDesktopUiHarness(
       latestRequestId: "request-notices-goal",
       latestRequestOutcome: null,
       goal: {
-        goalId: "goal-notices",
-        objective: "Make the import job resumable after a crash",
-        status: "usage_limited",
-        tokenBudget: 400_000,
-        tokensUsed: 312_400,
-        activeTimeSeconds: 2_460,
-        consecutiveBlockedAudits: 1,
-        continuationSequence: 4,
-        wrapupRequested: false,
-        wrapupCompleted: false,
-        lastBlockedReason:
-          "verification_failed: the resume test still fails on the second run",
-        lastFailure:
-          "usage_limited: every Claude account on this node has reached its usage limit",
-        completionEvidence: null,
+        kind: "observed",
+        next: "control_goal",
+        observation: {
+          nodeDid: NODE_DID,
+          sessionId: "session-notices-goal",
+          sessionDocId: "session-notices-goal-doc",
+          observedAt: "2026-11-08T00:00:00Z",
+          goal: {
+            goalId: "goal-notices",
+            revision: { document: "goal-notices-doc", composite: "goal-notices-cid" },
+            objective: "Make the import job resumable after a crash",
+            status: "usage_limited",
+            tokenBudget: "400000",
+            tokensUsed: "312400",
+            activeTimeSeconds: "2460",
+            continuationSequence: "4",
+            wrapupRequested: false,
+            wrapupCompleted: false,
+            lastBlockedReason:
+              "verification_failed: the resume test still fails on the second run",
+            lastFailure:
+              "usage_limited: every Claude account on this node has reached its usage limit",
+            completionEvidence: null,
+          },
+        },
       },
       timelineItems: [
         user("notices-goal", "Make the import job resumable after a crash.", 40),
@@ -1614,7 +1647,7 @@ export function createDesktopUiHarness(
         status: "active",
         turnState: "completed",
         latestRequestId: `request-index-${index}`,
-        goal: null,
+        goal: verifiedNoGoal(sessionId),
         retryEligibility: { eligible: false, denialReason: null },
         latestRequestOutcome: null,
         pendingTurn: null,
@@ -1896,7 +1929,7 @@ export function createDesktopUiHarness(
       status: "active",
       turnState: "completed",
       latestRequestId: requestId,
-      goal: null,
+      goal: verifiedNoGoal(sessionId),
       retryEligibility: { eligible: false, denialReason: null },
       latestRequestOutcome: harnessRequestOutcome(),
       pendingTurn: null,
@@ -2063,7 +2096,16 @@ export function createDesktopUiHarness(
       const [namespace, name] = pack.split("/");
       return { namespace, name, versions: [] };
     },
-    async installPack() {},
+    async installPack(request) {
+      const [pack, version] = request.package.split("@");
+      return {
+        pack: pack!,
+        coordinate: pack!,
+        version: version ?? null,
+        digest: "sha256:harness",
+        source: "registry",
+      };
+    },
     async updatePack() {},
     async removePack() {},
     async bindPackPlugin() {},
@@ -4157,6 +4199,7 @@ export function createDesktopUiHarness(
     listenerFactory,
     scenario,
     performance,
+    sharing: isSharingScenario(scenario) ? createHarnessSharing(scenario) : undefined,
   };
 }
 
@@ -4206,7 +4249,7 @@ function createLargePerformanceSession(
     status: "active",
     turnState: "running",
     latestRequestId: "large-request-live",
-    goal: null,
+    goal: verifiedNoGoal("session-large"),
     retryEligibility: { eligible: false, denialReason: null },
     latestRequestOutcome: null,
     pendingTurn: null,
@@ -4675,7 +4718,7 @@ function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
     case "notices":
       return value;
     default:
-      return "default";
+      return isSharingScenario(value) ? value : "default";
   }
 }
 

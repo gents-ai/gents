@@ -7,5 +7,5 @@ schema. Test data, not a shipped pack.
 ## Plugin
 
 `plugins/echo_fixture` returns an empty JSON object. The `.afb` is not
-checked in: `gents pack build` compiles the source, and the gents crate's
+checked in: `gents config pack build` compiles the source, and the gents crate's
 tests write a constant-output module at the declared path in a temp copy.

@@ -20,6 +20,7 @@ import { errorText } from "../../../lib/errorText";
 import { href } from "@/lib/router";
 import { packContents } from "./packContents";
 import { usePackActions } from "./usePackActions";
+import { PackInstallReview } from "../packs/PackInstallReview";
 import { useRegistrySearch } from "./useRegistrySearch";
 
 const NO_SOURCES: PackWireSources = { plugins: [], target_packs: [] };
@@ -75,7 +76,16 @@ export function PacksPanel({ deployment }: { deployment: NodeView }) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
-  const { busy, setBusy, install, update, remove } = usePackActions(refresh);
+  const {
+    busy,
+    setBusy,
+    install,
+    update,
+    remove,
+    review,
+    closeReview,
+    installReviewed,
+  } = usePackActions(refresh);
   const { query, setQuery, found, page, hasMore, searched, search } =
     useRegistrySearch();
 
@@ -132,6 +142,13 @@ export function PacksPanel({ deployment }: { deployment: NodeView }) {
 
   return (
     <div>
+      <PackInstallReview
+        request={review}
+        node={deployment}
+        installed={installed}
+        onCancel={closeReview}
+        onInstall={installReviewed}
+      />
       {wiring && (
         <WirePackDialog
           {...wiring}

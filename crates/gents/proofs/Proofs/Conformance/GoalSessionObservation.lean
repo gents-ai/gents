@@ -3,7 +3,7 @@ import Lean
 
 namespace Conformance.GoalSessionObservationContracts
 
-open GoalAutomation.SessionObservation GoalAutomation.RequestAssignment Lean
+open GoalAutomation.SessionObservation GoalAutomation.RequestAssignment GoalAutomation Lean
 
 structure Case where
   session : SessionRead
@@ -69,6 +69,62 @@ def caseJson (c : Case) : Json :=
     ("expected_refusal", (refusal c.captured state).map unknownCauseJson |>.getD Json.null)]
 
 def casesJson : String := (toJson (cases.map caseJson)).compress
+
+/-! Histories of reads the client folds (`SessionObservation.fold`). Session 1
+is the one shown; session 2 is another chat. -/
+
+def revisionA : ClientControl.Revision := ⟨"goal-1", "cid-a"⟩
+def revisionB : ClientControl.Revision := ⟨"goal-1", "cid-b"⟩
+
+def outcomes : List ReadOutcome :=
+  [.completed .present (.verified (some ⟨1, none⟩)) (some revisionA),
+    .completed .present (.verified (some ⟨1, none⟩)) (some revisionB),
+    .completed .present (.verified none) none,
+    .completed .present .missing none,
+    .completed .absent .missing none,
+    .incomplete, .refused]
+
+def reads (sessions : List Nat) : List Read :=
+  sessions.flatMap fun session => outcomes.map fun outcome => ⟨session, outcome⟩
+
+def histories : List (List Read) :=
+  let both := reads [1, 2]
+  let shown := reads [1]
+  [[]] ++ both.map (fun r => [r]) ++ both.flatMap (fun a => both.map fun b => [a, b]) ++
+    shown.flatMap (fun a => shown.flatMap fun b => shown.map fun c => [a, b, c])
+
+def revisionJson (revision : ClientControl.Revision) : Json :=
+  Json.mkObj [("document", toJson revision.document), ("composite", toJson revision.composite)]
+
+def outcomeJson : ReadOutcome → Json
+  | .completed session projection revision => Json.mkObj [("kind", "completed"),
+      ("state", stateJson (observe session projection)),
+      ("next", nextJson (next (observe session projection))),
+      ("revision", revision.map revisionJson |>.getD Json.null)]
+  | .incomplete => Json.mkObj [("kind", "incomplete")]
+  | .refused => Json.mkObj [("kind", "refused")]
+
+def readJson (read : Read) : Json :=
+  Json.mkObj [("session", toJson read.session), ("outcome", outcomeJson read.outcome)]
+
+def shownJson : Shown → Json
+  | .pending => Json.mkObj [("kind", "pending")]
+  | .unread => Json.mkObj [("kind", "unread")]
+  | .current v => Json.mkObj [("kind", "current"), ("view", viewJson v)]
+  | .stale v => Json.mkObj [("kind", "stale"), ("view", viewJson v)]
+
+def offeredJson : Option (NextAction × Option ClientControl.Revision) → Json
+  | none => Json.null
+  | some (action, revision) => Json.mkObj [("next", nextJson action),
+      ("revision", revision.map revisionJson |>.getD Json.null)]
+
+def foldCaseJson (history : List Read) : Json :=
+  let held := fold history
+  Json.mkObj [("reads", toJson (history.map readJson)), ("session", toJson (1 : Nat)),
+    ("expected_shown", shownJson (shown 1 held)),
+    ("expected_offered", offeredJson (offered 1 held))]
+
+def foldCasesJson : String := (toJson (histories.map foldCaseJson)).compress
 
 example : cases.length = 20 := by decide
 

@@ -37,6 +37,27 @@ fn artifact_directory(label: &str) -> Result<std::path::PathBuf> {
     Ok(directory)
 }
 
+/// The two live lanes as (OpenAI-compatible `/v1` endpoint, served model) pairs.
+/// Each workstation serves its own model, so a lane names both.
+fn delivery_lanes() -> Result<[(String, String); 2]> {
+    let lane = |n: usize| -> Result<(String, String)> {
+        Ok((
+            std::env::var(format!("GENTS_DELIVERY_ENDPOINT_{n}")).with_context(|| {
+                format!("GENTS_DELIVERY_ENDPOINT_{n}: workstation /v1 endpoint")
+            })?,
+            std::env::var(format!("GENTS_DELIVERY_MODEL_{n}")).with_context(|| {
+                format!("GENTS_DELIVERY_MODEL_{n}: model served at that endpoint")
+            })?,
+        ))
+    };
+    let lanes = [lane(1)?, lane(2)?];
+    ensure!(
+        lanes[0].0 != lanes[1].0,
+        "two distinct inference endpoints required"
+    );
+    Ok(lanes)
+}
+
 fn provider_peaks(calls: &[Value]) -> Result<BTreeMap<String, usize>> {
     let mut events: BTreeMap<String, Vec<(chrono::DateTime<chrono::FixedOffset>, i32)>> =
         BTreeMap::new();
@@ -224,7 +245,7 @@ async fn bind_agents(access: &ConfigAccess, owner: &str, agents: &DeliveryAgents
 /// configures their lanes, tasks and triggers under that User's signature.
 async fn configure(
     db: &support::TestDb,
-    endpoints: &[String; 2],
+    lanes: &[(String, String); 2],
 ) -> Result<(support::ManagedAgentFixture, DeliveryAgents)> {
     let fixture = support::managed_agent_fixture(db).await;
     support::grant_household_owner(db, &fixture.user).await;
@@ -254,7 +275,7 @@ async fn configure(
             "deadline_duration_secs":1800, "stream_liveness_timeout_secs":180
         }),
     )];
-    for (lane, endpoint) in endpoints.iter().enumerate() {
+    for (lane, (endpoint, model)) in lanes.iter().enumerate() {
         documents.extend([
             (Collection::InferenceBackend, json!({
                 "backend_id":format!("delivery-backend-{lane}"), "name":format!("Delivery workstation {}", lane+1),
@@ -264,7 +285,7 @@ async fn configure(
             })),
             (Collection::InferenceProfile, json!({
                 "profile_id":format!("delivery-profile-{lane}"),
-                "backend_id":format!("delivery-backend-{lane}"), "model_name":"GLM-5.3-Flash-NVFP4",
+                "backend_id":format!("delivery-backend-{lane}"), "model_name":model,
                 "context_window":1_000_000, "max_output_tokens":2048,
                 "execution_id":"delivery-execution"
             })),
@@ -323,20 +344,13 @@ async fn configure(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-#[ignore = "real inference: GENTS_TRIGGER_DELIVERY_LIVE=1; GENTS_DELIVERY_ENDPOINT_1 and GENTS_DELIVERY_ENDPOINT_2"]
+#[ignore = "real inference: GENTS_TRIGGER_DELIVERY_LIVE=1; GENTS_DELIVERY_ENDPOINT_1/2 and GENTS_DELIVERY_MODEL_1/2"]
 async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> Result<()> {
     ensure!(
         std::env::var("GENTS_TRIGGER_DELIVERY_LIVE").as_deref() == Ok("1"),
         "explicit live opt-in required"
     );
-    let endpoints = [
-        std::env::var("GENTS_DELIVERY_ENDPOINT_1").context("first workstation /v1 endpoint")?,
-        std::env::var("GENTS_DELIVERY_ENDPOINT_2").context("second workstation /v1 endpoint")?,
-    ];
-    ensure!(
-        endpoints[0] != endpoints[1],
-        "two distinct inference endpoints required"
-    );
+    let lanes = delivery_lanes()?;
     let artifacts = artifact_directory("burst")?;
     let home =
         gents::eval::runner::embedded::EmbeddedHome::create_retained(&artifacts.join("home"))
@@ -344,7 +358,7 @@ async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> R
     let db = support::test_db_from_home(home);
     let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
     let owner = identity.did().to_owned();
-    let (fixture, agents) = configure(&db, &endpoints).await?;
+    let (fixture, agents) = configure(&db, &lanes).await?;
     let access = fixture.access;
     let runtime = boot_live_agent(&db, identity).await?;
     support::interrupt::wait_for_runtime_ready(&db.node, &owner).await;
@@ -600,7 +614,8 @@ async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> R
         artifacts.join("evidence.json"),
         serde_json::to_vec_pretty(&json!({
             "owner_did":owner, "lead_agent_did":&agents.lead, "worker_agent_dids":&agents.workers,
-            "endpoints":endpoints, "configured_backend_capacity":[32,32],
+            "lanes":lanes.iter().map(|(endpoint, model)| json!({"endpoint":endpoint, "model":model})).collect::<Vec<_>>(),
+            "configured_backend_capacity":[32,32],
             "provider_peak_overlap":peaks, "lead_sessions":sessions, "requests":requests,
             "fires":fires, "outcomes":outcomes, "inference_calls":calls,
             "observed_busy_queue":observed_busy_queue
