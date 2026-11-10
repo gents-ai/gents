@@ -158,3 +158,5 @@ pub fn build_defra_query_tool(
 
 #[cfg(test)]
 mod tests;
+
+pub use query::collect_filter_field_keys;

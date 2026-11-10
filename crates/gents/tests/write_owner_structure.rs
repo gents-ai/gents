@@ -100,10 +100,12 @@ fn production_sources(root: &Path) -> Vec<PathBuf> {
 fn cfg_test(attributes: &[syn::Attribute]) -> bool {
     attributes.iter().any(|attribute| {
         attribute.path().is_ident("cfg")
-            && attribute
-                .meta
-                .require_list()
-                .is_ok_and(|list| list.tokens.to_string() == "test")
+            && attribute.meta.require_list().is_ok_and(|list| {
+                matches!(
+                    list.tokens.to_string().replace(' ', "").as_str(),
+                    "test" | "any(test,feature=\"test-fixtures\")"
+                )
+            })
     })
 }
 
@@ -691,6 +693,7 @@ fn snippet_sites(source: &str) -> usize {
 fn read_fence_counts_direct_node_execution() {
     for source in [
         "fn f(node: &EmbeddedNode, q: &str) { node.execute(q); }",
+        r#"#[cfg(any(test, feature = "production"))] fn f(node: &EmbeddedNode, q: &str) { node.execute(q); }"#,
         "fn f(db: &EmbeddedNode, q: &str) { db.execute(q); }",
         "fn f(db: Arc<defra_node::Node>, q: &str) { db.as_ref().execute(q); }",
         "impl S { fn f(&self, q: &str) { self.node.execute(q); } }",
@@ -725,6 +728,7 @@ fn read_fence_ignores_owner_wrappers_and_tests() {
         "fn f(node: &EmbeddedNode) { let db = node; } fn g(db: &Access, q: &str) { db.execute(q); }",
         "#[cfg(test)] mod tests { fn f(node: &EmbeddedNode, q: &str) { node.execute(q); } }",
         "#[cfg(test)] fn f(node: &EmbeddedNode, q: &str) { node.execute(q); }",
+        r#"#[cfg(any(test, feature = "test-fixtures"))] fn f(node: &EmbeddedNode, q: &str) { node.execute(q); }"#,
     ] {
         assert_eq!(snippet_sites(source), 0, "{source}");
     }
@@ -1801,10 +1805,10 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/store/config_client/schema_install.rs", 2),
     ("crates/gents/src/tools/builtin/defra_query/mod.rs", 1),
     ("crates/gents/src/eval/documents.rs", 3),
-    ("crates/gents/src/eval/report/mod.rs", 1),
-    ("crates/gents/src/eval/report/store.rs", 1),
-    ("crates/gents/src/eval/runner/freeze.rs", 1),
-    ("crates/gents/src/eval/runner/mod.rs", 1),
+    ("crates/gents-eval/src/report/mod.rs", 1),
+    ("crates/gents-eval/src/report/store.rs", 1),
+    ("crates/gents-eval/src/runner/freeze.rs", 1),
+    ("crates/gents-eval/src/runner/mod.rs", 1),
     ("crates/gents/src/goal/creation.rs", 2),
     ("crates/gents/src/store/graphql.rs", 1),
     ("crates/gents/src/store/local/home.rs", 3),
@@ -1817,9 +1821,9 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/request/lifecycle/execution_renewal.rs", 1),
     ("crates/gents/src/request/lifecycle/queue/position.rs", 1),
     ("crates/gents/src/runtime/node_readiness_publisher.rs", 1),
-    ("crates/gents/src/eval/optimization/driver.rs", 2),
-    ("crates/gents/src/eval/optimization/job.rs", 1),
-    ("crates/gents/src/eval/optimization/promote.rs", 2),
+    ("crates/gents-eval/src/optimization/driver.rs", 2),
+    ("crates/gents-eval/src/optimization/job.rs", 1),
+    ("crates/gents-eval/src/optimization/promote.rs", 2),
     ("crates/gents/src/tools/builtin/p2p.rs", 1),
     ("crates/gents/src/pack/resolve.rs", 1),
     ("crates/gents/src/plugin/allowed.rs", 2),
@@ -1994,7 +1998,7 @@ const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/store/config_client/retry.rs", 3),
     // JSON-RPC node pruned-history wording
     // persisted AgentRequest failure_reason
-    ("crates/gents/src/eval/runner/embedded/executor/outcome.rs", 2),
+    ("crates/gents-eval/src/runner/embedded/executor/outcome.rs", 2),
     // MCP probe transport/OS error text (metric label)
     ("crates/gents/src/tools/mcp/health.rs", 8),
     // display only: appends a next-call hint when absent

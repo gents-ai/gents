@@ -391,7 +391,7 @@ pub(crate) async fn exclude_arrival(
 
 /// Completeness comes from the native receiving-node journal, within the same
 /// transaction as the persisted binding, filter, receipts and checkpoint.
-pub(crate) async fn checkpoint_prefix(
+pub async fn checkpoint_prefix(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
     consumer: &EventConsumer,

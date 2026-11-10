@@ -11,7 +11,7 @@ pub(crate) struct ExecutionGeneration(String);
 
 #[derive(Debug, thiserror::Error)]
 #[error("execution lease expired or ownership was revoked")]
-pub(crate) struct ExecutionOwnershipLost;
+pub struct ExecutionOwnershipLost;
 
 impl Drop for RequestLifecycle {
     fn drop(&mut self) {

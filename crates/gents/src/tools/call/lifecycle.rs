@@ -128,8 +128,10 @@ mod session_message_call;
 mod transition;
 
 pub use gents_loop::tool_call_lifecycle::{FailureClass, ToolOutcome};
-#[cfg(test)]
-pub(crate) mod admission_fixture;
+#[cfg(any(test, feature = "test-fixtures"))]
+#[doc(hidden)]
+#[allow(dead_code)]
+pub mod admission_fixture;
 #[cfg(test)]
 mod background_conformance;
 #[cfg(test)]

@@ -1,9 +1,10 @@
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 extern crate self as gents;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
+#[doc(hidden)]
 #[path = "../tests/support/mod.rs"]
-pub(crate) mod support;
+pub mod support;
 
 pub mod claude_gateway_login;
 mod claude_request_context;
@@ -32,8 +33,79 @@ pub(crate) mod provider_usage;
 pub mod runtime;
 pub mod store;
 
-#[cfg(test)]
-pub(crate) mod test_support {
+#[cfg(any(test, feature = "test-fixtures"))]
+#[doc(hidden)]
+#[allow(dead_code)]
+pub mod test_support {
+    pub use crate::documents::automation::{event_admission_generation, EventConfigDocIds};
+    pub use crate::documents::event_consumer::checkpoint_prefix;
+    pub use crate::documents::event_trigger::{
+        update_trigger_runtime_fields, TriggerRuntimeUpdate,
+    };
+
+    pub fn tool_policy(
+        ceiling: &crate::tools::surface::ToolCeiling,
+    ) -> &crate::tools::surface::ToolPolicySurface {
+        ceiling.policy()
+    }
+
+    pub async fn delete_configuration_document(
+        txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+        collection: &str,
+        doc_id: &str,
+    ) -> Result<(), crate::store::config_client::ConfigClientError> {
+        txn.delete_configuration_document(collection, doc_id).await
+    }
+
+    pub async fn publish_provider_message(
+        writer: &crate::request::streaming::DefraStreamWriter,
+        request: &crate::request::lifecycle::RequestLifecycle,
+        turn: usize,
+        message: &gents_protocol::message::Message,
+    ) -> anyhow::Result<String> {
+        writer
+            .start_provider_attempt(
+                &request.request().doc_id,
+                turn,
+                0,
+                format!("inference.{}", turn + 1).parse()?,
+            )
+            .await;
+        Ok(writer
+            .publish_native_turn(request, turn, 0, message)
+            .await?
+            .message_doc_id)
+    }
+
+    pub async fn admitted_client_lifecycle(
+        node: std::sync::Arc<defra_node::Node>,
+        runtime: std::sync::Arc<dyn crate::NodeIdentity>,
+        request: &crate::AgentRequest,
+        agent: &dyn crate::NodeIdentity,
+    ) -> anyhow::Result<crate::request::lifecycle::RequestLifecycle> {
+        let (_owner, authority) =
+            crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+        let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+            node.clone(),
+            runtime,
+            authority,
+        );
+        let (request, admission) = verifier
+            .verify_fresh_for_claim_with_identity(request, agent)
+            .await?;
+        let mut lifecycle =
+            crate::request::lifecycle::RequestLifecycle::new_with_node_did(node, request, 60);
+        lifecycle.bind_managed_agent(agent)?;
+        lifecycle.set_client_claim_admission(admission);
+        Ok(lifecycle)
+    }
+
+    pub use crate::request::lifecycle::materialize::{
+        pending_agent_request_spec, write_trigger_delivery_with_identity,
+    };
+    pub use crate::request::lifecycle::ExecutionOwnershipLost;
+    pub use crate::triggers::engine::durable::PreparedFire;
+
     pub(crate) mod acp_policies;
     pub(crate) mod read_observation;
 
@@ -43,12 +115,12 @@ pub(crate) mod test_support {
         clippy::disallowed_methods,
         reason = "a test's #[tokio::test] runtime is its entry-point runtime"
     )]
-    pub(crate) fn runtime_handle() -> tokio::runtime::Handle {
+    pub fn runtime_handle() -> tokio::runtime::Handle {
         tokio::runtime::Handle::current()
     }
 
     /// Fixtures that reopen a store must retain its original signing identity.
-    pub(crate) fn node_builder() -> defra_node::NodeBuilder {
+    pub fn node_builder() -> defra_node::NodeBuilder {
         use crate::NodeIdentity as _;
 
         let directory = tempfile::tempdir().unwrap();
@@ -200,7 +272,7 @@ pub(crate) mod test_support {
         bootstrap_signed_test_node(&access, node_did).await;
     }
 
-    pub(crate) async fn bootstrap_signed_test_node(
+    pub async fn bootstrap_signed_test_node(
         access: &crate::store::config_client::ConfigAccess,
         node_did: &str,
     ) {
@@ -276,7 +348,7 @@ pub(crate) mod test_support {
         (db, user, access)
     }
 
-    pub(crate) async fn signed_test_node_from_db(
+    pub async fn signed_test_node_from_db(
         db: crate::support::TestDb,
         name: &str,
     ) -> (
@@ -497,6 +569,7 @@ pub(crate) mod test_support {
         .unwrap();
     }
 
+    #[cfg(test)]
     pub(crate) fn fixture_pack_copy(
         name: &str,
         plugin_output: &serde_json::Value,
@@ -534,6 +607,7 @@ pub(crate) mod test_support {
         (dir, root)
     }
 
+    #[cfg(test)]
     pub(crate) fn home_with_fixture_pack(
         name: &str,
     ) -> (

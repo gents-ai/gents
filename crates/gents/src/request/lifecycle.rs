@@ -42,7 +42,8 @@ pub use crate::triggers::engine::durable::request_arrival_order;
 pub(crate) use execution_lease::revoke_execution_preserving_output_at_with_access;
 #[cfg(test)]
 pub(crate) use execution_lease::terminalize_owned_at_with_access;
-pub(crate) use execution_lease::{ExecutionOwnershipLost, RequestExecutionLease};
+pub use execution_lease::ExecutionOwnershipLost;
+pub(crate) use execution_lease::RequestExecutionLease;
 pub use execution_lease::{RequestTerminalOutcome, TerminalizeResult};
 pub(crate) use gents_loop::execution_policy;
 #[cfg(test)]
@@ -564,7 +565,7 @@ pub struct RequestLifecycle {
 }
 
 impl RequestLifecycle {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub(crate) fn managed_agent_signer(
         &self,
     ) -> Option<crate::store::identity::ManagedAgentSigner> {

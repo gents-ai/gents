@@ -231,7 +231,7 @@ pub async fn build_signed_pending_agent_request_with_lineage_workspace_and_conve
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn pending_agent_request_spec(
+pub fn pending_agent_request_spec(
     node_did: &str,
     agent_did: &str,
     content: &str,
@@ -1479,7 +1479,7 @@ pub async fn write_task_delivery_local(
     write_task_delivery(&access, fire, continue_existing, create).await
 }
 
-pub(crate) async fn write_trigger_delivery_with_identity(
+pub async fn write_trigger_delivery_with_identity(
     node: &std::sync::Arc<EmbeddedNode>,
     actor: ::identity::Did,
     prepared: &crate::triggers::engine::durable::PreparedFire,
@@ -2385,14 +2385,11 @@ mod task_delivery_tests {
             "mutation {{ update_AgentRequest(docID: \"{}\", input: {{ lifecycle_state: \"completed\" }}) {{ _docID }} }}",
             escape_graphql_string(&first.request.doc_id)
         )).await.unwrap();
-        let observed = crate::eval::runner::embedded::observe::poll_request_with_access(
-            &user_access,
-            &first.request.request_id,
-        )
-        .await
-        .unwrap()
-        .expect("the user can observe the completed Task request");
-        assert_eq!(observed.lifecycle_state.as_deref(), Some("completed"));
+        let observed = user_access.execute(&request_query).await.unwrap();
+        assert_eq!(
+            observed["data"]["AgentRequest"][0]["lifecycle_state"],
+            "completed"
+        );
         let session_doc = session["_docID"].as_str().unwrap();
         let trace = crate::lean_vocab_test::lean_contract_snapshot()
             .identity_publication_cases

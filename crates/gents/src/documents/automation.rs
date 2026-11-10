@@ -170,7 +170,7 @@ pub(crate) fn resolved_event_source_generation(trigger: &ResolvedEventTrigger) -
     })
 }
 
-pub(crate) struct EventConfigDocIds<'a> {
+pub struct EventConfigDocIds<'a> {
     pub trigger: &'a str,
     pub source: &'a str,
     pub task: &'a str,
@@ -226,7 +226,7 @@ pub(crate) fn resolved_event_execution_generation(trigger: &ResolvedEventTrigger
     )
 }
 
-pub(crate) fn event_admission_generation(
+pub fn event_admission_generation(
     source: &EventSource,
     trigger: &super::Trigger,
     task: &super::Task,

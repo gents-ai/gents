@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 mod agent_bindings;
-pub(crate) use agent_bindings::{
+pub use agent_bindings::{
     load_pack_install_config_with_provisioner, rewrite_references as bind_agent_references,
     AgentProvisioner,
 };

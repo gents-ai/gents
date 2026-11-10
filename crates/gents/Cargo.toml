@@ -20,6 +20,8 @@ live-e2e = []
 # Test builds refuse to resolve the operator's real Gents homes; enabled only
 # through dev-dependencies, never by production builds.
 test-home-guard = []
+# Native fixtures for downstream conformance tests; never enabled in production.
+test-fixtures = ["test-home-guard"]
 
 # All other test binaries are auto-discovered; this explicit target overrides
 # autodiscovery for e2e_live so the link only happens on live runs
@@ -66,9 +68,6 @@ dirs.workspace = true
 events.workspace = true
 futures = "0.3"
 eventsource-stream = "0.2.3"
-# File captures in the eval runner (src/eval/runner/embedded/executor.rs)
-# match a case's declared glob under the trial workspace.
-glob = "0.3"
 hostname.workspace = true
 lens.workspace = true
 identity.workspace = true
