@@ -215,10 +215,6 @@ pub(crate) fn runtime_contract_router(
         .route("/enrollment/pending", post(enrollment_pending_handler))
         .route("/accounts/usage/read", post(account_usage_read_handler))
         .route(
-            gents_protocol::pairing_reader::PAIRING_READER_PATH,
-            post(crate::http::pairing_reader::pairing_reader_handler),
-        )
-        .route(
             gents_desktop_core::inference::INFERENCE_SETTINGS_PATH,
             get(crate::http::inference::inference_settings_handler),
         )

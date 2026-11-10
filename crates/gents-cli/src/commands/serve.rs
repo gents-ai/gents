@@ -897,9 +897,11 @@ async fn serve_foreground(
         serve_lifecycle.clone(),
     );
     let scrape_state = runtime_routers.scrape_state;
+    let owner_staged = gents::store::config_client::OwnerStagedRoute::new();
     let extra_routes = runtime_routers.contract.merge(
         embedded_http_probe_router(&bind_probe_path, bind_probe_token.clone())
-            .merge(crate::http::explorer::explorer_router()),
+            .merge(crate::http::explorer::explorer_router())
+            .merge(owner_staged.router()),
     );
     let client_access_ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
     if let Some(node_identity_did) = server_identity.node_identity_did.as_deref() {
@@ -984,6 +986,7 @@ async fn serve_foreground(
             crate::http::enrollment::ensure_enrollment_network(&node, identity.as_ref(), &node_name)
                 .await
                 .context("ensuring authenticated enrollment network")?;
+        owner_staged.serve(&node);
         *enrollment_decisions.write().await = Some(
             crate::http::enrollment::EnrollmentDecisionService::new(identity.clone(), node.clone()),
         );

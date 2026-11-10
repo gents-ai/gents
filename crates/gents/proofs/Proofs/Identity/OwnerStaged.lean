@@ -329,49 +329,46 @@ theorem pairing_refusal_ignores_the_observation :
      pairingOutcome "other-admin" "foreign"] =
     [.denied, .denied, .denied, .denied, .denied] := by native_decide
 
-/-! ### Transport independence of pairing readers
+/-! ### Transport independence
 
-A pairing reader is requested either in the requester's own configuration
-transaction on the runtime's node (`embedded`) or through the runtime's signed
-pairing-reader route (`RuntimeReconcile.HttpAccess.decideCommand`). The route
-never sends the requester's own relationship change to native ACP; once it
-admits the command it opens an embedded transaction as the signer and decides
-it with the same `outcome`. So the result depends only on who requests what,
-never on the transport. -/
+An owner-staged change is requested either in the requester's own
+configuration transaction on the runtime's node (`embedded`) or through the
+runtime's signed owner-staged route (`RuntimeReconcile.HttpAccess.decideCommand`).
+The route never sends the requester's own relationship change to native ACP;
+once it admits the command it opens an embedded transaction as the signer and
+decides it with the same `outcome`. So the result depends only on who requests
+what, never on the transport. Every node a client writes through over HTTP
+serves this route, including the in-process node of an offline command. -/
 
-inductive PairingResponse where
+inductive RouteResponse where
   | refused (decision : RuntimeReconcile.HttpAccess.CommandDecision)
   | decided (result : Outcome)
   deriving BEq, DecidableEq, Repr
 
-def pairingEmbedded (state : State) (runtime : DID) (agentsOf : DID → List DID)
-    (requester : DID) (node : Option String) (relation : Relation) : Outcome :=
-  outcome state runtime agentsOf requester (.pairingNode node) relation
-
-def pairingOverHttp (authorityMatches : Bool) (caller : Option DID) (signer : DID)
+def overHttp (authorityMatches : Bool) (caller : Option DID) (signer : DID)
     (signatureValid : Bool) (state : State) (runtime : DID) (agentsOf : DID → List DID)
-    (node : Option String) (relation : Relation) : PairingResponse :=
+    (authority : Authority) (relation : Relation) : RouteResponse :=
   match RuntimeReconcile.HttpAccess.decideCommand authorityMatches caller signer signatureValid with
-  | .executes => .decided (pairingEmbedded state runtime agentsOf signer node relation)
+  | .executes => .decided (outcome state runtime agentsOf signer authority relation)
   | refusal => .refused refusal
 
-/-- For every requester and observation, an admitted command decides exactly
-what the requester's embedded transaction decides. -/
-theorem pairing_outcome_is_transport_independent (state : State) (runtime : DID)
-    (agentsOf : DID → List DID) (requester : DID) (node : Option String) (relation : Relation) :
-    pairingOverHttp true (some requester) requester true state runtime agentsOf node relation =
-      .decided (pairingEmbedded state runtime agentsOf requester node relation) := by
-  simp [pairingOverHttp, RuntimeReconcile.HttpAccess.decideCommand]
+/-- For every requester, authority and relation, an admitted command decides
+exactly what the requester's embedded transaction decides. -/
+theorem outcome_is_transport_independent (state : State) (runtime : DID)
+    (agentsOf : DID → List DID) (requester : DID) (authority : Authority) (relation : Relation) :
+    overHttp true (some requester) requester true state runtime agentsOf authority relation =
+      .decided (outcome state runtime agentsOf requester authority relation) := by
+  simp [overHttp, RuntimeReconcile.HttpAccess.decideCommand]
 
 /-- The route decides only for its authenticated signer, and then exactly as
 that signer's embedded request. -/
-theorem pairing_route_decides_only_for_its_signer (authorityMatches : Bool) (caller : Option DID)
+theorem route_decides_only_for_its_signer (authorityMatches : Bool) (caller : Option DID)
     (signer : DID) (signatureValid : Bool) (state : State) (runtime : DID)
-    (agentsOf : DID → List DID) (node : Option String) (relation : Relation) (result : Outcome)
-    (h : pairingOverHttp authorityMatches caller signer signatureValid state runtime agentsOf node
+    (agentsOf : DID → List DID) (authority : Authority) (relation : Relation) (result : Outcome)
+    (h : overHttp authorityMatches caller signer signatureValid state runtime agentsOf authority
       relation = .decided result) :
-    caller = some signer ∧ result = pairingEmbedded state runtime agentsOf signer node relation := by
-  unfold pairingOverHttp at h
+    caller = some signer ∧ result = outcome state runtime agentsOf signer authority relation := by
+  unfold overHttp at h
   split at h
   · rename_i executes
     cases h
@@ -380,50 +377,259 @@ theorem pairing_route_decides_only_for_its_signer (authorityMatches : Bool) (cal
   · cases h
 
 /-- No existence oracle over HTTP either: an admitted requester that may not
-request the change gets the same `denied` whether the observation exists and
+request the change gets the same `denied` whether the document exists and
 whoever owns it. -/
-theorem pairing_route_refusal_independent_of_observation (state state' : State) (runtime : DID)
-    (agentsOf : DID → List DID) (requester : DID) (node : Option String) (relation : Relation)
-    (refused : authorized state requester relation (.pairingNode node) = false)
-    (refused' : authorized state' requester relation (.pairingNode node) = false) :
-    pairingOverHttp true (some requester) requester true state runtime agentsOf node relation =
-        pairingOverHttp true (some requester) requester true state' runtime agentsOf node relation ∧
-      pairingOverHttp true (some requester) requester true state runtime agentsOf node relation =
+theorem route_refusal_independent_of_document (state state' : State) (runtime : DID)
+    (agentsOf : DID → List DID) (requester : DID) (authority : Authority) (relation : Relation)
+    (refused : authorized state requester relation authority = false)
+    (refused' : authorized state' requester relation authority = false) :
+    overHttp true (some requester) requester true state runtime agentsOf authority relation =
+        overHttp true (some requester) requester true state' runtime agentsOf authority relation ∧
+      overHttp true (some requester) requester true state runtime agentsOf authority relation =
         .decided .denied := by
-  simp [pairing_outcome_is_transport_independent, pairingEmbedded, outcome, refused, refused']
+  simp [outcome_is_transport_independent, outcome, refused, refused']
 
 def pairingRequesters : List String := ["user", "admin", "outsider", "other-admin"]
 def pairingDocuments : List String := ["route", "missing", "foreign"]
 
-def pairingHttp (requester document : String) : PairingResponse :=
-  pairingOverHttp true (some requester) requester true unlinkedPairing "runtime" agentsOf
-    (some "node") (readerOn document)
+def pairingHttp (requester document : String) : RouteResponse :=
+  overHttp true (some requester) requester true unlinkedPairing "runtime" agentsOf
+    runtimeNode (readerOn document)
 
 theorem pairing_fixture_agrees_across_transports :
     (pairingRequesters.all fun requester => pairingDocuments.all fun document =>
       pairingHttp requester document == .decided (pairingOutcome requester document)) = true := by
   native_decide
 
-/-- Route refusals precede the observation: a bearer that is not the signer,
-an anonymous caller and an invalid signature are refused for the Node owner
-too, and a foreign authority is misdirected. -/
-theorem pairing_route_refuses_unauthenticated_commands :
-    [pairingOverHttp true (some "admin") "user" true unlinkedPairing "runtime" agentsOf
-        (some "node") routeReader,
-     pairingOverHttp true none "user" true unlinkedPairing "runtime" agentsOf
-        (some "node") routeReader,
-     pairingOverHttp true (some "user") "user" false unlinkedPairing "runtime" agentsOf
-        (some "node") routeReader,
-     pairingOverHttp false (some "user") "user" true unlinkedPairing "runtime" agentsOf
-        (some "node") routeReader] =
+/-- Route refusals precede the document: a bearer that is not the signer, an
+anonymous caller and an invalid signature are refused for the Node owner too,
+and a command addressed to another endpoint is misdirected. -/
+theorem route_refuses_unauthenticated_commands :
+    [overHttp true (some "admin") "user" true unlinkedPairing "runtime" agentsOf
+        runtimeNode routeReader,
+     overHttp true none "user" true unlinkedPairing "runtime" agentsOf runtimeNode routeReader,
+     overHttp true (some "user") "user" false unlinkedPairing "runtime" agentsOf
+        runtimeNode routeReader,
+     overHttp false (some "user") "user" true unlinkedPairing "runtime" agentsOf
+        runtimeNode routeReader] =
     [.refused .forbidden, .refused .forbidden, .refused .forbidden, .refused .misdirected] := by
   native_decide
 
-def PairingResponse.name : PairingResponse → String
+def RouteResponse.name : RouteResponse → String
   | .refused .misdirected => "misdirected"
   | .refused .forbidden => "forbidden"
   | .refused .executes => "executes"
   | .decided result => result.name
+
+/-! ### Applying configuration over HTTP
+
+The runtime cannot join a client's HTTP transaction: native DefraDB accepts a
+relationship change inside a transaction only in one the node itself began.
+So each owner-staged change of a client's apply is its own route command,
+decided by `outcome` as the signer, outside the transaction that writes the
+documents implying it. The order keeps access from ever being wider than the
+configuration intends:
+
+* Revocations are sent before the client's transaction commits. The first
+  refusal aborts the apply, so its documents are not committed; revocations
+  already decided stay, so access can only end up narrower.
+* Grants are sent after the commit, by the post-commit grant owner
+  (`CommittedRelationshipsIncomplete`). The first refusal is the apply's
+  error; the documents stay committed and that grant and the ones after it
+  are pending, so access is never granted for documents that were not
+  committed.
+
+In the requester's embedded transaction the same refusal rolls back the whole
+apply instead. -/
+
+def Outcome.refused : Outcome → Bool
+  | .denied | .unmanaged => true
+  | _ => false
+
+/-- Decide `changes` in order as `requester`, stopping at the first refusal:
+the state reached, and the changes not decided (the refused one first). -/
+def decideInOrder (runtime : DID) (agentsOf : DID → List DID) (requester : DID)
+    (authority : Authority) (grant : Bool) : State → List Relation → State × List Relation
+  | state, [] => (state, [])
+  | state, relation :: rest =>
+    if (outcome state runtime agentsOf requester authority relation).refused then
+      (state, relation :: rest)
+    else decideInOrder runtime agentsOf requester authority grant
+      (request state runtime agentsOf requester authority relation grant) rest
+
+inductive HttpApply where
+  | applied
+  | aborted
+  | committedIncomplete (pending : List Relation)
+  deriving BEq, Repr
+
+def HttpApply.name : HttpApply → String
+  | .applied => "applied"
+  | .aborted => "aborted"
+  | .committedIncomplete _ => "committed_incomplete"
+
+structure HttpApplyResult where
+  state : State
+  committed : Bool
+  result : HttpApply
+
+def applyOverHttp (state : State) (runtime : DID) (agentsOf : DID → List DID) (requester : DID)
+    (authority : Authority) (revocations grants : List Relation) : HttpApplyResult :=
+  match decideInOrder runtime agentsOf requester authority false state revocations with
+  | (revoked, _ :: _) => ⟨revoked, false, .aborted⟩
+  | (revoked, []) =>
+    match decideInOrder runtime agentsOf requester authority true revoked grants with
+    | (granted, []) => ⟨granted, true, .applied⟩
+    | (granted, pending) => ⟨granted, true, .committedIncomplete pending⟩
+
+/-- The same apply in the requester's embedded transaction: all or nothing. -/
+def applyEmbedded (state : State) (runtime : DID) (agentsOf : DID → List DID) (requester : DID)
+    (authority : Authority) (revocations grants : List Relation) : Option State :=
+  match decideInOrder runtime agentsOf requester authority false state revocations with
+  | (revoked, []) =>
+    match decideInOrder runtime agentsOf requester authority true revoked grants with
+    | (granted, []) => some granted
+    | _ => none
+  | _ => none
+
+theorem revocation_request_is_no_wider (state : State) (runtime : DID)
+    (agentsOf : DID → List DID) (requester : DID) (authority : Authority) (relation x : Relation)
+    (h : x ∈ (request state runtime agentsOf requester authority relation false).relations) :
+    x ∈ state.relations := by
+  unfold request at h
+  split at h
+  · simp only [apply, Bool.false_eq_true, if_false] at h
+    split at h
+    · exact (List.mem_filter.mp h).1
+    · exact h
+  · simp only [ownerStaged, apply, Bool.false_eq_true, if_false, Bool.not_true] at h
+    split at h
+    · exact (List.mem_filter.mp h).1
+    · exact h
+  · exact h
+
+theorem revocations_are_no_wider (runtime : DID) (agentsOf : DID → List DID) (requester : DID)
+    (authority : Authority) (revocations : List Relation) (state : State) (x : Relation)
+    (h : x ∈ (decideInOrder runtime agentsOf requester authority false state
+      revocations).1.relations) :
+    x ∈ state.relations := by
+  induction revocations generalizing state with
+  | nil => exact h
+  | cons relation rest ih =>
+    unfold decideInOrder at h
+    split at h
+    · exact h
+    · exact revocation_request_is_no_wider state runtime agentsOf requester authority relation x
+        (ih _ h)
+
+/-- A refused revocation aborts the apply before its documents commit, and
+access ends up no wider than before the apply. -/
+theorem aborted_apply_commits_nothing_and_is_no_wider (state : State) (runtime : DID)
+    (agentsOf : DID → List DID) (requester : DID) (authority : Authority)
+    (revocations grants : List Relation)
+    (h : (applyOverHttp state runtime agentsOf requester authority revocations grants).result =
+      .aborted) :
+    (applyOverHttp state runtime agentsOf requester authority revocations grants).committed =
+        false ∧
+      ∀ x ∈ (applyOverHttp state runtime agentsOf requester authority revocations
+        grants).state.relations, x ∈ state.relations := by
+  unfold applyOverHttp at h ⊢
+  split at h
+  · rename_i revoked rest hd tl hsplit
+    refine ⟨rfl, fun x hx => ?_⟩
+    have := revocations_are_no_wider runtime agentsOf requester authority revocations state x
+    rw [hsplit] at this
+    exact this hx
+  · split at h <;> cases h
+
+/-- A refused grant is reported only after the documents committed, with the
+refused grant and the ones after it pending. -/
+theorem refused_grant_is_reported_after_commit (state : State) (runtime : DID)
+    (agentsOf : DID → List DID) (requester : DID) (authority : Authority)
+    (revocations grants pending : List Relation)
+    (h : (applyOverHttp state runtime agentsOf requester authority revocations grants).result =
+      .committedIncomplete pending) :
+    (applyOverHttp state runtime agentsOf requester authority revocations grants).committed =
+        true ∧
+      pending ≠ [] := by
+  unfold applyOverHttp at h ⊢
+  split at h
+  · cases h
+  · split at h
+    · cases h
+    · rename_i _ granted rest hrest _
+      cases h
+      exact ⟨rfl, hrest⟩
+
+/-- When nothing is refused, the HTTP apply reaches exactly the state of the
+same requester's embedded transaction. -/
+theorem http_apply_agrees_with_embedded (state result : State) (runtime : DID)
+    (agentsOf : DID → List DID) (requester : DID) (authority : Authority)
+    (revocations grants : List Relation)
+    (h : applyEmbedded state runtime agentsOf requester authority revocations grants =
+      some result) :
+    applyOverHttp state runtime agentsOf requester authority revocations grants =
+      ⟨result, true, .applied⟩ := by
+  unfold applyEmbedded at h
+  unfold applyOverHttp
+  split at h
+  · rename_i hrev
+    rw [hrev]
+    split at h
+    · rename_i hgrant
+      cases h
+      simp [hgrant]
+    · cases h
+  · cases h
+
+/-- Event cursor rebinding over HTTP, one apply per requester: the
+configuring User's apply revokes the old writer and grants the new one, as in
+its embedded transaction; an outsider's apply aborts on the revocation and
+changes nothing; an outsider's grant-only apply commits and reports the
+refused grant pending. -/
+def cursorWriter (agent : String) : Relation := ⟨"configuration", "cursor", "writer", .actor agent⟩
+
+def cursorApply (requester : String) (revocations grants : List Relation) : HttpApplyResult :=
+  applyOverHttp runtimeCursor "runtime" agentsOf requester .documentUpdate revocations grants
+
+theorem cursor_rebind_over_http_follows_the_ordering :
+    let user := cursorApply "user" [cursorWriter "agent"] [cursorWriter "sibling"]
+    let aborted := cursorApply "outsider" [cursorWriter "agent"] [cursorWriter "sibling"]
+    let incomplete := cursorApply "outsider" [] [cursorWriter "sibling"]
+    [user.result.name, aborted.result.name, incomplete.result.name] =
+      ["applied", "aborted", "committed_incomplete"] ∧
+    [user.committed, aborted.committed, incomplete.committed] = [true, false, true] ∧
+    [cursorWritable user.state "agent", cursorWritable user.state "sibling",
+     cursorWritable aborted.state "agent", cursorWritable aborted.state "sibling",
+     cursorWritable incomplete.state "sibling"] = [false, true, true, false, false] ∧
+    ((applyEmbedded runtimeCursor "runtime" agentsOf "user" .documentUpdate
+      [cursorWriter "agent"] [cursorWriter "sibling"]).map State.relations ==
+        some user.state.relations) = true := by
+  native_decide
+
+/-- One HTTP apply per pairing requester and direction on the runtime-owned
+observation, for the route's generated cases: a revocation-only apply and a
+grant-only apply of `routeReader`. -/
+def pairingApply (requester direction : String) : HttpApplyResult :=
+  if direction == "revoke" then
+    applyOverHttp unlinkedPairing "runtime" agentsOf requester runtimeNode [routeReader] []
+  else applyOverHttp unlinkedPairing "runtime" agentsOf requester runtimeNode [] [routeReader]
+
+theorem pairing_apply_refusals_follow_the_ordering :
+    [(pairingApply "admin" "revoke").result.name, (pairingApply "admin" "grant").result.name,
+     (pairingApply "outsider" "revoke").result.name,
+     (pairingApply "outsider" "grant").result.name] =
+      ["applied", "applied", "aborted", "committed_incomplete"] ∧
+    [(pairingApply "outsider" "revoke").committed, (pairingApply "outsider" "grant").committed] =
+      [false, true] := by
+  native_decide
+
+def httpApplyCasesJson : List Lean.Json :=
+  ["revoke", "grant"].flatMap fun direction => pairingRequesters.map fun requester =>
+    let applied := pairingApply requester direction
+    Lean.Json.mkObj [("requester", Lean.toJson requester), ("direction", Lean.toJson direction),
+      ("result", Lean.toJson applied.result.name), ("committed", Lean.toJson applied.committed),
+      ("readable", Lean.toJson (pairingReadable applied.state))]
 
 def caseJson (path requester : String) (direct staged : Bool) (result : Outcome) : Lean.Json :=
   Lean.Json.mkObj [("path", Lean.toJson path), ("requester", Lean.toJson requester),
@@ -450,7 +656,7 @@ def pairingCasesJson : List Lean.Json :=
 `staged`: the owner-staged change made for the requester takes effect.
 `outcome`: how the owner-staged request is decided. Pairing cases name the
 observation: `route` is runtime-owned, `foreign` is owned by another actor,
-`missing` does not exist; `http` is how the runtime's pairing-reader route
+`missing` does not exist; `http` is how the runtime's owner-staged route
 answers the same requester's admitted command, and the embedded and route
 results are replayed against the same case. `direct` stays the native public
 route's own answer, which no Gents pairing path relies on. -/

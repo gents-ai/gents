@@ -182,6 +182,11 @@ pub enum ConfigClientError {
     OwnerStagedRelationshipUnmanaged { collection: String, doc_id: String },
     #[error("the requesting actor may not change relationships of {collection} {doc_id}")]
     OwnerStagedRelationshipDenied { collection: String, doc_id: String },
+    #[error("owner-staged route refused the command ({status}): {body}")]
+    OwnerStagedRouteStatus {
+        status: reqwest::StatusCode,
+        body: String,
+    },
     #[error("document relationship request failed ({status}): {body}")]
     DocumentRelationshipStatus {
         status: reqwest::StatusCode,

@@ -4,10 +4,17 @@
 //! every public route, so Gents never relies on that admission: the actor
 //! stages the change when it owns the document; otherwise the embedding
 //! runtime stages it as the owner, in the same transaction, for a requester
-//! that the modeled authority admits. A pairing reader is decided only in an
-//! embedded transaction; a client reaches it through the runtime's signed
-//! route. A document-update change over HTTP still sends the requester's own
-//! change and native ACP decides it.
+//! that the modeled authority admits.
+//!
+//! Over HTTP the runtime cannot join the client's transaction (native accepts
+//! a relationship change in a transaction only in one the node itself began),
+//! so each change is its own signed command to the runtime's owner-staged
+//! route, decided there by the same owner as the signer
+//! (`Identity.OwnerStaged.applyOverHttp`). A revocation is sent before the
+//! client's transaction commits: a refusal aborts the apply, and revocations
+//! already decided stay, so access only narrows. A grant is queued and sent
+//! after the commit by the post-commit grant owner; a refusal is the apply's
+//! `CommittedRelationshipsIncomplete` error with the documents committed.
 
 use std::sync::Arc;
 
@@ -21,13 +28,14 @@ use super::transact::{expect_committed, transact_owned, TransactionMode};
 use super::{ConfigAccess, ConfigApplyTxn, ConfigClientError, Result};
 use crate::store::config_client::pairing_reader::reader_relation;
 use crate::store::config_client::write_telemetry::WriteBackend;
-use crate::store::config_client::{PairingObservation, PairingReadReason};
+use crate::store::config_client::ConfigRelationshipGrant;
 use crate::store::graphql::escape_graphql_string;
+use gents_protocol::owner_staged::OwnerStagedChange;
 
 /// What the requester must natively hold before the owner stages a change for
 /// it (`Identity.OwnerStaged.Authority`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Authority {
+pub(super) enum Authority {
     /// `update` on the changed document itself.
     DocumentUpdate,
     /// `update` on the runtime's own Node row, only for a pairing
@@ -35,77 +43,126 @@ enum Authority {
     PairingNode,
 }
 
+/// The native relation a modeled change names: its collection and relation
+/// are fixed per path, so no request reaches another relation.
+pub(in crate::store::config_client) struct StagedRelation {
+    pub(in crate::store::config_client) collection: &'static str,
+    pub(in crate::store::config_client) doc_id: String,
+    relation: &'static str,
+    target: String,
+    authority: Authority,
+}
+
+impl StagedRelation {
+    pub(in crate::store::config_client) fn of(change: &OwnerStagedChange) -> Result<Self> {
+        let actor = |did: &str| {
+            identity::Did::new(did)
+                .map(|did| did.to_string())
+                .map_err(ConfigClientError::RelationshipTargetIdentity)
+        };
+        Ok(match change {
+            OwnerStagedChange::EventCursorWriter {
+                cursor_doc_id,
+                agent_did,
+            } => Self {
+                collection: "EventSourceCursor",
+                doc_id: cursor_doc_id.clone(),
+                relation: "writer",
+                target: actor(agent_did)?,
+                authority: Authority::DocumentUpdate,
+            },
+            OwnerStagedChange::PlacementReader {
+                placement_doc_id,
+                reader_did,
+            } => Self {
+                collection: crate::Collection::RepositoryPlacement.graphql_type(),
+                doc_id: placement_doc_id.clone(),
+                relation: "reader",
+                target: actor(reader_did)?,
+                authority: Authority::DocumentUpdate,
+            },
+            OwnerStagedChange::WorkspaceSelection {
+                agent_doc_id,
+                callback_doc_id,
+            } => Self {
+                collection: "Agent",
+                doc_id: agent_doc_id.clone(),
+                relation: "workspace_selected_by",
+                target: super::super::relationships::entity_set_target(
+                    "configuration",
+                    callback_doc_id,
+                    "reader",
+                )?,
+                authority: Authority::DocumentUpdate,
+            },
+            OwnerStagedChange::PairingReader {
+                observation,
+                doc_id,
+                reason,
+                reader_did,
+            } => Self {
+                collection: observation.collection(),
+                doc_id: doc_id.clone(),
+                relation: reader_relation(*reason),
+                target: actor(reader_did)?,
+                authority: Authority::PairingNode,
+            },
+        })
+    }
+}
+
 impl ConfigApplyTxn<'_> {
-    /// Stage an owner-managed actor relation (`Identity.OwnerStaged.outcome`)
-    /// for a requester that may update the document.
-    pub(crate) async fn change_owner_staged_actor_relationship(
+    /// Request one owner-staged change (`Identity.OwnerStaged.request`) as
+    /// this transaction's actor. An embedded transaction decides it in this
+    /// transaction. Over HTTP a revocation is decided by the runtime's route
+    /// now, before this transaction commits, and a grant after it commits.
+    pub async fn request_owner_staged(
         &self,
-        collection: &str,
-        doc_id: &str,
-        relation: &str,
-        target: &identity::Did,
-        delete: bool,
+        change: &OwnerStagedChange,
+        grant: bool,
     ) -> Result<()> {
-        self.change_owner_staged(
-            collection,
-            doc_id,
-            relation,
-            target.as_str(),
-            delete,
-            Authority::DocumentUpdate,
-        )
-        .await
+        let staged = StagedRelation::of(change)?;
+        match &self.backend {
+            TxnBackend::Embedded { .. } if !self.has_pack_interpreter() => {
+                self.change_owner_staged(
+                    staged.collection,
+                    &staged.doc_id,
+                    staged.relation,
+                    &staged.target,
+                    !grant,
+                    staged.authority,
+                )
+                .await
+            }
+            TxnBackend::Http { endpoint, .. } if !endpoint.replays_pack() => {
+                if grant {
+                    self.queue_relationship_grant(ConfigRelationshipGrant::OwnerStaged {
+                        change: change.clone(),
+                    })
+                } else {
+                    super::super::owner_staged_route::request(endpoint, change, false).await
+                }
+            }
+            // A hosted pack's relationship changes are replayed through its
+            // interpreter on the runtime, which native ACP decides as the
+            // requester; pairing readers are never pack relationships.
+            _ if staged.authority == Authority::PairingNode => {
+                Err(ConfigClientError::LocalAccessRequired)
+            }
+            _ => {
+                self.change_document_relationship(
+                    staged.collection,
+                    &staged.doc_id,
+                    staged.relation,
+                    &staged.target,
+                    !grant,
+                )
+                .await
+            }
+        }
     }
 
-    /// Stage an owner-managed relation to a native entity set for a requester
-    /// that may update the document.
-    pub(crate) async fn change_owner_staged_entity_set_relationship(
-        &self,
-        collection: &str,
-        doc_id: &str,
-        relation: &str,
-        (target_resource, target_doc_id, target_relation): (&str, &str, &str),
-        delete: bool,
-    ) -> Result<()> {
-        let target = super::super::relationships::entity_set_target(
-            target_resource,
-            target_doc_id,
-            target_relation,
-        )?;
-        self.change_owner_staged(
-            collection,
-            doc_id,
-            relation,
-            &target,
-            delete,
-            Authority::DocumentUpdate,
-        )
-        .await
-    }
-
-    /// Stage a pairing reader for a requester that may update the runtime's
-    /// own Node (`Identity.OwnerStaged.runtimeNode`). Only a pairing
-    /// observation the runtime owns is staged.
-    pub(in crate::store::config_client) async fn change_owner_staged_pairing_reader(
-        &self,
-        observation: PairingObservation,
-        doc_id: &str,
-        reason: PairingReadReason,
-        reader: &identity::Did,
-        delete: bool,
-    ) -> Result<()> {
-        self.change_owner_staged(
-            observation.collection(),
-            doc_id,
-            reader_relation(reason),
-            reader.as_str(),
-            delete,
-            Authority::PairingNode,
-        )
-        .await
-    }
-
-    async fn change_owner_staged(
+    pub(super) async fn change_owner_staged(
         &self,
         collection: &str,
         doc_id: &str,
@@ -115,14 +172,6 @@ impl ConfigApplyTxn<'_> {
         authority: Authority,
     ) -> Result<()> {
         crate::store::graphql::validate_collection_identifier(collection)?;
-        if self.has_pack_interpreter()
-            || (authority == Authority::DocumentUpdate
-                && matches!(self.backend, TxnBackend::Http { .. }))
-        {
-            return self
-                .change_document_relationship(collection, doc_id, relation, target, delete)
-                .await;
-        }
         let refused = |kind: fn(String, String) -> ConfigClientError| {
             Err(kind(collection.to_owned(), doc_id.to_owned()))
         };
@@ -328,8 +377,8 @@ impl ConfigApplyTxn<'_> {
 impl ConfigAccess {
     /// Begin a transaction as the non-runtime client this access names, for
     /// an operation the runtime authenticated from that client's signed
-    /// command. Only the pairing-reader decision runs in it.
-    pub(in crate::store::config_client) async fn transact_verified_client_pairing_reader<'a, F>(
+    /// command. Only the owner-staged decision runs in it.
+    pub(in crate::store::config_client) async fn transact_verified_client_owner_staged<'a, F>(
         &'a self,
         operation: &'static str,
         callback: F,
@@ -368,6 +417,23 @@ impl ConfigAccess {
         )
         .await
         .map(expect_committed)
+    }
+
+    /// [`ConfigAccess::request_owner_staged`] for the client this embedded
+    /// access names, whose signed command the runtime has authenticated. The
+    /// runtime holds no key for that client, so the transaction carries the
+    /// client's DID without a signer; the change is still decided by the same
+    /// `authorized` and owner checks, as that client.
+    pub(crate) async fn request_verified_client_owner_staged(
+        &self,
+        change: &OwnerStagedChange,
+        grant: bool,
+    ) -> Result<()> {
+        self.transact_verified_client_owner_staged(
+            "config.request_verified_client_owner_staged",
+            |txn| Box::pin(async move { txn.request_owner_staged(change, grant).await }),
+        )
+        .await
     }
 }
 

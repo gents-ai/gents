@@ -95,10 +95,9 @@ pub(super) async fn pairing_reader_targets(args: P2pAccessArgs) -> Result<()> {
 }
 
 pub(super) async fn pairing_reader(args: P2pPairingsReaderArgs, grant: bool) -> Result<()> {
-    use gents::store::config_client::{ConfigAccess, PairingObservation, PairingReadReason};
+    use gents::store::config_client::{PairingObservation, PairingReadReason};
 
-    let (access, home_dir) =
-        resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
+    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let observation = match args.observation {
         PairingObservationArg::Desired => PairingObservation::Desired,
         PairingObservationArg::Applied => PairingObservation::Applied,
@@ -108,28 +107,9 @@ pub(super) async fn pairing_reader(args: P2pPairingsReaderArgs, grant: bool) -> 
         PairingReadReasonArg::ToolView => PairingReadReason::ToolView,
     };
     let agent = identity::Did::new(args.agent_did.clone())?;
-    match &access {
-        ConfigAccess::Graphql(endpoint) => {
-            let identity = crate::load_client_identity().await?;
-            let node_did = crate::resolve_node_did(Some(&home_dir), None)?;
-            request_pairing_reader(
-                &identity,
-                endpoint,
-                &node_did,
-                observation,
-                &args.doc_id,
-                reason,
-                &agent,
-                grant,
-            )
-            .await?;
-        }
-        ConfigAccess::Local(_) => {
-            access
-                .set_pairing_reader(observation, &args.doc_id, reason, &agent, grant)
-                .await?;
-        }
-    }
+    access
+        .set_pairing_reader(observation, &args.doc_id, reason, &agent, grant)
+        .await?;
     print_json(&json!({
         "collection": observation.collection(),
         "doc_id": args.doc_id,
@@ -137,103 +117,6 @@ pub(super) async fn pairing_reader(args: P2pPairingsReaderArgs, grant: bool) -> 
         "reason": reason.as_str(),
         "granted": grant,
     }))
-}
-
-/// Ask the live runtime to decide this client's pairing reader change in its
-/// own embedded transaction (Lean `pairing_outcome_is_transport_independent`).
-/// A refusal is the same `ConfigClientError` the embedded path returns.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "each argument is one signed field of the pairing reader command"
-)]
-pub(crate) async fn request_pairing_reader(
-    identity: &dyn gents::NodeIdentity,
-    graphql: &gents::store::config_client::GraphqlEndpoint,
-    node_did: &str,
-    observation: gents::store::config_client::PairingObservation,
-    doc_id: &str,
-    reason: gents::store::config_client::PairingReadReason,
-    reader: &identity::Did,
-    grant: bool,
-) -> Result<()> {
-    use gents::store::config_client::ConfigClientError;
-    use gents_protocol::pairing_reader::{
-        PairingReaderCommand, PairingReaderRefusal, PAIRING_READER_COMMAND_VERSION,
-        PAIRING_READER_PATH,
-    };
-
-    anyhow::ensure!(
-        gents::store::config_client::ConfigAccess::Graphql(graphql.clone())
-            .actor_did()
-            .as_deref()
-            == Some(identity.did()),
-        "pairing reader request actor does not match its signer"
-    );
-    let mut command = PairingReaderCommand {
-        version: PAIRING_READER_COMMAND_VERSION,
-        node_did: node_did.to_owned(),
-        observation,
-        doc_id: doc_id.to_owned(),
-        reason,
-        reader_did: reader.as_str().to_owned(),
-        grant,
-        signer_did: identity.did().to_owned(),
-        issued_at: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        nonce: uuid::Uuid::new_v4().simple().to_string(),
-        sig: Vec::new(),
-    };
-    command.sig = identity
-        .sign(&command.signing_payload())
-        .await
-        .context("signing the pairing reader command")?;
-    let mut url = reqwest::Url::parse(graphql.url()).context("parsing runtime GraphQL endpoint")?;
-    url.set_path(PAIRING_READER_PATH);
-    url.set_query(None);
-    url.set_fragment(None);
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(30))
-        .build()?;
-    let response = graphql
-        .authorize(client.post(url))?
-        .json(&command)
-        .send()
-        .await
-        .context("asking the runtime to change a pairing reader")?;
-    let status = response.status();
-    if status.is_success() {
-        return Ok(());
-    }
-    let body: Value = response.json().await.unwrap_or_default();
-    let refused = |kind: fn(String, String) -> ConfigClientError| {
-        kind(observation.collection().to_owned(), doc_id.to_owned())
-    };
-    match serde_json::from_value::<PairingReaderRefusal>(body["code"].clone()) {
-        Ok(PairingReaderRefusal::Denied) => {
-            Err(refused(
-                |collection, doc_id| ConfigClientError::OwnerStagedRelationshipDenied {
-                    collection,
-                    doc_id,
-                },
-            )
-            .into())
-        }
-        Ok(PairingReaderRefusal::Unmanaged) => {
-            Err(refused(
-                |collection, doc_id| ConfigClientError::OwnerStagedRelationshipUnmanaged {
-                    collection,
-                    doc_id,
-                },
-            )
-            .into())
-        }
-        Err(_) => anyhow::bail!(
-            "runtime refused the pairing reader change ({status}): {}",
-            body.get("error")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown error")
-        ),
-    }
 }
 
 pub(super) async fn p2p_pairings_list(args: P2pPairingsListArgs) -> Result<()> {

@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use crate::store::config_client::{
-    ConfigAccess, ConfigApplyTxn, ConfigClientError, GraphqlEndpoint, PairingObservation,
-    PairingReadReason,
+    ConfigAccess, ConfigApplyTxn, ConfigClientError, GraphqlEndpoint, OwnerStagedChange,
+    PairingObservation, PairingReadReason,
 };
 
 const POLICY: &str = "name: OwnerStaged\nresources:\n  - name: rows\n    relations:\n      - name: writer\n      - name: editor\n    permissions:\n      - name: read\n        expr: writer + editor\n      - name: update\n        expr: editor\n      - name: delete\n";
@@ -173,12 +173,13 @@ async fn owner_staged_relationships_follow_the_document_owner() -> anyhow::Resul
         );
         let txn = staging(key, did).await?;
         let staged = txn
-            .change_owner_staged_actor_relationship(
+            .change_owner_staged(
                 "OwnerStagedRow",
                 &doc,
                 "writer",
-                &target_did,
+                target_did.as_str(),
                 false,
+                super::Authority::DocumentUpdate,
             )
             .await;
         let expected = case["staged"].as_bool().unwrap();
@@ -203,12 +204,13 @@ async fn owner_staged_relationships_follow_the_document_owner() -> anyhow::Resul
         assert_eq!(visible().await? == 1, expected, "{case}");
         if expected {
             let txn = staging(&user, user_did.clone()).await?;
-            txn.change_owner_staged_actor_relationship(
+            txn.change_owner_staged(
                 "OwnerStagedRow",
                 &doc,
                 "writer",
-                &target_did,
+                target_did.as_str(),
                 true,
+                super::Authority::DocumentUpdate,
             )
             .await?;
             txn.commit().await?;
@@ -230,12 +232,13 @@ async fn owner_staged_relationships_follow_the_document_owner() -> anyhow::Resul
     for row in [&doc, &missing] {
         let txn = staging(&outsider, identity::Did::new(outsider.did())?).await?;
         let refused = txn
-            .change_owner_staged_actor_relationship(
+            .change_owner_staged(
                 "OwnerStagedRow",
                 row,
                 "writer",
-                &target_did,
+                target_did.as_str(),
                 false,
+                super::Authority::DocumentUpdate,
             )
             .await;
         assert!(
@@ -475,31 +478,25 @@ async fn pairing_readers_are_staged_only_on_runtime_owned_observations() -> anyh
             .await?;
             txn.commit().await?;
         }
-        // The runtime's pairing-reader route runs the same request as the
+        // The runtime's owner-staged route runs the same request as the
         // authenticated client, without its key
-        // (`pairing_outcome_is_transport_independent`).
+        // (`outcome_is_transport_independent`).
         let routed_access = ConfigAccess::local_as(node.clone(), did(key.did())?);
+        let reader = |doc: &str| OwnerStagedChange::PairingReader {
+            observation: PairingObservation::Desired,
+            doc_id: doc.to_owned(),
+            reason: PairingReadReason::RouteAdmission,
+            reader_did: target_did.to_string(),
+        };
         let routed = routed_access
-            .set_verified_client_pairing_reader(
-                PairingObservation::Desired,
-                doc,
-                PairingReadReason::RouteAdmission,
-                &target_did,
-                true,
-            )
+            .request_verified_client_owner_staged(&reader(doc), true)
             .await;
         assert_eq!(case["http"], case["outcome"], "{case}");
         assert_modeled_outcome(case, "http", doc, &routed);
         assert_eq!(readable().await? == vec![doc.clone()], expected, "{case}");
         if expected {
             routed_access
-                .set_verified_client_pairing_reader(
-                    PairingObservation::Desired,
-                    doc,
-                    PairingReadReason::RouteAdmission,
-                    &target_did,
-                    false,
-                )
+                .request_verified_client_owner_staged(&reader(doc), false)
                 .await?;
             assert!(readable().await?.is_empty(), "{case}");
         }
@@ -507,11 +504,13 @@ async fn pairing_readers_are_staged_only_on_runtime_owned_observations() -> anyh
     // A route transaction never runs as the runtime itself.
     assert!(matches!(
         ConfigAccess::local_as(node.clone(), did(runtime.did())?)
-            .set_verified_client_pairing_reader(
-                PairingObservation::Desired,
-                &route,
-                PairingReadReason::RouteAdmission,
-                &target_did,
+            .request_verified_client_owner_staged(
+                &OwnerStagedChange::PairingReader {
+                    observation: PairingObservation::Desired,
+                    doc_id: route.clone(),
+                    reason: PairingReadReason::RouteAdmission,
+                    reader_did: target_did.to_string(),
+                },
                 true,
             )
             .await,

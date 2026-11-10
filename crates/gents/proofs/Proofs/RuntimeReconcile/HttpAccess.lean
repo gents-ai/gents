@@ -84,15 +84,15 @@ theorem anonymous_bootstrap_never_reads_as_node (authorityMatches : Bool) :
 
 /-! ### Signed client commands
 
-`/accounts/usage/read` and `/p2p/pairings/reader` are authenticated twice:
+`/accounts/usage/read` and `/config/owner-staged` are authenticated twice:
 DefraDB's bearer extractor names the caller, and the command names its signer
 and carries that signer's signature over its canonical payload. The runtime
 checks that the two DIDs are the same, that the command is current, that the
 signature verifies and that its nonce was not consumed before, and only then
 acts for that signer. The served node's principal never substitutes for it:
-a usage read is answered from the runtime's own observations, and a pairing
-reader change is decided by `Identity.OwnerStaged.outcome` with the signer as
-the requesting actor. -/
+a usage read is answered from the runtime's own observations, and an
+owner-staged change is decided by `Identity.OwnerStaged.outcome` with the
+signer as the requesting actor. -/
 
 inductive CommandDecision where
   | misdirected

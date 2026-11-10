@@ -756,7 +756,13 @@ async fn resolve_config_access_inner(
     )
     .with_client_signing_capability(client_identity.client_signing_capability()?)?
     .with_client_signed_agent_creates();
-    let http = Some(gents::defra_node::HttpConfig::with_listener(listener)?);
+    // Owner-staged relationship changes of those writes are decided by this
+    // node's own route, as the serving runtime decides them.
+    let owner_staged = gents::store::config_client::OwnerStagedRoute::new();
+    let http = Some(
+        gents::defra_node::HttpConfig::with_listener(listener)?
+            .with_extra_routes(owner_staged.router()),
+    );
     let (node, _admission) = match plugin_guard {
         Some(guard) => {
             gents::runtime::node_start::start_node_under_plugin_store(
@@ -785,7 +791,7 @@ async fn resolve_config_access_inner(
     };
     let migration_node = node.clone();
     let access = ConfigAccess::claimed_local_as(
-        node,
+        node.clone(),
         claim,
         identity::Did::new(client_identity.did().to_owned())?,
     )?
@@ -797,6 +803,7 @@ async fn resolve_config_access_inner(
             gents::store::local::storage_backend::classify_store_error(error, &data_dir)
         })?;
     gents::store::local::store_key::upgrade::finish(&data_dir)?;
+    owner_staged.serve(&node);
     Ok((access, home_dir, local_endpoint))
 }
 

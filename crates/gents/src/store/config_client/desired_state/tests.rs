@@ -2227,7 +2227,14 @@ async fn replacement_judges_the_count_field_of_the_event_source_update_payload()
 
 #[tokio::test]
 async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection() -> Result<()> {
-    let node = Arc::new(crate::test_support::node_builder().build().await?);
+    // Node ACP as in production: a rebound cursor's writer is staged by its
+    // owner, whose authority native decides with the node gate.
+    let node = Arc::new(
+        crate::test_support::node_builder()
+            .with_node_acp_enabled()
+            .build()
+            .await?,
+    );
     crate::ensure_runtime_schemas(&node).await?;
     node.add_collection(
         "type PlainPing { message: String } type HandoffPing { handoff_id: String message: String } type NumberedPing { handoff_id: Int }",

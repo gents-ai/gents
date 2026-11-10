@@ -256,12 +256,12 @@ async fn rebind_cursor(
         )
         .await?
         {
-            txn.change_owner_staged_actor_relationship(
-                "EventSourceCursor",
-                &cursor.doc_id,
-                "writer",
-                &identity::Did::new(agent)?,
-                true,
+            txn.request_owner_staged(
+                &gents_protocol::owner_staged::OwnerStagedChange::EventCursorWriter {
+                    cursor_doc_id: cursor.doc_id.clone(),
+                    agent_did: identity::Did::new(agent)?.to_string(),
+                },
+                false,
             )
             .await?;
         }
@@ -272,12 +272,12 @@ async fn rebind_cursor(
         )
         .await?
         {
-            txn.change_owner_staged_actor_relationship(
-                "EventSourceCursor",
-                &cursor.doc_id,
-                "writer",
-                &identity::Did::new(agent)?,
-                false,
+            txn.request_owner_staged(
+                &gents_protocol::owner_staged::OwnerStagedChange::EventCursorWriter {
+                    cursor_doc_id: cursor.doc_id.clone(),
+                    agent_did: identity::Did::new(agent)?.to_string(),
+                },
+                true,
             )
             .await?;
         }

@@ -35,12 +35,12 @@ async fn change(
 ) -> Result<()> {
     for reader in readers {
         let reader = identity::Did::new(reader)?;
-        txn.change_owner_staged_actor_relationship(
-            COLLECTION.graphql_type(),
-            doc,
-            "reader",
-            &reader,
-            !add,
+        txn.request_owner_staged(
+            &gents_protocol::owner_staged::OwnerStagedChange::PlacementReader {
+                placement_doc_id: doc.to_owned(),
+                reader_did: reader.to_string(),
+            },
+            add,
         )
         .await?;
     }

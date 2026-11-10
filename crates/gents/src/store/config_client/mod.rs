@@ -52,6 +52,7 @@ mod node_deferred_operation;
 mod node_document_publication;
 mod node_permissions;
 pub(crate) mod node_readiness;
+mod owner_staged_route;
 mod pack_effect;
 mod pairing_reader;
 #[cfg(test)]
@@ -125,6 +126,7 @@ pub(crate) use desired_state::validate::{validate_desired_state_plan, OutcomeSou
 pub(crate) use desired_state::{
     apply_desired_state_plan_with_semantics, configuration_node_doc, ConfigurationNodeBinding,
 };
+pub use gents_protocol::owner_staged::OwnerStagedChange;
 pub use inference_backend::{list_inference_backends_in_txn, load_inference_backend_in_txn};
 pub(crate) use node_deferred_operation::recover_deferred_node_operations;
 pub use node_deferred_operation::{
@@ -132,6 +134,9 @@ pub use node_deferred_operation::{
 };
 pub(crate) use node_document_publication::{
     publish_node_child_in_txn, publish_node_managers_in_txn, publish_secret_configuration_in_txn,
+};
+pub use owner_staged_route::{
+    consume_signed_command_nonce, OwnerStagedRoute, SignedCommandNonceError,
 };
 pub use pairing_reader::{PairingObservation, PairingReadReason};
 pub(crate) use schema_contract::collection_schema_contract_digest;
@@ -284,17 +289,17 @@ impl GraphqlEndpoint {
         Ok(self)
     }
 
+    pub(crate) fn replays_pack(&self) -> bool {
+        self.pack_replay.is_some()
+    }
+
     pub fn is_anonymous(&self) -> bool {
         self.principal_did.is_none() && self.delegated_authorization.is_none()
     }
 
-    pub fn authorization(&self) -> Result<Option<String>> {
-        if let Some(value) = &self.delegated_authorization {
-            return Ok(Some(value.to_str()?.to_owned()));
-        }
-        let Some(did) = self.principal_did.as_deref() else {
-            return Ok(None);
-        };
+    /// The endpoint authority a request to it carries in `Host`: DefraDB's
+    /// token audience, with the port only when it is not the scheme default.
+    pub(crate) fn audience(&self) -> Result<String> {
         let url = reqwest::Url::parse(self.url.trim()).map_err(|source| {
             ConfigClientError::ParseEndpoint {
                 url: self.url.clone(),
@@ -306,11 +311,20 @@ impl GraphqlEndpoint {
             .ok_or_else(|| ConfigClientError::EndpointHost {
                 url: self.url.clone(),
             })?;
-        // The DefraDB token audience is the `Host` header, which carries the port only when it is not the scheme default.
-        let audience = match url.port() {
+        Ok(match url.port() {
             Some(port) => format!("{host}:{port}"),
             None => host.to_string(),
+        })
+    }
+
+    pub fn authorization(&self) -> Result<Option<String>> {
+        if let Some(value) = &self.delegated_authorization {
+            return Ok(Some(value.to_str()?.to_owned()));
+        }
+        let Some(did) = self.principal_did.as_deref() else {
+            return Ok(None);
         };
+        let audience = self.audience()?;
         let authorization = if let Some(capability) = &self.client_signing_capability {
             crate::store::identity::defradb_bearer_authorization_with_config(
                 did,

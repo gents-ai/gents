@@ -80,22 +80,22 @@ pub(super) async fn apply(txn: &ConfigApplyTxn<'_>, before: Capture) -> Result<(
     for ((owner, id), old) in before.0 {
         let new = links(txn, &owner, &id, true).await?;
         for (agent, callback) in old.difference(&new) {
-            txn.change_owner_staged_entity_set_relationship(
-                "Agent",
-                agent,
-                "workspace_selected_by",
-                ("configuration", callback, "reader"),
-                true,
+            txn.request_owner_staged(
+                &gents_protocol::owner_staged::OwnerStagedChange::WorkspaceSelection {
+                    agent_doc_id: agent.clone(),
+                    callback_doc_id: callback.clone(),
+                },
+                false,
             )
             .await?;
         }
         for (agent, callback) in new.difference(&old) {
-            txn.change_owner_staged_entity_set_relationship(
-                "Agent",
-                agent,
-                "workspace_selected_by",
-                ("configuration", callback, "reader"),
-                false,
+            txn.request_owner_staged(
+                &gents_protocol::owner_staged::OwnerStagedChange::WorkspaceSelection {
+                    agent_doc_id: agent.clone(),
+                    callback_doc_id: callback.clone(),
+                },
+                true,
             )
             .await?;
         }
@@ -170,16 +170,23 @@ mod tests {
         let creator = crate::store::identity::resolve_agent_identity(&runtime, &creator_binding)?;
         let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
         let address = listener.local_addr()?;
+        // The client's selection is decided by the node's owner-staged route,
+        // as on a serving runtime.
+        let owner_staged = crate::store::config_client::OwnerStagedRoute::new();
         let node = Arc::new(
             defra_node::Node::builder()
                 .enable_signing()
                 .with_node_identity_did(runtime.did())
                 .with_node_acp_owner(user.did().to_owned())
-                .with_http(defra_node::HttpConfig::with_listener(listener)?)
+                .with_http(
+                    defra_node::HttpConfig::with_listener(listener)?
+                        .with_extra_routes(owner_staged.router()),
+                )
                 .build()
                 .await?,
         );
         crate::ensure_runtime_schemas(&node).await?;
+        owner_staged.serve(&node);
         let context =
             defra_core::RequestContext::default().with_identity(Some(user.did().to_owned()));
         for key in [creator.as_ref(), &other as &dyn NodeIdentity] {
@@ -191,6 +198,15 @@ mod tests {
                 node.add_nac_actor_relationship_as(&context, permission.as_str(), key.did())
                     .await?;
             }
+        }
+        // The route consumes each command's nonce as the runtime.
+        for permission in [
+            acp::nac::NodePermission::DocumentRead,
+            acp::nac::NodePermission::DocumentDelete,
+            acp::nac::NodePermission::CollectionGet,
+        ] {
+            node.add_nac_actor_relationship_as(&context, permission.as_str(), runtime.did())
+                .await?;
         }
         let url = format!("http://{address}/api/v0/graphql");
         let access = client(&url, &user)?;
