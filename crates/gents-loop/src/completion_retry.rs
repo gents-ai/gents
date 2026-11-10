@@ -150,7 +150,7 @@ impl CompletionRetryPolicy {
                 Duration::from_secs(2),
             ],
             max_resample: 0,
-            max_empty_resample: 0,
+            max_empty_resample: 3,
             allow_repair: false,
             account_hops: 0,
         }
