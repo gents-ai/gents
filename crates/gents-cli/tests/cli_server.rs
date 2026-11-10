@@ -821,6 +821,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         run_cli_text(
             &register_home,
             &[
+                "config",
                 "mcp",
                 "register",
                 "--graphql",

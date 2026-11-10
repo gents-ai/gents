@@ -400,7 +400,7 @@ pub(crate) fn control_lines(
         Ok(JobControlOutcome::Queued { intent_doc_id }) => Ok(vec![
             format!("{verb} requested"),
             format!("control: {intent_doc_id}"),
-            format!("next: gents job show {}", view.address),
+            format!("next: gents automation job show {}", view.address),
         ]),
         Ok(JobControlOutcome::Applied {
             state,

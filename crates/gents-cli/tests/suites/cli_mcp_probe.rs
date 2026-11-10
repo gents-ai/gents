@@ -228,6 +228,7 @@ fn mcp_register_rejects_unsupported_legacy_version() -> Result<()> {
     let stderr = run_cli_failure_stderr(
         tempdir.path(),
         &[
+            "config",
             "mcp",
             "register",
             "service",
@@ -250,6 +251,7 @@ async fn mcp_register_rejects_an_unavailable_explicit_node() -> Result<()> {
     let output = fixture
         .run_for_node(
             &[
+                "config",
                 "mcp",
                 "register",
                 "--endpoint",
@@ -289,6 +291,7 @@ async fn mcp_registration_requires_client_signed_transport_when_offline() -> Res
         run_cli_failure_stderr_with_env(
             &cwd,
             &[
+                "config",
                 "mcp",
                 "register",
                 "--home",

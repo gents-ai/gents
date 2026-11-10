@@ -8,12 +8,12 @@ import { renderIn, testApp } from "./app-fixture";
 import { deployment } from "./config-panel-wiring/fixtures";
 
 const REFUSAL =
-  "cannot publish a plugin pin through GraphQL because the commit outcome may be unknown; stop the runtime serving the owning node home, then run `gents pack wire demo/hello_plugin --agent did:key:z6Mk:default --home <node-home>` without --graphql";
+  "cannot publish a plugin pin through GraphQL because the commit outcome may be unknown; stop the runtime serving the owning node home, then run `gents config pack wire demo/hello_plugin --agent did:key:z6Mk:default --home <node-home>` without --graphql";
 
 describe("enabling a pack's plugin for an agent", () => {
   it("reads the running node's refusal for its command", () => {
     expect(refusedWhileRunning(REFUSAL)).toBe(
-      "gents pack wire demo/hello_plugin --agent did:key:z6Mk:default --home <node-home>",
+      "gents config pack wire demo/hello_plugin --agent did:key:z6Mk:default --home <node-home>",
     );
     expect(refusedWhileRunning("offline")).toBeUndefined();
   });
@@ -47,7 +47,7 @@ describe("enabling a pack's plugin for an agent", () => {
         /can’t be enabled from the app while this node is running/,
       ),
     ).toBeInTheDocument();
-    expect(screen.getByText(/gents pack wire 'demo\/hello_plugin'/)).toHaveTextContent(
+    expect(screen.getByText(/gents config pack wire 'demo\/hello_plugin'/)).toHaveTextContent(
       "--targets-from 'demo/targets'",
     );
     expect(screen.queryByText(/through GraphQL/)).toBeNull();

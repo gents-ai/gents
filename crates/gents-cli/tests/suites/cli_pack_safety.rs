@@ -340,7 +340,7 @@ async fn plugin_only_pack_installs_through_reviewed_user_session() -> Result<()>
     let outcome = tokio::task::spawn_blocking(move || {
         run_cli_json_with_env(
             &client_home,
-            &["pack", "install", &pack_arg, "--home", &node_home],
+            &["config", "pack", "install", &pack_arg, "--home", &node_home],
             &[("GENTS_DESKTOP_HOME", &install_user_home)],
         )
     })

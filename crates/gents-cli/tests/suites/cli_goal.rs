@@ -39,6 +39,8 @@ async fn goal_configuration_rejects_implicit_resume_and_clear_is_durable() -> Re
     run_cli_json(
         &home_dir,
         &[
+            "utils",
+            "debug",
             "request",
             "submit",
             "--graphql",

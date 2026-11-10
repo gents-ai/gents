@@ -660,12 +660,12 @@ fn readme(names: &Names, template: Template) -> String {
     };
     format!(
         "# {title}\n\n{title} {what}.\n\n\
-         ## Installation\n\n```sh\ngents pack install ./{name}\n```\n\n\
+         ## Installation\n\n```sh\ngents config pack install ./{name}\n```\n\n\
          ## Bindings and prerequisites\n\nBind the `worker` inference slot when installing, if the pack declares one.\n\n\
          ## Authority\n\nNo host files, commands or network access.\n\n\
          ## Inputs and outputs\n\n{io}\n\n\
          ## Completion and failure\n\nDescribe what finishing and failing look like.\n\n\
-         ## Validation\n\n```sh\ngents pack check ./{name}\n```\n\n\
+         ## Validation\n\n```sh\ngents config pack check ./{name}\n```\n\n\
          ## Operational history\n\nNone yet.\n",
         title = names.title,
         name = names.name,

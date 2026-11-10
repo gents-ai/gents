@@ -20,7 +20,7 @@ fn write_note_sdl(dir: &Path) -> Result<PathBuf> {
 }
 
 fn apply_note_schema(home_dir: &Path, graphql: &str, sdl: &str) -> Result<()> {
-    run_cli_json(home_dir, &["schema", "apply", "--graphql", graphql, sdl])?;
+    run_cli_json(home_dir, &["utils", "data", "schema", "apply", "--graphql", graphql, sdl])?;
     Ok(())
 }
 
@@ -165,6 +165,8 @@ async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation
     let canonical = run_cli_failure_stderr(
         &home_dir,
         &[
+            "utils",
+            "data",
             "document",
             "create",
             "Goal",
@@ -191,6 +193,8 @@ async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation
     let offline = run_cli_json(
         &home_dir,
         &[
+            "utils",
+            "data",
             "document",
             "create",
             "CliDocumentNote",
@@ -206,6 +210,8 @@ async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation
     let rows = run_cli_json(
         &home_dir,
         &[
+            "utils",
+            "data",
             "query",
             "--collection",
             "CliDocumentNote",
@@ -220,6 +226,8 @@ async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation
     let offline_unknown = run_cli_failure_stderr(
         &home_dir,
         &[
+            "utils",
+            "data",
             "document",
             "create",
             "CliDocumentNote",

@@ -303,7 +303,7 @@ impl HostCeiling {
             format!(
                 "runtime status for node {} omits its tool ceiling: only the served Node and its \
                  native administrators read private status, and this client key is neither; run \
-                 `gents tools explain` with the enrolled client key of that node",
+                 `gents config tools explain` with the enrolled client key of that node",
                 field("node_did").unwrap_or_else(|| "(unknown)".to_owned())
             )
         })?;
