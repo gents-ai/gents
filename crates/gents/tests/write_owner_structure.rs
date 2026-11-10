@@ -2796,3 +2796,93 @@ fn layer_edges_count_upward_and_peer_references_outside_tests() {
     assert!(!layer_edge_violates("eval", "store"));
     assert!(!layer_edge_violates("request", "agent"));
 }
+
+/// `crates/gents/src/store` is the dependency leaf of this crate: its
+/// production sources name `crate::store` and external crates, so the module
+/// can become its own crate. Entries are (crate-root name, references,
+/// reason) for root utilities that leave with it; the list only shrinks.
+#[rustfmt::skip]
+const STORE_CRATE_ROOT_ALLOWLIST: &[(&str, usize, &str)] = &[
+    ("drop_cleanup", 2, "runtime-bound drop cleanup owner; names no other module of this crate"),
+];
+
+fn store_outward_references(syntax: &syn::File) -> BTreeMap<String, usize> {
+    let mut visitor = CrateTopVisitor::default();
+    visitor.visit_file(syntax);
+    let mut references = BTreeMap::new();
+    for target in visitor.targets {
+        if target != "store" {
+            *references.entry(target).or_default() += 1;
+        }
+    }
+    references
+}
+
+#[test]
+fn store_names_no_sibling_module() {
+    let root = repo_root();
+    let mut actual = BTreeMap::<String, usize>::new();
+    let mut sites = BTreeMap::<String, BTreeSet<String>>::new();
+    for (relative, syntax) in parse_production(&root, production_sources(&root)) {
+        if source_top(&relative) != Some("store") {
+            continue;
+        }
+        for (target, count) in store_outward_references(&syntax) {
+            *actual.entry(target.clone()).or_default() += count;
+            sites.entry(target).or_default().insert(relative.clone());
+        }
+    }
+    let allowed = STORE_CRATE_ROOT_ALLOWLIST
+        .iter()
+        .map(|(target, count, _)| (target.to_string(), *count))
+        .collect::<BTreeMap<_, _>>();
+    let mut violations = Vec::new();
+    for target in allowed.keys().chain(actual.keys()).collect::<BTreeSet<_>>() {
+        let found = actual.get(target).copied().unwrap_or_default();
+        let files = sites
+            .get(target)
+            .map(|files| files.iter().cloned().collect::<Vec<_>>().join(", "))
+            .unwrap_or_default();
+        match allowed.get(target).copied() {
+            None => violations.push(format!(
+                "store -> crate::{target}: {found} reference(s) in {files}; move the document-aware code to its owner or name the item through crate::store"
+            )),
+            Some(limit) if found > limit => violations.push(format!(
+                "store -> crate::{target}: {found} references exceed the allowlisted {limit} ({files})"
+            )),
+            Some(limit) if found < limit => violations.push(format!(
+                "store -> crate::{target}: {found} references; lower the allowlist entry from {limit}"
+            )),
+            Some(_) => {}
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "store leaf ratchet failed:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn store_leaf_counts_crate_root_names_outside_tests() {
+    let syntax = syn::parse_file(
+        r#"
+        use crate::store::graphql::escape;
+        use crate::{documents::Task, Collection};
+        fn f() -> crate::store::Key { crate::drop_cleanup::current(); crate::Collection::Node }
+        #[cfg(test)]
+        mod tests { use crate::test_support::node; }
+        "#,
+    )
+    .expect("parse snippet");
+    assert_eq!(
+        store_outward_references(&syntax)
+            .into_iter()
+            .collect::<Vec<_>>(),
+        [
+            ("Collection".to_string(), 2),
+            ("documents".to_string(), 1),
+            ("drop_cleanup".to_string(), 1),
+        ]
+    );
+}
