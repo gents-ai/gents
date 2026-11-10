@@ -293,28 +293,27 @@ pub(super) async fn load_pack_install_config_with_dependencies(
     let (installation_doc_id, recorded) =
         super::installation::read_agent_bindings(access, &options.node_did, &coordinate).await?;
     let mut provisioned = PackAgentBindings::new();
-    for (index, slot) in slots.iter().enumerate() {
+    for slot in &slots {
         if recorded.contains_key(slot) {
             continue;
         }
         let original = match hosted {
             Some(_) => None,
-            None => live_original(
-                access,
-                &options.node_did,
-                &manifest.name,
-                slot,
-                &value["agents"][index],
-                environment,
-            )
-            .await?
-            .filter(|original| {
+            None => {
+                explicit_binding(access, &options.node_did, &coordinate, slot, environment).await?
+            }
+        };
+        if let Some(original) = &original {
+            anyhow::ensure!(
                 recorded
                     .values()
                     .chain(provisioned.values())
-                    .all(|bound| bound.agent_did != original.agent_did)
-            }),
-        };
+                    .all(|bound| bound.agent_did != original.agent_did),
+                "{} binds agent slot {slot:?} to {}, which another slot of this pack already holds",
+                agent_binding_variable(slot),
+                original.agent_did
+            );
+        }
         let binding = if let Some(original) = original {
             original
         } else if let Some(hosted) = hosted {
@@ -409,74 +408,78 @@ pub(super) async fn load_pack_install_config_with_dependencies(
     })
 }
 
-/// The live Agent an unbound slot stands for: the one Agent of this node whose
-/// name and Context are the template's once the slot is bound to it.
-/// Installing a pack on the node it was exported from binds the slot to that
-/// Agent instead of provisioning a second one; the document install then
-/// adopts it only if its content matches. An Agent another pack installed is
-/// never taken.
-async fn live_original(
+/// The install variable that binds the agent slot `slot` to an existing Agent
+/// of the node, by DID: the slot upper-cased, every other character an
+/// underscore, so it is a name `--var` and a shell environment both carry.
+pub fn agent_binding_variable(slot: &str) -> String {
+    let slot: String = slot
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("GENTS_PACK_BIND_AGENT_{slot}")
+}
+
+/// The existing Agent the installer bound `slot` to with
+/// [`agent_binding_variable`], or `None` when it named none and the pack
+/// provisions its own agent.
+///
+/// Maintainer decision (2026-11-10): a slot binds to an existing Agent only
+/// when the installer says so. Binding by matching display name let a pack
+/// that ships an agent named like one of the user's take that agent, and with
+/// `overwrite` replace its documents. A reinstall keeps the bindings its
+/// installation record holds, and `pack export` names these variables for the
+/// agents it was written from. An Agent another pack installed is never taken.
+async fn explicit_binding(
     access: &ConfigAccess,
     owner: &str,
     pack: &str,
     slot: &str,
-    template: &Value,
     environment: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<Option<AgentIdentityBinding>> {
-    let Some(display_name) = template.get("display_name").and_then(Value::as_str) else {
+    let variable = agent_binding_variable(slot);
+    let Some(agent_did) = environment(&variable)
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+    else {
         return Ok(None);
     };
     let response = access
         .execute(&format!(
-            r#"{{ Agent(filter: {{node_did: {{_eq: "{}"}}, display_name: {{_eq: "{}"}}}}) {{ agent_did creation_nonce context_id tags }} }}"#,
+            r#"{{ Agent(filter: {{node_did: {{_eq: "{}"}}, agent_did: {{_eq: "{}"}}}}) {{ agent_did creation_nonce tags }} }}"#,
             crate::store::graphql::escape_graphql_string(owner),
-            crate::store::graphql::escape_graphql_string(display_name),
+            crate::store::graphql::escape_graphql_string(&agent_did),
         ))
         .await?;
-    let mut originals = Vec::new();
-    for agent in response["data"]["Agent"].as_array().into_iter().flatten() {
-        let Some(agent_did) = agent["agent_did"].as_str() else {
-            continue;
-        };
-        let tags: Vec<String> = agent["tags"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|tag| tag.as_str().map(str::to_owned))
-            .collect();
-        if super::pack_origin_from_tags(&tags)?.is_some_and(|origin| origin != pack) {
-            continue;
-        }
-        let context = match template.get("context_id").and_then(Value::as_str) {
-            Some(context) => {
-                let bound = super::interpolate::interpolate_with(context, &|name| match name
-                    .strip_prefix(AGENT_DID_VARIABLE_PREFIX)
-                {
-                    Some(named) => (named == slot).then(|| agent_did.to_owned()),
-                    None if name == "GENTS_PACK_NODE_DID" => Some(owner.to_owned()),
-                    None => environment(name),
-                });
-                match bound {
-                    Ok(context) => Some(context),
-                    Err(_) => continue,
-                }
-            }
-            None => None,
-        };
-        if context.as_deref() == agent["context_id"].as_str() {
-            originals.push(AgentIdentityBinding {
-                agent_did: agent_did.to_owned(),
-                creation_nonce: agent["creation_nonce"]
-                    .as_str()
-                    .context("live agent has no creation nonce")?
-                    .to_owned(),
-            });
-        }
+    let agent = response["data"]["Agent"]
+        .as_array()
+        .and_then(|agents| agents.first())
+        .with_context(|| {
+            format!("{variable} binds agent slot {slot:?} to {agent_did}, which is not an Agent of this node the installer can read; omit the variable to have the pack make its own agent")
+        })?;
+    let tags: Vec<String> = agent["tags"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|tag| tag.as_str().map(str::to_owned))
+        .collect();
+    if let Some(origin) = super::pack_origin_from_tags(&tags)?.filter(|origin| *origin != pack) {
+        anyhow::bail!(
+            "{variable} binds agent slot {slot:?} to {agent_did}, which pack {origin} installed; a slot never takes another pack's agent"
+        );
     }
-    Ok(match originals.len() {
-        1 => originals.pop(),
-        _ => None,
-    })
+    Ok(Some(AgentIdentityBinding {
+        agent_did,
+        creation_nonce: agent["creation_nonce"]
+            .as_str()
+            .context("live agent has no creation nonce")?
+            .to_owned(),
+    }))
 }
 
 /// An offline view keeps agent templates as JSON; only the remaining document

@@ -41,7 +41,7 @@ async fn install(
     archive: &PackArchive,
     bindings: &BTreeMap<String, String>,
 ) -> anyhow::Result<InstallReport> {
-    install_in(db, user, access, archive, bindings, None).await
+    install_in(db, user, access, archive, bindings, None, &BTreeMap::new()).await
 }
 
 async fn install_in(
@@ -51,6 +51,7 @@ async fn install_in(
     archive: &PackArchive,
     bindings: &BTreeMap<String, String>,
     plugin_home: Option<&std::path::Path>,
+    variables: &BTreeMap<String, String>,
 ) -> anyhow::Result<InstallReport> {
     let runtime = db.node_identity.clone();
     let local = ConfigAccess::local_as(db.node.clone(), identity::Did::new(user.did()).unwrap());
@@ -61,7 +62,7 @@ async fn install_in(
         bindings,
         &[],
         plugin_home,
-        &|_| None,
+        &|name| variables.get(name).cloned(),
         runtime.as_ref(),
         &Default::default(),
     )
@@ -342,12 +343,46 @@ async fn a_live_app_exports_installs_on_a_second_node_and_is_adopted_where_it_ca
         inference_slot.clone(),
         format!("{}:inference", worker.agent_did),
     )]);
-    let adopted = install(
+    // The exported agent keeps the live agent's display name, and that is
+    // not a binding: prepared with no variable, the slot is a new agent of
+    // the pack's own, not the user's.
+    let local = ConfigAccess::local_as(
+        origin.node.clone(),
+        identity::Did::new(origin_user.did()).unwrap(),
+    );
+    let unbound = prepare_document_pack_archive_with_runtime(
+        &local,
+        origin.node_identity.did(),
+        &archive,
+        &origin_binding,
+        &[],
+        None,
+        &|_| None,
+        origin.node_identity.as_ref(),
+        &Default::default(),
+    )
+    .await
+    .unwrap();
+    assert_ne!(
+        unbound.agent_bindings[slot].agent_did, worker.agent_did,
+        "a shared display name does not bind the slot to the user's agent"
+    );
+
+    // With the variable the export names, the slot is the agent it was
+    // exported from, and the live originals become the pack's documents.
+    let bound = BTreeMap::from([(
+        crate::pack::agent_binding_variable(slot),
+        report.agents[slot].clone(),
+    )]);
+    assert_eq!(report.agents[slot], worker.agent_did);
+    let adopted = install_in(
         &origin,
         &origin_user,
         &origin_access,
         &archive,
         &origin_binding,
+        None,
+        &bound,
     )
     .await
     .unwrap();
@@ -374,12 +409,14 @@ async fn a_live_app_exports_installs_on_a_second_node_and_is_adopted_where_it_ca
         )],
     )
     .await;
-    let refused = install(
+    let refused = install_in(
         &origin,
         &origin_user,
         &origin_access,
         &archive,
         &origin_binding,
+        None,
+        &bound,
     )
     .await
     .unwrap_err();
@@ -749,6 +786,7 @@ async fn a_plugin_built_on_the_node_exports_as_the_packs_plugin_and_runs_where_i
         &archive,
         &BTreeMap::from([(slot.to_owned(), "profile".to_owned())]),
         Some(home.path()),
+        &BTreeMap::new(),
     )
     .await
     .unwrap();

@@ -9,7 +9,7 @@ pub(crate) use agent_bindings::{
 };
 pub mod archive;
 pub use agent_bindings::{
-    agent_did_variable, agent_slot_reference, load_pack_authoring_config,
+    agent_binding_variable, agent_did_variable, agent_slot_reference, load_pack_authoring_config,
     load_pack_install_config, AuthoredPackConfig, BoundPackConfig, PackAgentBindings,
     AGENT_SLOT_REFERENCE_PREFIX,
 };
