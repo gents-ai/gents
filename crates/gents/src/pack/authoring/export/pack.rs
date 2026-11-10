@@ -89,14 +89,19 @@ pub async fn export_pack(
             })
         })
         .await?;
-    let closure = close(node_did, &snapshot, selection)?;
-    let mut schemas = BTreeMap::new();
-    for collection in &closure.collections {
-        schemas.insert(
-            collection.clone(),
-            super::schema::collection_sdl(access, collection).await?,
-        );
+    let mut closure = close(node_did, &snapshot, selection)?;
+    let exported = super::schema::collection_schemas(access, &closure.collections).await?;
+    for (collection, via) in exported.pulled {
+        closure.pulled.push(PulledByReference {
+            part: format!("collection/{collection}"),
+            via,
+        });
+        closure.collections.insert(collection);
     }
+    closure
+        .pulled
+        .sort_by(|left, right| left.part.cmp(&right.part));
+    let schemas = exported.files;
     let plan = Plan {
         name,
         namespace: namespace.to_owned(),

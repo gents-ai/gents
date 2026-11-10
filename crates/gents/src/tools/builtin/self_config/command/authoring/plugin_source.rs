@@ -49,7 +49,7 @@ impl ConfigCommandTool {
             return Ok(BTreeMap::new());
         };
         let access = self.core.access()?;
-        let mut schemas = BTreeMap::new();
+        let mut present = BTreeSet::new();
         let mut managed = Vec::new();
         let mut absent = Vec::new();
         for collection in &data.collections {
@@ -66,14 +66,13 @@ impl ConfigCommandTool {
             {
                 absent.push(collection.as_str());
             } else {
-                schemas.insert(
-                    collection.clone(),
-                    collection_sdl(&access, collection).await?,
-                );
+                present.insert(collection.clone());
             }
         }
         if managed.is_empty() && absent.is_empty() {
-            return Ok(schemas);
+            // A collection the plugin's data relates to ships in the same
+            // file: install publishes both sides of a relation together.
+            return Ok(collection_schemas(&access, &present).await?.files);
         }
         let mut reasons = Vec::new();
         if !absent.is_empty() {

@@ -3,12 +3,11 @@ use crate::support::{self, *};
 use anyhow::{Context, Result};
 
 /// A documents pack that ships a plugin: install stores the plugin and
-/// records it. Retiring that plugin needs a complete reference inventory,
-/// which no document reader proves under ACP, so removal refuses and leaves
-/// the plugin, its record and the pack's documents in place. Every pack here
-/// is scaffolded on the fly, so this needs no fixture at all.
+/// records it. No Tools selects the plugin, so removing the pack retires it:
+/// the plugin is no longer installed or callable. Every pack here is
+/// scaffolded on the fly, so this needs no fixture at all.
 #[test]
-fn a_document_pack_with_a_plugin_installs_and_its_removal_refuses_intact() -> Result<()> {
+fn a_document_pack_with_a_plugin_installs_and_its_removal_retires_the_plugin() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let home = temp.path().join("node");
     let home_arg = home.to_str().context("path")?;
@@ -93,17 +92,15 @@ fn a_document_pack_with_a_plugin_installs_and_its_removal_refuses_intact() -> Re
     )?;
     anyhow::ensure!(echoed == serde_json::json!({"a": 1}), "{echoed}");
 
-    let refused = run_cli_failure_stderr(
+    run_cli_json(
         temp.path(),
         &["config", "pack", "remove", "demo_tools", "--home", home_arg],
     )?;
     anyhow::ensure!(
-        refused.contains(
-            "plugin retirement requires a complete native configuration reference inventory"
-        ),
-        "{refused}"
+        gents::plugin::store::read_record(&home, "gents", "echo_tool").is_err(),
+        "the retired plugin still has a store record"
     );
-    let retained = run_cli_json(
+    let uncallable = run_cli_failure_stderr(
         temp.path(),
         &[
             "config",
@@ -117,15 +114,7 @@ fn a_document_pack_with_a_plugin_installs_and_its_removal_refuses_intact() -> Re
             r#"{"b":2}"#,
         ],
     )?;
-    anyhow::ensure!(retained == serde_json::json!({"b": 2}), "{retained}");
-    let again = run_cli_failure_stderr(
-        temp.path(),
-        &["config", "pack", "remove", "demo_tools", "--home", home_arg],
-    )?;
-    anyhow::ensure!(
-        again.contains("complete native configuration reference inventory"),
-        "the refused removal left the pack installed: {again}"
-    );
+    anyhow::ensure!(uncallable.contains("not installed"), "{uncallable}");
     Ok(())
 }
 
@@ -408,11 +397,10 @@ fn offline_pack_install_naming_an_unresolved_plugin_is_refused_before_writing() 
 }
 
 /// A documents dependency that ships a plugin installs that plugin under the
-/// dependency's own coordinate. Removing the dependent would retire that
-/// plugin, which needs a complete reference inventory no ACP reader proves, so
-/// the removal refuses and the dependency's plugin stays owned by it.
+/// dependency's own coordinate. Removing the dependent releases the
+/// dependency, and with it retires the plugin no Tools selects.
 #[test]
-fn a_documents_dependency_plugin_is_retained_when_its_dependent_removal_refuses() -> Result<()> {
+fn a_documents_dependency_plugin_is_retired_with_its_dependent() -> Result<()> {
     let scratch = tempfile::tempdir().context("creating dependee tempdir")?;
     let dependee = scratch.path().join("dependee_fixture");
     copy_dir_all(&fixture_pack_dir("dependee_fixture"), &dependee)?;
@@ -441,7 +429,7 @@ fn a_documents_dependency_plugin_is_retained_when_its_dependent_removal_refuses(
         "the dependency's plugin is not owned by the dependency: {record:?}"
     );
 
-    let refused = run_cli_failure_stderr(
+    run_cli_json(
         setup.tempdir.path(),
         &[
             "config",
@@ -453,15 +441,8 @@ fn a_documents_dependency_plugin_is_retained_when_its_dependent_removal_refuses(
         ],
     )?;
     anyhow::ensure!(
-        refused.contains(
-            "plugin retirement requires a complete native configuration reference inventory"
-        ),
-        "{refused}"
-    );
-    let retained = gents::plugin::store::read_record(&setup.home, "fixture", "echo_tool")?;
-    anyhow::ensure!(
-        retained.owner_pack_coordinate.as_deref() == Some("fixture/dependee_fixture"),
-        "the refused removal changed the dependency's plugin: {retained:?}"
+        gents::plugin::store::read_record(&setup.home, "fixture", "echo_tool").is_err(),
+        "the dependency's plugin outlived the removal that released it"
     );
     Ok(())
 }

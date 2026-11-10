@@ -193,7 +193,7 @@ pub(crate) async fn ensure_home_plugins_unreferenced(
         return Ok(());
     }
     if !gents::store::local::home::init_config_path(home).is_file() {
-        return Err(gents::pack::PackRemovalError::ReferenceInventoryUnavailable.into());
+        return Err(gents::pack::PackRemovalError::NodeUnobserved.into());
     }
     #[cfg(test)]
     {
@@ -285,7 +285,7 @@ pub(crate) async fn remove_home_install_with_guard(
     if !record.plugins.is_empty() {
         super::warn_on_unrecorded_removal(
             coordinate,
-            super::record_plugin_store_change(home, coordinate, None).await,
+            super::record_plugin_retirement(home, coordinate).await,
         );
     }
 

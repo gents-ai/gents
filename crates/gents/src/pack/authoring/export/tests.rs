@@ -799,3 +799,155 @@ async fn a_plugin_built_on_the_node_exports_as_the_packs_plugin_and_runs_where_i
         "{refused}"
     );
 }
+
+/// A collection that relates to another exports with it: the other side is
+/// pulled in by reference, both are written in one SDL file, and the
+/// relation works where the pack installs.
+#[tokio::test]
+async fn related_collections_export_together_and_query_across_the_relation_where_they_install() {
+    let (origin, user, access, _worker) =
+        crate::test_support::signed_test_node("pack-export-relation").await;
+    let owner = origin.node_identity.did().to_owned();
+    grant_schema(&origin, &user).await;
+    access
+        .add_collection(
+            "type LibraryAuthor { name: String books: [LibraryBook] }\ntype LibraryBook { title: String @index author: LibraryAuthor }",
+        )
+        .await
+        .unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let report = export_pack(
+        &access,
+        &owner,
+        &out.path().join("library"),
+        "library",
+        "fixture",
+        &ExportSelection {
+            collections: ["LibraryBook".to_owned()].into(),
+            ..ExportSelection::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert!(report.check.problems.is_empty(), "{:#?}", report.check);
+    assert!(
+        report.by_reference.iter().any(|pulled| {
+            pulled.part == "collection/LibraryAuthor"
+                && pulled.via == "collection/LibraryBook field author"
+        }),
+        "{:?}",
+        report.by_reference
+    );
+    assert_eq!(report.schemas.len(), 1, "{:?}", report.schemas);
+    let sdl = std::fs::read_to_string(report.dir.join(&report.schemas[0])).unwrap();
+    for side in ["books: [LibraryBook]", "author: LibraryAuthor"] {
+        assert!(sdl.contains(side), "{side}: {sdl}");
+    }
+
+    let (bytes, _) = pack_dir(&report.dir).unwrap();
+    let archive = PackArchive::from_bytes(&bytes).unwrap();
+    let (second, second_user, second_access) =
+        crate::test_support::signed_test_node_without_agent("pack-export-relation-second").await;
+    grant_schema(&second, &second_user).await;
+    install(
+        &second,
+        &second_user,
+        &second_access,
+        &archive,
+        &BTreeMap::new(),
+    )
+    .await
+    .unwrap();
+    let author = ConfigAccess::write_local(
+        &second.node,
+        "test.pack_export.relation",
+        "mutation { add_LibraryAuthor(input: {name: \"Ada\"}) { _docID } }",
+    )
+    .await
+    .unwrap();
+    let author = &author["data"]["add_LibraryAuthor"];
+    let author = author[0]["_docID"]
+        .as_str()
+        .or(author["_docID"].as_str())
+        .expect("the author's document ID")
+        .to_owned();
+    for (title, author) in [("Notes", Some(&author)), ("Orphan", None)] {
+        let author = author
+            .map(|id| format!(", _authorID: \"{id}\""))
+            .unwrap_or_default();
+        ConfigAccess::write_local(
+            &second.node,
+            "test.pack_export.relation",
+            &format!(
+                "mutation {{ add_LibraryBook(input: {{title: \"{title}\"{author}}}) {{ _docID }} }}"
+            ),
+        )
+        .await
+        .unwrap();
+    }
+    let found = rows(
+        &second_access,
+        "{ LibraryAuthor { name books { title } } LibraryBook(filter: {author: {name: {_eq: \"Ada\"}}}) { title author { name } } }",
+    )
+    .await;
+    assert_eq!(
+        found["LibraryAuthor"],
+        json!([{"name": "Ada", "books": [{"title": "Notes"}]}]),
+        "{found}"
+    );
+    assert_eq!(
+        found["LibraryBook"],
+        json!([{"title": "Notes", "author": {"name": "Ada"}}]),
+        "{found}"
+    );
+}
+
+/// A view is refused by name with what a pack would need to carry it, and a
+/// collection that relates to one is refused for that side.
+#[tokio::test]
+async fn a_view_is_refused_by_name_with_what_blocks_it() {
+    let (origin, user, access, _worker) =
+        crate::test_support::signed_test_node("pack-export-view").await;
+    let owner = origin.node_identity.did().to_owned();
+    grant_schema(&origin, &user).await;
+    ConfigAccess::local_as(
+        origin.node.clone(),
+        identity::Did::new(origin.node_identity.did()).unwrap(),
+    )
+    .grant_node_permission(
+        &identity::Did::new(user.did()).unwrap(),
+        crate::store::config_client::NodePermission::ViewAdd,
+    )
+    .await
+    .unwrap();
+    access
+        .add_collection("type ShelfItem { title: String }")
+        .await
+        .unwrap();
+    access
+        .add_schema_view("ShelfItem { title }", "type ShelfTitles { title: String }")
+        .await
+        .unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let dir = out.path().join("shelf");
+    let error = export_pack(
+        &access,
+        &owner,
+        &dir,
+        "shelf",
+        "fixture",
+        &ExportSelection {
+            collections: ["ShelfTitles".to_owned()].into(),
+            ..ExportSelection::default()
+        },
+    )
+    .await
+    .unwrap_err();
+    let error = format!("{error:#}");
+    assert!(
+        error.contains("collection ShelfTitles is a view, which a pack cannot carry")
+            && error.contains("[\"view\",\"create\"]"),
+        "{error}"
+    );
+    assert!(!dir.exists(), "a refused export writes nothing");
+}

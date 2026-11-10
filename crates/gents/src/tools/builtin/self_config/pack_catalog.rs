@@ -73,58 +73,42 @@ impl PackInstaller {
     }
 
     /// Why a pack's plugins were not retired, for the model: the Tools it can
-    /// see selecting them, and the call that drops the first such selection.
-    /// Retirement itself stays refused on every surface until a complete
-    /// reference inventory exists (Lean `incomplete_plugin_inventory_refuses`).
+    /// read that still select them, and the call that drops the first such
+    /// selection (Lean `Configuration.selected_plugin_refuses_retirement`).
     fn plugin_retirement_refusal(
         coordinate: &str,
         plugins: &BTreeSet<String>,
         selections: Option<Vec<node_packs::PluginSelection>>,
         cause: anyhow::Error,
     ) -> anyhow::Error {
-        let Some(selections) = selections else {
+        let Some(first) = selections
+            .as_ref()
+            .and_then(|selections| selections.first())
+        else {
             return cause;
         };
+        let selections = selections.iter().flatten();
         let names = plugins.iter().cloned().collect::<Vec<_>>().join(", ");
-        let source = plugins
-            .iter()
-            .filter_map(|plugin| plugin.strip_prefix("node/"))
-            .map(|name| format!(" To stop building {name}, delete its source document with plugin-source preview delete."))
-            .collect::<String>();
-        let reason = "Retiring a plugin needs proof that no Tools on the node selects it, and a read filtered by document access cannot give that proof, so no surface removes an installed plugin yet";
-        let (seen, next_call) = match selections.first() {
-            Some(first) => (
-                format!(
-                    "Selected by {}. The tools update below drops the first selection, so no model is offered the plugin; it stays installed.",
-                    selections
-                        .iter()
-                        .map(|selection| format!(
-                            "Tools {:?} of agent {} ({})",
-                            selection.tools, selection.agent, selection.plugin
-                        ))
-                        .collect::<BTreeSet<_>>()
-                        .into_iter()
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-                json!({
-                    "argv": ["tools", "update"],
-                    // Deselecting is the drop the caller's own-Tools guard
-                    // otherwise refuses.
-                    "options": {"agent": first.agent, "shared": "acknowledge", "allow-drop": "integrations"},
-                    "set": {"integrations": first.integrations},
-                }),
-            ),
-            None => (
-                "No Tools this agent can read selects it, so no model is offered it; it stays installed and unused.".to_owned(),
-                json!({"argv": ["plugin", "get", plugins.iter().next()]}),
-            ),
-        };
         command::CommandGuidance {
             message: format!(
-                "{coordinate} was not removed ({names}). {reason}. {seen}{source} Cause: {cause:#}"
+                "{coordinate} was not removed ({names}): selected by {}. The tools update below drops the first selection; when no Tools selects the plugin, repeat [\"pack\",\"remove\",{coordinate:?}].",
+                selections
+                    .map(|selection| format!(
+                        "Tools {:?} of agent {} ({})",
+                        selection.tools, selection.agent, selection.plugin
+                    ))
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ),
-            next_call,
+            next_call: json!({
+                "argv": ["tools", "update"],
+                // Deselecting is the drop the caller's own-Tools guard
+                // otherwise refuses.
+                "options": {"agent": first.agent, "shared": "acknowledge", "allow-drop": "integrations"},
+                "set": {"integrations": first.integrations},
+            }),
         }
         .into()
     }
@@ -157,10 +141,10 @@ impl PackInstaller {
     }
 
     /// Removes an installed pack. An assets or plugins pack releases its home
-    /// record and the plugin records it owns; a documents pack removes its
+    /// record and retires the plugins it owns; a documents pack removes its
     /// `PackInstallation` record and everything it lists. Nothing is resolved
-    /// (no store or registry lookup) and no plugin bytes or archive are
-    /// released; use `gents config pack remove` for that. `with_collections`
+    /// (no store or registry lookup) and no archive is released; use
+    /// `gents config pack remove` for that. `with_collections`
     /// then also empties and removes each collection the pack's SDL declared
     /// that nothing else on the node names.
     pub(super) async fn remove(
@@ -176,7 +160,7 @@ impl PackInstaller {
         let access = self.core.access()?;
         let packs = self.packs(&access);
         if let Some(record) = packs.home_pack(&coordinate)? {
-            let removal = packs
+            let (removal, plugin_bytes) = packs
                 .remove_home_pack(&coordinate, record, self.core.identity().ok())
                 .await
                 .map_err(|error| match error {
@@ -187,10 +171,21 @@ impl PackInstaller {
                     } => Self::plugin_retirement_refusal(&coordinate, &plugins, selections, cause),
                     HomePackRemovalError::Other(error) => error,
                 })?;
+            // A plugin built on the node keeps its source document, which
+            // `plugin build` installs again.
+            let source = coordinate
+                .strip_prefix("node/")
+                .filter(|_| !removal.plugins.is_empty());
             return ordered! {
                 "pack": coordinate,
-                "removed": json!({"kind": removal.record.kind, "plugins": removal.plugins, "pages": removal.record.ux.iter().map(|page| page.name.clone()).collect::<Vec<_>>()}),
-                "effect": "The pack's install record and plugin records were released. Its cached assets, plugin bytes and archive stay until the operator runs `gents config pack prune`.",
+                "removed": json!({"kind": removal.record.kind, "plugins": removal.plugins, "plugin_bytes": plugin_bytes, "pages": removal.record.ux.iter().map(|page| page.name.clone()).collect::<Vec<_>>()}),
+                "effect": if removal.plugins.is_empty() {
+                    "The pack's install record was released. Its cached assets and archive stay until the operator runs `gents config pack prune`."
+                } else {
+                    "The pack's plugins are retired: no call resolves them and plugin list no longer shows them. Their records, the bytes no other plugin uses and the install record were released; the stored archive stays until the operator runs `gents config pack prune`."
+                },
+                "source": source.map(|name| format!("The source document {name} is kept, and [\"plugin\",\"build\",{name:?}] installs it again. Delete it with the call below to stop building it.")),
+                "next_call": source.map(|name| json!({"argv":["plugin-source","preview","delete"],"target_id":name})),
             }
             .pretty();
         }

@@ -814,22 +814,38 @@ agent removed with its pack does not prevent that pack's removal. -/
 def pluginRemovalSafe (references removed : List String) : Bool :=
   references.all fun reference => decide (reference ∉ removed)
 
-/-- ACP-filtered rows establish non-use only if a native inventory owner
-confirms the observation is complete in the same removal transaction. An
-empty retirement needs no inventory. -/
-def pluginRemovalObservedSafe (references removed : List String) (complete : Bool) : Bool :=
-  removed.isEmpty || (complete && pluginRemovalSafe references removed)
+/-- A User or the Engineer retires installed plugins: retirement is a pack
+removal, which only the User's own client and an agent holding the pack
+install grant reach. It is refused while a Tools document the retirer can
+read still selects one of the plugins. Document access filters that read, so
+a Tools the retirer cannot read may still name a retired plugin; its agent
+then fails that tool's resolution with "plugin is not installed", which the
+maintainer accepts over a plugin nobody can remove. `observed` is false when
+the node's configuration was not read at all (a home that has no node), which
+proves nothing and refuses. An empty retirement needs no read. -/
+def pluginRetirementAllowed (references removed : List String) (observed : Bool) : Bool :=
+  removed.isEmpty || (observed && pluginRemovalSafe references removed)
 
-theorem incomplete_plugin_inventory_refuses (references removed : List String)
+theorem unobserved_node_refuses_retirement (references removed : List String)
     (nonempty : removed.isEmpty = false) :
-    pluginRemovalObservedSafe references removed false = false := by
-  simp [pluginRemovalObservedSafe, nonempty]
+    pluginRetirementAllowed references removed false = false := by
+  simp [pluginRetirementAllowed, nonempty]
 
-/-- A disappearance notice must keep the durable installation evidence when
-the plugin inventory cannot establish safe retirement. The notice may still
-refresh the record so watchers can observe externally removed files. -/
-def retainPluginStoreRecord (plugins : List String) (complete : Bool) : Bool :=
-  !plugins.isEmpty && !complete
+theorem unselected_plugins_retire (references removed : List String)
+    (unselected : pluginRemovalSafe references removed = true) :
+    pluginRetirementAllowed references removed true = true := by
+  simp [pluginRetirementAllowed, unselected]
+
+/-- A notice that plugin files are gone keeps the node's installation record
+unless the plugins were retired: files that disappeared outside a retirement
+leave the durable evidence in place, and the notice may still refresh the
+record so watchers observe the change. A retirement releases the record. -/
+def retainPluginStoreRecord (plugins : List String) (retired : Bool) : Bool :=
+  !plugins.isEmpty && !retired
+
+theorem retired_plugins_release_their_record (plugins : List String) :
+    retainPluginStoreRecord plugins true = false := by
+  simp [retainPluginStoreRecord]
 
 theorem pluginRemovalSafe_iff (references removed : List String) :
     pluginRemovalSafe references removed = true ↔
@@ -842,5 +858,15 @@ theorem referenced_plugin_refuses_removal (references removed : List String)
   cases h : pluginRemovalSafe references removed with
   | false => rfl
   | true => exact False.elim ((pluginRemovalSafe_iff references removed).mp h reference hReference hRemoved)
+
+theorem selected_plugin_refuses_retirement (references removed : List String)
+    (reference : String) (hReference : reference ∈ references) (hRemoved : reference ∈ removed) :
+    pluginRetirementAllowed references removed true = false := by
+  have nonempty : removed.isEmpty = false := by
+    cases removed with
+    | nil => cases hRemoved
+    | cons _ _ => rfl
+  simp [pluginRetirementAllowed, nonempty,
+    referenced_plugin_refuses_removal references removed reference hReference hRemoved]
 
 end Configuration

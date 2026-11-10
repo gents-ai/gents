@@ -260,8 +260,8 @@ pub enum PackDriftError {
 pub enum PackRemovalError {
     #[error("pack-owned {collection} {id:?} is unavailable to the removing actor")]
     OwnedDocumentUnavailable { collection: String, id: String },
-    #[error("plugin retirement requires a complete native configuration reference inventory")]
-    ReferenceInventoryUnavailable,
+    #[error("plugin retirement reads the node's Tools for selections, and this home has no node configuration to read; initialize the home, then remove the plugin")]
+    NodeUnobserved,
 }
 
 fn require_owned_document_visible(
@@ -1081,6 +1081,32 @@ pub async fn record_plugin_store_change_as(
     .await
 }
 
+/// Tells the node that `coordinate`'s plugins were retired from `home` after
+/// [`ensure_plugins_unreferenced`] allowed it: the record that listed them is
+/// released, where a notice of files that merely disappeared keeps it.
+pub async fn record_plugin_retirement_as(
+    access: &ConfigAccess,
+    owner: &str,
+    identity: Option<Did>,
+    home: &Path,
+    coordinate: &str,
+) -> std::result::Result<(), PluginStoreChangeError> {
+    record_plugin_store_change_with_stage(
+        access,
+        owner,
+        identity,
+        home,
+        coordinate,
+        None,
+        PluginStageContext {
+            node_binding: None,
+            changes: None,
+            retired: true,
+        },
+    )
+    .await
+}
+
 pub(crate) async fn record_plugin_store_change_as_with_node_binding(
     access: &ConfigAccess,
     owner: &str,
@@ -1100,6 +1126,7 @@ pub(crate) async fn record_plugin_store_change_as_with_node_binding(
         PluginStageContext {
             node_binding,
             changes: None,
+            retired: false,
         },
     )
     .await
@@ -1125,6 +1152,7 @@ pub async fn record_staged_plugin_store_change(
         PluginStageContext {
             node_binding: None,
             changes: Some(changes),
+            retired: false,
         },
     )
     .await
@@ -1148,6 +1176,9 @@ pub(crate) async fn record_staged_plugin_store_change_as_with_node_binding(
 pub(crate) struct PluginStageContext<'a> {
     pub(crate) node_binding: Option<&'a crate::store::config_client::ConfigurationNodeBinding>,
     pub(crate) changes: Option<&'a crate::pack::plugin_lifecycle::PluginStageChanges>,
+    /// The plugins were retired, so the node's record of them is released
+    /// rather than kept as evidence (Lean `Configuration.retainPluginStoreRecord`).
+    pub(crate) retired: bool,
 }
 
 async fn record_plugin_store_change_with_stage(
@@ -1162,6 +1193,7 @@ async fn record_plugin_store_change_with_stage(
     let PluginStageContext {
         node_binding,
         changes,
+        retired,
     } = stage;
     if let Some(identity) = identity {
         if access.actor_did().as_deref() != Some(identity.as_str()) {
@@ -1188,7 +1220,16 @@ async fn record_plugin_store_change_with_stage(
                     )
                     .await?;
                 }
-                write_plugin_record(txn, owner, home, coordinate, installed, node_binding).await
+                write_plugin_record(
+                    txn,
+                    owner,
+                    home,
+                    coordinate,
+                    installed,
+                    node_binding,
+                    retired,
+                )
+                .await
             })
         })
         .await;
@@ -1275,6 +1316,7 @@ async fn write_plugin_record(
     coordinate: &str,
     installed: Option<&PackIdentity>,
     node_binding: Option<&crate::store::config_client::ConfigurationNodeBinding>,
+    retired: bool,
 ) -> std::result::Result<(), PluginStoreChangeError> {
     if let Some(pack) = installed {
         if let Some(conflict) =
@@ -1322,7 +1364,7 @@ async fn write_plugin_record(
             .map_err(Into::into)
         }
         None if prior.doc_id.is_none() => return Ok(()),
-        None if own && !retained && prior.plugins.is_empty() => {
+        None if own && !retained && (retired || prior.plugins.is_empty()) => {
             return remove_record_in_txn(txn, owner, coordinate, &prior, DriftPolicy::Refuse)
                 .await
                 .map(|_| ())
