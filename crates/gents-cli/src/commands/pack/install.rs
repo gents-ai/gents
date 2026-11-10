@@ -288,12 +288,50 @@ async fn install_documents_pack_resolved_inner(
     let requested = parse_inference_slot_bindings(&args.inference_slots)?;
     let temp = tempfile::tempdir()?;
     gents::pack::materialize::materialize(pack.archive(), temp.path())?;
+    let origin_tag = gents::pack::pack_origin_tag(&format!(
+        "{}/{}",
+        pack.manifest().metadata.namespace,
+        pack.manifest().name
+    ))?;
+    let shared_collections = if args.preview {
+        super::review::shared_collections(access, pack.manifest(), |path| {
+            Ok(pack.asset(path)?.to_vec())
+        })
+        .await
+    } else {
+        None
+    };
+    let review = |documents: Vec<serde_json::Value>, needs: serde_json::Value| {
+        let mut preview = json!({
+            "pack": pack.manifest().name,
+            "source": pack.label(),
+            "digest": pack.digest(),
+            "owner": owner,
+            "origin_tag": origin_tag,
+            "dependencies": pack.manifest().metadata.dependencies,
+            "kind": pack.manifest().metadata.kind,
+            "declared_access": super::review::declared_access(&documents),
+            "documents": documents,
+            "collections": super::review::collections(pack.manifest(), |path| {
+                Ok(pack.asset(path)?.to_vec())
+            })?,
+            "shared_collections": shared_collections,
+            "inference_needs": needs,
+            "would_write": false,
+        });
+        let dependency_manifests: Vec<_> = dependencies.iter().map(PackSource::manifest).collect();
+        merge(
+            &mut preview,
+            super::review::identity_and_authority(pack.manifest(), &dependency_manifests)?,
+        );
+        Ok::<_, anyhow::Error>(preview)
+    };
     let overrides = parse_dependency_variables(&args.dependency_variables)?;
     let dependency_archives = dependencies
         .iter()
         .map(PackSource::archive)
         .collect::<Vec<_>>();
-    let mut prepared = if let Some(local) = local {
+    let prepared = if let Some(local) = local {
         gents::pack::prepare_document_pack_archive_with_runtime(
             access,
             owner,
@@ -320,7 +358,7 @@ async fn install_documents_pack_resolved_inner(
         )
         .await
     };
-    let prepared = match prepared {
+    let mut prepared = match prepared {
         Ok(prepared) => prepared,
         // A preview reports the slots still to bind, so they can be chosen
         // and previewed again; the install itself still refuses them.
@@ -382,18 +420,21 @@ async fn install_documents_pack_resolved_inner(
                 }
             })
             .collect::<Result<Vec<_>>>()?;
-        return Ok(json!({
-            "pack": pack.manifest().name,
-            "source": pack.label(),
-            "digest": pack.digest(),
-            "owner": owner,
-            "inference": inference,
-            "dependency_inference": dependency_inference,
-            "origin_tag": origin_tag,
-            "dependencies": pack.manifest().metadata.dependencies,
-            "install_variables": variables,
-            "would_write": false,
-        }));
+        let packs: Vec<_> = std::iter::once((pack.manifest(), inference.clone()))
+            .chain(dependencies.iter().filter_map(|dependency| {
+                let manifest = dependency.manifest();
+                Some((manifest, dependency_inference.get(&manifest.name)?.clone()))
+            }))
+            .map(|(manifest, preview)| super::review::PackInference::bound(manifest, preview))
+            .collect();
+        let mut preview = review(
+            super::review::documents_by_slot(&prepared.config, &prepared.agent_bindings)?,
+            super::review::inference_needs(&packs),
+        )?;
+        preview["inference"] = json!(inference);
+        preview["dependency_inference"] = json!(dependency_inference);
+        preview["install_variables"] = json!(variables);
+        return Ok(preview);
     }
     // A dependency installed on its own behalf (`explicit` false) writes no
     // home record, and a remote node has no local home to record in.
