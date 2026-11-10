@@ -8259,6 +8259,55 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
     )
     .unwrap();
     assert_eq!(status["installed"]["version"], "2.0.0");
+
+    // A rebuilt artifact meets the pin: the refusal is the Tools edit that
+    // moves it, and after that edit the same update goes through.
+    let (_rebuilt_dir, rebuilt_path, rebuilt) =
+        crate::pack::plugin_lifecycle::tests::fixture_with_output(
+            "3.0.0",
+            false,
+            br#"{"native_pack_echo":"rebuilt"}"#,
+        );
+    std::fs::copy(rebuilt_path, &artifact).unwrap();
+    let pinned = config_call(
+        &tools,
+        &["pack", "update", path, "--digest", rebuilt.digest()],
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    let failure: Value = serde_json::from_str(&pinned[pinned.find('{').unwrap()..]).unwrap();
+    let message = failure["error"].as_str().unwrap();
+    assert!(
+        message.contains("nothing was installed") && message.contains("fixture/native_echo"),
+        "{failure}"
+    );
+    let move_pin = &failure["recovery"]["next_call"];
+    assert_eq!(move_pin["argv"], json!(["tools", "update"]), "{failure}");
+    assert_eq!(
+        move_pin["set"]["integrations"]["lsp"]["timeout_secs"], 31,
+        "the pin move keeps the other integrations: {failure}"
+    );
+    assert_eq!(
+        crate::pack::read_home_install(home.path(), "fixture/native_echo_pack")
+            .unwrap()
+            .unwrap()
+            .version,
+        "2.0.0"
+    );
+    tool.call(move_pin.to_string()).await.unwrap();
+    config_call(
+        &tools,
+        &["pack", "update", path, "--digest", rebuilt.digest()],
+    )
+    .await
+    .unwrap();
+    let rebuilt_record =
+        crate::plugin::store::read_record(home.path(), "fixture", "native_echo").unwrap();
+    assert_eq!(
+        move_pin["set"]["integrations"]["plugins"][0]["digest"],
+        rebuilt_record.digest.as_str()
+    );
     let removal = config_call(&tools, &["pack", "remove", "fixture/native_echo_pack"])
         .await
         .unwrap_err()
@@ -8271,7 +8320,7 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
         crate::plugin::store::read_record(home.path(), "fixture", "native_echo")
             .unwrap()
             .version,
-        "2.0.0"
+        "3.0.0"
     );
 }
 

@@ -370,6 +370,66 @@ impl PackInstaller {
         }))
     }
 
+    /// The selections whose pins refuse the plugins `distribution` publishes.
+    pub(super) async fn pin_conflicts(
+        &self,
+        distribution: &ConfigPackDistribution,
+    ) -> anyhow::Result<Vec<crate::pack::PluginPinConflict>> {
+        let manifest = distribution.manifest();
+        let mut replacements = BTreeMap::new();
+        for plugin in &manifest.metadata.plugins {
+            replacements.insert(
+                format!("{}/{}", manifest.metadata.namespace, plugin.name),
+                format!(
+                    "sha256:{}",
+                    crate::plugin::store::content_digest_hex(
+                        distribution.0.archive.asset(&plugin.artifact)?
+                    )
+                ),
+            );
+        }
+        crate::pack::plugin_pin_conflicts(&self.core.access()?, self.core.node_did(), &replacements)
+            .await
+    }
+
+    /// Refuses an install that replaces a plugin some Tools pins to another
+    /// digest, as the Tools edit that moves the first such pin.
+    async fn require_pins_follow(
+        &self,
+        distribution: &ConfigPackDistribution,
+    ) -> anyhow::Result<()> {
+        let conflicts = self.pin_conflicts(distribution).await?;
+        let Some(first) = conflicts.first() else {
+            return Ok(());
+        };
+        let others = conflicts
+            .iter()
+            .skip(1)
+            .filter(|conflict| conflict.tools != first.tools)
+            .map(|conflict| format!("Tools {:?} of agent {}", conflict.tools, conflict.agent))
+            .collect::<BTreeSet<_>>();
+        Err(command::CommandGuidance {
+            message: format!(
+                "nothing was installed: Tools {:?} of agent {} pins {} at {}, and this install replaces it with {}. Move the pin with the tools update below, then repeat this call.{}",
+                first.tools,
+                first.agent,
+                first.plugin,
+                first.pin,
+                first.replacement,
+                if others.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        " The same is then asked for {}.",
+                        others.into_iter().collect::<Vec<_>>().join(", ")
+                    )
+                }
+            ),
+            next_call: pin_move_call(first),
+        }
+        .into())
+    }
+
     /// Refuses a change that would meet edited documents without a decision,
     /// as the same call with the decision that loses nothing; the message
     /// names the other one. `words` is the pack command as it was called.
@@ -451,6 +511,7 @@ impl PackInstaller {
             "pack digest changed: preview authorized {expected:?}, resolved {:?}; preview again",
             distribution.digest()
         );
+        self.require_pins_follow(&distribution).await?;
         match distribution.manifest().metadata.kind {
             PackKind::Documents => {
                 let manifest = distribution.manifest();
@@ -470,4 +531,14 @@ impl PackInstaller {
             }
         }
     }
+}
+
+/// The `tools update` that moves `conflict`'s pins to the replacement. The
+/// whole `integrations` field is sent because `set` replaces a field.
+pub(super) fn pin_move_call(conflict: &crate::pack::PluginPinConflict) -> Value {
+    json!({
+        "argv": ["tools", "update"],
+        "options": {"agent": conflict.agent, "shared": "acknowledge"},
+        "set": {"integrations": conflict.integrations},
+    })
 }

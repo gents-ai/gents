@@ -360,3 +360,73 @@ async fn plugin_build_accepts_data_collections_that_live_on_the_node() {
     );
     assert_eq!(record.data_unique_keys["DeskTicket"], [["subject"]]);
 }
+
+/// Rebuilding `node/NAME` moves the pins of the Tools that select it, since
+/// the builder is who selected it, and the receipt lists them.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn a_rebuild_moves_the_pins_of_the_tools_that_select_the_plugin() {
+    let home = tempfile::tempdir().unwrap();
+    let home_path = std::fs::canonicalize(home.path()).unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let artifact = outside.path().join("probe.afb");
+    let write_artifact = |output: &[u8]| {
+        std::fs::write(
+            &artifact,
+            crate::plugin::tests::build_plugin_afb(&crate::plugin::tests::constant_output_wat(
+                output,
+            )),
+        )
+        .unwrap();
+    };
+    let builder = outside.path().join("builder.sh");
+    std::fs::write(
+        &builder,
+        format!(
+            "#!/bin/sh\ncat {:?} > plugins/probe.afb\nprintf '{{\"cases\":[{{\"plugin\":\"probe\",\"passed\":1,\"failures\":[]}}]}}'\n",
+            artifact
+        ),
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&builder, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let _stub = PLUGIN_BUILDER_STUB.lock().await;
+    let _builder =
+        crate::test_support::EnvVarGuard::set("GENTS_PLUGIN_BUILDER", builder.to_str().unwrap());
+    let (_fixture, tools) = fileless_tool("live-plugin-pins", &home_path).await;
+    let build = json!({"argv":["plugin","build"],"target_id":"probe","set":{"language":"rust","source":"fn main() {}"}});
+
+    write_artifact(br#"{"build":1}"#);
+    let first = ok(&tools, build.clone()).await;
+    assert_eq!(first["selections_moved"], Value::Null, "{first}");
+    let tools_document = ok(&tools, json!({"argv":["tools","get"]})).await;
+    let mut integrations = tools_document["document"]["integrations"].clone();
+    if !integrations.is_object() {
+        integrations = json!({});
+    }
+    integrations["plugins"] = json!([first["selection"]]);
+    ok(
+        &tools,
+        json!({"argv":["tools","update"],"set":{"integrations":integrations}}),
+    )
+    .await;
+
+    write_artifact(br#"{"build":2}"#);
+    let second = ok(&tools, build).await;
+    assert_ne!(second["digest"], first["digest"], "{second}");
+    assert_eq!(
+        second["selections_moved"][0]["from"], first["digest"],
+        "{second}"
+    );
+    assert_eq!(
+        second["selections_moved"][0]["to"], second["digest"],
+        "{second}"
+    );
+    let after = ok(&tools, json!({"argv":["tools","get"]})).await;
+    assert_eq!(
+        after["document"]["integrations"]["plugins"][0]["digest"], second["digest"],
+        "{after}"
+    );
+}

@@ -187,6 +187,38 @@ impl ConfigCommandTool {
             actor: self.identity.clone(),
             home: Some(home),
         };
+        // The builder is who selected node/NAME, so its pinned selections
+        // follow the rebuild: each pin moves to the new digest through the
+        // Tools edit path, with that path's authority, before the install's
+        // pin check (Lean `Configuration.pluginReplacementSafe`) reads them.
+        let mut followed = Vec::new();
+        let mut moved = BTreeSet::new();
+        for conflict in installer.pin_conflicts(&distribution).await? {
+            if !moved.insert(conflict.tools.clone()) {
+                continue;
+            }
+            let call = pin_move_call(&conflict);
+            let argv = vec![
+                "tools".to_owned(),
+                "edit".to_owned(),
+                "--agent".to_owned(),
+                conflict.agent.clone(),
+                "--shared".to_owned(),
+                "acknowledge".to_owned(),
+                "--set".to_owned(),
+                format!("integrations={}", conflict.integrations),
+            ];
+            Box::pin(self.dispatch(&argv)).await.map_err(|error| {
+                CommandGuidance {
+                    message: format!(
+                        "plugin {coordinate} built and passed its cases, but nothing was installed: Tools {:?} of agent {} pins the previous build ({}) and could not be moved to {}: {error:#}. Move the pin with the tools update below, then build again.",
+                        conflict.tools, conflict.agent, conflict.pin, conflict.replacement
+                    ),
+                    next_call: call,
+                }
+            })?;
+            followed.push(json!({"tools": conflict.tools, "agent": conflict.agent, "from": conflict.pin, "to": conflict.replacement}));
+        }
         let receipt = installer
             .plugins_pack(
                 if prepared.installed {
@@ -216,8 +248,9 @@ impl ConfigCommandTool {
             "failed": 0,
             "sandbox": build.sandbox,
             "selection": json!({"plugin": coordinate, "digest": digest}),
+            "selections_moved": (!followed.is_empty()).then_some(&followed),
             "next_call": json!({"argv":["plugin","run",coordinate],"options":{"input":{}}}),
-            "guidance": "The source and cases are the PluginSource document; build again after editing it. To give a model this tool, add the selection to Tools.integrations.plugins with tools update, preserving the other entries; a rebuild changes the digest, so update the selection after it.",
+            "guidance": "The source and cases are the PluginSource document; build again after editing it. To give a model this tool, add the selection to Tools.integrations.plugins with tools update, preserving the other entries. A rebuild moves the pins of Tools that already select it; selections_moved lists them.",
         }
         .pretty()
     }

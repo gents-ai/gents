@@ -21,7 +21,7 @@ where
     if removed.is_empty() {
         return Ok(());
     }
-    for (agent, tools, reference) in selected_plugin_references(access, owner).await? {
+    for (agent, tools, reference, _) in selected_plugin_references(access, owner).await? {
         anyhow::ensure!(
             !removed.contains(&reference.plugin),
             "cannot remove plugin {}: agent {:?} still selects it through Tools {:?}; remove that reference first with `gents pack wire {} --agent {} --remove --home <node-home>`",
@@ -39,28 +39,86 @@ pub(crate) async fn ensure_replaced_plugins_match<R>(
 where
     R: ConfigRead + ?Sized,
 {
+    Ok(plugin_pin_conflicts(access, owner, replacements)
+        .await?
+        .first()
+        .map(|conflict| {
+            format!(
+                "cannot replace plugin {} with {}: agent {:?} selects pin {} through Tools {:?}",
+                conflict.plugin, conflict.replacement, conflict.agent, conflict.pin, conflict.tools,
+            )
+        }))
+}
+
+/// A selection whose pin refuses a plugin replacement
+/// (Lean `Configuration.pluginReplacementSafe`).
+#[derive(Debug, Clone)]
+pub struct PluginPinConflict {
+    pub plugin: String,
+    pub replacement: String,
+    pub agent: String,
+    pub tools: String,
+    pub pin: String,
+    /// The selecting Tools' `integrations` with every replaced plugin's pin
+    /// moved to its replacement: the value that lets the replacement through.
+    pub integrations: serde_json::Value,
+}
+
+/// Every selection pinned to a digest other than the one `replacements`
+/// publishes for its plugin, in the order the references are read.
+pub async fn plugin_pin_conflicts<R>(
+    access: &R,
+    owner: &str,
+    replacements: &BTreeMap<String, String>,
+) -> Result<Vec<PluginPinConflict>>
+where
+    R: ConfigRead + ?Sized,
+{
     if replacements.is_empty() {
-        return Ok(None);
+        return Ok(Vec::new());
     }
-    for (agent, tools, reference) in selected_plugin_references(access, owner).await? {
-        if let (Some(replacement), Some(pin)) =
+    let mut conflicts = Vec::new();
+    for (agent, tools, reference, integrations) in selected_plugin_references(access, owner).await?
+    {
+        let (Some(replacement), Some(pin)) =
             (replacements.get(&reference.plugin), &reference.digest)
-        {
-            if pin != replacement {
-                return Ok(Some(format!(
-                    "cannot replace plugin {} with {}: agent {:?} selects pin {} through Tools {:?}",
-                    reference.plugin, replacement, agent, pin, tools,
-                )));
+        else {
+            continue;
+        };
+        if pin == replacement {
+            continue;
+        }
+        let mut moved = integrations;
+        for entry in moved.plugins.iter_mut().flatten() {
+            if let Some(replacement) = replacements.get(&entry.plugin) {
+                if entry.digest.is_some() {
+                    entry.digest = Some(replacement.clone());
+                }
             }
         }
+        conflicts.push(PluginPinConflict {
+            plugin: reference.plugin,
+            replacement: replacement.clone(),
+            agent,
+            tools,
+            pin: pin.clone(),
+            integrations: serde_json::to_value(&moved)?,
+        });
     }
-    Ok(None)
+    Ok(conflicts)
 }
 
 async fn selected_plugin_references<R>(
     access: &R,
     owner: &str,
-) -> Result<Vec<(String, String, crate::documents::PluginToolRef)>>
+) -> Result<
+    Vec<(
+        String,
+        String,
+        crate::documents::PluginToolRef,
+        crate::documents::IntegrationTools,
+    )>,
+>
 where
     R: ConfigRead + ?Sized,
 {
@@ -116,6 +174,7 @@ where
                 agent.agent_did.clone(),
                 tools.tools_id.clone(),
                 reference.clone(),
+                tools.integrations.clone().unwrap_or_default(),
             ));
         }
     }

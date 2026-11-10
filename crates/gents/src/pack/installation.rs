@@ -32,7 +32,7 @@ pub use documents::{
     HostedPackPreparation, PreparedDependency, PreparedDocumentPackInstall,
 };
 pub use hosted::{stage_hosted_pack, HostedHomePublication, HostedPackStage, HostedPackStageError};
-pub use removal::ensure_plugins_unreferenced;
+pub use removal::{ensure_plugins_unreferenced, plugin_pin_conflicts, PluginPinConflict};
 const RECORD: &str = "PackInstallation";
 const HISTORY_LIMIT: usize = 32;
 

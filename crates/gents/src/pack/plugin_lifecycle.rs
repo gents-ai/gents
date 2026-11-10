@@ -303,10 +303,24 @@ pub(crate) mod tests {
         std::path::PathBuf,
         crate::pack::archive::PackArchive,
     ) {
+        fixture_with_output(version, authority, br#"{"native_pack_echo":"ok"}"#)
+    }
+
+    /// The fixture pack whose plugin returns `output`: a different output is
+    /// a different artifact digest.
+    pub(crate) fn fixture_with_output(
+        version: &str,
+        authority: bool,
+        output: &[u8],
+    ) -> (
+        tempfile::TempDir,
+        std::path::PathBuf,
+        crate::pack::archive::PackArchive,
+    ) {
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("source");
         std::fs::create_dir_all(source.join("plugins")).unwrap();
-        let wat = crate::plugin::tests::constant_output_wat(br#"{"native_pack_echo":"ok"}"#);
+        let wat = crate::plugin::tests::constant_output_wat(output);
         let afb = crate::plugin::tests::build_plugin_afb(&wat);
         std::fs::write(source.join("plugins/native_echo.afb"), afb).unwrap();
         let mut plugin = json!({"name":"native_echo","description":"Deterministic sealed native pack fixture","artifact":"plugins/native_echo.afb","language":"rust","input_schema":{"type":"object","properties":{},"additionalProperties":false}});
