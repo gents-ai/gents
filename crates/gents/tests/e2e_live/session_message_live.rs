@@ -3245,7 +3245,6 @@ async fn configure_bash_agent_tools(
     workspace: &Path,
     targets: Vec<AgentTargetDocument>,
 ) {
-    grant_local_target_writers(db, node_did, agent_did, &targets).await;
     configure_agent_tools(
         db,
         node_did,
@@ -3431,31 +3430,12 @@ fn target_documents(targets: Vec<AgentTargetDocument>) -> Vec<(Collection, serde
         .collect()
 }
 
-/// The node's User lets `caller` open sessions on each local target's Agent
-/// (the `session_writer` relation behind `agent_new` and `agent_message`).
-async fn grant_local_target_writers(
-    db: &TestDb,
-    node_did: &str,
-    caller: &str,
-    targets: &[AgentTargetDocument],
-) {
-    let user = crate::support::load_managed_fixture_user(db).await;
-    let access = db.client_access(&user);
-    for target in targets
-        .iter()
-        .filter(|target| target.target_node_did == node_did)
-    {
-        crate::support::grant_agent_session_writer(db, &access, &target.agent_did, caller).await;
-    }
-}
-
 async fn authorize_session_targets(
     db: &TestDb,
     node_did: &str,
     agent_did: &str,
     targets: Vec<AgentTargetDocument>,
 ) {
-    grant_local_target_writers(db, node_did, agent_did, &targets).await;
     configure_agent_tools(
         db,
         node_did,
@@ -3488,7 +3468,6 @@ async fn configure_standard_backgrounding_tools(
             child_agent_did,
         )
     }];
-    grant_local_target_writers(db, node_did, parent_agent_did, &targets).await;
     configure_agent_tools(
         db,
         node_did,

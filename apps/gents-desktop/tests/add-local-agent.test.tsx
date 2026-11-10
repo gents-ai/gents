@@ -204,6 +204,26 @@ describe("Add node enrollment", () => {
     );
     expect(api.fetchDesktopSnapshot).toHaveBeenCalled();
   });
+
+  it("includes the chosen name in the enrollment request", async () => {
+    const { api, app } = fleet([forge]);
+    api.requestStatusEnrollment.mockResolvedValue({ requestId: "request-1" });
+    const dialog = await openAddAgent(app);
+    await userEvent.type(
+      within(dialog).getByLabelText("Node server"),
+      "server.example:9191",
+    );
+    await userEvent.type(within(dialog).getByLabelText("Your name (optional)"), "Ivan");
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Request enrolment" }),
+    );
+    await waitFor(() =>
+      expect(api.requestStatusEnrollment).toHaveBeenCalledWith(
+        "server.example:9191",
+        "Ivan",
+      ),
+    );
+  });
 });
 
 describe("the local node's Setup needed", () => {

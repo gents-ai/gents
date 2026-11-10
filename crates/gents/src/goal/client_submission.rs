@@ -196,18 +196,20 @@ pub async fn submit_prepared_session_goal_control(
         }
     };
     grant_command_relationships(access, command, &document).await?;
-    if command.requester_did != command.agent_did
-        && !(matches!(
-            command.operation,
-            gents_protocol::goal_control::GoalOperation::Create { .. }
-        ) && command.native_evidence.is_some())
+    // The runtime leaves a creation without native request evidence unanswered;
+    // every other control is answered after it rechecks the requester's access
+    // in the effect transaction.
+    if matches!(
+        command.operation,
+        gents_protocol::goal_control::GoalOperation::Create { .. }
+    ) && command.native_evidence.is_none()
     {
         if let Some(row) = receipt_row(access, &document).await? {
             if let Some(receipt) = verified_receipt(&row, signer, command).await? {
                 return Ok(receipt);
             }
         }
-        anyhow::bail!("Goal control was saved but is blocked until the runtime can atomically recheck the requester's access. It remains pending; retry after that capability is available.");
+        anyhow::bail!("Goal creation was saved but remains pending: it lacks the requester's native request evidence that the runtime needs to create the Goal.");
     }
     let query = format!(
         r#"{{ AgentSessionGoalReceipt(filter: {{ command_doc_id: {{ _eq: "{}" }} }}) {{ receipt_json }} }}"#,

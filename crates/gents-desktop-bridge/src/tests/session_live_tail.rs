@@ -24,37 +24,52 @@ fn queued(
     }
 }
 
+fn steered(
+    content: &'static str,
+    after: &'static str,
+) -> impl FnOnce(&mut gents_protocol::request_admission::AgentRequestCreate) {
+    move |create| {
+        queued(content, Some(after))(create);
+        if let Some(queue) = create.input.queue.as_mut() {
+            queue.delivery = gents_protocol::request_input::QueueDelivery::Steer;
+        }
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_queued_or_folded_submission_keeps_the_running_turns_streaming_text() {
-    // A blocker turn holds the session while the head and a later append are
-    // submitted; when it ends the runtime claims the head and folds the
-    // append into it. The head's provider turn streams and stays open, and a
-    // further append queues behind it.
+    // Lean `Session.ordinary_queued_input_never_folds`: only an explicit
+    // steer folds. `QueuedSteering.user_steer_passes_queued_turns`: the steer
+    // reaches the running turn at its next safe boundary, so the head's
+    // request supersedes it and keeps streaming, while a later ordinary append
+    // waits for its own turn.
     let desktop = RunningDesktop::start(vec![
-        held("LIVE-BLOCKER", "blocking"),
-        held("LIVE-HEAD", "still streaming"),
+        held("LIVE-HEAD", "before the steer"),
         held("LIVE-FOLDED", "still streaming"),
     ])
     .await;
-    let blocker = desktop
-        .send("sess_live", "req_blocker", "LIVE-BLOCKER")
-        .await;
-    desktop.wait_for_request_state(&blocker, "processing").await;
-    let head = desktop
-        .send_shaped("sess_live", "req_head", queued("LIVE-HEAD", None))
-        .await;
+    let head = desktop.send("sess_live", "req_head", "LIVE-HEAD").await;
+    desktop.wait_for_request_state(&head, "processing").await;
+    desktop.provider.wait_for_chunks("LIVE-HEAD", 1).await;
     let folded = desktop
         .send_shaped(
             "sess_live",
             "req_folded",
-            queued("LIVE-FOLDED", Some("req_head")),
+            steered("LIVE-FOLDED", "req_head"),
         )
         .await;
-    desktop.provider.release("LIVE-BLOCKER");
-    desktop.wait_for_request_state(&blocker, "completed").await;
-    desktop.wait_for_request_state(&head, "processing").await;
+    desktop.provider.release("LIVE-HEAD");
     let folded_row = desktop.wait_for_request_state(&folded, "superseded").await;
     assert_eq!(folded_row["request_id"], "req_folded");
+    desktop
+        .wait_for(
+            "the steer superseded by the head",
+            &format!(
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{folded}" }} }}) {{ superseded_by_request_doc_id }} }}"#
+            ),
+            |data| data["AgentRequest"][0]["superseded_by_request_doc_id"] == head.as_str(),
+        )
+        .await;
     desktop
         .wait_for(
             "the head's streaming text",
@@ -71,6 +86,7 @@ async fn a_queued_or_folded_submission_keeps_the_running_turns_streaming_text() 
             },
         )
         .await;
+    desktop.wait_for_request_state(&head, "processing").await;
     let queued_doc = desktop
         .send_shaped(
             "sess_live",

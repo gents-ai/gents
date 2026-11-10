@@ -76,11 +76,15 @@ that runtime. Clients query and subscribe to its authenticated database endpoint
 replica presence is never an alternative data source or an authorization grant.
 Arbitrary application collections have no implicit replication path. PeerRegistry binds
 a node DID to signed delivery endpoints and carries peer liveness and offered network
-metadata. NodeDirectoryEntry publishes agent DIDs for discovery, not authority. -/
+metadata. NodeDirectoryEntry publishes agent DIDs for discovery, not authority.
+EnrollmentRenewalIntent and EnrollmentRenewalOffer are the member-signed renewal request
+and the owner-signed fresh offer for an existing enrollment generation; they carry no
+authority beyond the ordinary signed request and decision they lead to. -/
 def replicatedProtocolCollections : List String :=
   ["PeerRegistry", "NodeDirectoryEntry", "Network",
    "NetworkEnrollmentRequest", "NetworkEnrollmentDecision",
-   "NetworkAuthorizationRevision", "NetworkEnrollmentRouteReceipt"]
+   "NetworkAuthorizationRevision", "NetworkEnrollmentRouteReceipt",
+   "EnrollmentRenewalIntent", "EnrollmentRenewalOffer"]
 
 def collectionReplicates (collection : String) : Bool :=
   replicatedProtocolCollections.contains collection

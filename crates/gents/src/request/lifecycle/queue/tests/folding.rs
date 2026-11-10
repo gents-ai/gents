@@ -586,7 +586,12 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
             let entry = LeanFoldQueueEntry {
                 request_id: id,
                 execution_origin: "interactive".into(),
-                delivery: "queue".into(),
+                delivery: if id == case.selected {
+                    "steer"
+                } else {
+                    "queue"
+                }
+                .into(),
                 order_key: id,
                 source: "user".into(),
                 policy: "append".into(),
@@ -903,7 +908,7 @@ async fn claim_selected_publication_keeps_later_incompatible_pending_row() {
         let entry = LeanFoldQueueEntry {
             request_id: id,
             execution_origin: "interactive".into(),
-            delivery: "queue".into(),
+            delivery: if id == 3 { "steer" } else { "queue" }.into(),
             order_key: id,
             source: "user".into(),
             policy: "append".into(),

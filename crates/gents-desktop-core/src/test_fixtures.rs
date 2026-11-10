@@ -234,18 +234,6 @@ impl ServedRuntimeHome {
             ],
         )
         .await;
-        // The User authorizes the lead to write the worker's sessions, as
-        // the runtime's own session-message tests do.
-        let worker_doc = self.agent_doc_id(&worker).await;
-        self.user_access()
-            .add_actor_relationship(
-                "Agent",
-                &worker_doc,
-                "session_writer",
-                &::identity::Did::new(&lead.agent_did).unwrap(),
-            )
-            .await
-            .unwrap();
         (lead, worker)
     }
 

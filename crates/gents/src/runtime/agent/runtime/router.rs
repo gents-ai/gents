@@ -15,6 +15,11 @@ use gents_protocol::row::AgentRequest;
 
 use super::context::AgentResolution;
 
+pub(in crate::runtime::agent) mod configuration_admission;
+use configuration_admission::{
+    routed_configuration_admission, ConfigurationAdmission, DeferredRequests,
+};
+
 #[derive(Clone)]
 pub(in crate::runtime::agent) struct RuntimeAdmissionGate {
     state: Arc<RwLock<bool>>,
@@ -169,6 +174,7 @@ where
     let mut admission_changed = admission_gate.subscribe();
     let mut readiness_changed = runtime_status.readiness().subscribe_observation();
     let mut pending_request = None;
+    let mut deferred = DeferredRequests::default();
 
     loop {
         let Some((request, routed_snapshot, admission_observation)) =
@@ -182,6 +188,7 @@ where
                     admission_changed: &mut admission_changed,
                     readiness_changed: &mut readiness_changed,
                     pending_request: &mut pending_request,
+                    deferred: &mut deferred,
                 },
                 &mut shutdown,
                 Some(&runtime_status),
@@ -191,6 +198,7 @@ where
         else {
             return Ok(());
         };
+        deferred.forget(&request.request_id);
 
         let Some(_admission) = admission_gate.enter().await else {
             return Ok(());
@@ -240,6 +248,34 @@ where
             startup_diagnostic,
         ) {
             EffectiveAgentAdmission::Ready => {
+                let configuration = routed_snapshot
+                    .agents
+                    .get(&resolution.agent_did)
+                    .map(|agent| &agent.configuration);
+                match routed_configuration_admission(configuration).await {
+                    Ok(ConfigurationAdmission::Claim) => {}
+                    Ok(ConfigurationAdmission::AwaitNewerGeneration) => {
+                        tracing::warn!(
+                            request_id = %request.request_id,
+                            session_id = %request.session_id,
+                            agent_did = %resolution.agent_did,
+                            generation = routed_snapshot.generation,
+                            "routed generation's selected configuration is not visible to its agent; deferring request to a newer generation"
+                        );
+                        deferred.defer(routed_snapshot.generation, request);
+                        continue;
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            request_id = %request.request_id,
+                            session_id = %request.session_id,
+                            agent_did = %resolution.agent_did,
+                            error = %error,
+                            "selected configuration read failed; leaving request pending"
+                        );
+                        continue;
+                    }
+                }
                 let dispatcher = routed_snapshot
                     .dispatchers
                     .get(&resolution.agent_did)
@@ -344,6 +380,7 @@ pub(super) struct RouterWaitState<'a> {
         crate::runtime::node_readiness_publisher::AgentAdmissionObservation,
     >,
     pub(super) pending_request: &'a mut Option<AgentRequest>,
+    pub(super) deferred: &'a mut DeferredRequests,
 }
 
 pub(super) async fn wait_for_next_request_with_latest_snapshot<W>(
@@ -370,6 +407,7 @@ where
         admission_changed,
         readiness_changed,
         pending_request,
+        deferred,
     } = wait_state;
     loop {
         let routed_snapshot = active_snapshot_rx.borrow_and_update().clone();
@@ -421,6 +459,9 @@ where
                     &routed_snapshot.configuration_fingerprint(),
                 );
             }
+        }
+        if pending_request.is_none() {
+            *pending_request = deferred.release(routed_snapshot.generation);
         }
         if let Some(request) = pending_request.take() {
             if !watcher.retains_agent(&request.agent_did) {

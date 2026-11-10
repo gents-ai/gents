@@ -28,7 +28,7 @@ async fn create_user_message(
         AgentRequestAdmissionRecord::client(user.did()),
     );
     spec.input.queue = queued_after.map(|active| gents_protocol::request_input::RequestQueue {
-        delivery: Default::default(),
+        delivery: gents_protocol::request_input::QueueDelivery::Steer,
         position: None,
         source: gents_protocol::request_input::QueueSource::User,
         policy: gents_protocol::request_input::QueuePolicy::Append,

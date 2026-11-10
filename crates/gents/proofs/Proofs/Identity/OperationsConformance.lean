@@ -297,7 +297,8 @@ def enrollmentPolicyCasesJson : String :=
 
 def networkProtocolCasesJson : String :=
   let collections := ["Network", "NetworkEnrollmentRequest", "NetworkEnrollmentDecision",
-    "NetworkEnrollmentRouteReceipt", "NetworkAuthorizationRevision", "NodeDirectoryEntry",
+    "NetworkEnrollmentRouteReceipt", "NetworkAuthorizationRevision",
+    "EnrollmentRenewalIntent", "EnrollmentRenewalOffer", "NodeDirectoryEntry",
     "PeerRegistry", "AgentSession"]
   (toJson (collections.map fun name => Json.mkObj [
     ("collection", toJson name), ("resource", toJson (networkProtocolResource name))])).compress

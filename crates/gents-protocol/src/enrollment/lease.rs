@@ -9,6 +9,15 @@ use super::canonical::parse_canonical_timestamp;
 /// sequence. Every protocol-2 node, RC0 included, accepts that generation.
 pub const ENROLLMENT_RENEWAL_WINDOW_SECONDS: u64 = 7 * 24 * 60 * 60;
 
+/// A network's automatic renewal setting, as held by its
+/// `EnrollmentRenewalPolicy` document. Absent, renewal is off; `lease_seconds`
+/// caps the lease an automatic approval grants.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EnrollmentRenewalPolicy {
+    pub enabled: bool,
+    pub lease_seconds: Option<u64>,
+}
+
 /// How a signed authorization lease reads at one observation time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]

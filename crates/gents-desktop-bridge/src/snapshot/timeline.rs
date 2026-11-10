@@ -486,7 +486,7 @@ mod tests {
         ] {
             let message = MessageView {
                 runtime_control: true,
-                origin: Some(crate::types::RequestOriginView::BackgroundCompletion),
+                origin: Some(crate::types::RequestOriginView::BackgroundCompletion { notification: false }),
                 input_text: Some(text.into()),
                 ..user_message("internal-completion", 1, text)
             };

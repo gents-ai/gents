@@ -121,8 +121,11 @@ where
     if preserve {
         return Ok(());
     }
-    let PortReadiness::Outdated { version } =
-        observe_port_readiness(&node_home, user_status_signer(state).await.as_ref()).await?
+    let PortReadiness::Outdated { version } = observe_port_readiness(
+        &node_home,
+        user_status_signer(state, &node_home).await.as_ref(),
+    )
+    .await?
     else {
         return Ok(());
     };

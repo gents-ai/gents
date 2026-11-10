@@ -212,7 +212,12 @@ fn external_inputs_keep_their_sender_and_internal_inputs_remain_inspectable() {
                 RequestOriginView::SessionMessage { .. } => "automated:sessionMessage".into(),
                 RequestOriginView::Trigger { .. } => "automated:trigger".into(),
                 RequestOriginView::GoalContinuation { .. } => "automated:goal".into(),
-                RequestOriginView::BackgroundCompletion => "automated:background".into(),
+                RequestOriginView::BackgroundCompletion { notification: true } => {
+                    "automated:notification".into()
+                }
+                RequestOriginView::BackgroundCompletion {
+                    notification: false,
+                } => "automated:wake".into(),
             },
             other => format!("{other:?}"),
         })
@@ -225,8 +230,8 @@ fn external_inputs_keep_their_sender_and_internal_inputs_remain_inspectable() {
             "automated:sessionMessage",
             "assistant:reviewed",
             "automated:trigger",
-            "automated:background",
-            "automated:background",
+            "automated:notification",
+            "automated:wake",
             "automated:goal",
             "assistant:goal answer",
         ]

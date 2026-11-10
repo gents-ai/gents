@@ -223,6 +223,8 @@ def networkProtocolResource : String → Option String
   | "NetworkEnrollmentDecision" => some "enrollment_records"
   | "NetworkEnrollmentRouteReceipt" => some "enrollment_records"
   | "NetworkAuthorizationRevision" => some "enrollment_records"
+  | "EnrollmentRenewalIntent" => some "enrollment_records"
+  | "EnrollmentRenewalOffer" => some "enrollment_records"
   | "NodeDirectoryEntry" => some "scoped_discovery"
   | "PeerRegistry" => some "discovery"
   | _ => none

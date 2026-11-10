@@ -88,6 +88,7 @@ impl EnrollmentDecisionService {
                     "network_id": pending.request.network_id,
                     "candidate_did": pending.request.candidate_did,
                     "candidate_peer": pending.request.candidate_peer,
+                    "candidate_name": pending.request.candidate_name,
                     "owner_node_did": pending.request.owner_node_did,
                     "signed_request": pending.request,
                     "profile": pending.request.profile,

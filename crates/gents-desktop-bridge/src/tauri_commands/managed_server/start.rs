@@ -68,18 +68,13 @@ where
     }).await?;
     let mut carried_wait = None;
     let mut replace_loaded_job = false;
+    let reader = user_status_signer(state, &node_home).await;
     let (ready, initial_enabled, _lifecycle) =
-        match matching_external_server(&node_home, user_status_signer(state).await.as_ref()).await?
-        {
+        match matching_external_server(&node_home, reader.as_ref()).await? {
             Some(external) => (Some(external), false, lifecycle),
             None => {
                 ensure_launchable_here(app, state)?;
-                let outdated = match observe_port_readiness(
-                    &node_home,
-                    user_status_signer(state).await.as_ref(),
-                )
-                .await?
-                {
+                let outdated = match observe_port_readiness(&node_home, reader.as_ref()).await? {
                     PortReadiness::Outdated { version } => Some(version),
                     _ => None,
                 };
@@ -164,8 +159,11 @@ where
             run_native(native_service(app, state)?, |service| service.stop(false)).await?;
         }
         if gents_server::server_host::initialized_home(&node_home) {
-            ensure_default_port_identity(&node_home, user_status_signer(state).await.as_ref())
-                .await?;
+            ensure_default_port_identity(
+                &node_home,
+                user_status_signer(state, &node_home).await.as_ref(),
+            )
+            .await?;
         }
         gents_server::server_host::ensure_standard_home(
             tauri::async_runtime::handle().inner(),
@@ -190,7 +188,11 @@ where
             },
         )
         .await?;
-        ensure_default_port_identity(&node_home, user_status_signer(state).await.as_ref()).await?;
+        ensure_default_port_identity(
+            &node_home,
+            user_status_signer(state, &node_home).await.as_ref(),
+        )
+        .await?;
         run_native(launchable_native_service(app, state)?, |service| {
             service.install()
         })
@@ -264,8 +266,11 @@ where
     }
     let stored = load_bound_preference(state).await?;
     let native = run_native(native_service(app, state)?, |service| service.status()).await?;
-    let mut status = if let Some(external) =
-        matching_external_server(&node_home, user_status_signer(state).await.as_ref()).await?
+    let mut status = if let Some(external) = matching_external_server(
+        &node_home,
+        user_status_signer(state, &node_home).await.as_ref(),
+    )
+    .await?
     {
         project_external_status(external, &native)
     } else {

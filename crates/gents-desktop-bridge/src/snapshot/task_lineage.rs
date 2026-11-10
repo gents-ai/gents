@@ -17,6 +17,13 @@ pub(super) struct LineageIndex {
     rows: Vec<Row>,
     by_scope: BTreeMap<Scope, Option<usize>>,
     cache: BTreeMap<(String, Scope), Option<String>>,
+    scoped_cache: BTreeMap<Scope, Option<ScopedTask>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct ScopedTask {
+    pub node: String,
+    pub task: String,
 }
 
 impl LineageIndex {
@@ -32,6 +39,7 @@ impl LineageIndex {
             rows,
             by_scope,
             cache: BTreeMap::new(),
+            scoped_cache: BTreeMap::new(),
         }
     }
 
@@ -63,6 +71,39 @@ impl LineageIndex {
             self.cache.insert((owner.to_owned(), scope), task.clone());
         }
         task
+    }
+
+    pub fn originating_scoped_task(&mut self, scope: &Scope) -> Option<ScopedTask> {
+        let mut current = scope.clone();
+        let mut visited = BTreeSet::new();
+        let mut path = Vec::new();
+        let result = loop {
+            if !visited.insert(current.clone()) {
+                break None;
+            }
+            if let Some(cached) = self.scoped_cache.get(&current) {
+                break cached.clone();
+            }
+            path.push(current.clone());
+            let Some(Some(index)) = self.by_scope.get(&current) else {
+                break None;
+            };
+            let row = &self.rows[*index];
+            if let Some(task) = &row.task {
+                break Some(ScopedTask {
+                    node: current.node.clone(),
+                    task: task.clone(),
+                });
+            }
+            let Some(parent) = &row.starter else {
+                break None;
+            };
+            current = parent.clone();
+        };
+        for scope in path {
+            self.scoped_cache.insert(scope, result.clone());
+        }
+        result
     }
 }
 
@@ -116,6 +157,49 @@ mod tests {
             assert_eq!(
                 index.originating_task("other-node", &scope(&case["scope"])),
                 None
+            );
+        }
+    }
+
+    #[test]
+    fn generated_scoped_lineage_cases_preserve_the_task_owner() {
+        let contract: Value = gents_lean_contract::load_contract_snapshot().unwrap();
+        let cases: Vec<_> = contract["session_document_cases"]["projection"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|case| case["operation"] == "task_lineage_scoped")
+            .collect();
+        assert!(!cases.is_empty());
+        for case in cases {
+            let rows = case["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| Row {
+                    scope: scope(&row["scope"]),
+                    task: row["task"].as_u64().map(|value| value.to_string()),
+                    starter: (!row["starter"].is_null()).then(|| scope(&row["starter"])),
+                })
+                .collect();
+            let expected =
+                case["task"]
+                    .as_u64()
+                    .zip(case["task_node"].as_u64())
+                    .map(|(task, node)| ScopedTask {
+                        task: task.to_string(),
+                        node: node.to_string(),
+                    });
+            let mut index = LineageIndex::new(rows);
+            assert_eq!(
+                index.originating_scoped_task(&scope(&case["scope"])),
+                expected,
+                "{}",
+                case["name"]
+            );
+            assert_eq!(
+                index.originating_scoped_task(&scope(&case["scope"])),
+                expected
             );
         }
     }

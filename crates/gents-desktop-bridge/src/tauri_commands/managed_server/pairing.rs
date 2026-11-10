@@ -30,7 +30,7 @@ pub(in crate::tauri_commands) async fn start_running_managed_pairing(
     };
     let target = match matching_external_server(
         &node_home,
-        user_status_signer(state).await.as_ref(),
+        user_status_signer(state, &node_home).await.as_ref(),
     )
     .await
     {
@@ -65,10 +65,13 @@ pub(super) async fn enroll_managed_runtime(
     let node_home = state.policy.node_home.clone().ok_or_else(|| {
         PairingFailure::Permanent("managed enrollment requires a local node home".into())
     })?;
-    let status = matching_external_server(&node_home, user_status_signer(state).await.as_ref())
-        .await
-        .map_err(|error| PairingFailure::Transient(error.to_string()))?
-        .ok_or_else(|| PairingFailure::Permanent("managed runtime is not running".into()))?;
+    let status = matching_external_server(
+        &node_home,
+        user_status_signer(state, &node_home).await.as_ref(),
+    )
+    .await
+    .map_err(|error| PairingFailure::Transient(error.to_string()))?
+    .ok_or_else(|| PairingFailure::Permanent("managed runtime is not running".into()))?;
     let target = pairing_target(&status).ok_or_else(|| {
         PairingFailure::Permanent("managed runtime has no enrollment endpoint".into())
     })?;
