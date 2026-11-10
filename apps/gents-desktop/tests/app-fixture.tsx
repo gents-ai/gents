@@ -19,6 +19,7 @@ import type { FlagId } from "../src/ui/lib/flags";
 import { bindNav, type Route } from "../src/ui/lib/router";
 import { resetPreferences } from "../src/ui/preferences";
 import { deployment } from "./config-panel-wiring/fixtures";
+import { memorySendAttachments } from "./send-attachments-fixture";
 
 export function node(overrides: Record<string, unknown> = {}) {
   return { ...deployment, sessions: [], mailboxItems: [], ...overrides };
@@ -60,6 +61,7 @@ export function testApp({
     reportFailure,
     supportsManagedServer,
     sharing,
+    sendAttachments: memorySendAttachments(),
   });
   if (snapshot) publishSnapshot(app, snapshot as DesktopClientSnapshot);
   if (deployments) publish(app, deployments);

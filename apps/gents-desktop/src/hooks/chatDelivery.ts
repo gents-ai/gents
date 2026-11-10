@@ -5,21 +5,20 @@ import {
   type DesktopApiAdapter,
 } from "@source-inc/gents-desktop-client";
 import {
-  chatDraftOf,
   chatDraftPayload,
-  chatDraftRequest,
   chatDraftsFor,
   forgetChatDraftAttachments,
   loadChatDrafts,
   removeChatDraft,
-  retainChatDraft,
   saveChatDraft,
+  saveNewChatDraft,
   savedChatDraft,
   validateChatResult,
   type ChatDraft,
 } from "./chatDrafts";
 import { deliveryAffordances, nextSendDeadline, sendStatus } from "./chatDeliveryView";
 import type { ChatStore } from "./chatStore";
+import type { SendAttachmentStore } from "./sendAttachments";
 import type { ShellStores } from "./shellProjection";
 import { heldFor, sessionShowsRequest } from "./sessionStore";
 
@@ -52,6 +51,13 @@ export class ChatViewUpdateError extends Error {
 
 type Reply = { ok: true; result: ChatSendResult } | { ok: false; error: unknown };
 
+/** `next(value)`, in the calling task when `value` is already known. Only
+ * attachment bytes are waited for, so a send without them is saved and
+ * dispatched in the task that submitted it. */
+function proceed<T, U>(value: T | Promise<T>, next: (value: T) => U) {
+  return value instanceof Promise ? value.then(next) : next(value);
+}
+
 /** The runtime holds the message (Lean `onReply true`, `onObserve`). A chat
  * message keeps no payload; a mailbox answer stays saved, confirmed, until its
  * question is observed closed. */
@@ -75,6 +81,7 @@ function confirm(store: ChatStore, current: ChatDraft) {
 export function createChatDelivery(
   api: DesktopApiAdapter,
   stores: ShellStores,
+  attachments: SendAttachmentStore,
   now: () => number = Date.now,
 ) {
   function clientDid() {
@@ -128,37 +135,31 @@ export function createChatDelivery(
       await applied(reply.result, current);
     } catch (error) {
       throw new ChatViewUpdateError(reply.result, error);
+    } finally {
+      if (!current.mailbox) await forgetChatDraftAttachments(attachments, current);
     }
     return reply.result;
   }
-  async function send(
-    draft: ChatDraft,
-    applied: Applied,
-    saved?: Saved,
-    fresh = false,
-  ) {
-    const attempt: ChatDraft = {
+  /** Saves `draft` as a send in flight until its deadline. */
+  function attempt(draft: ChatDraft) {
+    if (clientDid() !== draft.clientDid)
+      throw new Error("The selected client changed before dispatch.");
+    const pending: ChatDraft = {
       ...draft,
       failure: undefined,
       pendingUntil: now() + CHAT_SEND_DEADLINE_MS,
     };
-    try {
-      if (clientDid() !== draft.clientDid)
-        throw new Error("The selected client changed before dispatch.");
-      saveChatDraft(stores.chat, attempt);
-    } catch (error) {
-      // A new send that was never saved keeps no attachment bytes.
-      if (fresh) forgetChatDraftAttachments(draft);
-      throw error;
-    }
+    saveChatDraft(stores.chat, pending);
+    return pending;
+  }
+  /** Dispatches a saved attempt and settles its reply. */
+  async function send(attempt: ChatDraft, applied: Applied, saved?: Saved) {
     saved?.(attempt);
     const reply: Promise<Reply> = (async () => {
       try {
-        // Without attachments the send is dispatched in the task that saved it.
-        const result = await api.sendChatMessage(
-          attempt.attachments?.length
-            ? await chatDraftPayload(attempt)
-            : chatDraftRequest(attempt),
+        const result = await proceed(
+          chatDraftPayload(attachments, attempt),
+          (payload) => api.sendChatMessage(payload),
         );
         validateChatResult(attempt, result);
         return { ok: true as const, result };
@@ -201,10 +202,7 @@ export function createChatDelivery(
         requestId: crypto.randomUUID(),
         sessionId: request.sessionId ?? crypto.randomUUID(),
       };
-      const draft = input.attachments?.length
-        ? await retainChatDraft(input, selectedSessionId, queued, mailbox)
-        : chatDraftOf(input, selectedSessionId, queued, mailbox);
-      try {
+      const admitted = (draft: ChatDraft) => {
         if (
           chatDraftsFor(
             load(),
@@ -221,11 +219,19 @@ export function createChatDelivery(
           throw new Error(
             "Retry or discard the saved answer before answering this question again.",
           );
-      } catch (error) {
-        forgetChatDraftAttachments(draft);
-        throw error;
-      }
-      return send(draft, applied, saved, true);
+        return attempt(draft);
+      };
+      return proceed(
+        saveNewChatDraft(
+          attachments,
+          input,
+          selectedSessionId,
+          queued,
+          mailbox,
+          admitted,
+        ),
+        (draft) => send(draft, applied, saved),
+      );
     },
     /** Resend a failed message: the same payload under the same identity. */
     async retry(requestId: string, applied: Applied) {
@@ -234,7 +240,7 @@ export function createChatDelivery(
       if (status === "pending") throw new Error("This message is still being sent.");
       if (status === "confirmed")
         throw new Error("This message was already delivered.");
-      return send(draft, applied);
+      return send(attempt(draft), applied);
     },
     /** Discard a failed message. It sends nothing; if an earlier send of it
      * reached the runtime, it still appears in the session. */
@@ -243,6 +249,7 @@ export function createChatDelivery(
       if (sendStatus(draft, now()) !== "failed")
         throw new Error("Only a message that wasn't sent can be discarded.");
       removeChatDraft(stores.chat, draft);
+      await forgetChatDraftAttachments(attachments, draft);
     },
   };
 }

@@ -27,6 +27,7 @@ import {
 import { acceptedChat } from "../chat-delivery-fixture";
 import { goalDeliveryStorage } from "../goal-delivery-storage";
 import { shellStores } from "../shell-fixture";
+import { memorySendAttachments } from "../send-attachments-fixture";
 
 type ViewCase = Omit<DeliveryAffordances, "view"> & {
   status: SendStatus;
@@ -98,7 +99,7 @@ async function replay(trace: Trace, mailbox: boolean) {
         wire.push({ request, resolve, reject }),
       ),
   } as unknown as DesktopApiAdapter;
-  const delivery = createChatDelivery(api, stores);
+  const delivery = createChatDelivery(api, stores, memorySendAttachments());
   const stopObserving = observeLandedChatSends(stores);
   const applied = async () => true;
   let requestId: string | null = null;

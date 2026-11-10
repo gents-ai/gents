@@ -28,7 +28,7 @@ function description(draft: ChatDraft) {
     const request = chatDraftRequest(draft);
     return [
       request.content,
-      ...(draft.attachments ?? []).map((attachment) => attachment.name),
+      ...(request.attachments ?? []).map((attachment) => attachment.name),
     ]
       .filter(Boolean)
       .join("\n");

@@ -9,6 +9,7 @@ import type {
 import { createMailboxActions } from "../src/hooks/mailboxActions";
 import { loadChatDrafts } from "../src/hooks/chatDrafts";
 import { shellStores } from "./shell-fixture";
+import { memorySendAttachments } from "./send-attachments-fixture";
 
 const item: MailboxItemView = {
   itemId: "item-1",
@@ -41,6 +42,7 @@ function mailbox(api: DesktopApiAdapter) {
     stores,
     refreshSnapshot: async () => {},
     reportFailure: () => {},
+    sendAttachments: memorySendAttachments(),
   });
   return { store: stores.selection, actions };
 }

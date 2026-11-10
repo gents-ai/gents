@@ -20,6 +20,7 @@ import { admittingProjection, shellStores } from "./shell-fixture";
 import { goalDeliveryStorage } from "./goal-delivery-storage";
 import { acceptedChat } from "./chat-delivery-fixture";
 import { deferred } from "./deferred";
+import { memorySendAttachments } from "./send-attachments-fixture";
 
 beforeEach(() => vi.stubGlobal("localStorage", goalDeliveryStorage()));
 afterEach(() => {
@@ -42,6 +43,7 @@ function fixture(sessionId: string | null = "session") {
     .mockRejectedValue(new Error("Outer reply was lost"));
   const report = vi.fn();
   const projection = admittingProjection("agent");
+  const sendAttachments = memorySendAttachments();
   const actions = () =>
     createChatActions({
       api: { sendChatMessage: send } as unknown as DesktopApiAdapter,
@@ -50,6 +52,7 @@ function fixture(sessionId: string | null = "session") {
       refreshSession: vi.fn(),
       refreshSnapshot: vi.fn(),
       reportFailure: report,
+      sendAttachments,
     });
   return { stores, send, report, projection, actions };
 }
@@ -162,6 +165,7 @@ it("keeps a confirmed message confirmed when the chat view cannot show it", asyn
   const delivery = createChatDelivery(
     { sendChatMessage: f.send } as unknown as DesktopApiAdapter,
     f.stores,
+    memorySendAttachments(),
   );
   const shown = delivery.submit(
     { clientDid: "client", nodeDid: "node", sessionId: "session", content: "Original" },
@@ -187,6 +191,7 @@ it("shows every window the same status and lets no window discard another window
   const other = createChatDelivery(
     { sendChatMessage: f.send } as unknown as DesktopApiAdapter,
     { ...f.stores, chat: createChatStore() },
+    memorySendAttachments(),
   );
   const [seen] = loadChatDrafts().chatDrafts;
   expect(sendStatus(seen, Date.now())).toBe("pending");

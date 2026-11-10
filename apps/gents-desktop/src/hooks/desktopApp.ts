@@ -29,6 +29,8 @@ import type { ShellStores } from "./shellProjection";
 import { createShellView, type ShellViewStore } from "./shellView";
 import { observeMailboxAnswerRetirement } from "./mailboxAnswerRetirement";
 import { observeLandedChatSends } from "./chatDelivery";
+import { pruneChatDraftAttachments } from "./chatDrafts";
+import { indexedDbSendAttachments, type SendAttachmentStore } from "./sendAttachments";
 import { seenMarks } from "../ui/app/sessionViews";
 import { mailboxSeen } from "../ui/app/mailboxSeen";
 import { seenMarkOf } from "../ui/lib/seen";
@@ -43,13 +45,17 @@ export type DesktopBridge = {
   sharing?: SharingAdapter;
 };
 
-export type DesktopAppParams = Omit<DesktopBridge, "listenToUpdates">;
+export type DesktopAppParams = Omit<DesktopBridge, "listenToUpdates"> & {
+  /** Where saved sends keep their attachment bytes. */
+  sendAttachments?: SendAttachmentStore;
+};
 
 export function createDesktopApp({
   api,
   supportsManagedServer = false,
   reportFailure,
   sharing: given,
+  sendAttachments = indexedDbSendAttachments(),
 }: DesktopAppParams) {
   const stores: ShellStores & {
     providers: ProviderStore;
@@ -67,6 +73,7 @@ export function createDesktopApp({
     localServer: createLocalServerStore(),
     provenance: createProvenanceStore(),
   };
+  void pruneChatDraftAttachments(sendAttachments);
   const view = createShellView(stores);
   const project = () => view.getState();
   followTranscript(stores, view);
@@ -100,6 +107,7 @@ export function createDesktopApp({
       reads,
       client: lifecycle,
       reportFailure: reportAction,
+      sendAttachments,
     }),
     ...createProviders({ api, store: stores.providers, client: stores.client }),
     ...localServer,

@@ -7,15 +7,17 @@ import type {
   RequestAttachment,
 } from "@source-inc/gents-desktop-client";
 import { createChatDelivery } from "../src/hooks/chatDelivery";
-import { chatDraftKey, loadChatDrafts } from "../src/hooks/chatDrafts";
-import { createChatStore } from "../src/hooks/chatStore";
 import {
-  memorySendAttachments,
-  setSendAttachments,
-  type SendAttachmentStore,
-} from "../src/hooks/sendAttachments";
+  chatDraftKey,
+  chatDraftRequest,
+  loadChatDrafts,
+  pruneChatDraftAttachments,
+} from "../src/hooks/chatDrafts";
+import { createChatStore } from "../src/hooks/chatStore";
+import type { SendAttachmentStore } from "../src/hooks/sendAttachments";
 import { shellStores } from "./shell-fixture";
 import { acceptedChat } from "./chat-delivery-fixture";
+import { memorySendAttachments } from "./send-attachments-fixture";
 
 /* WebKit refuses a localStorage write once the origin holds about 5 Mi
    characters, which one base64 attachment at the 4 MiB file cap exceeds. */
@@ -61,15 +63,10 @@ const SECOND: RequestAttachment = {
   data: "bm90ZXM=",
 };
 
-let kept: SendAttachmentStore;
-beforeEach(() => {
-  vi.stubGlobal("localStorage", webkitLocalStorage());
-  kept = memorySendAttachments();
-  setSendAttachments(kept);
-});
+beforeEach(() => vi.stubGlobal("localStorage", webkitLocalStorage()));
 afterEach(() => vi.unstubAllGlobals());
 
-function fixture() {
+function fixture(kept: SendAttachmentStore = memorySendAttachments()) {
   const stores = shellStores({
     deployments: [{ nodeDid: "node", sessions: [], mailboxItems: [] }],
     selection: { nodeDid: "node", sessionId: "session" },
@@ -84,6 +81,7 @@ function fixture() {
     createChatDelivery(
       { sendChatMessage: send } as unknown as DesktopApiAdapter,
       stores,
+      kept,
     );
   const submit = () =>
     delivery().submit(
@@ -98,7 +96,7 @@ function fixture() {
       false,
       async () => true,
     );
-  return { stores, send, delivery, submit };
+  return { stores, kept, send, delivery, submit };
 }
 
 it("keeps large attachments out of localStorage and resends them after a restart", async () => {
@@ -109,7 +107,7 @@ it("keeps large attachments out of localStorage and resends them after a restart
   const [failed] = loadChatDrafts().chatDrafts;
   const entry = localStorage.getItem(chatDraftKey(failed))!;
   expect(entry.length).toBeLessThan(2_000);
-  expect(failed.attachments).toEqual([
+  expect(chatDraftRequest(failed).attachments).toEqual([
     expect.objectContaining({ name: "scan.pdf", size: 4 * 1024 * 1024 }),
     expect.objectContaining({ name: "notes.txt", size: 5 }),
   ]);
@@ -120,27 +118,22 @@ it("keeps large attachments out of localStorage and resends them after a restart
   await f.delivery().retry(failed.requestId, async () => true);
   expect(f.send.mock.calls[1][0]).toEqual(request);
   expect(loadChatDrafts().chatDrafts).toEqual([]);
-  await vi.waitFor(async () =>
-    expect(await kept.get(chatDraftKey(failed))).toBeUndefined(),
-  );
+  expect(await f.kept.get(chatDraftKey(failed))).toBeUndefined();
 });
 
 it("drops the kept bytes when a failed send is discarded", async () => {
   const f = fixture();
   await expect(f.submit()).rejects.toThrow();
   const [failed] = loadChatDrafts().chatDrafts;
-  expect(await kept.get(chatDraftKey(failed))).toHaveLength(2);
+  expect(await f.kept.get(chatDraftKey(failed))).toHaveLength(2);
   await f.delivery().discard(failed.requestId);
   expect(loadChatDrafts().chatDrafts).toEqual([]);
-  await vi.waitFor(async () =>
-    expect(await kept.get(chatDraftKey(failed))).toBeUndefined(),
-  );
+  expect(await f.kept.get(chatDraftKey(failed))).toBeUndefined();
 });
 
 it("refuses a send whose attachments cannot be kept, before saving or dispatching it", async () => {
-  const f = fixture();
-  setSendAttachments({
-    ...kept,
+  const f = fixture({
+    ...memorySendAttachments(),
     put: async () => {
       throw new Error("This window has no IndexedDB.");
     },
@@ -156,15 +149,45 @@ it("fails a retry clearly when the kept bytes are gone or changed, without sendi
   const f = fixture();
   await expect(f.submit()).rejects.toThrow();
   const [failed] = loadChatDrafts().chatDrafts;
-  await kept.put(chatDraftKey(failed), [SECOND.data, SECOND.data]);
+  await f.kept.put(chatDraftKey(failed), [SECOND.data, SECOND.data]);
   await expect(f.delivery().retry(failed.requestId, async () => true)).rejects.toThrow(
     /attachments are no longer saved on this device/,
   );
-  await kept.delete(chatDraftKey(failed));
+  await f.kept.delete(chatDraftKey(failed));
   await expect(f.delivery().retry(failed.requestId, async () => true)).rejects.toThrow(
     /attachments are no longer saved on this device/,
   );
   expect(f.send).toHaveBeenCalledTimes(1);
   const [still] = loadChatDrafts().chatDrafts;
   expect(still.failure?.message).toMatch(/Discard it and attach the files again/);
+});
+
+it("drops the kept bytes of a send that is refused before it is saved", async () => {
+  const f = fixture();
+  const put = vi.spyOn(f.kept, "put");
+  const remove = vi.spyOn(f.kept, "delete");
+  vi.spyOn(localStorage, "setItem").mockImplementationOnce(() => {
+    throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
+  });
+  await expect(f.submit()).rejects.toThrow("The quota has been exceeded.");
+  expect(f.send).not.toHaveBeenCalled();
+  const [key] = put.mock.calls[0];
+  expect(remove).toHaveBeenCalledWith(key);
+  expect(await f.kept.get(key)).toBeUndefined();
+});
+
+it("prunes the bytes no saved send refers to once they are not new", async () => {
+  let at = 1_000_000;
+  const f = fixture(memorySendAttachments(() => at));
+  await expect(f.submit()).rejects.toThrow();
+  const [failed] = loadChatDrafts().chatDrafts;
+  await f.kept.put("released", [SECOND.data]);
+  await pruneChatDraftAttachments(f.kept, at);
+  expect(await f.kept.get("released")).toHaveLength(1);
+  at += 60_001;
+  await f.kept.put("unsaved", [SECOND.data]);
+  await pruneChatDraftAttachments(f.kept, at);
+  expect(await f.kept.get("released")).toBeUndefined();
+  expect(await f.kept.get("unsaved")).toHaveLength(1);
+  expect(await f.kept.get(chatDraftKey(failed))).toHaveLength(2);
 });

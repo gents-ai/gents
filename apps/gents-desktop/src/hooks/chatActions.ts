@@ -34,6 +34,7 @@ import { heldFor, readSession } from "./sessionStore";
 import type { ShellProjection, ShellStores } from "./shellProjection";
 import { ChatViewUpdateError, createChatDelivery } from "./chatDelivery";
 import { chatDraftRequest, type ChatDraft } from "./chatDrafts";
+import type { SendAttachmentStore } from "./sendAttachments";
 import { createGoalDelivery } from "./goalDelivery";
 import { goalDraftCommand, type GoalDraft } from "./goalDrafts";
 import { GOAL_CHANGED, GOAL_NEXT_STEP, GOAL_NOT_CURRENT } from "./goalState";
@@ -47,6 +48,7 @@ type ChatActionParams = {
   ) => Promise<DesktopSessionSnapshot | null>;
   refreshSnapshot: () => Promise<void>;
   reportFailure: (message: string) => void;
+  sendAttachments: SendAttachmentStore;
 };
 
 function queueEditFailure(
@@ -110,12 +112,13 @@ export function createChatActions({
   refreshSession,
   refreshSnapshot,
   reportFailure,
+  sendAttachments,
 }: ChatActionParams) {
   const store = stores.selection;
   let submissionInFlight = false;
   const forkDestinations = new Map<string, string>();
   const goalDelivery = createGoalDelivery(api, stores);
-  const chatDelivery = createChatDelivery(api, stores);
+  const chatDelivery = createChatDelivery(api, stores, sendAttachments);
 
   const selectedNode = () => nodeOf(stores.fleet.getState(), store.getState().nodeDid);
   const folderFor = (nodeDid: string | null | undefined, sessionId: string | null) =>
@@ -193,7 +196,7 @@ export function createChatActions({
     try {
       request = chatDraftRequest(draft);
     } catch {}
-    const attachmentViews = draft.attachments ?? [];
+    const attachmentViews = request?.attachments ?? [];
     if (draft.selectedSessionId === null) {
       if (request)
         writeChatFolders(stores.chat, (folders) =>

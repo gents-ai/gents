@@ -1,15 +1,8 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
-import { afterAll, afterEach, beforeAll, beforeEach } from "vitest";
-import {
-  memorySendAttachments,
-  setSendAttachments,
-} from "../src/hooks/sendAttachments";
+import { afterAll, afterEach, beforeAll } from "vitest";
 
 const originalConsoleError = console.error.bind(console);
-
-/* jsdom has no IndexedDB; each test keeps its sends' attachments in memory */
-beforeEach(() => setSendAttachments(memorySendAttachments()));
 
 afterEach(async () => {
   cleanup();

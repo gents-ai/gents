@@ -6,7 +6,7 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import { attachmentMetadata } from "./attachmentMetadata";
 import type { ChatStore } from "./chatStore";
-import { sendAttachments } from "./sendAttachments";
+import type { SendAttachmentStore } from "./sendAttachments";
 
 const PREFIX = "gents.chat.sendDraft.v1:";
 /** The base client's list of sends with an unknown outcome and no kept
@@ -23,12 +23,11 @@ export type ChatDraft = {
   queued: boolean;
   mailbox?: { nodeDid: string; itemId: string; summary: string };
   /** The authored payload, kept until the runtime confirms it (Lean
-   * `ClientOptimisticSend.payload_retained`); a retry resends it as is. The
-   * attachment bytes are kept beside it in `sendAttachments` under the
-   * draft's key, so this holds the request without them. */
+   * `ClientOptimisticSend.payload_retained`); a retry resends it as is. Its
+   * attachments are views (name, type, digest, size): their bytes are kept
+   * in a `SendAttachmentStore` under the draft's key, and a retry sends only
+   * bytes that match. */
   requestJson: string;
-  /** The kept attachments, in order; a retry sends only bytes that match. */
-  attachments?: AttachmentView[];
   /** The runtime holds this request. Only a mailbox answer stays saved once
    * confirmed, until its question is observed closed. A draft saved by the
    * base client with its receipt (`result`) was confirmed too. */
@@ -53,15 +52,10 @@ const attachmentView = (value: unknown): value is AttachmentView =>
   typeof value.digest === "string" &&
   typeof value.size === "number";
 
-/** Drops the kept attachment bytes of a send that is released, discarded or
- * never saved. A failed delete leaves unreferenced bytes, never a send
- * without them. */
-export function forgetChatDraftAttachments(draft: ChatDraft) {
-  if (draft.attachments?.length)
-    void sendAttachments()
-      .delete(chatDraftKey(draft))
-      .catch(() => {});
-}
+/** A saved input: the request with its attachments as views. */
+export type SavedChatInput = Omit<ChatSendRequest, "attachments"> & {
+  attachments?: AttachmentView[];
+};
 
 export function chatDraftKey(
   draft: Pick<ChatDraft, "clientDid" | "nodeDid" | "requestId">,
@@ -105,16 +99,6 @@ function decode(value: unknown): ChatDraft {
       summary: value.mailbox.summary,
     };
   }
-  if (value.attachments !== undefined) {
-    if (!Array.isArray(value.attachments) || !value.attachments.every(attachmentView))
-      throw new Error("The saved message's attachments could not be read.");
-    draft.attachments = value.attachments.map(({ name, mediaType, digest, size }) => ({
-      name,
-      mediaType,
-      digest,
-      size,
-    }));
-  }
   if (value.confirmed === true || object(value.result)) draft.confirmed = true;
   else if (
     typeof value.pendingUntil === "number" &&
@@ -138,7 +122,7 @@ export function loadChatDrafts(): {
   try {
     localStorage.removeItem(ABANDONED_UNRESOLVED);
     const chatDrafts: ChatDraft[] = [];
-    const released: ChatDraft[] = [];
+    const released: string[] = [];
     for (let index = 0; index < localStorage.length; index++) {
       const key = localStorage.key(index);
       if (!key?.startsWith(PREFIX)) continue;
@@ -147,13 +131,10 @@ export function loadChatDrafts(): {
         throw new Error("The saved message identity is inconsistent.");
       // A confirmed chat message keeps no payload (Lean `onReply`); only a
       // confirmed answer waits for its question to close.
-      if (draft.confirmed && !draft.mailbox) released.push(draft);
+      if (draft.confirmed && !draft.mailbox) released.push(key);
       else chatDrafts.push(draft);
     }
-    for (const draft of released) {
-      localStorage.removeItem(chatDraftKey(draft));
-      forgetChatDraftAttachments(draft);
-    }
+    for (const key of released) localStorage.removeItem(key);
     return { chatDrafts, chatDraftError: null };
   } catch (error) {
     return {
@@ -164,48 +145,53 @@ export function loadChatDrafts(): {
   }
 }
 
-/** The draft of a request without attachments. A request with attachments
- * is kept through `retainChatDraft`, which keeps their bytes first. */
+/** The draft of `request`, whose attachments are saved as `attachments`,
+ * their views in order. */
 export function chatDraftOf(
   request: ChatSendRequest,
   selectedSessionId: string | null,
   queued = false,
   mailbox?: ChatDraft["mailbox"],
-  attachments?: AttachmentView[],
+  attachments: AttachmentView[] = [],
 ): ChatDraft {
   const { attachments: files, ...input } = request;
-  if (files?.length && files.length !== attachments?.length)
+  if ((files?.length ?? 0) !== attachments.length)
     throw new Error("The message's attachments were not kept.");
+  const saved: SavedChatInput = attachments.length ? { ...input, attachments } : input;
   return decode({
     ...input,
     selectedSessionId,
     queued,
     mailbox,
-    requestJson: JSON.stringify(input),
-    attachments: attachments?.length ? attachments : undefined,
+    requestJson: JSON.stringify(saved),
   });
 }
 
-/** The draft of a new send. Its attachment bytes are kept before it returns,
- * so a send whose bytes cannot be kept is refused before anything is saved
- * or dispatched; the caller saves the draft or abandons it. */
-export async function retainChatDraft(
+/** Saves a new send with `save`, which returns the draft as saved. Its
+ * attachment bytes are kept first, so a send whose bytes cannot be kept is
+ * refused before it is saved, and the bytes of a send `save` refuses are
+ * deleted. A send without attachments is saved in the calling task. */
+export function saveNewChatDraft(
+  store: SendAttachmentStore,
   request: ChatSendRequest,
   selectedSessionId: string | null,
-  queued = false,
-  mailbox?: ChatDraft["mailbox"],
-): Promise<ChatDraft> {
+  queued: boolean,
+  mailbox: ChatDraft["mailbox"],
+  save: (draft: ChatDraft) => ChatDraft,
+): ChatDraft | Promise<ChatDraft> {
   const files = request.attachments ?? [];
-  const draft = chatDraftOf(
-    request,
-    selectedSessionId,
-    queued,
-    mailbox,
-    await Promise.all(files.map(attachmentMetadata)),
-  );
-  if (files.length)
+  if (!files.length)
+    return save(chatDraftOf(request, selectedSessionId, queued, mailbox));
+  return (async () => {
+    const draft = chatDraftOf(
+      request,
+      selectedSessionId,
+      queued,
+      mailbox,
+      await Promise.all(files.map(attachmentMetadata)),
+    );
     try {
-      await sendAttachments().put(
+      await store.put(
         chatDraftKey(draft),
         files.map((file) => file.data),
       );
@@ -216,11 +202,17 @@ export async function retainChatDraft(
         }`,
       );
     }
-  return draft;
+    try {
+      return save(draft);
+    } catch (error) {
+      await forgetChatDraftAttachments(store, draft);
+      throw error;
+    }
+  })();
 }
 
-/** The saved input without its attachment bytes. */
-export function chatDraftRequest(draft: ChatDraft): ChatSendRequest {
+/** The saved input, its attachments as views. */
+export function chatDraftRequest(draft: ChatDraft): SavedChatInput {
   const request: unknown = JSON.parse(draft.requestJson);
   if (
     !object(request) ||
@@ -229,47 +221,88 @@ export function chatDraftRequest(draft: ChatDraft): ChatSendRequest {
     request.requestId !== draft.requestId ||
     request.sessionId !== draft.sessionId ||
     typeof request.content !== "string" ||
+    !(
+      request.attachments === undefined ||
+      (Array.isArray(request.attachments) && request.attachments.every(attachmentView))
+    ) ||
     (draft.mailbox !== undefined &&
       request.causedBySourceDocId !== draft.mailbox.itemId)
   )
     throw new Error("The saved message input is unreadable or has changed identity.");
-  return request as ChatSendRequest;
+  return request as SavedChatInput;
 }
 
 /** The whole payload a send or retry dispatches: the saved input with the
- * kept attachment bytes, which must still match what was sent first. */
-export async function chatDraftPayload(draft: ChatDraft): Promise<ChatSendRequest> {
-  const request = chatDraftRequest(draft);
-  if (!draft.attachments?.length) return request;
-  const kept = draft.attachments;
-  let data: string[] | undefined;
-  try {
-    data = await sendAttachments().get(chatDraftKey(draft));
-  } catch (error) {
-    throw new Error(
-      `This message's attachments could not be read on this device, so it was not sent: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
-  }
-  const attachments =
-    data?.length === kept.length
-      ? kept.map(({ name, mediaType }, index) => ({
-          name,
-          mediaType,
-          data: data[index],
-        }))
-      : null;
-  if (
-    !attachments ||
-    (await Promise.all(attachments.map(attachmentMetadata))).some(
-      (view, index) => view.digest !== kept[index].digest,
+ * kept attachment bytes, which must still match what was sent first. A send
+ * without attachments has nothing to read, so its payload is ready in the
+ * calling task. */
+export function chatDraftPayload(
+  store: SendAttachmentStore,
+  draft: ChatDraft,
+): ChatSendRequest | Promise<ChatSendRequest> {
+  const { attachments: kept = [], ...input } = chatDraftRequest(draft);
+  if (!kept.length) return input;
+  return (async () => {
+    let data: string[] | undefined;
+    try {
+      data = await store.get(chatDraftKey(draft));
+    } catch (error) {
+      throw new Error(
+        `This message's attachments could not be read on this device, so it was not sent: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    const attachments =
+      data?.length === kept.length
+        ? kept.map(({ name, mediaType }, index) => ({
+            name,
+            mediaType,
+            data: data[index],
+          }))
+        : null;
+    if (
+      !attachments ||
+      (await Promise.all(attachments.map(attachmentMetadata))).some(
+        (view, index) => view.digest !== kept[index].digest,
+      )
     )
-  )
-    throw new Error(
-      "This message's attachments are no longer saved on this device, so it was not sent. Discard it and attach the files again.",
-    );
-  return { ...request, attachments };
+      throw new Error(
+        "This message's attachments are no longer saved on this device, so it was not sent. Discard it and attach the files again.",
+      );
+    return { ...input, attachments };
+  })();
+}
+
+/** Deletes the kept attachment bytes of a send that is released, discarded
+ * or never saved. A failed delete leaves bytes no saved send refers to,
+ * which `pruneChatDraftAttachments` removes, never a send without them. */
+export async function forgetChatDraftAttachments(
+  store: SendAttachmentStore,
+  draft: ChatDraft,
+) {
+  let kept = true;
+  try {
+    kept = Boolean(chatDraftRequest(draft).attachments?.length);
+  } catch {}
+  if (kept) await store.delete(chatDraftKey(draft)).catch(() => {});
+}
+
+/** A send keeps its bytes moments before it is saved, so bytes kept this
+ * recently may belong to a send no window has saved yet. */
+const UNSAVED_ATTACHMENTS_MS = 60_000;
+
+/** Deletes the kept attachment bytes no saved send refers to: those of
+ * sends released in another window, confirmed by observation, or whose
+ * delete failed. Run as the saved sends load; a failed prune leaves them for
+ * the next. */
+export async function pruneChatDraftAttachments(
+  store: SendAttachmentStore,
+  now = Date.now(),
+) {
+  await store
+    .prune((key) => localStorage.getItem(key) !== null, now - UNSAVED_ATTACHMENTS_MS)
+    .catch(() => {});
 }
 
 /** Each message has its own key, so another window cannot overwrite it. The
@@ -277,11 +310,9 @@ export async function chatDraftPayload(draft: ChatDraft): Promise<ChatSendReques
 export function saveChatDraft(store: ChatStore, draft: ChatDraft) {
   const key = chatDraftKey(draft);
   const previous = localStorage.getItem(key);
-  const original = previous === null ? null : decode(JSON.parse(previous));
   if (
-    original &&
-    (original.requestJson !== draft.requestJson ||
-      JSON.stringify(original.attachments) !== JSON.stringify(draft.attachments))
+    previous !== null &&
+    decode(JSON.parse(previous)).requestJson !== draft.requestJson
   )
     throw new Error("The original message input cannot be replaced.");
   localStorage.setItem(key, JSON.stringify(draft));
@@ -294,7 +325,6 @@ export function saveChatDraft(store: ChatStore, draft: ChatDraft) {
 
 export function removeChatDraft(store: ChatStore, draft: ChatDraft) {
   localStorage.removeItem(chatDraftKey(draft));
-  forgetChatDraftAttachments(draft);
   store.setState(loadChatDrafts());
 }
 
@@ -332,7 +362,7 @@ export function validateChatResult(draft: ChatDraft, result: ChatSendResult) {
     result.sessionId !== draft.sessionId
   )
     throw new Error("The reply does not match the saved message.");
-  let request: ChatSendRequest | null = null;
+  let request: SavedChatInput | null = null;
   try {
     request = chatDraftRequest(draft);
   } catch {}
