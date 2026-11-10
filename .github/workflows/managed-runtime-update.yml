@@ -60,7 +60,9 @@ jobs:
       matrix:
         os: [ubuntu-24.04, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    # macOS also builds and runs the live onboarding suite (#3546); a cold
+    # dependency cache took 46 minutes to build the service alone.
+    timeout-minutes: 90
     env:
       CARGO_INCREMENTAL: '0'
       CARGO_BUILD_JOBS: '2'
