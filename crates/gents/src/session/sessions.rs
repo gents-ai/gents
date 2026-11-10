@@ -516,7 +516,7 @@ pub(crate) async fn stage_created_session_relationships_in_txn(
 }
 
 /// The caller verifies that the session was created by this transaction.
-pub(crate) async fn stage_session_relationships_in_txn(
+pub async fn stage_session_relationships_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     session_doc_id: &str,
     agent_doc_id: &str,
