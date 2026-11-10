@@ -83,15 +83,14 @@ pub async fn claim_invocation(
         .transact_write("callback.claim_invocation", |txn| {
             let mutation = &mutation;
             Box::pin(async move {
-                let (binding_doc, binding) =
-                    crate::store::config_client::read_desired_state_record_in_txn(
-                        txn,
-                        crate::Collection::CallbackBinding,
-                        node_did,
-                        invocation.origin.binding_id(),
-                    )
-                    .await?
-                    .context("callback binding unavailable to selected agent")?;
+                let (binding_doc, binding) = crate::documents::read_desired_state_record_in_txn(
+                    txn,
+                    crate::Collection::CallbackBinding,
+                    node_did,
+                    invocation.origin.binding_id(),
+                )
+                .await?
+                .context("callback binding unavailable to selected agent")?;
                 let binding: crate::documents::CallbackBinding = serde_json::from_value(binding)?;
                 anyhow::ensure!(
                     binding.enabled
@@ -105,25 +104,23 @@ pub async fn claim_invocation(
                     &invocation.agent_did,
                 )
                 .await?;
-                let (source_doc, source) =
-                    crate::store::config_client::read_desired_state_record_in_txn(
-                        txn,
-                        crate::Collection::EventSource,
-                        node_did,
-                        &binding.event_source_id,
-                    )
-                    .await?
-                    .context("callback event source unavailable to selected agent")?;
+                let (source_doc, source) = crate::documents::read_desired_state_record_in_txn(
+                    txn,
+                    crate::Collection::EventSource,
+                    node_did,
+                    &binding.event_source_id,
+                )
+                .await?
+                .context("callback event source unavailable to selected agent")?;
                 let source: crate::documents::EventSource = serde_json::from_value(source)?;
-                let (callback_doc, current) =
-                    crate::store::config_client::read_desired_state_record_in_txn(
-                        txn,
-                        crate::Collection::Callback,
-                        node_did,
-                        &invocation.callback_id,
-                    )
-                    .await?
-                    .context("callback unavailable to selected agent")?;
+                let (callback_doc, current) = crate::documents::read_desired_state_record_in_txn(
+                    txn,
+                    crate::Collection::Callback,
+                    node_did,
+                    &invocation.callback_id,
+                )
+                .await?
+                .context("callback unavailable to selected agent")?;
                 let current: crate::documents::Callback = serde_json::from_value(current)?;
                 anyhow::ensure!(
                     current.enabled && &current == callback,
@@ -151,15 +148,14 @@ pub async fn claim_invocation(
                 {
                     let (prepared_doc, prepared) =
                         prepared_module.context("callback module missing before claim")?;
-                    let (module_doc, module) =
-                        crate::store::config_client::read_desired_state_record_in_txn(
-                            txn,
-                            crate::Collection::CallbackModule,
-                            node_did,
-                            module_id,
-                        )
-                        .await?
-                        .context("callback module unavailable to selected agent")?;
+                    let (module_doc, module) = crate::documents::read_desired_state_record_in_txn(
+                        txn,
+                        crate::Collection::CallbackModule,
+                        node_did,
+                        module_id,
+                    )
+                    .await?
+                    .context("callback module unavailable to selected agent")?;
                     let module: crate::documents::CallbackModule = serde_json::from_value(module)?;
                     anyhow::ensure!(
                         module.enabled && module_doc == prepared_doc && &module == prepared,

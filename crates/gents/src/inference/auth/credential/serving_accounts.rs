@@ -14,7 +14,7 @@ pub async fn serving_accounts(
     let backends = access
         .transact_readonly("config.serving_accounts", |txn| {
             Box::pin(async move {
-                crate::store::config_client::list_inference_backends_in_txn(txn, node_did).await
+                crate::documents::list_inference_backends_in_txn(txn, node_did).await
             })
         })
         .await?;
@@ -90,7 +90,7 @@ async fn read<T>(
 where
     T: serde::de::DeserializeOwned,
 {
-    crate::store::config_client::read_desired_state_record_in_txn(txn, collection, node_did, id)
+    crate::documents::read_desired_state_record_in_txn(txn, collection, node_did, id)
         .await?
         .map(|(_, value)| {
             serde_json::from_value(value).with_context(|| format!("decoding scoped {collection:?}"))
@@ -301,7 +301,7 @@ mod tests {
                         let mut records = Vec::new();
                         for id in ["on-a", "on-b", "compaction"] {
                             records.push(
-                                crate::store::config_client::read_desired_state_record_in_txn(
+                                crate::documents::read_desired_state_record_in_txn(
                                     txn,
                                     Collection::InferenceProfile,
                                     did,
@@ -369,9 +369,9 @@ mod tests {
 
         let backends = access
             .transact_write("test.backends", |txn| {
-                Box::pin(async move {
-                    crate::store::config_client::list_inference_backends_in_txn(txn, did).await
-                })
+                Box::pin(
+                    async move { crate::documents::list_inference_backends_in_txn(txn, did).await },
+                )
             })
             .await?;
         for backend in &backends {
@@ -440,13 +440,13 @@ mod tests {
             (Collection::Agent, json!({"node_did": did, "agent_did": "did:key:z6MkTestAgentY", "creation_nonce": "nonce-y", "inference_profile_id": "profile-a"})),
         ]
         .into_iter()
-        .map(|(collection, value)| crate::store::config_client::DesiredStateApplyDocument {
+        .map(|(collection, value)| crate::documents::DesiredStateApplyDocument {
             collection,
             add: value.clone(),
             update: value,
         })
         .collect();
-        let plan = crate::store::config_client::DesiredStateApplyPlan::new(documents)?;
+        let plan = crate::documents::DesiredStateApplyPlan::new(documents)?;
         access
             .transact_write("test.agent_accounts", |txn| {
                 let plan = &plan;

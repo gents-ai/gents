@@ -403,9 +403,8 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
         lean_identity_household_cases, LeanIdentityAction, LeanIdentitySubject,
     };
     use gents::documents::apply_desired_state_plan;
-    use gents::store::config_client::{
-        DesiredStateApplyDocument, DesiredStateApplyPlan, NodePermission,
-    };
+    use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use gents::store::config_client::NodePermission;
     use gents::store::graphql::{created_doc_id, escape_graphql_string};
     use gents::NodeIdentity;
 
@@ -556,7 +555,7 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
         .transact_readonly("test.configuration.node", |txn| {
             Box::pin(async move {
                 Ok::<_, anyhow::Error>(
-                    gents::store::config_client::read_desired_state_record_in_txn(
+                    gents::documents::read_desired_state_record_in_txn(
                         txn,
                         gents::Collection::Node,
                         node_did,
@@ -686,7 +685,7 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
                 let actual_agent = &actual_agent;
                 Box::pin(async move {
                     apply_desired_state_plan(txn, plan).await?;
-                    let (doc, _) = gents::store::config_client::read_desired_state_record_in_txn(
+                    let (doc, _) = gents::documents::read_desired_state_record_in_txn(
                         txn,
                         gents::Collection::Tools,
                         node_did,
@@ -807,7 +806,7 @@ async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyh
         .transact_readonly("test.self_config.agent", |txn| {
             let runtime = &runtime;
             Box::pin(async move {
-                gents::store::config_client::read_desired_state_record_in_txn(
+                gents::documents::read_desired_state_record_in_txn(
                     txn,
                     gents::Collection::Agent,
                     runtime.did(),
@@ -940,8 +939,8 @@ async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyh
                 let response = if actor(modeled)?.as_str() == user.did() {
                     let mut updated = agent_value.clone();
                     updated["description"] = serde_json::json!("configured");
-                    let plan = gents::store::config_client::DesiredStateApplyPlan::new(vec![
-                        gents::store::config_client::DesiredStateApplyDocument {
+                    let plan = gents::documents::DesiredStateApplyPlan::new(vec![
+                        gents::documents::DesiredStateApplyDocument {
                             collection: gents::Collection::Agent,
                             add: agent_value.clone(),
                             update: updated,

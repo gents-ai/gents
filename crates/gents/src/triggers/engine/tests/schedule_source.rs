@@ -700,10 +700,10 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
         (crate::Collection::Schedule, serde_json::json!({"node_did":owner_did, "schedule_id":"sched-e2e", "cadence":interval_cadence_json()})),
         (crate::Collection::Trigger, serde_json::json!({"node_did":owner_did, "trigger_id":"sched-e2e", "task_id":"task-e2e",
             "source":{"kind":"schedule", "schedule_id":"sched-e2e"}, "enabled":true, "concurrency":"serial"})),
-    ].into_iter().map(|(collection, value)| crate::store::config_client::DesiredStateApplyDocument {
+    ].into_iter().map(|(collection, value)| crate::documents::DesiredStateApplyDocument {
         collection, add:value.clone(), update:value,
     }).collect();
-    let plan = crate::store::config_client::DesiredStateApplyPlan::new(documents).unwrap();
+    let plan = crate::documents::DesiredStateApplyPlan::new(documents).unwrap();
     user_access
         .transact_write("test.schedule.install", |txn| {
             let plan = &plan;

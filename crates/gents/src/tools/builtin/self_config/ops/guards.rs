@@ -2,9 +2,9 @@ use anyhow::{anyhow, Context, Result};
 use serde_json::{Map, Value};
 
 use super::{decode_merged, read_owned_doc, AgentAnchor};
+use crate::documents::patch::SelfConfigTarget;
 use crate::documents::{BackendAuth, Tools};
 use crate::inference::backends::provider::BackendProviderOauthExt;
-use crate::store::config_client::patch::SelfConfigTarget;
 use crate::store::config_client::ConfigApplyTxn;
 
 /// Lean `SelfConfig.keepsReach`.

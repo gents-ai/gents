@@ -969,7 +969,7 @@ async fn required_mcp_service_needs_agent_scoped_measured_availability() {
                     &response,
                     "ToolServiceHealthState",
                 )?;
-                crate::store::config_client::publish_node_child_in_txn(
+                crate::documents::publish_node_child_in_txn(
                     txn,
                     "ToolServiceHealthState",
                     &doc,

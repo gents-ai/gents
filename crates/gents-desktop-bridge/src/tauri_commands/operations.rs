@@ -4,8 +4,9 @@ use anyhow::Context;
 use std::sync::Arc;
 
 use chrono::Utc;
+use gents::documents::list_inference_backends_in_txn;
 use gents::inference::backends::registry::lookup_backend_observation_in_txn;
-use gents::store::config_client::{list_inference_backends_in_txn, ConfigAccess};
+use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::escape_graphql_string;
 use gents_desktop_core::client::ClientCore;
 use gents_protocol::job::JobControlOutcome;

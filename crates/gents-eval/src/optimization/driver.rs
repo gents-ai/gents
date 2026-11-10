@@ -899,7 +899,7 @@ async fn freeze_job(
         "the optimization baseline must already be installed with its recorded agent bindings",
     )?;
     if let Err(error) = baseline_equivalence(
-        &gents::store::config_client::DesiredStateApplyPlan::from_pack_config(&installed.config)?,
+        &gents::documents::DesiredStateApplyPlan::from_pack_config(&installed.config)?,
         &closure,
     ) {
         return Err(match error.downcast::<BaselineMismatch>() {

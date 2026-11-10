@@ -1,14 +1,13 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::inference::resolved::{MaxTurnsProvenance, ResolvedAgent, DEFAULT_MAX_TURNS};
 use gents::request::lifecycle::{
     build_signed_client_request, submit_client_request, ExecutionOrigin, RequestIdentity,
     RequestSigner, RequestSpec,
 };
-use gents::store::config_client::{
-    ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan, NodePermission,
-};
+use gents::store::config_client::{ConfigAccess, NodePermission};
 use gents::store::graphql::escape_graphql_string;
 use gents::{Collection, DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};

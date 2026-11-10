@@ -1,39 +1,37 @@
-mod agent_target_access;
-mod declared_readers;
-pub(crate) mod plan;
-pub(crate) mod projection;
-pub(crate) mod read;
-pub(super) mod schema_fields;
-pub(super) mod selection;
-mod self_config_inference;
-pub(crate) mod semantics;
-pub(super) mod task_selection;
-pub(super) mod validate;
-mod workspace_selection;
-
-use super::{ConfigApplyTxn, ConfigRelationshipGrant};
+use super::plan::{
+    document_identity, ensure_expectations_hold, validate_node_replacement,
+    DesiredStateApplyCounts, DesiredStateApplyPlan,
+};
+use super::read::read_identity_records;
+use super::schema_fields::{
+    prefetch_declared_fields, validate_event_source_live_fields,
+    validate_output_obligation_count_fields, IntrospectedFields,
+};
+use super::semantics::DesiredStateSemantics;
+use super::validate::{
+    changed_configuration_keys, validate_advertised_profiles, validate_outcome_source_fields,
+    validate_trigger_document_fields,
+};
+use super::{
+    agent_target_access, declared_readers, read, selection, self_config_inference, task_selection,
+    workspace_selection,
+};
+use crate::store::config_client::{
+    configuration_replacement_patch, publish_node_managers_in_txn, ConfigApplyTxn,
+    ConfigClientError, ConfigRelationshipGrant,
+};
 use crate::store::graphql::escape_graphql_string;
 use crate::Collection;
 use anyhow::{Context, Result};
 use gents_protocol::graphql::extract_mutation_doc_id;
-use plan::{
-    document_identity, ensure_expectations_hold, validate_node_replacement,
-    DesiredStateApplyCounts, DesiredStateApplyPlan,
-};
-use read::read_identity_records;
-use schema_fields::{
-    prefetch_declared_fields, validate_event_source_live_fields,
-    validate_output_obligation_count_fields, IntrospectedFields,
-};
-use semantics::DesiredStateSemantics;
 use std::collections::BTreeSet;
-use validate::{
-    changed_configuration_keys, validate_advertised_profiles, validate_outcome_source_fields,
-    validate_trigger_document_fields,
-};
 
 #[cfg(test)]
-fn confirm_removal(response: &serde_json::Value, collection: &str, doc_id: &str) -> Result<()> {
+pub(super) fn confirm_removal(
+    response: &serde_json::Value,
+    collection: &str,
+    doc_id: &str,
+) -> Result<()> {
     let field = format!("delete_{collection}");
     let rows = response
         .get("data")
@@ -41,7 +39,7 @@ fn confirm_removal(response: &serde_json::Value, collection: &str, doc_id: &str)
         .and_then(serde_json::Value::as_array);
     if !matches!(rows.map(Vec::as_slice), Some([row]) if row.get("_docID").and_then(serde_json::Value::as_str) == Some(doc_id))
     {
-        return Err(super::ConfigClientError::DesiredStateRemovalUnconfirmed.into());
+        return Err(ConfigClientError::DesiredStateRemovalUnconfirmed.into());
     }
     Ok(())
 }
@@ -171,7 +169,7 @@ pub(crate) async fn apply_desired_state_plan_with_semantics(
         let previous = existing.as_ref().map(|(_, current)| current.clone());
         if created && matches!(document.collection, Collection::Node | Collection::Agent) {
             if txn.actor_did().is_none() {
-                return Err(super::ConfigClientError::RelationshipActorRequired.into());
+                return Err(ConfigClientError::RelationshipActorRequired.into());
             }
             identity::Did::new(if document.collection == Collection::Node {
                 owner
@@ -185,11 +183,7 @@ pub(crate) async fn apply_desired_state_plan_with_semantics(
                 validate_node_replacement(&current, &document.update)?;
             }
             let update = if txn.client_signed_configuration() {
-                super::client_signed_agent::configuration_replacement_patch(
-                    document.collection,
-                    &current,
-                    &document.update,
-                )?
+                configuration_replacement_patch(document.collection, &current, &document.update)?
             } else {
                 document.update.clone()
             };
@@ -224,7 +218,7 @@ pub(crate) async fn apply_desired_state_plan_with_semantics(
             _ => {}
         }
         if changed {
-            let not_applied = || super::ConfigClientError::ConfigurationMutationNotApplied {
+            let not_applied = || ConfigClientError::ConfigurationMutationNotApplied {
                 collection: name,
                 node_did: owner.to_owned(),
                 id: id.to_owned(),
@@ -325,14 +319,8 @@ pub(crate) async fn apply_desired_state_plan_with_semantics(
         let node_doc = configuration_node_doc(txn, &node_did, binding).await?;
         txn.add_resource_relationship(collection, &doc_id, "parent", "nodes", &node_doc)
             .await?;
-        super::publish_node_managers_in_txn(
-            txn,
-            collection,
-            &doc_id,
-            "selection_manager",
-            &node_doc,
-        )
-        .await?;
+        publish_node_managers_in_txn(txn, collection, &doc_id, "selection_manager", &node_doc)
+            .await?;
     }
     for (node_did, binding_doc, binding) in created_callback_bindings {
         let agent = identity::Did::new(&binding.agent_did)?;
@@ -348,8 +336,7 @@ pub(crate) async fn apply_desired_state_plan_with_semantics(
     let mut queued_agents = BTreeSet::new();
     for (node_did, agent_did, agent_doc) in created_agents {
         let node_doc = configuration_node_doc(txn, &node_did, binding).await?;
-        super::publish_node_managers_in_txn(txn, "Agent", &agent_doc, "administrator", &node_doc)
-            .await?;
+        publish_node_managers_in_txn(txn, "Agent", &agent_doc, "administrator", &node_doc).await?;
         if txn.managed_agent_signer().is_some() || txn.has_pack_interpreter() {
             txn.add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &node_doc)
                 .await?;
@@ -475,6 +462,3 @@ pub(crate) async fn apply_desired_state_plan_with_semantics(
     }
     Ok(counts)
 }
-
-#[cfg(test)]
-mod tests;

@@ -11,9 +11,8 @@ use crate::optimization::target::{
     Closure, FrozenDocument,
 };
 use gents::documents::apply_desired_state_plan;
-use gents::store::config_client::{
-    stale_expectation, ConfigAccess, DesiredStateApplyPlan, TransactionFailure,
-};
+use gents::documents::{stale_expectation, DesiredStateApplyPlan};
+use gents::store::config_client::{ConfigAccess, TransactionFailure};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Promotion {
@@ -372,7 +371,7 @@ mod tests {
     use crate::optimization::job::load_job;
     use crate::optimization::subject::tests::FIXTURE_TEMPLATE;
     use crate::optimization::target::TargetField;
-    use gents::store::config_client::DesiredStateApplyPlan;
+    use gents::documents::DesiredStateApplyPlan;
     use gents::Collection;
     use serde_json::json;
 
@@ -867,15 +866,14 @@ mod tests {
             .transact_readonly("test.promotion.node", |txn| {
                 let owner = &owner;
                 Box::pin(async move {
-                    let (doc_id, _) =
-                        gents::store::config_client::read_desired_state_record_in_txn(
-                            txn,
-                            Collection::Node,
-                            owner,
-                            owner,
-                        )
-                        .await?
-                        .expect("user-owned Node");
+                    let (doc_id, _) = gents::documents::read_desired_state_record_in_txn(
+                        txn,
+                        Collection::Node,
+                        owner,
+                        owner,
+                    )
+                    .await?
+                    .expect("user-owned Node");
                     Ok::<_, anyhow::Error>(doc_id)
                 })
             })

@@ -137,14 +137,14 @@ async fn write_documents(
     let documents = documents
         .into_iter()
         .map(
-            |(collection, value)| crate::store::config_client::DesiredStateApplyDocument {
+            |(collection, value)| crate::documents::DesiredStateApplyDocument {
                 collection,
                 add: value.clone(),
                 update: value,
             },
         )
         .collect();
-    let plan = crate::store::config_client::DesiredStateApplyPlan::new(documents).unwrap();
+    let plan = crate::documents::DesiredStateApplyPlan::new(documents).unwrap();
     access
         .transact_write(operation, |txn| {
             let plan = &plan;
@@ -204,8 +204,8 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
         "tools_id": format!("{}:tools", agent.default_agent_did()),
         "system_prompt": "updated prompt"
     });
-    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
-        crate::store::config_client::DesiredStateApplyDocument {
+    let plan = crate::documents::DesiredStateApplyPlan::new(vec![
+        crate::documents::DesiredStateApplyDocument {
             collection: crate::Collection::AgentContext,
             add: context.clone(),
             update: context,
@@ -890,7 +890,7 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
 
 async fn record_plugin_install(
     access: &crate::store::config_client::ConfigAccess,
-    node_binding: &crate::store::config_client::ConfigurationNodeBinding,
+    node_binding: &crate::documents::ConfigurationNodeBinding,
     node_did: &str,
     plugin_home: &std::path::Path,
 ) {

@@ -1686,22 +1686,21 @@ async fn saved_config_audit_reports_broken_references_without_mutation_and_refus
                             "{actor}"
                         );
                     }
-                    let (_, mut context) =
-                        crate::store::config_client::read_desired_state_record_in_txn(
-                            txn,
-                            crate::Collection::AgentContext,
-                            node_did,
-                            context_id,
-                        )
-                        .await?
-                        .expect("saved context exists");
+                    let (_, mut context) = crate::documents::read_desired_state_record_in_txn(
+                        txn,
+                        crate::Collection::AgentContext,
+                        node_did,
+                        context_id,
+                    )
+                    .await?
+                    .expect("saved context exists");
                     context
                         .as_object_mut()
                         .unwrap()
                         .retain(|key, _| !key.starts_with('_'));
                     context["tools_id"] = json!(tools_id);
-                    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
-                        crate::store::config_client::DesiredStateApplyDocument {
+                    let plan = crate::documents::DesiredStateApplyPlan::new(vec![
+                        crate::documents::DesiredStateApplyDocument {
                             collection: crate::Collection::AgentContext,
                             add: context.clone(),
                             update: context,

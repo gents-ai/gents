@@ -4,10 +4,10 @@ use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
 use super::{agent_management, ConfigureAgentParams, SelfConfigCore, StringUpdate};
-use crate::store::config_client::{
-    ConfigAccess, ConfigurationNodeBinding, DesiredStateApplyDocument, DesiredStateApplyPlan,
-    GraphqlEndpoint, NodePermission,
+use crate::documents::{
+    ConfigurationNodeBinding, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
+use crate::store::config_client::{ConfigAccess, GraphqlEndpoint, NodePermission};
 use crate::store::identity::{KeyIdentity, NodeIdentity};
 use crate::Collection;
 
@@ -408,7 +408,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
             let creator = &creator;
             let runtime = &runtime;
             Box::pin(async move {
-                crate::store::config_client::grant_selected_self_configuration(
+                crate::documents::grant_selected_self_configuration(
                     txn,
                     runtime.did(),
                     &creator.agent_did,

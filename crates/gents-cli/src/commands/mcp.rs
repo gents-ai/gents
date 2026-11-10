@@ -75,7 +75,7 @@ async fn mcp_register(args: McpRegisterArgs) -> Result<()> {
             let endpoint_url = &endpoint_url;
             Box::pin(async move {
                 use gents::documents::apply_desired_state_plan;
-                use gents::store::config_client::{
+                use gents::documents::{
                     read_desired_state_record_in_txn, DesiredStateApplyDocument,
                     DesiredStateApplyPlan,
                 };
@@ -450,7 +450,7 @@ mod tests {
     #[tokio::test]
     async fn exact_service_read_uses_the_requested_node_scope() {
         use gents::documents::apply_desired_state_plan;
-        use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+        use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         use gents::NodeIdentity;
         let directory = tempfile::tempdir().unwrap();
         let root =

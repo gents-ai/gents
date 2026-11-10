@@ -623,7 +623,7 @@ async fn background_completion_transaction_attempt(
                 session.session.agent_did == parent.agent_did,
                 "background wake session selects a different Agent"
             );
-            let (agent, _) = crate::store::config_client::read_desired_state_record_in_txn(
+            let (agent, _) = crate::documents::read_desired_state_record_in_txn(
                 txn,
                 crate::Collection::Agent,
                 &parent.node_did,

@@ -110,8 +110,8 @@ pub(super) async fn insert_backend(
         "auth": {"kind": "unauthenticated"},
         "max_concurrent": 2
     });
-    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
-        crate::store::config_client::DesiredStateApplyDocument {
+    let plan = crate::documents::DesiredStateApplyPlan::new(vec![
+        crate::documents::DesiredStateApplyDocument {
             collection: crate::Collection::InferenceBackend,
             add: value.clone(),
             update: value,

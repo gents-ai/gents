@@ -6,12 +6,11 @@ use serde_json::{json, Value};
 
 use super::*;
 use crate::documents::apply_desired_state_plan;
+use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use crate::pack::{
     write_home_install, HomePackInstall, PackKind, PackUxPlugin, UxContributions, UxDataSurface,
 };
-use crate::store::config_client::{
-    ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan, GraphqlEndpoint, NodePermission,
-};
+use crate::store::config_client::{ConfigAccess, GraphqlEndpoint, NodePermission};
 use crate::Collection;
 
 const NODE: &str = "did:key:z";

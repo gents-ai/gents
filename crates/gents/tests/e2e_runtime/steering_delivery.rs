@@ -557,7 +557,7 @@ async fn caller_message(
                 let node_did = &node_did;
                 Box::pin(async move {
                     Ok::<_, anyhow::Error>(
-                        gents::store::config_client::read_desired_state_record_in_txn(
+                        gents::documents::read_desired_state_record_in_txn(
                             txn,
                             gents::Collection::Agent,
                             node_did,

@@ -1881,7 +1881,7 @@ async fn signed_goal_backed_request(
                 let agent_did = agent.did();
                 Box::pin(async move {
                     Ok::<_, anyhow::Error>(
-                        gents::store::config_client::read_desired_state_record_in_txn(
+                        gents::documents::read_desired_state_record_in_txn(
                             txn,
                             gents::Collection::Agent,
                             did,
@@ -5006,7 +5006,7 @@ async fn create_visible_foreign_collision(
     let agent = serde_json::json!({"node_did": foreign_node.did(), "agent_did": foreign_agent.did(),
         "creation_nonce": binding.creation_nonce, "display_name": "Foreign collision Agent",
         "inference_profile_id": profile_id, "enabled": true});
-    let plan = gents::store::config_client::DesiredStateApplyPlan::new(
+    let plan = gents::documents::DesiredStateApplyPlan::new(
         [
             (gents::Collection::Node, node),
             (gents::Collection::InferenceBackend, backend),
@@ -5015,7 +5015,7 @@ async fn create_visible_foreign_collision(
         ]
         .into_iter()
         .map(
-            |(collection, value)| gents::store::config_client::DesiredStateApplyDocument {
+            |(collection, value)| gents::documents::DesiredStateApplyDocument {
                 collection,
                 add: value.clone(),
                 update: value,

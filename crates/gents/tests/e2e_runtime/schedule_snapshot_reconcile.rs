@@ -17,7 +17,7 @@ async fn apply_documents(
     access: &ConfigAccess,
     documents: Vec<(gents::Collection, serde_json::Value)>,
 ) {
-    use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     let plan = DesiredStateApplyPlan::new(
         documents
             .into_iter()

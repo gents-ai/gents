@@ -477,7 +477,7 @@ async fn boot_interrupt_agent(
 /// profile and a streaming system prompt.
 async fn configure_live_interrupt(actors: &RequestActors, target: &InferenceTarget) {
     use gents::documents::apply_desired_state_plan;
-    use gents::store::config_client::{
+    use gents::documents::{
         read_desired_state_record_in_txn as read, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     let node_did = actors.node_did();

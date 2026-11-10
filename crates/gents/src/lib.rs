@@ -272,7 +272,7 @@ pub mod test_support {
         access: &crate::store::config_client::ConfigAccess,
         node_did: &str,
     ) {
-        use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+        use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 
         let node_input = serde_json::json!({"node_did": node_did});
         let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
@@ -382,18 +382,17 @@ pub mod test_support {
         access
             .transact_write("test.set_default_agent", |txn| {
                 Box::pin(async move {
-                    let (_, mut node) =
-                        crate::store::config_client::read_desired_state_record_in_txn(
-                            txn,
-                            crate::Collection::Node,
-                            runtime_did,
-                            runtime_did,
-                        )
-                        .await?
-                        .expect("fixture user must own one Node for its runtime");
+                    let (_, mut node) = crate::documents::read_desired_state_record_in_txn(
+                        txn,
+                        crate::Collection::Node,
+                        runtime_did,
+                        runtime_did,
+                    )
+                    .await?
+                    .expect("fixture user must own one Node for its runtime");
                     node["default_agent_did"] = serde_json::json!(agent_did);
-                    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
-                        crate::store::config_client::DesiredStateApplyDocument {
+                    let plan = crate::documents::DesiredStateApplyPlan::new(vec![
+                        crate::documents::DesiredStateApplyDocument {
                             collection: crate::Collection::Node,
                             add: node.clone(),
                             update: node,
@@ -418,18 +417,17 @@ pub mod test_support {
             .transact_write("test.set_node_field", |txn| {
                 let value = value.clone();
                 Box::pin(async move {
-                    let (_, mut node) =
-                        crate::store::config_client::read_desired_state_record_in_txn(
-                            txn,
-                            crate::Collection::Node,
-                            runtime_did,
-                            runtime_did,
-                        )
-                        .await?
-                        .expect("fixture user must own one Node for its runtime");
+                    let (_, mut node) = crate::documents::read_desired_state_record_in_txn(
+                        txn,
+                        crate::Collection::Node,
+                        runtime_did,
+                        runtime_did,
+                    )
+                    .await?
+                    .expect("fixture user must own one Node for its runtime");
                     node[field] = value;
-                    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
-                        crate::store::config_client::DesiredStateApplyDocument {
+                    let plan = crate::documents::DesiredStateApplyPlan::new(vec![
+                        crate::documents::DesiredStateApplyDocument {
                             collection: crate::Collection::Node,
                             add: node.clone(),
                             update: node,
@@ -540,7 +538,7 @@ pub mod test_support {
         binding: &gents_protocol::agent_identity::AgentIdentityBinding,
         access: &crate::store::config_client::ConfigAccess,
     ) {
-        use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+        use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         let documents = test_agent_documents(owner, display_name, binding)
             .into_iter()
             .map(|(collection, value)| DesiredStateApplyDocument {
@@ -664,15 +662,14 @@ pub mod test_support {
                         )
                         .await?
                         .ok_or_else(|| anyhow::anyhow!("created session is not visible"))?;
-                    let (agent_doc, _) =
-                        crate::store::config_client::read_desired_state_record_in_txn(
-                            txn,
-                            crate::Collection::Agent,
-                            node_did,
-                            agent_did,
-                        )
-                        .await?
-                        .ok_or_else(|| anyhow::anyhow!("session Agent is not visible"))?;
+                    let (agent_doc, _) = crate::documents::read_desired_state_record_in_txn(
+                        txn,
+                        crate::Collection::Agent,
+                        node_did,
+                        agent_did,
+                    )
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("session Agent is not visible"))?;
                     crate::session::stage_created_session_relationships_in_txn(
                         txn,
                         &session.doc_id,

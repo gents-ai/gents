@@ -22,10 +22,9 @@ pub(crate) fn snapshot_query(node_did: Option<&str>) -> Result<String> {
     let request_args = snapshot_request_args(node_did);
     let mailbox_node = node_filter(node_did);
     let mailbox_args = format!("(filter: {{ {mailbox_node} status: {{ _eq: \"open\" }} }})");
-    let trigger_fields =
-        gents::store::config_client::config_projection(gents::Collection::Trigger, None)?
-            .0
-            .join(" ");
+    let trigger_fields = gents::documents::config_projection(gents::Collection::Trigger, None)?
+        .0
+        .join(" ");
     let backend_fields = INFERENCE_BACKEND_FIELDS;
     Ok(format!("query DesktopSnapshot {{
       nodes: {NODE_NAME}{args} {{ {NODE_FIELDS} }}

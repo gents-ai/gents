@@ -4,8 +4,8 @@ use std::time::Duration;
 use clap::Parser;
 use gents::documents::apply_desired_state_plan;
 use gents::documents::EvalSplit;
+use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::runtime::embedded::EmbeddedHome;
-use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::{Collection, ConfigAccess, NodeIdentity};
 use gents_eval::checks::CheckRegistry;
 use gents_eval::runner::{
@@ -408,7 +408,7 @@ async fn set_default_agent(access: &ConfigAccess, owner: &str, agent_did: &str) 
     access
         .transact_write("cli.eval.test_default_agent", |txn| {
             Box::pin(async move {
-                let (_, mut node) = gents::store::config_client::read_desired_state_record_in_txn(
+                let (_, mut node) = gents::documents::read_desired_state_record_in_txn(
                     txn,
                     Collection::Node,
                     owner,

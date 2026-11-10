@@ -4,10 +4,9 @@ use crate::documents::event_consumer::{
     acknowledge_fire, exclude_arrival, load_or_seed_for_source,
     load_or_seed_for_source_with_node_binding,
 };
+use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use crate::request::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
-use crate::store::config_client::{
-    ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan, NodePermission,
-};
+use crate::store::config_client::{ConfigAccess, NodePermission};
 use crate::store::identity::NodeIdentity;
 use crate::Collection;
 use serde_json::Value;

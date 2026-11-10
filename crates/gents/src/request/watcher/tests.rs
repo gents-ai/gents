@@ -152,7 +152,7 @@ struct ScopedWatcherFixture {
 
 impl ScopedWatcherFixture {
     async fn new() -> Self {
-        use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+        use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         use crate::store::identity::NodeIdentity;
 
         let db = crate::support::test_db("scoped-watcher").await;

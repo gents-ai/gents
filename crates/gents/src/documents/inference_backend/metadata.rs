@@ -5,13 +5,12 @@ use crate::documents::backend_credential::{
     backend_credential_in_txn, put_backend_credential_in_txn, BackendCredential,
     BackendCredentialSecret,
 };
-use crate::store::config_client::{
-    ConfigAccess, ConfigApplyTxn, DesiredStateApplyDocument, DesiredStateApplyPlan,
-};
+use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::Collection;
 
 pub(crate) fn backend_metadata_fields() -> Result<&'static [&'static str]> {
-    crate::store::config_client::canonical_struct_fields::<InferenceBackendMetadata>()
+    crate::documents::canonical_struct_fields::<InferenceBackendMetadata>()
 }
 
 /// Retire the two owned records in one transaction. Credentials can be shared
@@ -38,7 +37,7 @@ pub(crate) async fn remove_backend_metadata_in_txn(
         .as_str()
         .filter(|doc| !doc.is_empty())
         .context("backend observation has no physical ID")?;
-    let (node_doc, _) = crate::store::config_client::read_desired_state_record_in_txn(
+    let (node_doc, _) = crate::documents::read_desired_state_record_in_txn(
         txn,
         Collection::Node,
         node_did,
@@ -280,7 +279,7 @@ pub(crate) async fn write_backend_metadata_in_txn(
             &response,
             "InferenceBackendMetadata",
         )?;
-        crate::store::config_client::publish_node_child_in_txn(
+        crate::documents::publish_node_child_in_txn(
             txn,
             "InferenceBackendMetadata",
             &doc,
@@ -300,7 +299,7 @@ pub(crate) async fn write_backend_metadata_in_txn(
             &observation,
             "InferenceBackendObservation",
         )?;
-        crate::store::config_client::publish_node_child_in_txn(
+        crate::documents::publish_node_child_in_txn(
             txn,
             "InferenceBackendObservation",
             &observation_doc,
@@ -351,7 +350,7 @@ pub async fn write_inference_backend_document(
         .transact_write("config.inference_backend.upsert", |txn| {
             Box::pin(async move {
                 write_inference_backend_in_txn(txn, backend).await?;
-                crate::store::config_client::read_desired_state_record_in_txn(
+                crate::documents::read_desired_state_record_in_txn(
                     txn,
                     Collection::InferenceBackend,
                     &backend.node_did,

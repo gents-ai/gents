@@ -1,9 +1,10 @@
 use anyhow::Result;
-use gents::documents::ToolServiceRegistry;
-use gents::store::collection::Collection;
 #[cfg(test)]
-use gents::store::config_client::read_desired_state_record_in_txn;
-use gents::store::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents::documents::read_desired_state_record_in_txn;
+use gents::documents::ToolServiceRegistry;
+use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents::store::collection::Collection;
+use gents::store::config_client::ConfigAccess;
 use gents::Tools;
 
 pub async fn upsert_tools_on(access: &ConfigAccess, document: &Tools) -> Result<()> {

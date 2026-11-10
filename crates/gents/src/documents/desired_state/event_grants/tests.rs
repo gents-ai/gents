@@ -1,6 +1,7 @@
 use super::*;
 use crate::documents::apply_desired_state_plan;
-use crate::store::config_client::{ConfigAccess, DesiredStateApplyDocument};
+use crate::documents::DesiredStateApplyDocument;
+use crate::store::config_client::ConfigAccess;
 use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::NodeIdentity;
 use serde_json::{json, Value};

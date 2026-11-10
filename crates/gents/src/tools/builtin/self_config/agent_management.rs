@@ -1,8 +1,9 @@
 use super::*;
-use crate::documents::{Agent, AgentContext, BashTools, BuiltInTools, FileTools, HostTools, Tools};
-use crate::store::config_client::{
-    validate_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
+use crate::documents::{
+    validate_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
+use crate::documents::{Agent, AgentContext, BashTools, BuiltInTools, FileTools, HostTools, Tools};
+use crate::store::config_client::ConfigAccess;
 
 fn catalog_from_documents(refs: &crate::ConfigReferences) -> Result<agent::AgentCatalogView> {
     let mut view = agent::AgentCatalogView::default();
@@ -190,7 +191,7 @@ async fn agent_apply_access(
     ceiling: &crate::tools::surface::SelfConfigProcessCeiling,
     preview: bool,
     held: Option<&ops::OperatorGrants>,
-    node_binding: Option<&crate::store::config_client::ConfigurationNodeBinding>,
+    node_binding: Option<&crate::documents::ConfigurationNodeBinding>,
 ) -> Result<String> {
     if preview {
         access
@@ -230,7 +231,7 @@ async fn agent_apply_in_txn(
     ceiling: &crate::tools::surface::SelfConfigProcessCeiling,
     preview: bool,
     held: Option<&ops::OperatorGrants>,
-    node_binding: Option<&crate::store::config_client::ConfigurationNodeBinding>,
+    node_binding: Option<&crate::documents::ConfigurationNodeBinding>,
 ) -> Result<String> {
     let refs = crate::ConfigReferences::load_in_txn(txn, owner).await?;
     let view = catalog_from_documents(&refs)?;
@@ -465,7 +466,7 @@ async fn agent_apply_in_txn(
                 .filter(|(field, _)| field != "system_prompt")
                 .cloned()
                 .collect();
-            merged = crate::store::config_client::patch::apply_patch(
+            merged = crate::documents::patch::apply_patch(
                 SelfConfigTarget::Agent,
                 &merged,
                 &agent_patch,
@@ -597,10 +598,7 @@ pub async fn grant_own_self_configuration(
                     }])?;
                     crate::documents::apply_desired_state_plan(txn, &plan).await?;
                 }
-                crate::store::config_client::grant_selected_self_configuration(
-                    txn, node_did, agent_did,
-                )
-                .await
+                crate::documents::grant_selected_self_configuration(txn, node_did, agent_did).await
             })
         })
         .await

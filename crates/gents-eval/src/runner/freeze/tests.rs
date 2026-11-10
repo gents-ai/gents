@@ -11,7 +11,7 @@ use crate::runner::embedded::EmbeddedHome;
 use crate::scoring::PILOT_PURPOSE;
 use gents::documents::apply_desired_state_plan;
 use gents::documents::EvalSplit;
-use gents::store::config_client::{
+use gents::documents::{
     read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 

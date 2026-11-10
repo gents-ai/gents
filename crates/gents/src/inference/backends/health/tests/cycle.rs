@@ -271,7 +271,7 @@ async fn disabled_and_removed_backends_are_probed_again_when_observed_enabled() 
             .await
             .unwrap();
     }
-    let plan = crate::store::config_client::DesiredStateApplyPlan::new(Vec::new())
+    let plan = crate::documents::DesiredStateApplyPlan::new(Vec::new())
         .unwrap()
         .with_removals(vec![(
             crate::Collection::InferenceBackend,

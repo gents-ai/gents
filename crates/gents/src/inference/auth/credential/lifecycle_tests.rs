@@ -180,7 +180,7 @@ async fn seed_raw(access: &ConfigAccess, input: Value) {
                     gents_protocol::schemas::OAUTH_CREDENTIAL,
                 ).await?;
                 let doc = gents_protocol::graphql::extract_mutation_doc_id(&response, "OAuthCredential")?;
-                crate::store::config_client::publish_secret_configuration_in_txn(txn, "OAuthCredential", &doc, &did).await?;
+                crate::documents::publish_secret_configuration_in_txn(txn, "OAuthCredential", &doc, &did).await?;
                 Ok::<(), anyhow::Error>(())
             })
         })
@@ -210,9 +210,9 @@ async fn labeled(access: &ConfigAccess, credential: OAuthCredential, label: &str
 async fn backends(access: &ConfigAccess, did: &str) -> Vec<crate::InferenceBackend> {
     access
         .transact_readonly("test.interactive.backends", |txn| {
-            Box::pin(async move {
-                crate::store::config_client::list_inference_backends_in_txn(txn, did).await
-            })
+            Box::pin(
+                async move { crate::documents::list_inference_backends_in_txn(txn, did).await },
+            )
         })
         .await
         .unwrap()

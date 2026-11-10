@@ -101,7 +101,7 @@ async fn submit_prepared_edit(
                     )
                     .await?
                     .context("edit session unavailable")?;
-                let (agent_doc, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                let (agent_doc, _) = crate::documents::read_desired_state_record_in_txn(
                     txn,
                     crate::Collection::Agent,
                     node_did,

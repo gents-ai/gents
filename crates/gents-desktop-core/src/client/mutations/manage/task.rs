@@ -4,10 +4,11 @@ use chrono::{SecondsFormat, Utc};
 #[cfg(test)]
 use defra_node::Node as EmbeddedNode;
 use gents::documents::apply_desired_state_plan;
+use gents::documents::read_desired_state_record_in_txn;
+use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::documents::{EventSource, Schedule, Task, Trigger};
 use gents::store::collection::Collection;
-use gents::store::config_client::read_desired_state_record_in_txn;
-use gents::store::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents::store::config_client::ConfigAccess;
 use gents::task_session_title;
 use serde::de::DeserializeOwned;
 use serde_json::Value;

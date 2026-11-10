@@ -47,7 +47,7 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
     access
         .transact_write("test.artifact_live.profile", |txn| {
             use gents::documents::apply_desired_state_plan;
-            use gents::store::config_client::{
+            use gents::documents::{
                 read_desired_state_record_in_txn as read, DesiredStateApplyDocument,
                 DesiredStateApplyPlan,
             };

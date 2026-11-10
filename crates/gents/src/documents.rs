@@ -18,7 +18,10 @@ pub mod automation;
 pub(crate) mod backend_credential;
 pub(crate) mod desired_state;
 pub(crate) mod event_consumer;
+pub(crate) mod event_source_cursor;
+mod node_document_publication;
 mod pack_config;
+pub mod patch;
 mod principal;
 mod references;
 mod schedule;
@@ -43,10 +46,24 @@ pub use callback::{
 };
 pub use compaction::CompactionConfig;
 pub use context::AgentContext;
-pub use desired_state::apply_desired_state_plan;
-#[allow(unused_imports)]
+pub(crate) use desired_state::plan::document_identity;
+pub use desired_state::plan::{
+    stale_expectation, DesiredStateApplyCounts, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    DesiredStateExpectation, DriftedDocument, StaleExpectation,
+};
+pub(crate) use desired_state::projection::canonical_struct_fields;
+pub use desired_state::projection::{config_projection, desired_state_document_digest};
+pub(crate) use desired_state::read::read_desired_state_document_in_txn;
+pub use desired_state::read::read_record as read_desired_state_record_in_txn;
+pub use desired_state::read::read_records as read_desired_state_records_in_txn;
+pub(crate) use desired_state::schema_fields::collection_is_installed;
+pub use desired_state::validate::{
+    event_trigger_document_field_names, validate_event_trigger_document_fields,
+};
+pub(crate) use desired_state::validate::{validate_desired_state_plan, OutcomeSourceSchemaError};
+pub use desired_state::{apply_desired_state_plan, grant_selected_self_configuration};
 pub(crate) use desired_state::{
-    apply_desired_state_plan_with_node_binding, validate_desired_state_plan,
+    apply_desired_state_plan_with_node_binding, configuration_node_doc, ConfigurationNodeBinding,
 };
 pub use eval_definition::{
     EvalCapture, EvalCase, EvalCheckRef, EvalContinuation, EvalDefinition, EvalFixtureDocument,
@@ -56,6 +73,8 @@ pub use eval_definition::{
 pub use installation::{
     ProjectionAcpBinding, ProjectionAcpObservation, RepositoryPlacement, ToolServiceRegistry,
 };
+pub use node_document_publication::publish_node_child_in_txn;
+pub(crate) use node_document_publication::publish_secret_configuration_in_txn;
 pub use pack_config::PackConfig;
 pub(crate) use references::{references_of, RequiredReference};
 pub use references::{ConfigReferences, MissingReference};
@@ -67,6 +86,7 @@ pub use behavior::{list_agents, load_agent, write_agent_document, Agent};
 
 pub use inference_backend::write_inference_backend_document;
 pub(crate) use inference_backend::{backend_metadata_fields, write_inference_backend_in_txn};
+pub use inference_backend::{list_inference_backends_in_txn, load_inference_backend_in_txn};
 pub use inference_backend::{
     AdvertisedModel, BackendAuth, BackendAuthSelection, BackendAuthSelectionFields,
     BackendModelCatalog, ClaudePlatform, InferenceBackend, InferenceBackendMetadata,

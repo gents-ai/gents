@@ -109,8 +109,8 @@ async fn modeled_cached_schedule_requires_runtime_visibility() -> anyhow::Result
         .await?;
     let plan_value = json!({"node_did":runtime, "schedule_id":"planned",
         "cadence":{"kind":"interval", "interval_secs":60}});
-    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
-        crate::store::config_client::DesiredStateApplyDocument {
+    let plan = crate::documents::DesiredStateApplyPlan::new(vec![
+        crate::documents::DesiredStateApplyDocument {
             collection: crate::Collection::Schedule,
             add: plan_value.clone(),
             update: plan_value,
@@ -135,8 +135,8 @@ async fn modeled_cached_schedule_requires_runtime_visibility() -> anyhow::Result
     );
     let updated = json!({"node_did":runtime, "schedule_id":"planned", "display_name":"edited by user",
         "cadence":{"kind":"interval", "interval_secs":120}});
-    let update_plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
-        crate::store::config_client::DesiredStateApplyDocument {
+    let update_plan = crate::documents::DesiredStateApplyPlan::new(vec![
+        crate::documents::DesiredStateApplyDocument {
             collection: crate::Collection::Schedule,
             add: updated.clone(),
             update: updated,

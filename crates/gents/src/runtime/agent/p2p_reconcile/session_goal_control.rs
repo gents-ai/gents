@@ -170,7 +170,7 @@ async fn process_command_with_clock(
             let Some(session) = crate::store::config_client::agent_session::load_agent_session_owner_in_txn(txn, &command.node_did, &command.session_id).await? else {
                 return Ok((None, None));
             };
-            let Some((agent_doc, agent)) = crate::store::config_client::read_desired_state_record_in_txn(
+            let Some((agent_doc, agent)) = crate::documents::read_desired_state_record_in_txn(
                 txn, crate::Collection::Agent, &command.node_did, &command.agent_did,
             ).await? else {
                 return Ok((None, None));

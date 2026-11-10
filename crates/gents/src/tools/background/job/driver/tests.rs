@@ -672,7 +672,7 @@ fn step_settings(targets: &[&str]) -> PluginJobSettings {
 /// The inference chain the job fixture's Agent names, so its Tools can be
 /// rewritten under reference validation.
 async fn write_inference(job: &Job) {
-    use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     let documents = [
         (
             crate::Collection::InferenceProfile,

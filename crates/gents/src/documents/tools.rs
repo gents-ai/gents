@@ -608,7 +608,7 @@ pub struct SelfConfigTools {
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub enable_self_config: Option<bool>,
     /// Self-config category allowlist; unset means the core spine
-    /// (agent, tools, profile). See `config_client::patch`.
+    /// (agent, tools, profile). See `documents::patch`.
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
@@ -959,9 +959,7 @@ impl Tools {
                 false,
             );
             for category in self_config.self_config_categories.iter().flatten() {
-                if !crate::store::config_client::patch::SELF_CONFIG_CATEGORIES
-                    .contains(&category.as_str())
-                {
+                if !crate::documents::patch::SELF_CONFIG_CATEGORIES.contains(&category.as_str()) {
                     errors.push(format!("unknown self_config category {category:?}"));
                 }
             }
@@ -1002,8 +1000,8 @@ pub async fn load_agent_context_and_tools_in_txn(
     owner: &str,
     agent_did: &str,
 ) -> anyhow::Result<(Option<super::AgentContext>, Option<Tools>)> {
+    use crate::documents::read_desired_state_document_in_txn as read;
     use crate::store::collection::Collection;
-    use crate::store::config_client::read_desired_state_document_in_txn as read;
     use anyhow::Context as _;
     let agent: super::Agent = serde_json::from_value(
         read(txn, Collection::Agent, owner, agent_did)

@@ -4,7 +4,7 @@ mod support;
 
 use anyhow::{ensure, Context, Result};
 use gents::documents::apply_desired_state_plan;
-use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::store::graphql::escape_graphql_string;
 use gents::{Collection, ConfigAccess, NodeIdentity};
 use serde_json::{json, Value};
@@ -207,7 +207,7 @@ async fn bind_agents(access: &ConfigAccess, owner: &str, agents: &DeliveryAgents
     ];
     access
         .transact_write("test.delivery_live.bind_agents", |txn| {
-            use gents::store::config_client::read_desired_state_record_in_txn as read;
+            use gents::documents::read_desired_state_record_in_txn as read;
             let profiles = &profiles;
             let lead = &agents.lead;
             Box::pin(async move {

@@ -492,7 +492,7 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
     assert!(node_view.is_err() || node_view.unwrap()["data"]["AgentRequest"] == json!([]));
     {
         use crate::documents::apply_desired_state_plan;
-        use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+        use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         let tools = json!({"node_did": db.node_identity.did(), "tools_id": format!("{}:tools", agent.did()),
             "host": {"bash": {"mode": "ReadOnly", "background_enabled": true,
                 "max_output_chars": 10}}});
@@ -553,7 +553,7 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
 
     {
         use crate::documents::apply_desired_state_plan;
-        use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+        use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         let tools = json!({"node_did": db.node_identity.did(), "tools_id": format!("{}:tools", agent.did()),
             "host": {"bash": {"mode": "ReadOnly", "background_enabled": true,
                 "max_output_chars": 25}}});

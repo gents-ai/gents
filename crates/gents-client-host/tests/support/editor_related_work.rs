@@ -2,7 +2,7 @@ use super::{fake_llm, ChatAction};
 use anyhow::{Context, Result};
 use gents::documents::apply_desired_state_plan;
 use gents::documents::{load_agent_context_and_tools_in_txn, AgentTools};
-use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::{Collection, ConfigAccess};
 use serde_json::{json, Value};
 use std::{path::Path, sync::Arc, time::Duration};
@@ -102,7 +102,7 @@ pub async fn configure(access: &ConfigAccess, node: &str, agent: &str) -> Result
         Box::pin(async move {
             let (_, tools) = load_agent_context_and_tools_in_txn(txn, node, agent).await?;
             let mut tools = tools.context("fixture agent tools")?;
-            let (_, base) = gents::store::config_client::read_desired_state_record_in_txn(txn, Collection::Agent, node, agent).await?.context("fixture agent")?;
+            let (_, base) = gents::documents::read_desired_state_record_in_txn(txn, Collection::Agent, node, agent).await?.context("fixture agent")?;
             let mut documents = Vec::new();
             let targets: Vec<_> = (0..2).map(|index| format!("related-worker-{index}")).collect();
             for target in &targets {

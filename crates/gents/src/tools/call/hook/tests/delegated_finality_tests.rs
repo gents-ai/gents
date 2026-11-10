@@ -1,13 +1,12 @@
 use std::sync::Arc;
 
+use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use crate::request::admission::AgentRequestAdmissionVerifier;
 use crate::request::lifecycle::{
     submit_client_request, ClaimOutcome, ExecutionOrigin, RequestLifecycle,
 };
 use crate::session::message::{AgentMessageDelivery, Plan, RenderedBody};
-use crate::store::config_client::{
-    ConfigAccess, ConfigApplyTxn, DesiredStateApplyDocument, DesiredStateApplyPlan,
-};
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::store::identity::NodeIdentity;
 use crate::tools::call::lifecycle::{FailureClass, ToolCallLifecycle};
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};

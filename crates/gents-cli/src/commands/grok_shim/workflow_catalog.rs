@@ -154,7 +154,7 @@ mod tests {
                 let (did, agent, refs) = (did.clone(), agent.clone(), refs.clone());
                 Box::pin(async move {
                     use gents::documents::apply_desired_state_plan;
-                    use gents::store::config_client::{
+                    use gents::documents::{
                         read_desired_state_record_in_txn as read, DesiredStateApplyDocument,
                         DesiredStateApplyPlan,
                     };

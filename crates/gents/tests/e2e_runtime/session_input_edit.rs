@@ -93,7 +93,7 @@ async fn signed_edit_targets(
                     )
                     .await?
                     .expect("session exists");
-                let (agent_doc, _) = gents::store::config_client::read_desired_state_record_in_txn(
+                let (agent_doc, _) = gents::documents::read_desired_state_record_in_txn(
                     txn,
                     gents::Collection::Agent,
                     node_did,
@@ -175,7 +175,7 @@ impl EndpointEdits {
                 let agent_did = &agent_did;
                 Box::pin(async move {
                     Ok::<_, anyhow::Error>(
-                        gents::store::config_client::read_desired_state_record_in_txn(
+                        gents::documents::read_desired_state_record_in_txn(
                             txn,
                             gents::Collection::Agent,
                             did,
@@ -842,7 +842,7 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
             let agent_did = agent.did();
             Box::pin(async move {
                 Ok::<_, anyhow::Error>(
-                    gents::store::config_client::read_desired_state_record_in_txn(
+                    gents::documents::read_desired_state_record_in_txn(
                         txn,
                         gents::Collection::Agent,
                         did,

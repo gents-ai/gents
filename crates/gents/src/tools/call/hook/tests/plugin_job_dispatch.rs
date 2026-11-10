@@ -268,8 +268,8 @@ async fn step0(output: Value, options: Options) -> Step0 {
         .unwrap();
     let target = json!({"target_id": "t-worker", "node_did": identity.did(),
         "target_node_did": identity.did(), "agent_did": worker.did(), "name": "worker"});
-    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
-        crate::store::config_client::DesiredStateApplyDocument {
+    let plan = crate::documents::DesiredStateApplyPlan::new(vec![
+        crate::documents::DesiredStateApplyDocument {
             collection: crate::Collection::AgentTarget,
             add: target.clone(),
             update: target,
@@ -1911,24 +1911,22 @@ impl Step0 {
                 self.owner
                     .transact_write("test.plugin_job_hop_cap", |txn| {
                         Box::pin(async move {
-                            let (_, mut node) =
-                                crate::store::config_client::read_desired_state_record_in_txn(
-                                    txn,
-                                    crate::Collection::Node,
-                                    node_did,
-                                    node_did,
-                                )
-                                .await?
-                                .ok_or_else(|| anyhow::anyhow!("owned Node is unavailable"))?;
+                            let (_, mut node) = crate::documents::read_desired_state_record_in_txn(
+                                txn,
+                                crate::Collection::Node,
+                                node_did,
+                                node_did,
+                            )
+                            .await?
+                            .ok_or_else(|| anyhow::anyhow!("owned Node is unavailable"))?;
                             node["max_request_hop"] = json!(cap);
-                            let plan =
-                                crate::store::config_client::DesiredStateApplyPlan::new(vec![
-                                    crate::store::config_client::DesiredStateApplyDocument {
-                                        collection: crate::Collection::Node,
-                                        add: node.clone(),
-                                        update: node,
-                                    },
-                                ])?;
+                            let plan = crate::documents::DesiredStateApplyPlan::new(vec![
+                                crate::documents::DesiredStateApplyDocument {
+                                    collection: crate::Collection::Node,
+                                    add: node.clone(),
+                                    update: node,
+                                },
+                            ])?;
                             crate::documents::apply_desired_state_plan(txn, &plan).await
                         })
                     })

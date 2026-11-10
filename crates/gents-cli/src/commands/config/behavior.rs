@@ -21,7 +21,7 @@ pub(super) async fn agent_set(args: AgentUpsertArgs) -> Result<()> {
             let row = access
                 .transact_readonly("cli.agent.identity", |txn| {
                     Box::pin(async move {
-                        gents::store::config_client::read_desired_state_record_in_txn(
+                        gents::documents::read_desired_state_record_in_txn(
                             txn,
                             Collection::Agent,
                             owner,
@@ -419,7 +419,7 @@ mod tests {
     #[tokio::test]
     async fn bare_id_prefers_the_local_row_and_ambiguity_names_candidates() -> Result<()> {
         use gents::documents::apply_desired_state_plan;
-        use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+        use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         // Agent DIDs are derived per runtime, so the shared logical ID is a
         // profile label the local Node and a replicated peer both use.
         let client = crate::shared::test_support::ClientHome::new().await;
@@ -513,7 +513,7 @@ mod tests {
         let node = client.node().clone();
         let owner = client.node_did();
         use gents::documents::apply_desired_state_plan;
-        use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+        use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         let documents = [
             (Collection::InferenceBackend,json!({"node_did":owner,"backend_id":"backend","name":"Test","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:1/v1","auth":{"kind":"unauthenticated"}})),
             (Collection::InferenceProfile,json!({"node_did":owner,"profile_id":"profile-1","backend_id":"backend","model_name":"test"})),
@@ -673,7 +673,7 @@ mod tests {
     #[tokio::test]
     async fn raw_set_rejects_dangling_profile_reference() -> Result<()> {
         use gents::documents::apply_desired_state_plan;
-        use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+        use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         let client = crate::shared::test_support::ClientHome::new().await;
         let binding =
             gents::store::identity::provision_agent_identity(client.home.identity.as_ref())?;

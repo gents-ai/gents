@@ -479,11 +479,12 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
         .is_err()
     );
     assert_eq!(discoveries.load(std::sync::atomic::Ordering::SeqCst), 2);
-    let removal = super::DesiredStateApplyPlan::new(Vec::new())?.with_removals(vec![(
-        crate::Collection::InferenceBackend,
-        runtime.did().to_owned(),
-        "backend".to_owned(),
-    )])?;
+    let removal =
+        crate::documents::DesiredStateApplyPlan::new(Vec::new())?.with_removals(vec![(
+            crate::Collection::InferenceBackend,
+            runtime.did().to_owned(),
+            "backend".to_owned(),
+        )])?;
     let denied = agent_access
         .transact_write("test.backend.remove.denied", |txn| {
             let removal = &removal;

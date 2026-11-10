@@ -137,7 +137,7 @@ async fn edit_command(home: &EmbeddedHome, issued_at: DateTime<Utc>) -> SessionI
         .transact_readonly("test.edit.agent", |txn| {
             let agent_did = &binding.agent_did;
             Box::pin(async move {
-                let (doc, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                let (doc, _) = crate::documents::read_desired_state_record_in_txn(
                     txn,
                     crate::Collection::Agent,
                     did,

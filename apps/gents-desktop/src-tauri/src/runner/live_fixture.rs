@@ -851,10 +851,10 @@ mod tests {
         skill_id: &str,
     ) -> Result<()> {
         use gents::documents::apply_desired_state_plan;
-        use gents::store::collection::Collection;
-        use gents::store::config_client::{
+        use gents::documents::{
             read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
         };
+        use gents::store::collection::Collection;
         fixture
             .desktop_core()
             .operator_access(node_did)?

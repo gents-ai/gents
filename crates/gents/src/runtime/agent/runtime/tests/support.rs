@@ -28,7 +28,7 @@ pub(super) struct PluginRuntimeFixture {
     pub runtime: Arc<dyn NodeIdentity>,
     pub user_access: crate::store::config_client::ConfigAccess,
     pub agent_access: crate::store::config_client::ConfigAccess,
-    pub node_binding: crate::store::config_client::ConfigurationNodeBinding,
+    pub node_binding: crate::documents::ConfigurationNodeBinding,
 }
 
 impl PluginRuntimeFixture {
@@ -42,9 +42,8 @@ pub(super) async fn plugin_runtime_fixture(
     backend_id: &str,
     endpoint: &str,
 ) -> anyhow::Result<PluginRuntimeFixture> {
-    use crate::store::config_client::{
-        ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
-    };
+    use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use crate::store::config_client::ConfigAccess;
     use crate::store::identity::GrantSet;
     use crate::Collection;
     use serde_json::json;
@@ -127,7 +126,7 @@ pub(super) async fn plugin_runtime_fixture(
         identity::Did::new(agent.did())?,
         agent.as_ref(),
     )?;
-    let node_binding = crate::store::config_client::ConfigurationNodeBinding {
+    let node_binding = crate::documents::ConfigurationNodeBinding {
         node_did: identity::Did::new(runtime.did())?,
         doc_id: node_doc,
         enabled: true,
@@ -162,20 +161,19 @@ pub(super) async fn merge_fixture_document(
             let id = id.clone();
             let fields = fields.clone();
             Box::pin(async move {
-                let (_, mut document) =
-                    crate::store::config_client::read_desired_state_record_in_txn(
-                        txn, collection, &node_did, &id,
-                    )
-                    .await?
-                    .expect("fixture document must exist before its update");
+                let (_, mut document) = crate::documents::read_desired_state_record_in_txn(
+                    txn, collection, &node_did, &id,
+                )
+                .await?
+                .expect("fixture document must exist before its update");
                 if let (Some(target), Some(source)) = (document.as_object_mut(), fields.as_object())
                 {
                     for (key, value) in source {
                         target.insert(key.clone(), value.clone());
                     }
                 }
-                let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
-                    crate::store::config_client::DesiredStateApplyDocument {
+                let plan = crate::documents::DesiredStateApplyPlan::new(vec![
+                    crate::documents::DesiredStateApplyDocument {
                         collection,
                         add: document.clone(),
                         update: document,
@@ -271,7 +269,7 @@ impl HeldRuntimeFixture {
             .transact_write("test.runtime.agent_config", |txn| {
                 let agent_did = &agent_did;
                 Box::pin(async move {
-                    crate::store::config_client::grant_selected_self_configuration(
+                    crate::documents::grant_selected_self_configuration(
                         txn,
                         runtime_did,
                         agent_did.as_str(),
@@ -305,7 +303,7 @@ pub(super) async fn held_runtime_fixture_with_status(
     max_concurrent: i64,
     probe_status: &str,
 ) -> HeldRuntimeFixture {
-    use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     let (db, user, user_access, binding) = crate::test_support::signed_test_node(name).await;
     let node_did = db.node_identity.did();
     let profile_id = format!("{}:inference", binding.agent_did);

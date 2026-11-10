@@ -107,14 +107,14 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
         ConformanceConsumer::RustTest {
             id: "store::config_client::desired_state::workspace_selection::tests::selected_callback_agents_follow_native_visibility",
             package: "gents",
-            source_path: "crates/gents/src/store/config_client/desired_state/workspace_selection.rs",
+            source_path: "crates/gents/src/documents/desired_state/workspace_selection.rs",
             module_path: "store::config_client::desired_state::workspace_selection::tests",
             function: "selected_callback_agents_follow_native_visibility",
         },
         ConformanceConsumer::RustTest {
             id: "store::config_client::desired_state::agent_target_access::tests::configured_agent_targets_grant_exactly_session_writer",
             package: "gents",
-            source_path: "crates/gents/src/store/config_client/desired_state/agent_target_access.rs",
+            source_path: "crates/gents/src/documents/desired_state/agent_target_access.rs",
             module_path: "store::config_client::desired_state::agent_target_access::tests",
             function: "configured_agent_targets_grant_exactly_session_writer",
         },
@@ -1101,14 +1101,14 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
         ConformanceConsumer::RustTest {
             id: "config_client::desired_state::tests::guarded_publication_matches_lean_publish_if_cases",
             package: "gents",
-            source_path: "crates/gents/src/store/config_client/desired_state/tests.rs",
+            source_path: "crates/gents/src/documents/desired_state/tests.rs",
             module_path: "config_client::desired_state::tests",
             function: "guarded_publication_matches_lean_publish_if_cases",
         },
         ConformanceConsumer::RustTest {
             id: "config_client::desired_state::tests::generated_default_replacements_preserve_runtime_startup_selection",
             package: "gents",
-            source_path: "crates/gents/src/store/config_client/desired_state/tests.rs",
+            source_path: "crates/gents/src/documents/desired_state/tests.rs",
             module_path: "config_client::desired_state::tests",
             function: "generated_default_replacements_preserve_runtime_startup_selection",
         },

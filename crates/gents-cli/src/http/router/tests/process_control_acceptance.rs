@@ -305,10 +305,10 @@ async fn configure_background_bash(
     model: &str,
 ) {
     use gents::documents::apply_desired_state_plan;
-    use gents::documents::{AgentContext, BashTools, HostTools, Tools};
-    use gents::store::config_client::{
+    use gents::documents::{
         read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
+    use gents::documents::{AgentContext, BashTools, HostTools, Tools};
     use gents::Collection;
 
     fn plan(docs: Vec<(Collection, Value)>) -> anyhow::Result<DesiredStateApplyPlan> {

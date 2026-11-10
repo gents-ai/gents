@@ -10,10 +10,11 @@ use serde_json::json;
 
 use super::inference::tests::InterruptionCapture;
 use super::{AgentDaemon, AgentDaemonInit};
+use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use crate::inference::llm::tool::ToolDyn;
 use crate::inference::resolved::ResolvedAgent;
 use crate::runtime::agent::runtime::StartupBarrier;
-use crate::store::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+use crate::store::config_client::ConfigAccess;
 use crate::tools::call::hook::{
     BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy,
 };

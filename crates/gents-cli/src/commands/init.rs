@@ -6,12 +6,12 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use gents::documents::apply_desired_state_plan;
 use gents::documents::{
+    read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
+};
+use gents::documents::{
     Agent, AgentContext, AgentTools, BackendAuth, BashTools, BuiltInTools,
     DatastoreToolSurfaceDocument, DatastoreTools, FileTools, HostTools, InferenceBackend,
     InferenceExecution, InferenceSampling, SurfaceToolDecl, Tools,
-};
-use gents::store::config_client::{
-    read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 use gents::tools::builtin::self_config::engineer_self_config;
 use gents::{
@@ -1306,7 +1306,7 @@ async fn initialize_runtime_home(
             .transact_write("init.grant_self_configuration", |txn| {
                 let default_agent_did = &default_agent_did;
                 Box::pin(async move {
-                    gents::store::config_client::grant_selected_self_configuration(
+                    gents::documents::grant_selected_self_configuration(
                         txn,
                         node_did,
                         default_agent_did,

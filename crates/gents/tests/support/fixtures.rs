@@ -235,7 +235,7 @@ pub async fn configure_agent_tools_as(
     referenced_documents: Vec<(gents::Collection, serde_json::Value)>,
 ) {
     use gents::documents::AgentContext;
-    use gents::store::config_client::{
+    use gents::documents::{
         read_desired_state_record_in_txn as read, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     use gents::Collection;
@@ -454,7 +454,7 @@ pub async fn bind_selected_managed_agent_backend(
     model_name: &str,
 ) {
     use gents::documents::apply_desired_state_plan;
-    use gents::store::config_client::{
+    use gents::documents::{
         read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     use gents::Collection;
@@ -556,7 +556,7 @@ async fn bind_agent_backend_chain(
                 .transact_readonly("test.bind_backend.read", |txn| {
                     let id = &id;
                     Box::pin(async move {
-                        gents::store::config_client::read_desired_state_record_in_txn(
+                        gents::documents::read_desired_state_record_in_txn(
                             txn, collection, owner, id,
                         )
                         .await
@@ -583,8 +583,8 @@ async fn bind_agent_backend_chain(
             .await
             .expect("grant fixture User operator access");
         let node = serde_json::json!({"node_did": owner});
-        let plan = gents::store::config_client::DesiredStateApplyPlan::new(vec![
-            gents::store::config_client::DesiredStateApplyDocument {
+        let plan = gents::documents::DesiredStateApplyPlan::new(vec![
+            gents::documents::DesiredStateApplyDocument {
                 collection: gents::Collection::Node,
                 add: node.clone(),
                 update: node,
@@ -693,7 +693,7 @@ pub async fn set_backend_auth_as(
     auth: serde_json::Value,
 ) {
     use gents::documents::apply_desired_state_plan;
-    use gents::store::config_client::{
+    use gents::documents::{
         read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     access

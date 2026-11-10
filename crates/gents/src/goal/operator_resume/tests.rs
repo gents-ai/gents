@@ -1,6 +1,7 @@
 use super::support::*;
 use super::*;
-use crate::store::config_client::{read_desired_state_record_in_txn, ConfigAccess};
+use crate::documents::read_desired_state_record_in_txn;
+use crate::store::config_client::ConfigAccess;
 use crate::Collection;
 use gents_loop::provider_limit::{persisted_failure_reason, ProviderLimitHeaders};
 use serde_json::json;

@@ -203,7 +203,7 @@ async fn original_account_profiles(
 ) -> Result<Vec<String>> {
     use crate::inference::backends::provider::BackendProviderOauthExt;
     let backends: Vec<_> =
-        crate::store::config_client::list_inference_backends_in_txn(txn, &credential.node_did)
+        crate::documents::list_inference_backends_in_txn(txn, &credential.node_did)
             .await?
             .into_iter()
             .filter(|backend| {

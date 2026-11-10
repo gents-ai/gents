@@ -51,7 +51,7 @@ pub(crate) async fn inspect_pack_inference_bindings_with_node_binding(
     manifest: &PackManifest,
     node_did: &str,
     requested: &PackInferenceBindings,
-    node_binding: Option<&crate::store::config_client::ConfigurationNodeBinding>,
+    node_binding: Option<&crate::documents::ConfigurationNodeBinding>,
 ) -> Result<PackInferenceBindingPreview> {
     super::validate_pack_manifest(manifest)?;
     anyhow::ensure!(
@@ -111,19 +111,14 @@ pub async fn inference_profile_options(
 async fn inference_profile_options_with_node_binding(
     access: &ConfigAccess,
     node_did: &str,
-    node_binding: Option<&crate::store::config_client::ConfigurationNodeBinding>,
+    node_binding: Option<&crate::documents::ConfigurationNodeBinding>,
 ) -> Result<Vec<PackInferenceProfileOption>> {
     let (node_enabled, profiles, backends) = access
         .transact_readonly("pack.inference_binding_preview", |txn| {
             Box::pin(async move {
                 let refs = crate::ConfigReferences::load_in_txn(txn, node_did).await?;
                 let node_enabled = if let Some(binding) = node_binding {
-                    crate::store::config_client::configuration_node_doc(
-                        txn,
-                        node_did,
-                        Some(binding),
-                    )
-                    .await?;
+                    crate::documents::configuration_node_doc(txn, node_did, Some(binding)).await?;
                     binding.enabled
                 } else {
                     refs.documents()
@@ -199,7 +194,7 @@ pub(crate) async fn preview_pack_inference_bindings_with_node_binding(
     manifest: &PackManifest,
     node_did: &str,
     requested: &PackInferenceBindings,
-    node_binding: Option<&crate::store::config_client::ConfigurationNodeBinding>,
+    node_binding: Option<&crate::documents::ConfigurationNodeBinding>,
 ) -> Result<PackInferenceBindingPreview> {
     let mut preview = inspect_pack_inference_bindings_with_node_binding(
         access,
@@ -323,7 +318,7 @@ pub async fn install_pack_documents_with_expectations(
     pack: &super::PackIdentity,
     config: &PackConfig,
     policy: super::DriftPolicy,
-    expected: Vec<crate::store::config_client::DesiredStateExpectation>,
+    expected: Vec<crate::documents::DesiredStateExpectation>,
 ) -> Result<super::InstallReport> {
     super::provenance::apply_pack_documents(access, owner, pack, config, policy, expected).await
 }
@@ -454,10 +449,10 @@ mod tests {
                 json!({"node_did":foreign_owner,"profile_id":"foreign:inference","backend_id":"foreign:backend","model_name":"foreign"}),
             ),
         ];
-        let plan = crate::store::config_client::DesiredStateApplyPlan::new(
+        let plan = crate::documents::DesiredStateApplyPlan::new(
             docs.into_iter()
                 .map(
-                    |(collection, value)| crate::store::config_client::DesiredStateApplyDocument {
+                    |(collection, value)| crate::documents::DesiredStateApplyDocument {
                         collection,
                         add: value.clone(),
                         update: value,
@@ -505,8 +500,8 @@ mod tests {
                 .contains("unknown profile")
         );
         let disabled = backend(owner, "glm:backend", false);
-        let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
-            crate::store::config_client::DesiredStateApplyDocument {
+        let plan = crate::documents::DesiredStateApplyPlan::new(vec![
+            crate::documents::DesiredStateApplyDocument {
                 collection: crate::Collection::InferenceBackend,
                 add: disabled.clone(),
                 update: disabled,

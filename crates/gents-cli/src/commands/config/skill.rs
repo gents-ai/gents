@@ -13,7 +13,7 @@ use crate::{print_json, EXPORT_SKILL_FIELDS};
 /// `created_at` is set only when the Skill is created.
 async fn upsert_skill(access: &ConfigAccess, skill: &SkillDocument) -> Result<String> {
     use gents::documents::apply_desired_state_plan;
-    use gents::store::config_client::{
+    use gents::documents::{
         read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     let mut update = serde_json::to_value(skill)?;

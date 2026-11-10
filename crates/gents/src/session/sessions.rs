@@ -19,7 +19,7 @@ pub(crate) async fn stage_plugin_job_session_in_txn(
         gents_protocol::request_input::SessionCreationIntent::PluginJob,
     )
     .await?;
-    let (agent, _) = crate::store::config_client::read_desired_state_record_in_txn(
+    let (agent, _) = crate::documents::read_desired_state_record_in_txn(
         txn,
         crate::Collection::Agent,
         &create.node_did,
@@ -459,7 +459,7 @@ pub(crate) async fn grant_created_session_relationships(
                     .as_str()
                     .context("session relationship recovery omitted node identity")?;
                 let (actual_agent_doc, _) =
-                    crate::store::config_client::read_desired_state_record_in_txn(
+                    crate::documents::read_desired_state_record_in_txn(
                         txn,
                         crate::Collection::Agent,
                         node_did,
@@ -1068,7 +1068,7 @@ pub(crate) async fn recover_agent_session_relationships_with_access(
             if rows.is_empty() {
                 return Ok::<_, anyhow::Error>((String::new(), Vec::new()));
             }
-            let (agent_doc, _) = crate::store::config_client::read_desired_state_record_in_txn(
+            let (agent_doc, _) = crate::documents::read_desired_state_record_in_txn(
                 txn, crate::Collection::Agent, node_did, agent_did,
             ).await?.context("selected agent is unavailable for session relationship recovery")?;
             let mut pending = Vec::new();

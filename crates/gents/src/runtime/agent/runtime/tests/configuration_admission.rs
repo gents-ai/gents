@@ -3,9 +3,9 @@ use super::super::router::configuration_admission::{
     DeferredRequests,
 };
 use super::support::request;
+use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use crate::inference::resolved::{ResolvedConfiguration, SelectedConfiguration};
 use crate::runtime::agent::{resolve_document_runtime_snapshot, DocumentResolveContext};
-use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use crate::store::identity::NodeIdentity;
 use crate::turn::provider_input::configuration::ConfigurationVisibilityError;
 use crate::Collection;

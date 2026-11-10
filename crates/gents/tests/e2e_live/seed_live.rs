@@ -137,7 +137,7 @@ async fn configure_seed_and_compaction(
     profile_id: &str,
 ) {
     use gents::documents::apply_desired_state_plan;
-    use gents::store::config_client::{
+    use gents::documents::{
         read_desired_state_record_in_txn as read, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
 

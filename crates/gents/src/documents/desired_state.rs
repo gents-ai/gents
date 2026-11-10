@@ -1,4 +1,17 @@
+mod agent_target_access;
+mod apply;
+mod declared_readers;
 mod event_grants;
+pub(crate) mod plan;
+pub(crate) mod projection;
+pub(crate) mod read;
+pub(super) mod schema_fields;
+pub(super) mod selection;
+mod self_config_inference;
+pub(crate) mod semantics;
+pub(super) mod task_selection;
+pub(super) mod validate;
+mod workspace_selection;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -7,11 +20,18 @@ use super::inference_backend::{
     prepare_backend_metadata_in_txn, remove_backend_metadata_in_txn, write_backend_metadata_in_txn,
 };
 use super::InferenceBackend;
-use crate::store::config_client::{
-    ConfigApplyTxn, ConfigurationNodeBinding, DesiredStateApplyCounts, DesiredStateApplyPlan,
-    DesiredStateSemantics, PendingEventGrants,
-};
+use crate::store::config_client::ConfigApplyTxn;
+#[cfg(test)]
+use crate::store::graphql::escape_graphql_string;
 use crate::Collection;
+#[cfg(test)]
+use apply::confirm_removal;
+pub use apply::grant_selected_self_configuration;
+pub(crate) use apply::{configuration_node_doc, ConfigurationNodeBinding};
+#[cfg(test)]
+use plan::document_identity;
+use plan::{DesiredStateApplyCounts, DesiredStateApplyPlan};
+use semantics::{DesiredStateSemantics, PendingEventGrants};
 
 /// The configuration-document meaning of a desired-state apply: the
 /// InferenceBackend metadata and credential split, event grants, and event
@@ -39,12 +59,10 @@ impl DesiredStateSemantics for DocumentSemantics {
         let (metadata, credential) =
             prepare_backend_metadata_in_txn(txn, backend, existing).await?;
         let projected = serde_json::to_value(metadata.clone().into_backend()?)?;
-        let normalized = crate::store::config_client::config_projection(
-            Collection::InferenceBackend,
-            Some(&projected),
-        )?
-        .1
-        .context("backend metadata projection missing")?;
+        let normalized =
+            projection::config_projection(Collection::InferenceBackend, Some(&projected))?
+                .1
+                .context("backend metadata projection missing")?;
         if credential.is_some() || existing.is_none_or(|value| value != &normalized) {
             crate::OpenAiWireApi::warn_if_ignored(
                 metadata.provider_kind,
@@ -102,18 +120,8 @@ pub(crate) async fn apply_desired_state_plan_with_node_binding(
     plan: &DesiredStateApplyPlan,
     binding: Option<&ConfigurationNodeBinding>,
 ) -> Result<DesiredStateApplyCounts> {
-    crate::store::config_client::apply_desired_state_plan_with_semantics(
-        txn,
-        plan,
-        binding,
-        &DocumentSemantics,
-    )
-    .await
+    apply::apply_desired_state_plan_with_semantics(txn, plan, binding, &DocumentSemantics).await
 }
 
-pub(crate) async fn validate_desired_state_plan(
-    txn: &ConfigApplyTxn<'_>,
-    plan: &DesiredStateApplyPlan,
-) -> Result<()> {
-    crate::store::config_client::validate_desired_state_plan(txn, plan).await
-}
+#[cfg(test)]
+mod tests;

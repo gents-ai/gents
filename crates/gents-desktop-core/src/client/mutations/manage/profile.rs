@@ -1,9 +1,10 @@
 use anyhow::{Context, Result};
 use gents::documents::apply_desired_state_plan;
 use gents::documents::list_inference_profiles_in_txn;
+use gents::documents::read_desired_state_record_in_txn;
+use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::store::collection::Collection;
-use gents::store::config_client::read_desired_state_record_in_txn;
-use gents::store::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents::store::config_client::ConfigAccess;
 use gents::InferenceProfile;
 
 /// Profiles can be shared by other agents and compaction. Selecting a model

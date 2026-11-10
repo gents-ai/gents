@@ -513,7 +513,7 @@ impl McpFixture {
         enabled: bool,
     ) -> Result<()> {
         use gents::documents::apply_desired_state_plan;
-        use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+        use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         let value = serde_json::json!({"node_did":self.node_did,"service_id":service_id,"display_name":"Fixture MCP","description":"MCP probe fixture","hostname":hostname,"tailscale_ip":tailscale_ip,"lan_ip":lan_ip,"mcp_port":mcp_port,"mcp_path":"/mcp","enabled":enabled});
         if mcp_port == 0
             || [hostname, tailscale_ip, lan_ip]

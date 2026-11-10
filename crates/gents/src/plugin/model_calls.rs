@@ -64,7 +64,7 @@ impl ModelProfileVisibility {
             .access
             .transact_readonly("plugin.model_recheck", |txn| {
                 Box::pin(async move {
-                    let profile = crate::store::config_client::read_desired_state_record_in_txn(
+                    let profile = crate::documents::read_desired_state_record_in_txn(
                         txn,
                         Collection::InferenceProfile,
                         &self.owner,
@@ -72,7 +72,7 @@ impl ModelProfileVisibility {
                     )
                     .await?
                     .context("selected profile is unavailable")?;
-                    let backend = crate::store::config_client::read_desired_state_record_in_txn(
+                    let backend = crate::documents::read_desired_state_record_in_txn(
                         txn,
                         Collection::InferenceBackend,
                         &self.owner,
@@ -164,7 +164,7 @@ where
                     .transact_readonly("plugin.model_profile", |txn| {
                         Box::pin(async move {
                             let (profile_doc, profile_value) =
-                                crate::store::config_client::read_desired_state_record_in_txn(
+                                crate::documents::read_desired_state_record_in_txn(
                                     txn,
                                     Collection::InferenceProfile,
                                     owner,
@@ -175,7 +175,7 @@ where
                             let profile: InferenceProfile =
                                 serde_json::from_value(profile_value.clone())?;
                             let (backend_doc, backend_value) =
-                                crate::store::config_client::read_desired_state_record_in_txn(
+                                crate::documents::read_desired_state_record_in_txn(
                                     txn,
                                     Collection::InferenceBackend,
                                     owner,

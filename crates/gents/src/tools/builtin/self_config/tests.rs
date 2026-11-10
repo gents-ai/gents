@@ -174,7 +174,7 @@ pub(super) struct SelfConfigFixture {
     user_access: crate::ConfigAccess,
     agent: Arc<dyn crate::NodeIdentity>,
     agent_did: String,
-    node_binding: crate::store::config_client::ConfigurationNodeBinding,
+    node_binding: crate::documents::ConfigurationNodeBinding,
 }
 
 impl SelfConfigFixture {
@@ -184,7 +184,7 @@ impl SelfConfigFixture {
             crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
                 .expect("fixture Agent is derived from the held runtime");
         let response = user_access.execute("{ Node { _docID } }").await.unwrap();
-        let node_binding = crate::store::config_client::ConfigurationNodeBinding {
+        let node_binding = crate::documents::ConfigurationNodeBinding {
             node_did: identity::Did::new(db.node_identity.did()).unwrap(),
             doc_id: response["data"]["Node"][0]["_docID"]
                 .as_str()
@@ -215,10 +215,7 @@ impl SelfConfigFixture {
                 let owner = self.db.node_identity.did();
                 let agent = &self.agent_did;
                 Box::pin(async move {
-                    crate::store::config_client::grant_selected_self_configuration(
-                        txn, owner, agent,
-                    )
-                    .await
+                    crate::documents::grant_selected_self_configuration(txn, owner, agent).await
                 })
             })
             .await
@@ -294,15 +291,14 @@ impl SelfConfigFixture {
                 Box::pin(async move {
                     let actor = identity::Did::new(&self.agent_did)?;
                     for (collection, id, write) in documents {
-                        let (doc, _) =
-                            crate::store::config_client::read_desired_state_record_in_txn(
-                                txn,
-                                *collection,
-                                self.node_did(),
-                                id,
-                            )
-                            .await?
-                            .expect("account choice configuration exists");
+                        let (doc, _) = crate::documents::read_desired_state_record_in_txn(
+                            txn,
+                            *collection,
+                            self.node_did(),
+                            id,
+                        )
+                        .await?
+                        .expect("account choice configuration exists");
                         txn.add_actor_relationship(
                             collection.graphql_type(),
                             &doc,
@@ -420,19 +416,16 @@ impl SelfConfigFixture {
                 let owner = self.db.node_identity.did();
                 let actor = &self.agent_did;
                 Box::pin(async move {
-                    crate::store::config_client::grant_selected_self_configuration(
-                        txn, owner, sibling,
+                    crate::documents::grant_selected_self_configuration(txn, owner, sibling)
+                        .await?;
+                    let (doc_id, _) = crate::documents::read_desired_state_record_in_txn(
+                        txn,
+                        crate::Collection::Agent,
+                        owner,
+                        sibling,
                     )
-                    .await?;
-                    let (doc_id, _) =
-                        crate::store::config_client::read_desired_state_record_in_txn(
-                            txn,
-                            crate::Collection::Agent,
-                            owner,
-                            sibling,
-                        )
-                        .await?
-                        .expect("sibling Agent exists");
+                    .await?
+                    .expect("sibling Agent exists");
                     txn.delete_actor_relationship(
                         "Agent",
                         &doc_id,
@@ -462,15 +455,14 @@ impl SelfConfigFixture {
                 let owner = self.db.node_identity.did();
                 let actor = &self.agent_did;
                 Box::pin(async move {
-                    let (doc_id, _) =
-                        crate::store::config_client::read_desired_state_record_in_txn(
-                            txn,
-                            crate::Collection::Agent,
-                            owner,
-                            target,
-                        )
-                        .await?
-                        .expect("target Agent exists");
+                    let (doc_id, _) = crate::documents::read_desired_state_record_in_txn(
+                        txn,
+                        crate::Collection::Agent,
+                        owner,
+                        target,
+                    )
+                    .await?
+                    .expect("target Agent exists");
                     txn.add_actor_relationship(
                         "Agent",
                         &doc_id,
@@ -491,7 +483,7 @@ impl SelfConfigFixture {
 
     async fn grant_pack_install_to(&self, agent_did: &str) {
         use crate::documents::apply_desired_state_plan;
-        use crate::store::config_client::{
+        use crate::documents::{
             read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
         };
         let tools_id = format!("{agent_did}:tools");
@@ -581,7 +573,7 @@ impl SelfConfigFixture {
             .transact_write("test.self_config.signed_fixture_update", |txn| {
                 let patch = &patch;
                 Box::pin(async move {
-                    let (doc, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                    let (doc, _) = crate::documents::read_desired_state_record_in_txn(
                         txn, collection, self.node_did(), id,
                     )
                     .await?
@@ -811,7 +803,7 @@ fn help_contracts_conform_to_canonical_types_and_enum_vocabulary() {
             .clone()
     })
     .collect::<Vec<_>>();
-    for target in crate::store::config_client::patch::ALL_SELF_CONFIG_TARGETS {
+    for target in crate::documents::patch::ALL_SELF_CONFIG_TARGETS {
         let contract = all_contracts
             .iter()
             .find(|contract| contract["collection"] == target.collection_name())
@@ -849,8 +841,8 @@ fn help_contracts_conform_to_canonical_types_and_enum_vocabulary() {
         let canonical = canonical.iter().copied().collect::<BTreeSet<_>>();
         assert_eq!(described, canonical, "{name} nested help drift");
     };
+    use crate::documents::canonical_struct_fields;
     use crate::documents::*;
-    use crate::store::config_client::canonical_struct_fields;
     assert_fields(
         &shapes["host"],
         canonical_struct_fields::<HostTools>().unwrap(),
@@ -2377,7 +2369,7 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
         access
             .transact_readonly("test.self_config.backend", |txn| {
                 Box::pin(async move {
-                    crate::store::config_client::read_desired_state_record_in_txn(
+                    crate::documents::read_desired_state_record_in_txn(
                         txn,
                         crate::Collection::InferenceBackend,
                         owner,
@@ -4238,7 +4230,7 @@ async fn agent_clone_never_copies_the_source_self_config_grants() {
             let tools_id = &tools_id;
             let node_did = &node_did;
             Box::pin(async move {
-                crate::store::config_client::read_desired_state_record_in_txn(
+                crate::documents::read_desired_state_record_in_txn(
                     txn,
                     crate::Collection::Tools,
                     node_did,
@@ -4384,7 +4376,7 @@ async fn clone_does_not_inherit_self_config_from_its_source() {
             let owner = node_did.clone();
             let tools_id = clone_tools_id.clone();
             Box::pin(async move {
-                let (_, tools) = crate::store::config_client::read_desired_state_record_in_txn(
+                let (_, tools) = crate::documents::read_desired_state_record_in_txn(
                     txn,
                     crate::Collection::Tools,
                     &owner,
@@ -4417,8 +4409,8 @@ async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_locko
     crate::test_support::bootstrap_signed_test_node(fixture.user_access(), &foreign).await;
     let tools_id = format!("{}:tools", fixture.agent_did());
     let document = json!({"node_did": foreign, "tools_id": tools_id});
-    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
-        crate::store::config_client::DesiredStateApplyDocument {
+    let plan = crate::documents::DesiredStateApplyPlan::new(vec![
+        crate::documents::DesiredStateApplyDocument {
             collection: crate::Collection::Tools,
             add: document.clone(),
             update: document,
@@ -4565,7 +4557,7 @@ async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_
             let owner = owner.clone();
             let tools_id = tools_id.clone();
             Box::pin(async move {
-                let value = crate::store::config_client::read_desired_state_document_in_txn(
+                let value = crate::documents::read_desired_state_document_in_txn(
                     txn,
                     crate::Collection::Tools,
                     &owner,
@@ -5251,7 +5243,7 @@ async fn account_choice_core(name: &str) -> (SelfConfigFixture, SelfConfigCore) 
             .unwrap();
     }
     let compaction = format!("{agent}:compaction");
-    let plan = crate::store::config_client::DesiredStateApplyPlan::new(
+    let plan = crate::documents::DesiredStateApplyPlan::new(
         [
             (
                 crate::Collection::Compaction,
@@ -5280,7 +5272,7 @@ async fn account_choice_core(name: &str) -> (SelfConfigFixture, SelfConfigCore) 
             ]
         }))
         .map(
-            |(collection, value)| crate::store::config_client::DesiredStateApplyDocument {
+            |(collection, value)| crate::documents::DesiredStateApplyDocument {
                 collection,
                 add: value.clone(),
                 update: value,
@@ -5753,24 +5745,23 @@ async fn agent_clone_inherited_compaction_cannot_switch_account() {
             Box::pin(async move {
                 let mut documents = Vec::new();
                 for (id, context) in sources {
-                    let (_, mut value) =
-                        crate::store::config_client::read_desired_state_record_in_txn(
-                            txn,
-                            crate::Collection::Agent,
-                            owner,
-                            id,
-                        )
-                        .await?
-                        .expect("source Agent exists");
+                    let (_, mut value) = crate::documents::read_desired_state_record_in_txn(
+                        txn,
+                        crate::Collection::Agent,
+                        owner,
+                        id,
+                    )
+                    .await?
+                    .expect("source Agent exists");
                     value["context_id"] = json!(context);
                     value["inference_profile_id"] = json!("p-original");
-                    documents.push(crate::store::config_client::DesiredStateApplyDocument {
+                    documents.push(crate::documents::DesiredStateApplyDocument {
                         collection: crate::Collection::Agent,
                         add: value.clone(),
                         update: value,
                     });
                 }
-                let plan = crate::store::config_client::DesiredStateApplyPlan::new(documents)?;
+                let plan = crate::documents::DesiredStateApplyPlan::new(documents)?;
                 crate::documents::apply_desired_state_plan(txn, &plan).await
             })
         })
@@ -6453,8 +6444,7 @@ async fn backend_reads_expose_operator_catalogs_without_credentials_or_provider_
     let stored_keyed = access
         .transact_readonly("test.backend_catalog.metadata", |txn| {
             Box::pin(async move {
-                crate::store::config_client::load_inference_backend_in_txn(txn, owner, "keyed")
-                    .await
+                crate::documents::load_inference_backend_in_txn(txn, owner, "keyed").await
             })
         })
         .await
@@ -6548,8 +6538,8 @@ async fn modeled_resource_reads_use_resource_category_and_native_access() {
     let backend_id = format!("{}:backend", fixture.agent_did());
     let task = json!({"node_did": fixture.node_did(), "task_id": "read-exposure-task",
         "agent_did": fixture.agent_did(), "prompt_template": "Do the work"});
-    let task_plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
-        crate::store::config_client::DesiredStateApplyDocument {
+    let task_plan = crate::documents::DesiredStateApplyPlan::new(vec![
+        crate::documents::DesiredStateApplyDocument {
             collection: crate::Collection::Task,
             add: task.clone(),
             update: task,
@@ -6634,8 +6624,8 @@ async fn automation_read_preserves_native_selected_agent_visibility() {
     let sibling = fixture.install_sibling("Other Agent").await;
     let task = json!({"node_did": fixture.node_did(), "task_id": "other-agent-task",
         "agent_did": sibling, "prompt_template": "Do the work"});
-    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
-        crate::store::config_client::DesiredStateApplyDocument {
+    let plan = crate::documents::DesiredStateApplyPlan::new(vec![
+        crate::documents::DesiredStateApplyDocument {
             collection: crate::Collection::Task,
             add: task.clone(),
             update: task,
@@ -7642,7 +7632,7 @@ async fn modeled_job_policy_updates_follow_native_tools_authorization() {
                 let tools_id = &tools_id;
                 let node_did = &node_did;
                 Box::pin(async move {
-                    crate::store::config_client::read_desired_state_record_in_txn(
+                    crate::documents::read_desired_state_record_in_txn(
                         txn,
                         crate::Collection::Tools,
                         node_did,
@@ -7731,7 +7721,7 @@ async fn modeled_job_policy_updates_follow_native_tools_authorization() {
                 let tools_id = &tools_id;
                 let node_did = &node_did;
                 Box::pin(async move {
-                    crate::store::config_client::read_desired_state_record_in_txn(
+                    crate::documents::read_desired_state_record_in_txn(
                         txn,
                         crate::Collection::Tools,
                         node_did,
@@ -7827,8 +7817,7 @@ async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
             let owner = fixture.node_did();
             let sibling = &sibling;
             Box::pin(async move {
-                crate::store::config_client::grant_selected_self_configuration(txn, owner, sibling)
-                    .await
+                crate::documents::grant_selected_self_configuration(txn, owner, sibling).await
             })
         })
         .await
@@ -7997,7 +7986,7 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
             let did = did.clone();
             let tools_id = format!("{}:tools", fixture.agent_did());
             Box::pin(async move {
-                let value = crate::store::config_client::read_desired_state_document_in_txn(
+                let value = crate::documents::read_desired_state_document_in_txn(
                     txn,
                     crate::Collection::Tools,
                     &did,

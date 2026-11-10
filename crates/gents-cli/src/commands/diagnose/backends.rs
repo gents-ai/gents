@@ -308,7 +308,7 @@ mod tests {
     #[tokio::test]
     async fn oauth_backend_uses_exact_owner_observation_without_discovery() {
         use gents::documents::apply_desired_state_plan;
-        use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+        use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         let client = crate::shared::test_support::ClientHome::new().await;
         let owner = client.node_did().to_owned();
         let peer_dir = tempfile::tempdir().unwrap();

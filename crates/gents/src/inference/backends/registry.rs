@@ -567,7 +567,7 @@ async fn write_probe_observation(
         .transact_write("backend_registry.update_probe", |txn| {
             let input = input.clone();
             Box::pin(async move {
-                let (metadata_doc, value) = crate::store::config_client::read_desired_state_record_in_txn(
+                let (metadata_doc, value) = crate::documents::read_desired_state_record_in_txn(
                     txn, crate::Collection::InferenceBackend, node_did, backend_id,
                 )
                 .await?
@@ -624,7 +624,7 @@ pub(crate) async fn capture_backend_document(
     crate::inference::auth::credential::runtime_credential_access(node, &backend.node_did)?
         .transact_readonly("backend_registry.capture_probe", |txn| {
             Box::pin(async move {
-                let (doc, value) = crate::store::config_client::read_desired_state_record_in_txn(
+                let (doc, value) = crate::documents::read_desired_state_record_in_txn(
                     txn,
                     crate::Collection::InferenceBackend,
                     &backend.node_did,
@@ -972,7 +972,7 @@ pub async fn discover_runtime_backend_models(
     let current = access
         .transact_readonly("backend_registry.discovery_authorize", |txn| {
             Box::pin(async move {
-                crate::store::config_client::load_inference_backend_in_txn(
+                crate::documents::load_inference_backend_in_txn(
                     txn,
                     &backend.node_did,
                     &backend.backend_id,
@@ -1071,7 +1071,7 @@ pub async fn discover_backend_for_actor(
     let (doc_id, backend) = actor_access
         .transact_readonly("backend_registry.actor_discovery", |txn| {
             Box::pin(async move {
-                let (doc, value) = crate::store::config_client::read_desired_state_record_in_txn(
+                let (doc, value) = crate::documents::read_desired_state_record_in_txn(
                     txn,
                     crate::Collection::InferenceBackend,
                     node_did,
@@ -1143,15 +1143,14 @@ pub async fn discover_backend_for_actor(
                     ),
                     "selected backend is unavailable"
                 );
-                let (current_doc, _) =
-                    crate::store::config_client::read_desired_state_record_in_txn(
-                        txn,
-                        crate::Collection::InferenceBackend,
-                        &backend.node_did,
-                        &backend.backend_id,
-                    )
-                    .await?
-                    .context("selected backend is unavailable")?;
+                let (current_doc, _) = crate::documents::read_desired_state_record_in_txn(
+                    txn,
+                    crate::Collection::InferenceBackend,
+                    &backend.node_did,
+                    &backend.backend_id,
+                )
+                .await?
+                .context("selected backend is unavailable")?;
                 anyhow::ensure!(current_doc == *doc_id, "selected backend changed");
                 record_model_catalog_in_txn(
                     txn,

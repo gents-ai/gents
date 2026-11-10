@@ -400,7 +400,7 @@ async fn stage_resume_inner(
         )
         .await?
         .context("goal session is unavailable")?;
-        let (agent_doc_id, _) = crate::store::config_client::read_desired_state_record_in_txn(
+        let (agent_doc_id, _) = crate::documents::read_desired_state_record_in_txn(
             txn,
             crate::Collection::Agent,
             node_did,

@@ -290,7 +290,7 @@ pub(crate) async fn seed_test_configuration(
     documents: Vec<(crate::Collection, serde_json::Value)>,
 ) {
     use crate::documents::apply_desired_state_plan;
-    use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     let documents = documents
         .into_iter()
         .map(|(collection, mut value)| {

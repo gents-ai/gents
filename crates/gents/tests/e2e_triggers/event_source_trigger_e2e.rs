@@ -40,7 +40,7 @@ async fn register_webhook_event_schema(access: &ConfigAccess) {
 }
 
 async fn apply_documents(access: &ConfigAccess, documents: Vec<(gents::Collection, Value)>) {
-    use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     let plan = DesiredStateApplyPlan::new(
         documents
             .into_iter()

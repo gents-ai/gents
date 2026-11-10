@@ -26,7 +26,7 @@ pub(crate) async fn observe_unattended_agent_in_txn(
     if txn.actor_did() != Some(selected) {
         return Err(Error::ActorMismatch);
     }
-    let (doc, value) = crate::store::config_client::read_desired_state_record_in_txn(
+    let (doc, value) = crate::documents::read_desired_state_record_in_txn(
         txn,
         crate::Collection::Agent,
         owner,

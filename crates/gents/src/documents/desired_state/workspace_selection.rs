@@ -108,7 +108,8 @@ pub(super) async fn apply(txn: &ConfigApplyTxn<'_>, before: Capture) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::config_client::{ConfigAccess, DesiredStateApplyDocument, GraphqlEndpoint};
+    use crate::documents::DesiredStateApplyDocument;
+    use crate::store::config_client::{ConfigAccess, GraphqlEndpoint};
     use crate::store::identity::NodeIdentity;
     use serde_json::json;
     use std::sync::Arc;
@@ -131,7 +132,7 @@ mod tests {
 
     #[test]
     fn workspace_selection_edges_are_the_selected_agents() -> Result<()> {
-        use crate::store::config_client::desired_state::selection::tests::canonical;
+        use crate::documents::desired_state::selection::tests::canonical;
         let owner = "did:key:node";
         let selection = json!({"writer_agent_did":"did:key:writer",
             "integrator_agent_did":"did:key:integrator",

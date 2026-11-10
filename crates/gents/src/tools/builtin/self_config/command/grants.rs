@@ -268,13 +268,13 @@ mod scope_tests {
         let mut modeled = categories.clone();
         modeled.sort();
         assert_eq!(
-            sorted(&crate::store::config_client::patch::SELF_CONFIG_CATEGORIES),
+            sorted(&crate::documents::patch::SELF_CONFIG_CATEGORIES),
             modeled
         );
         let mut modeled = default_categories.clone();
         modeled.sort();
         assert_eq!(
-            sorted(&crate::store::config_client::patch::DEFAULT_SELF_CONFIG_CATEGORIES),
+            sorted(&crate::documents::patch::DEFAULT_SELF_CONFIG_CATEGORIES),
             modeled
         );
     }

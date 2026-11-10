@@ -179,7 +179,7 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
             let node_did = &node_did;
             let agent_did = &default_agent_did;
             Box::pin(async move {
-                use gents::store::config_client::{
+                use gents::documents::{
                     read_desired_state_record_in_txn as read, DesiredStateApplyDocument,
                     DesiredStateApplyPlan,
                 };

@@ -372,7 +372,7 @@ pub(crate) async fn ensure_request_session_in_txn(
     .await?
     .context("reserved client session disappeared")?
     .doc_id;
-    let (agent, _) = crate::store::config_client::read_desired_state_record_in_txn(
+    let (agent, _) = crate::documents::read_desired_state_record_in_txn(
         txn,
         crate::Collection::Agent,
         &create.node_did,
@@ -509,7 +509,7 @@ async fn bind_existing_targets_in_txn(
             && session.session.requester_did.as_deref() == Some(create.requester_did.as_str()),
         "client request session scope changed"
     );
-    let (agent, _) = crate::store::config_client::read_desired_state_record_in_txn(
+    let (agent, _) = crate::documents::read_desired_state_record_in_txn(
         txn,
         crate::Collection::Agent,
         &create.node_did,
@@ -1051,7 +1051,7 @@ async fn reconcile_client_request_inner(
                             == Some(create.requester_did.as_str()),
                     "client request session differs from retained request"
                 );
-                let (agent, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                let (agent, _) = crate::documents::read_desired_state_record_in_txn(
                     txn,
                     crate::Collection::Agent,
                     &create.node_did,
@@ -1148,7 +1148,7 @@ pub(crate) async fn complete_client_request_relationships(
                     )
                     .await?
                     .context("request session is unavailable")?;
-                let (agent, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                let (agent, _) = crate::documents::read_desired_state_record_in_txn(
                     txn,
                     crate::Collection::Agent,
                     node_did,
@@ -1340,7 +1340,7 @@ pub async fn reconcile_client_retry(
                         crate::store::config_client::agent_session::load_agent_session_owner_in_txn(txn, node_did, session_id)
                             .await?
                             .context("retry session is unavailable")?;
-                    let (agent, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                    let (agent, _) = crate::documents::read_desired_state_record_in_txn(
                         txn,
                         crate::Collection::Agent,
                         node_did,
@@ -2368,7 +2368,7 @@ mod tests {
                     .await?
                     .context("unattended session missing")?;
                     let (agent_doc, _) =
-                        crate::store::config_client::read_desired_state_record_in_txn(
+                        crate::documents::read_desired_state_record_in_txn(
                             txn,
                             crate::Collection::Agent,
                             runtime.did(),

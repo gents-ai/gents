@@ -48,8 +48,8 @@ use std::sync::Arc;
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
 
+use crate::documents::patch::{SelfConfigPatch, SelfConfigTarget};
 use crate::inference::llm::tool::{Tool, ToolDefinition, ToolDyn};
-use crate::store::config_client::patch::{SelfConfigPatch, SelfConfigTarget};
 use crate::store::graphql::escape_graphql_string;
 use crate::tools::surface::presets::{builtin_preset_names, preset_fields};
 use crate::tools::surface::SelfConfigToolConfig;
@@ -204,7 +204,7 @@ pub(crate) async fn runtime_node_binding(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
     runtime_identity: &dyn NodeIdentity,
-) -> Result<crate::store::config_client::ConfigurationNodeBinding> {
+) -> Result<crate::documents::ConfigurationNodeBinding> {
     anyhow::ensure!(
         runtime_identity.did() == node_did && node.node_identity_did() == Some(node_did),
         "self-configuration runtime identity does not match the Node"
@@ -214,7 +214,7 @@ pub(crate) async fn runtime_node_binding(
     let (doc_id, node_record) = access
         .transact_readonly("self_config.node_binding", |txn| {
             Box::pin(async move {
-                crate::store::config_client::read_desired_state_record_in_txn(
+                crate::documents::read_desired_state_record_in_txn(
                     txn,
                     crate::Collection::Node,
                     node_did,
@@ -225,7 +225,7 @@ pub(crate) async fn runtime_node_binding(
         })
         .await?
         .context("runtime cannot observe its Node for self-configuration")?;
-    Ok(crate::store::config_client::ConfigurationNodeBinding {
+    Ok(crate::documents::ConfigurationNodeBinding {
         node_did: actor,
         doc_id,
         enabled: node_record
@@ -276,7 +276,7 @@ pub(crate) fn build_self_config_tools_with_runtime(
     runtime_identity: Option<Arc<dyn NodeIdentity>>,
     config: &SelfConfigToolConfig,
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
-    node_binding: Option<crate::store::config_client::ConfigurationNodeBinding>,
+    node_binding: Option<crate::documents::ConfigurationNodeBinding>,
 ) -> Vec<Box<dyn ToolDyn>> {
     if !config.enabled {
         return Vec::new();

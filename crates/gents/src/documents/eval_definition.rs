@@ -531,10 +531,8 @@ mod tests {
             value["updated_at"] = updated_at.into();
             let parsed = parse(value);
             assert_eq!(parsed.updated_at.as_deref(), Some(updated_at));
-            crate::store::config_client::desired_state_document_digest(
-                &serde_json::to_value(&parsed).unwrap(),
-            )
-            .unwrap()
+            crate::documents::desired_state_document_digest(&serde_json::to_value(&parsed).unwrap())
+                .unwrap()
         };
         assert_eq!(
             digest("2026-01-01T00:00:00.000000000Z"),
@@ -550,8 +548,7 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(pack.eval_definitions.len(), 1);
-        let plan =
-            crate::store::config_client::DesiredStateApplyPlan::from_pack_config(&pack).unwrap();
+        let plan = crate::documents::DesiredStateApplyPlan::from_pack_config(&pack).unwrap();
         assert!(plan
             .documents()
             .iter()

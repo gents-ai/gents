@@ -209,7 +209,7 @@ pub(super) fn ordinary_mutation_allowed(intent: bool, mutation: bool) -> bool {
     !intent || !mutation
 }
 
-pub(super) fn configuration_replacement_patch(
+pub(crate) fn configuration_replacement_patch(
     collection: crate::store::collection::Collection,
     current: &Value,
     proposed: &Value,

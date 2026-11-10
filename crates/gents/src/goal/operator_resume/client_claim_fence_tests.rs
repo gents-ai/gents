@@ -178,7 +178,7 @@ async fn user_goal_continuation_claim_fences_current_physical_binding() {
                 let (_, mut document) = user
                     .transact_readonly("test.goal.source_agent", |txn| {
                         Box::pin(async move {
-                            crate::store::config_client::read_desired_state_record_in_txn(
+                            crate::documents::read_desired_state_record_in_txn(
                                 txn,
                                 crate::Collection::Agent,
                                 node_did,
@@ -193,8 +193,8 @@ async fn user_goal_continuation_claim_fences_current_physical_binding() {
                 document["agent_did"] = binding.agent_did.clone().into();
                 document["creation_nonce"] = binding.creation_nonce.clone().into();
                 document["display_name"] = "other Goal Agent".into();
-                let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
-                    crate::store::config_client::DesiredStateApplyDocument {
+                let plan = crate::documents::DesiredStateApplyPlan::new(vec![
+                    crate::documents::DesiredStateApplyDocument {
                         collection: crate::Collection::Agent,
                         add: document.clone(),
                         update: document,

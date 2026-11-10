@@ -115,7 +115,7 @@ impl RequestActors {
                 let agent_did = fixture.agent.did();
                 Box::pin(async move {
                     Ok::<_, anyhow::Error>(
-                        gents::store::config_client::read_desired_state_record_in_txn(
+                        gents::documents::read_desired_state_record_in_txn(
                             txn,
                             gents::Collection::Agent,
                             node_did,
@@ -731,7 +731,7 @@ pub async fn submit_user_request_to(
         .transact_readonly("test.user_request.agent", |txn| {
             Box::pin(async move {
                 Ok::<_, anyhow::Error>(
-                    gents::store::config_client::read_desired_state_record_in_txn(
+                    gents::documents::read_desired_state_record_in_txn(
                         txn,
                         gents::Collection::Agent,
                         node_did,

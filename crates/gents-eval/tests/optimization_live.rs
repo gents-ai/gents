@@ -3,8 +3,8 @@ use gents::support;
 use std::path::{Path, PathBuf};
 
 use gents::documents::apply_desired_state_plan;
+use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::documents::{EvalDefinition, EvalSplit, InferenceBackend, InferenceProfile};
-use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::{Collection, ConfigAccess, DocumentRuntimeOptions};
 use gents_eval::checks::CheckRegistry;
 use gents_eval::optimization::target::JobTarget;

@@ -121,7 +121,7 @@ pub async fn enqueue_managed_accepted_request_until(
             .transact_readonly("test.followup.agent", |txn| {
                 Box::pin(async move {
                     Ok::<_, anyhow::Error>(
-                        gents::store::config_client::read_desired_state_record_in_txn(
+                        gents::documents::read_desired_state_record_in_txn(
                             txn,
                             gents::Collection::Agent,
                             node_did,
@@ -225,7 +225,7 @@ pub async fn prepare_managed_accepted_turn(
             .transact_readonly("test.accepted_turn.agent", |txn| {
                 Box::pin(async move {
                     Ok::<_, anyhow::Error>(
-                        gents::store::config_client::read_desired_state_record_in_txn(
+                        gents::documents::read_desired_state_record_in_txn(
                             txn,
                             gents::Collection::Agent,
                             node_did,
@@ -424,7 +424,7 @@ pub async fn boot_managed_accepted_turn_with_backend_capacity(
     max_concurrent: usize,
 ) -> AcceptedTurnRuntime {
     use gents::documents::apply_desired_state_plan;
-    use gents::store::config_client::{
+    use gents::documents::{
         read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     assert!(max_concurrent > 0);
@@ -499,7 +499,7 @@ async fn boot_accepted_turn_with_backend_capacity_inner(
         prepared.backend.enable_dynamic_followups(marker);
     }
     use gents::documents::apply_desired_state_plan;
-    use gents::store::config_client::{
+    use gents::documents::{
         read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     let did = db.node_identity.did();

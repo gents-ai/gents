@@ -1211,7 +1211,7 @@ async fn write_runtime_documents(
     access: &crate::ConfigAccess,
     documents: Vec<(crate::Collection, Value)>,
 ) {
-    use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     let plan = DesiredStateApplyPlan::new(
         documents
             .into_iter()

@@ -157,7 +157,7 @@ async fn name_serving_accounts(
     let backends = access
         .transact_readonly("timeline.serving_accounts", |txn| {
             Box::pin(async move {
-                crate::store::config_client::list_inference_backends_in_txn(txn, node_did).await
+                crate::documents::list_inference_backends_in_txn(txn, node_did).await
             })
         })
         .await?;

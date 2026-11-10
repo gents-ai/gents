@@ -368,7 +368,7 @@ async fn declared_outcome_readers(
     owner: &str,
     task_id: &str,
 ) -> Result<Vec<String>> {
-    let Some((_, task)) = crate::store::config_client::read_desired_state_record_in_txn(
+    let Some((_, task)) = crate::documents::read_desired_state_record_in_txn(
         txn,
         crate::Collection::Task,
         owner,

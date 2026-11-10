@@ -14,9 +14,8 @@ async fn model_driven_held_client_eval_and_optimization_records_are_private() ->
     use crate::optimization::target::{Target, TargetField};
     use acp::nac::NodePermission;
     use gents::documents::apply_desired_state_plan;
-    use gents::store::config_client::{
-        DesiredStateApplyDocument, DesiredStateApplyPlan, GraphqlEndpoint,
-    };
+    use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use gents::store::config_client::GraphqlEndpoint;
     use gents::store::identity::NodeIdentity;
     let modeled = &crate::lean_vocab_test::lean_contract_snapshot().identity_eval_record_cases;
     let directory = tempfile::tempdir()?;

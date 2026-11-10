@@ -225,7 +225,7 @@ async fn a_definition_that_no_longer_validates_fails_the_job_as_definition_chang
         .access()
         .transact_write("matrix.invalidate_definition", |txn| {
             Box::pin(async move {
-                let (doc_id, _) = gents::store::config_client::read_desired_state_record_in_txn(
+                let (doc_id, _) = gents::documents::read_desired_state_record_in_txn(
                     txn, Collection::EvalDefinition, owner, DEFINITION,
                 ).await?.expect("installed definition");
                 txn.execute_client_signed_update(

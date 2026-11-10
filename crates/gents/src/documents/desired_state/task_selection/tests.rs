@@ -4,9 +4,9 @@ use anyhow::{Context, Result};
 use serde_json::json;
 
 use super::{apply_task_selections, selected_agent};
+use crate::documents::desired_state::selection::tests::canonical;
+use crate::documents::desired_state::selection::{apply_selection_changes, Change};
 use crate::lean_vocab_test::lean_identity_household_cases;
-use crate::store::config_client::desired_state::selection::tests::canonical;
-use crate::store::config_client::desired_state::selection::{apply_selection_changes, Change};
 use crate::store::config_client::ConfigAccess;
 use crate::store::identity::NodeIdentity;
 use crate::Collection;
@@ -304,8 +304,8 @@ async fn task_and_agent_target_visibility_follows_modeled_native_selection() -> 
     );
     for (actor, expected_case) in [(a.did(), "task-selected"), (b.did(), "task-unrelated")] {
         let value = json!({"node_did":runtime.did(), "task_id":"published-task", "agent_did":a.did(), "prompt_template":"work"});
-        let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
-            crate::store::config_client::DesiredStateApplyDocument {
+        let plan = crate::documents::DesiredStateApplyPlan::new(vec![
+            crate::documents::DesiredStateApplyDocument {
                 collection: Collection::Task,
                 add: value.clone(),
                 update: value,
@@ -363,8 +363,8 @@ async fn task_and_agent_target_visibility_follows_modeled_native_selection() -> 
         user.did()
     );
     let value = json!({"node_did":runtime.did(), "task_id":"published-task", "agent_did":b.did(), "prompt_template":"work"});
-    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
-        crate::store::config_client::DesiredStateApplyDocument {
+    let plan = crate::documents::DesiredStateApplyPlan::new(vec![
+        crate::documents::DesiredStateApplyDocument {
             collection: Collection::Task,
             add: value.clone(),
             update: value,

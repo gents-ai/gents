@@ -5,13 +5,11 @@ use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
 use crate::documents::apply_desired_state_plan;
+use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use crate::inference::resolved::{
     ResolvedConfiguration, SelectedConfiguration, SelectedConfigurationDocument,
 };
-use crate::store::config_client::{
-    ConfigAccess, ConfigClientError, DesiredStateApplyDocument, DesiredStateApplyPlan,
-    GraphqlEndpoint,
-};
+use crate::store::config_client::{ConfigAccess, ConfigClientError, GraphqlEndpoint};
 use crate::store::identity::NodeIdentity;
 use crate::Collection;
 
@@ -479,7 +477,7 @@ async fn held_client_and_agent_mcp_selection_isolation_rebind_and_rollback() -> 
         Collection::ToolServiceRegistry,
         service("agent-owned", "agent"),
     )])?;
-    let node_binding = crate::store::config_client::ConfigurationNodeBinding {
+    let node_binding = crate::documents::ConfigurationNodeBinding {
         node_did: identity::Did::new(runtime.did())?,
         doc_id: node_doc,
         enabled: true,

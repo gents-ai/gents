@@ -3,7 +3,7 @@ use crate::lean_vocab_test::{
     lean_self_config_field_tables, lean_self_config_selection_cases, lean_sibling_tools_cases,
     LeanAgentCandidate, LeanAgentDecisionInputs, LeanSelfConfigCase, LeanSelfConfigPatchEntry,
 };
-use gents::store::config_client::patch::{
+use gents::documents::patch::{
     apply_patch, ensure_admissible, SelfConfigPatch, SelfConfigTarget, ALL_SELF_CONFIG_TARGETS,
 };
 use gents::tools::builtin::self_config::agent::{

@@ -1,9 +1,9 @@
 use super::*;
 use gents::documents::apply_desired_state_plan;
-use gents::store::config_client::{
-    read_desired_state_record_in_txn, ConfigAccess, DesiredStateApplyDocument,
-    DesiredStateApplyPlan,
+use gents::documents::{
+    read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
+use gents::store::config_client::ConfigAccess;
 use gents::{Collection, Tools};
 use serde_json::json;
 use std::sync::Arc;

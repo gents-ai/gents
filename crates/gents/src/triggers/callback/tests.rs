@@ -1771,9 +1771,8 @@ impl Backlog {
     }
     async fn registered() -> Self {
         use crate::documents::apply_desired_state_plan;
-        use crate::store::config_client::{
-            ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
-        };
+        use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+        use crate::store::config_client::ConfigAccess;
         use crate::Collection;
         let home = tempfile::tempdir().unwrap();
         let identity =
@@ -1834,7 +1833,7 @@ impl Backlog {
 
     async fn add_binding(&self, binding_id: &str) {
         use crate::documents::apply_desired_state_plan;
-        use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+        use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         let value = json!({"binding_id":binding_id,"agent_did":crate::triggers::callback::test_agent_did(),"event_source_id":"backlog","callback_id":"cb-backlog",
             "input_fields":["label"],"enabled":true,"node_did":BACKLOG_OWNER});
         let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
@@ -2391,7 +2390,7 @@ async fn callback_repository_placement_reads_with_selected_agent() -> anyhow::Re
             owner
                 .transact_readonly("test.callback.owner_placement", |txn| {
                     Box::pin(async move {
-                        crate::store::config_client::read_desired_state_document_in_txn(
+                        crate::documents::read_desired_state_document_in_txn(
                             txn,
                             crate::Collection::RepositoryPlacement,
                             owner_did,
@@ -2712,7 +2711,7 @@ async fn callback_claim_rechecks_modeled_source_visibility_and_generation() {
 #[tokio::test]
 async fn callback_module_plan_commits_only_with_modeled_native_authority() {
     use crate::documents::apply_desired_state_plan;
-    use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     let backlog = Backlog::registered().await;
     let access = super::test_agent_access(&backlog.node);
     let make = |collection, value: serde_json::Value| DesiredStateApplyDocument {

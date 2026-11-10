@@ -283,7 +283,7 @@ async fn install_review_policy(
     fixture: &TitleFixture,
     prompt: &str,
 ) -> crate::plugin::approval::workspace::ReviewTaskSelection {
-    use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     let document = serde_json::json!({
         "node_did": fixture.parent.node_did,
         "task_id": "review",
@@ -324,7 +324,7 @@ async fn grant_agent_self_configuration_on_review_task(fixture: &TitleFixture) {
             Box::pin(async move {
                 // The Task links resolve through the Agent's own revocable
                 // `config_writer` role, which only the User's explicit grant holds.
-                crate::store::config_client::grant_selected_self_configuration(
+                crate::documents::grant_selected_self_configuration(
                     txn, node_did, agent_did,
                 )
                 .await?;

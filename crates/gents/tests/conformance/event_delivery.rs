@@ -635,7 +635,7 @@ async fn install_event_delivery_config(
     agent_did: &str,
 ) -> (String, String, String) {
     use gents::documents::apply_desired_state_plan;
-    use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     use gents::Collection;
     use serde_json::json;
     let documents = [

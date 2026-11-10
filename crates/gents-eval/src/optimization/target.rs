@@ -2,10 +2,11 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use gents::store::config_client::{
-    desired_state_document_digest, ConfigApplyTxn, DesiredStateApplyDocument,
-    DesiredStateApplyPlan, DesiredStateExpectation,
+use gents::documents::{
+    desired_state_document_digest, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    DesiredStateExpectation,
 };
+use gents::store::config_client::ConfigApplyTxn;
 use gents::Collection;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -240,8 +241,7 @@ fn remapped_by_trial(collection: Collection, field: Option<&str>, pack_document:
 }
 
 fn comparable(collection: Collection, document: &Value, pack_document: &Value) -> Result<Value> {
-    let (_, projected) =
-        gents::store::config_client::config_projection(collection, Some(document))?;
+    let (_, projected) = gents::documents::config_projection(collection, Some(document))?;
     let mut projected = projected.context("canonical projection missing")?;
     if let Some(object) = projected.as_object_mut() {
         object.retain(|field, _| !remapped_by_trial(collection, Some(field), pack_document));

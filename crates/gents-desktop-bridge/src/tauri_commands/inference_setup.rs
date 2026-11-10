@@ -1472,7 +1472,7 @@ mod provider_account_tests {
         let openrouter: gents::InferenceBackend = access
             .transact_readonly("test.read_openrouter", |txn| {
                 Box::pin(async move {
-                    gents::store::config_client::read_desired_state_record_in_txn(
+                    gents::documents::read_desired_state_record_in_txn(
                         txn,
                         gents::Collection::InferenceBackend,
                         node_did,
@@ -1568,7 +1568,7 @@ mod provider_account_tests {
         .unwrap()
         .credential;
         let unbound_backend = format!("{}-{}", unbound.provider, unbound.account_ref.unwrap());
-        let removal = gents::store::config_client::DesiredStateApplyPlan::new(Vec::new())
+        let removal = gents::documents::DesiredStateApplyPlan::new(Vec::new())
             .unwrap()
             .with_removals(vec![(
                 gents::Collection::InferenceBackend,

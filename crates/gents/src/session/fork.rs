@@ -715,15 +715,14 @@ async fn fork_in_txn(
         ForkError::ForkNotSameAgent
     );
     let agent = params.target_agent_did.unwrap_or(&parent.agent_did);
-    let (agent_doc_id, agent_document) =
-        crate::store::config_client::read_desired_state_record_in_txn(
-            txn,
-            crate::store::collection::Collection::Agent,
-            params.caller_node_did,
-            agent,
-        )
-        .await?
-        .ok_or_else(|| ForkError::ForkAgentNotFound(agent.to_owned()))?;
+    let (agent_doc_id, agent_document) = crate::documents::read_desired_state_record_in_txn(
+        txn,
+        crate::store::collection::Collection::Agent,
+        params.caller_node_did,
+        agent,
+    )
+    .await?
+    .ok_or_else(|| ForkError::ForkAgentNotFound(agent.to_owned()))?;
     anyhow::ensure!(
         agent_document["enabled"] == true,
         "fork target agent is disabled"

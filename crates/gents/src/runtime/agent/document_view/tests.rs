@@ -671,7 +671,7 @@ async fn patch_desired_document(
     patch: serde_json::Value,
 ) {
     use crate::documents::apply_desired_state_plan;
-    use crate::store::config_client::{
+    use crate::documents::{
         read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     access
@@ -1637,7 +1637,7 @@ async fn bind_subscription_backend(
     model: &str,
 ) {
     use crate::documents::apply_desired_state_plan;
-    use crate::store::config_client::{
+    use crate::documents::{
         read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     access.transact_write("test.subscription_backend", |txn| {

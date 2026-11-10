@@ -6,10 +6,10 @@ use defra_node::Node as EmbeddedNode;
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
+use crate::documents::config_projection;
 use crate::documents::{Task, TaskHook, TaskHookPhase};
 use crate::request::lifecycle::RequestTerminalOutcome;
 use crate::store::collection::Collection;
-use crate::store::config_client::config_projection;
 use crate::store::graphql::escape_graphql_string;
 use crate::tools::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
 use gents_protocol::row::AgentRequest;

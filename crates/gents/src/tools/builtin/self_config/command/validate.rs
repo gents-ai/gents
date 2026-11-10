@@ -1,7 +1,8 @@
 use super::*;
-use crate::store::config_client::{
-    validate_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
+use crate::documents::{
+    validate_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
+use crate::store::config_client::ConfigAccess;
 
 impl ConfigCommandTool {
     pub(super) async fn validate_saved(&self, argv: &[String]) -> Result<String> {

@@ -1,10 +1,11 @@
 use anyhow::Result;
 #[cfg(test)]
 use gents::documents::apply_desired_state_plan;
-use gents::store::collection::Collection;
 #[cfg(test)]
-use gents::store::config_client::read_desired_state_record_in_txn;
-use gents::store::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents::documents::read_desired_state_record_in_txn;
+use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents::store::collection::Collection;
+use gents::store::config_client::ConfigAccess;
 use gents::AgentDocument;
 
 #[cfg(test)]
@@ -228,7 +229,7 @@ mod tests {
                     &access,
                     alpha,
                     &[(
-                        gents::store::config_client::patch::SelfConfigTarget::Agent,
+                        gents::documents::patch::SelfConfigTarget::Agent,
                         review.into(),
                         vec![("enabled".into(), Some(json!(false)))],
                     )],

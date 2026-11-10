@@ -379,7 +379,7 @@ async fn installing_a_pack_binds_its_inference_slot_to_the_frozen_profile() {
             let agent_did = &agent_did;
             let node_did = &node_did;
             Box::pin(async move {
-                let (node, _) = gents::store::config_client::read_desired_state_record_in_txn(
+                let (node, _) = gents::documents::read_desired_state_record_in_txn(
                     txn,
                     Collection::Node,
                     node_did,
@@ -387,7 +387,7 @@ async fn installing_a_pack_binds_its_inference_slot_to_the_frozen_profile() {
                 )
                 .await?
                 .unwrap();
-                let (agent, _) = gents::store::config_client::read_desired_state_record_in_txn(
+                let (agent, _) = gents::documents::read_desired_state_record_in_txn(
                     txn,
                     Collection::Agent,
                     node_did,

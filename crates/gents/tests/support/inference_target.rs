@@ -2,11 +2,11 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use gents::documents::DesiredStateApplyPlan;
 use gents::documents::{
     BackendAuth, ConfigReferences, InferenceBackend, InferenceProfile, InferenceSampling,
 };
 use gents::pack::{decode_pack_config, PackInstallOptions};
-use gents::store::config_client::DesiredStateApplyPlan;
 use gents::BackendProviderKind;
 
 pub const EVAL_TARGET_VARIABLE: &str = "GENTS_EVAL_TARGET";

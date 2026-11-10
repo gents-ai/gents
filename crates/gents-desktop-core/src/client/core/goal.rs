@@ -178,7 +178,7 @@ impl ClientCore {
                             .await?
                             .ok_or_else(|| anyhow::anyhow!("selected session is not available"))?;
                     let (agent_doc_id, _) =
-                        gents::store::config_client::read_desired_state_record_in_txn(
+                        gents::documents::read_desired_state_record_in_txn(
                             txn,
                             gents::Collection::Agent,
                             node_did,

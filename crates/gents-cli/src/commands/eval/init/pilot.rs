@@ -168,14 +168,12 @@ async fn install_definition(ctx: &EvalContext, dir: &std::path::Path) -> Result<
     let expected = config
         .eval_definitions
         .iter()
-        .map(
-            |definition| gents::store::config_client::DesiredStateExpectation {
-                collection: gents::Collection::EvalDefinition,
-                owner: ctx.owner.clone(),
-                id: definition.definition_id.clone(),
-                digest: None,
-            },
-        )
+        .map(|definition| gents::documents::DesiredStateExpectation {
+            collection: gents::Collection::EvalDefinition,
+            owner: ctx.owner.clone(),
+            id: definition.definition_id.clone(),
+            digest: None,
+        })
         .collect();
     gents::pack::install_pack_documents_with_expectations(
         &ctx.access,
@@ -537,8 +535,8 @@ mod tests {
         let mut existing =
             serde_json::to_value(&drafted.assembled.as_ref().unwrap().definition).unwrap();
         existing["title"] = json!("Existing instrument");
-        let plan = gents::store::config_client::DesiredStateApplyPlan::new(vec![
-            gents::store::config_client::DesiredStateApplyDocument {
+        let plan = gents::documents::DesiredStateApplyPlan::new(vec![
+            gents::documents::DesiredStateApplyDocument {
                 collection: gents::Collection::EvalDefinition,
                 add: existing.clone(),
                 update: existing,
@@ -558,7 +556,7 @@ mod tests {
         let before = fixture.ctx.access.execute(query).await.unwrap();
         let error = install_definition(&fixture.ctx, dir).await.unwrap_err();
         assert!(
-            gents::store::config_client::stale_expectation(&error).is_some(),
+            gents::documents::stale_expectation(&error).is_some(),
             "{error:#}"
         );
         let after = fixture.ctx.access.execute(query).await.unwrap();
@@ -581,7 +579,7 @@ mod tests {
         assert_ne!(left.is_ok(), right.is_ok());
         let error = left.err().or_else(|| right.err()).unwrap();
         assert!(
-            gents::store::config_client::stale_expectation(&error).is_some(),
+            gents::documents::stale_expectation(&error).is_some(),
             "{error:#}"
         );
     }

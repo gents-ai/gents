@@ -44,7 +44,7 @@ async fn register_action_request_schema(access: &ConfigAccess) {
 }
 
 async fn apply_documents(access: &ConfigAccess, documents: Vec<(Collection, serde_json::Value)>) {
-    use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     let plan = DesiredStateApplyPlan::new(
         documents
             .into_iter()

@@ -8,10 +8,9 @@ mod tools;
 
 use anyhow::Result;
 use gents::documents::apply_desired_state_plan;
+use gents::documents::{read_desired_state_record_in_txn, DesiredStateApplyPlan};
 use gents::store::collection::Collection;
-use gents::store::config_client::{
-    read_desired_state_record_in_txn, ConfigAccess, DesiredStateApplyPlan,
-};
+use gents::store::config_client::ConfigAccess;
 
 pub async fn apply_plan(
     access: &ConfigAccess,

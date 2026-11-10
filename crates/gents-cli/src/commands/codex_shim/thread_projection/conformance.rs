@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use gents::documents::apply_desired_state_plan;
-use gents::store::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents::store::config_client::ConfigAccess;
 use gents::{Collection, NodeIdentity};
 use serde_json::json;
 

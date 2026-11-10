@@ -351,16 +351,14 @@ where
         "callback.read_config",
         |txn| {
             Box::pin(async move {
-                crate::store::config_client::read_desired_state_record_in_txn(
-                    txn, collection, owner, id,
-                )
-                .await?
-                .map(|(doc, value)| {
-                    serde_json::from_value(value)
-                        .map(|value| (doc, value))
-                        .map_err(Into::into)
-                })
-                .transpose()
+                crate::documents::read_desired_state_record_in_txn(txn, collection, owner, id)
+                    .await?
+                    .map(|(doc, value)| {
+                        serde_json::from_value(value)
+                            .map(|value| (doc, value))
+                            .map_err(Into::into)
+                    })
+                    .transpose()
             })
         },
     )
@@ -372,7 +370,7 @@ pub async fn list_enabled_bindings(
     owner: &str,
 ) -> Result<Vec<CallbackBindingDoc>> {
     let (fields, _) =
-        crate::store::config_client::config_projection(crate::Collection::CallbackBinding, None)?;
+        crate::documents::config_projection(crate::Collection::CallbackBinding, None)?;
     let query = format!(
         "{{ CallbackBinding(filter: {{ node_did: {{ _eq: \"{}\" }} }}) {{ {} }} }}",
         escape_graphql_string(owner),
@@ -412,7 +410,7 @@ pub(super) async fn load_callback_module_as(
     access
         .transact_readonly("callback.read_module_as_agent", |txn| {
             Box::pin(async move {
-                crate::store::config_client::read_desired_state_record_in_txn(
+                crate::documents::read_desired_state_record_in_txn(
                     txn,
                     crate::Collection::CallbackModule,
                     owner,
@@ -1252,7 +1250,7 @@ pub async fn load_repository_placement(
     let row: Option<crate::documents::RepositoryPlacement> = access
         .transact_readonly("callback.read_repository_placement", |txn| {
             Box::pin(async move {
-                crate::store::config_client::read_desired_state_document_in_txn(
+                crate::documents::read_desired_state_document_in_txn(
                     txn,
                     crate::Collection::RepositoryPlacement,
                     owner,

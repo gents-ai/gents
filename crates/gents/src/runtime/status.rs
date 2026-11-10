@@ -385,7 +385,7 @@ async fn upsert_runtime_status(
             let response = txn.execute(mutation).await?;
             let doc = gents_protocol::graphql::extract_mutation_doc_id(&response, "NodeRuntime")?;
             if rows.is_empty() {
-                crate::store::config_client::publish_node_child_in_txn(
+                crate::documents::publish_node_child_in_txn(
                     txn, "NodeRuntime", &doc, actor.as_str(),
                 ).await?;
             }

@@ -13,7 +13,7 @@ pub struct AgentProvisioner<'a> {
     pub runtime: &'a dyn crate::store::identity::NodeIdentity,
     pub actor: Option<&'a dyn crate::store::identity::NodeIdentity>,
     pub selected_agent_did: Option<&'a str>,
-    pub(crate) node_binding: Option<&'a crate::store::config_client::ConfigurationNodeBinding>,
+    pub(crate) node_binding: Option<&'a crate::documents::ConfigurationNodeBinding>,
 }
 
 impl<'a> AgentProvisioner<'a> {
@@ -544,7 +544,7 @@ pub fn load_pack_authoring_config(
         read_asset,
         environment,
     )?;
-    crate::store::config_client::DesiredStateApplyPlan::from_pack_config(&documents)?;
+    crate::documents::DesiredStateApplyPlan::from_pack_config(&documents)?;
     let mut hydrated = serde_json::to_value(&documents)?;
     if !agents.is_empty() {
         hydrated["agents"] = agents.into();

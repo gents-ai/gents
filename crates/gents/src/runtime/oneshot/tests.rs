@@ -399,14 +399,14 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
         ]
         .into_iter()
         .map(
-            |(collection, value)| crate::store::config_client::DesiredStateApplyDocument {
+            |(collection, value)| crate::documents::DesiredStateApplyDocument {
                 collection,
                 add: value.clone(),
                 update: value,
             },
         )
         .collect();
-        let plan = crate::store::config_client::DesiredStateApplyPlan::new(documents).unwrap();
+        let plan = crate::documents::DesiredStateApplyPlan::new(documents).unwrap();
         user_access
             .transact_write("test.oneshot.select_surface", |txn| {
                 let plan = &plan;

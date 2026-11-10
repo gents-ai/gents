@@ -3,13 +3,12 @@ use anyhow::{Context, Result};
 use super::refused;
 use crate::runner::executor::InferenceBinding;
 use crate::DefinitionRef;
+use gents::documents::{desired_state_document_digest, read_desired_state_record_in_txn};
 use gents::documents::{
     EvalDefinition, InferenceBackend, InferenceExecution, InferenceProfile, InferenceRetryPolicy,
     InferenceSampling,
 };
-use gents::store::config_client::{
-    desired_state_document_digest, read_desired_state_record_in_txn, ConfigAccess,
-};
+use gents::store::config_client::ConfigAccess;
 use gents::Collection;
 
 pub(super) async fn read_document<T>(

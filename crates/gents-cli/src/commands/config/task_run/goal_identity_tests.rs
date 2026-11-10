@@ -87,7 +87,7 @@ async fn enable_goal_creation(
     binding: &gents_protocol::agent_identity::AgentIdentityBinding,
 ) -> Result<()> {
     use gents::documents::{apply_desired_state_plan, AgentContext, BuiltInTools, Tools};
-    use gents::store::config_client::{
+    use gents::documents::{
         read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     use gents::Collection;

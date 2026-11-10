@@ -17,7 +17,7 @@ pub(super) async fn seed_agent_session(
         .transact_readonly("test.session_control.agent", |txn| {
             Box::pin(async move {
                 Ok::<_, anyhow::Error>(
-                    gents::store::config_client::read_desired_state_record_in_txn(
+                    gents::documents::read_desired_state_record_in_txn(
                         txn,
                         gents::Collection::Agent,
                         db.node_identity.did(),

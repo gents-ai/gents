@@ -1,6 +1,7 @@
 use super::{DocumentRecord, DocumentRuntimeView};
+use crate::documents::config_projection;
 use crate::store::collection::Collection;
-use crate::store::config_client::{config_projection, ConfigAccess, ConfigApplyTxn};
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::store::graphql::escape_graphql_string;
 use anyhow::{Context, Result};
 use defra_node::Node as EmbeddedNode;

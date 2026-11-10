@@ -213,7 +213,7 @@ pub(crate) async fn put_backend_credential_in_txn(
             &serde_json::json!({"input": input}), gents_protocol::schemas::BACKEND_CREDENTIAL,
         ).await?;
         let doc = gents_protocol::graphql::extract_mutation_doc_id(&response, "BackendCredential")?;
-        crate::store::config_client::publish_secret_configuration_in_txn(
+        crate::documents::publish_secret_configuration_in_txn(
             txn,
             "BackendCredential",
             &doc,

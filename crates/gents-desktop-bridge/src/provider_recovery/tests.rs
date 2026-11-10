@@ -40,15 +40,14 @@ impl Fixture {
                     Box::pin(async move {
                         // Discovery observes the stored connection, whose key
                         // the runtime moved into a node credential.
-                        let (_, stored) =
-                            gents::store::config_client::read_desired_state_record_in_txn(
-                                txn,
-                                gents::Collection::InferenceBackend,
-                                &backend.node_did,
-                                &backend.backend_id,
-                            )
-                            .await?
-                            .expect("stored backend");
+                        let (_, stored) = gents::documents::read_desired_state_record_in_txn(
+                            txn,
+                            gents::Collection::InferenceBackend,
+                            &backend.node_did,
+                            &backend.backend_id,
+                        )
+                        .await?
+                        .expect("stored backend");
                         let stored: gents::InferenceBackend = serde_json::from_value(stored)?;
                         gents::record_model_catalog_in_txn(
                             txn,

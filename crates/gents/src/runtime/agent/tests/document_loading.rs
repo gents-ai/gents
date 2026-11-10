@@ -214,12 +214,10 @@ where
             let id = &id;
             Box::pin(async move {
                 Ok::<_, anyhow::Error>(
-                    crate::store::config_client::read_desired_state_record_in_txn(
-                        txn, collection, owner, id,
-                    )
-                    .await?
-                    .expect("installed document")
-                    .1,
+                    crate::documents::read_desired_state_record_in_txn(txn, collection, owner, id)
+                        .await?
+                        .expect("installed document")
+                        .1,
                 )
             })
         })
@@ -237,8 +235,8 @@ where
     T: serde::Serialize,
 {
     let value = serde_json::to_value(document)?;
-    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
-        crate::store::config_client::DesiredStateApplyDocument {
+    let plan = crate::documents::DesiredStateApplyPlan::new(vec![
+        crate::documents::DesiredStateApplyDocument {
             collection,
             add: value.clone(),
             update: value,
@@ -474,7 +472,7 @@ async fn from_default_agent_documents_rejects_unresolved_agent_target() {
         let did = &did;
         let target_id = &target_id;
         Box::pin(async move {
-            let (doc_id, _) = crate::store::config_client::read_desired_state_record_in_txn(
+            let (doc_id, _) = crate::documents::read_desired_state_record_in_txn(
                 txn, crate::Collection::AgentTarget, did, target_id,
             ).await?.expect("installed target");
             let mutation = format!(r#"mutation($input: AgentTargetMutationInputArg!) {{ update_AgentTarget(docID: "{}", input: $input) {{ _docID }} }}"#,
@@ -533,7 +531,7 @@ async fn from_default_agent_documents_loads_runnable_agents_and_tracks_unavailab
         let did = &did;
         let profile_id = &profile_id;
         Box::pin(async move {
-            let (doc_id, _) = crate::store::config_client::read_desired_state_record_in_txn(
+            let (doc_id, _) = crate::documents::read_desired_state_record_in_txn(
                 txn, crate::Collection::InferenceProfile, did, profile_id,
             ).await?.expect("installed profile");
             let mutation = format!(r#"mutation($input: InferenceProfileMutationInputArg!) {{ update_InferenceProfile(docID: "{}", input: $input) {{ _docID }} }}"#,

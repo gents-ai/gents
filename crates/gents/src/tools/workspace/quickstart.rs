@@ -12,10 +12,10 @@ use super::{
     CAP_CREATE_WORKSPACE, CAP_OBSERVE_DIRTY_BASE, CAP_SEAL_WORKSPACE,
 };
 use crate::documents::apply_desired_state_plan;
-use crate::store::config_client::{
-    read_desired_state_record_in_txn, ConfigAccess, DesiredStateApplyDocument,
-    DesiredStateApplyPlan,
+use crate::documents::{
+    read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
+use crate::store::config_client::ConfigAccess;
 use crate::Collection;
 
 /// The user configures each Agent explicitly; physical Agent documents are

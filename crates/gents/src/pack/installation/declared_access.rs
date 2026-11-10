@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 
-use crate::store::config_client::DesiredStateApplyDocument;
+use crate::documents::DesiredStateApplyDocument;
 use crate::Collection;
 
 fn declared_field(collection: Collection) -> Option<&'static str> {

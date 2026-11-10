@@ -647,7 +647,7 @@ pub async fn read_node_usage(
     let backends = access
         .transact_readonly("usage_observation.read_node", |txn| {
             Box::pin(async move {
-                crate::store::config_client::list_inference_backends_in_txn(txn, node_did).await
+                crate::documents::list_inference_backends_in_txn(txn, node_did).await
             })
         })
         .await?;

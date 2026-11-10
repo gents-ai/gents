@@ -77,7 +77,7 @@ pub(super) async fn sync_account_backend(
         return Ok(());
     };
     let serving: Vec<_> =
-        crate::store::config_client::list_inference_backends_in_txn(txn, &credential.node_did)
+        crate::documents::list_inference_backends_in_txn(txn, &credential.node_did)
             .await?
             .into_iter()
             .filter(|backend| backend.auth.oauth_account_ref() == Some(account_ref))

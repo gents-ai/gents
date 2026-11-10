@@ -557,7 +557,7 @@ mod tests {
                 let found = access
                     .transact_write("cli.eval.init.test_read_author", |txn| {
                         Box::pin(async move {
-                            gents::store::config_client::read_desired_state_record_in_txn(
+                            gents::documents::read_desired_state_record_in_txn(
                                 txn, collection, owner, id,
                             )
                             .await

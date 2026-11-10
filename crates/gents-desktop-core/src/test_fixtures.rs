@@ -7,11 +7,10 @@
 use std::sync::Arc;
 
 use gents::documents::apply_desired_state_plan;
+use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::runtime::embedded::EmbeddedHome;
 use gents::store::collection::Collection;
-use gents::store::config_client::{
-    ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan, GraphqlEndpoint,
-};
+use gents::store::config_client::{ConfigAccess, GraphqlEndpoint};
 use gents::store::identity::{GrantSet, KeyIdentity, NodeIdentity};
 use gents_protocol::agent_identity::AgentIdentityBinding;
 

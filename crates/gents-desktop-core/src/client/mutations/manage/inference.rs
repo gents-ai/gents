@@ -1,6 +1,7 @@
 use anyhow::Result;
+use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::store::collection::Collection;
-use gents::store::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents::store::config_client::ConfigAccess;
 use gents::InferenceBackend;
 
 pub async fn upsert_inference_backend_on(

@@ -1264,9 +1264,9 @@ pub(crate) async fn load_request_context_in_txn(
     Option<crate::documents::Tools>,
     Vec<crate::documents::AgentTargetDocument>,
 )> {
+    use crate::documents::read_desired_state_document_in_txn as read;
     use crate::documents::{Agent, AgentContext, AgentTargetDocument, Tools};
     use crate::store::collection::Collection;
-    use crate::store::config_client::read_desired_state_document_in_txn as read;
     let agent: Agent = serde_json::from_value(
         read(txn, Collection::Agent, owner, agent_did)
             .await?
@@ -1609,15 +1609,14 @@ mod tests {
                     let runtime_did = &runtime_did;
                     let agent_did = &agent_did;
                     Box::pin(async move {
-                        let (agent_doc, _) =
-                            crate::store::config_client::read_desired_state_record_in_txn(
-                                txn,
-                                crate::Collection::Agent,
-                                runtime_did,
-                                agent_did,
-                            )
-                            .await?
-                            .ok_or_else(|| anyhow::anyhow!("fixture Agent document is missing"))?;
+                        let (agent_doc, _) = crate::documents::read_desired_state_record_in_txn(
+                            txn,
+                            crate::Collection::Agent,
+                            runtime_did,
+                            agent_did,
+                        )
+                        .await?
+                        .ok_or_else(|| anyhow::anyhow!("fixture Agent document is missing"))?;
                         txn.add_actor_relationship(
                             "Agent",
                             &agent_doc,
@@ -1867,27 +1866,26 @@ mod tests {
                 let owner = &owner;
                 let context = &context;
                 Box::pin(async move {
-                    let (_, mut record) =
-                        crate::store::config_client::read_desired_state_record_in_txn(
-                            txn,
-                            crate::Collection::AgentContext,
-                            owner,
-                            context,
-                        )
-                        .await?
-                        .ok_or_else(|| anyhow::anyhow!("fixture AgentContext is missing"))?;
+                    let (_, mut record) = crate::documents::read_desired_state_record_in_txn(
+                        txn,
+                        crate::Collection::AgentContext,
+                        owner,
+                        context,
+                    )
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("fixture AgentContext is missing"))?;
                     record["skill_ids"] = serde_json::json!(["allowed"]);
                     let skill = serde_json::json!({
                         "skill_id": "allowed", "node_did": owner, "name": "Allowed skill",
                         "instructions": "Admitted by the context allowlist.", "enabled": true,
                     });
-                    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
-                        crate::store::config_client::DesiredStateApplyDocument {
+                    let plan = crate::documents::DesiredStateApplyPlan::new(vec![
+                        crate::documents::DesiredStateApplyDocument {
                             collection: crate::Collection::Skill,
                             add: skill.clone(),
                             update: skill,
                         },
-                        crate::store::config_client::DesiredStateApplyDocument {
+                        crate::documents::DesiredStateApplyDocument {
                             collection: crate::Collection::AgentContext,
                             add: record.clone(),
                             update: record,

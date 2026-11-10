@@ -1110,7 +1110,7 @@ async fn upsert_persisted_health_state(
             let response = txn.execute(mutation).await?;
             let doc = gents_protocol::graphql::extract_mutation_doc_id(&response, "ToolServiceHealthState")?;
             if rows.is_empty() {
-                crate::store::config_client::publish_node_child_in_txn(
+                crate::documents::publish_node_child_in_txn(
                     txn, "ToolServiceHealthState", &doc, actor.as_str(),
                 ).await?;
             }

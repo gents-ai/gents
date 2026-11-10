@@ -3,8 +3,9 @@ mod editor;
 pub use editor::*;
 use gents::documents::apply_desired_state_plan;
 use gents::documents::Node;
+use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::store::collection::Collection;
-use gents::store::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents::store::config_client::ConfigAccess;
 
 pub async fn upsert_node_on(access: &ConfigAccess, document: &Node) -> Result<()> {
     let value = serde_json::to_value(document)?;
@@ -36,7 +37,7 @@ async fn set_default_agent_in_txn(
     agent_did: &str,
 ) -> Result<()> {
     use anyhow::Context;
-    use gents::store::config_client::read_desired_state_record_in_txn;
+    use gents::documents::read_desired_state_record_in_txn;
     let (_, mut node) = read_desired_state_record_in_txn(txn, Collection::Node, node_did, node_did)
         .await?
         .context("default agent requires an existing node")?;
@@ -96,14 +97,9 @@ async fn apply_config_components_in_txn(
     plan: &DesiredStateApplyPlan,
 ) -> Result<()> {
     use anyhow::Context;
-    gents::store::config_client::read_desired_state_record_in_txn(
-        txn,
-        Collection::Node,
-        owner,
-        owner,
-    )
-    .await?
-    .context("component apply requires an existing node")?;
+    gents::documents::read_desired_state_record_in_txn(txn, Collection::Node, owner, owner)
+        .await?
+        .context("component apply requires an existing node")?;
     apply_desired_state_plan(txn, plan).await?;
     Ok(())
 }
@@ -142,9 +138,9 @@ pub async fn patch_config_components_on(
     access: &ConfigAccess,
     node_did: &str,
     patches: &[(
-        gents::store::config_client::patch::SelfConfigTarget,
+        gents::documents::patch::SelfConfigTarget,
         String,
-        gents::store::config_client::patch::SelfConfigPatch,
+        gents::documents::patch::SelfConfigPatch,
     )],
 ) -> Result<()> {
     patch_config_components_with(access, node_did, patches).await
@@ -154,9 +150,9 @@ async fn patch_config_components_with(
     access: &ConfigAccess,
     node_did: &str,
     patches: &[(
-        gents::store::config_client::patch::SelfConfigTarget,
+        gents::documents::patch::SelfConfigTarget,
         String,
-        gents::store::config_client::patch::SelfConfigPatch,
+        gents::documents::patch::SelfConfigPatch,
     )],
 ) -> Result<()> {
     access
@@ -170,13 +166,13 @@ async fn patch_config_components_in_txn(
     txn: &gents::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     patches: &[(
-        gents::store::config_client::patch::SelfConfigTarget,
+        gents::documents::patch::SelfConfigTarget,
         String,
-        gents::store::config_client::patch::SelfConfigPatch,
+        gents::documents::patch::SelfConfigPatch,
     )],
 ) -> Result<()> {
     use anyhow::Context;
-    use gents::store::config_client::{
+    use gents::documents::{
         patch::{apply_patch, ensure_admissible},
         read_desired_state_record_in_txn,
     };
@@ -230,7 +226,7 @@ async fn patch_config_components_in_txn(
 mod tests {
     use super::*;
     use crate::test_fixtures::ServedRuntimeHome;
-    use gents::store::config_client::read_desired_state_record_in_txn;
+    use gents::documents::read_desired_state_record_in_txn;
     use serde_json::json;
 
     #[tokio::test]
@@ -478,7 +474,7 @@ mod tests {
     #[tokio::test]
     async fn component_patch_preserves_hidden_auth_and_rolls_back_invalid_companion() -> Result<()>
     {
-        use gents::store::config_client::patch::SelfConfigTarget;
+        use gents::documents::patch::SelfConfigTarget;
         let runtime = ServedRuntimeHome::start().await;
         let access = runtime.user_access();
         let owner = runtime.node_did();

@@ -4,8 +4,8 @@ use anyhow::{Context, Result};
 use serde_json::{Map, Value};
 
 use super::{read_owned_doc, SelfConfigCore};
+use crate::documents::patch::SelfConfigTarget;
 use crate::documents::{IntegrationTools, SelfConfigTools};
-use crate::store::config_client::patch::SelfConfigTarget;
 use crate::store::config_client::ConfigApplyTxn;
 
 /// Operator-managed grants carried by a Tools document (Lean

@@ -4,15 +4,15 @@ use std::process::Command;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+use gents::documents::{
+    read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
+};
 use gents::pack::archive::{pack_dir, PackArchive};
 use gents::pack::{
     install_prepared_document_pack, prepare_document_pack_archive, DriftPolicy, InstalledVia,
     PackAgentBindings,
 };
-use gents::store::config_client::{
-    read_desired_state_record_in_txn, ConfigAccess, DesiredStateApplyDocument,
-    DesiredStateApplyPlan,
-};
+use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::escape_graphql_string;
 use gents::{Collection, DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};
 use serde_json::{json, Value};

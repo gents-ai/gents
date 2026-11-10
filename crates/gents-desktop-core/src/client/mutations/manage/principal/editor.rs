@@ -1,11 +1,12 @@
 use anyhow::{ensure, Context, Result};
+use gents::documents::{
+    patch::{SelfConfigPatch, SelfConfigTarget},
+    read_desired_state_record_in_txn,
+};
 use gents::inference::backends::rotation::{
     backend_pool_members, set_backend_rotation_in_txn, BackendRotation, RotationOutcome,
 };
-use gents::store::config_client::{
-    patch::{SelfConfigPatch, SelfConfigTarget},
-    read_desired_state_record_in_txn, ConfigAccess, ConfigApplyTxn,
-};
+use gents::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use ts_rs::TS;
@@ -299,7 +300,7 @@ mod tests {
     use super::*;
     use crate::test_fixtures::ServedRuntimeHome;
     use gents::documents::apply_desired_state_plan;
-    use gents::store::config_client::DesiredStateApplyPlan;
+    use gents::documents::DesiredStateApplyPlan;
     use serde_json::json;
 
     /// The runtime and the User's access to it, with one API-key backend.

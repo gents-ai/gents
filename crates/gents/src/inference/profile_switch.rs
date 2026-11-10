@@ -7,15 +7,14 @@ use serde::Serialize;
 use crate::documents::{
     apply_desired_state_plan, ConfigReferences, InferenceBackendObservation, InferenceProfile,
 };
+use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use crate::inference::auth::credential::{
     backend_account, enabled_accounts_note, list_accounts, no_switch_candidate_note, provider_name,
     serving_account, AccountState, AccountSummary, ServingAccount,
 };
 use crate::inference::resolved::advertised_model_for_profile;
 use crate::inference::usage_observation::{usage_view, UsageView};
-use crate::store::config_client::{
-    ConfigAccess, ConfigApplyTxn, DesiredStateApplyDocument, DesiredStateApplyPlan,
-};
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::{Collection, InferenceBackend};
 
 /// What a move costs, shown with every plan and receipt.
@@ -278,9 +277,7 @@ impl Snapshot {
                     format!("no profile {profile_id:?}; `gents config profile list` shows them")
                 })?;
         let mut backends = Vec::new();
-        for backend in
-            crate::store::config_client::list_inference_backends_in_txn(txn, node_did).await?
-        {
+        for backend in crate::documents::list_inference_backends_in_txn(txn, node_did).await? {
             let observation =
                 crate::inference::backends::registry::lookup_backend_observation_in_txn(
                     txn,

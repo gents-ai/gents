@@ -1,9 +1,10 @@
 use anyhow::{Context, Result};
 
 use super::Agent;
+use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use crate::store::config_client::ConfigAccess;
 #[cfg(test)]
 use crate::store::config_client::ConfigApplyTxn;
-use crate::store::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 use crate::Collection;
 
 pub async fn write_agent_document(access: &ConfigAccess, behavior: &Agent) -> Result<String> {
@@ -17,7 +18,7 @@ pub async fn write_agent_document(access: &ConfigAccess, behavior: &Agent) -> Re
                     update: value,
                 }])?;
                 crate::documents::apply_desired_state_plan(txn, &plan).await?;
-                crate::store::config_client::read_desired_state_record_in_txn(
+                crate::documents::read_desired_state_record_in_txn(
                     txn,
                     Collection::Agent,
                     &behavior.node_did,
@@ -37,7 +38,7 @@ async fn load_agent_in_txn(
     node_did: &str,
     agent_did: &str,
 ) -> Result<Option<Agent>> {
-    crate::store::config_client::read_desired_state_document_in_txn(
+    crate::documents::read_desired_state_document_in_txn(
         txn,
         Collection::Agent,
         node_did,

@@ -78,7 +78,7 @@ async fn stage_goal_backed_request(
         session.session.agent_did == request.agent_did,
         "goal request session selects a different Agent"
     );
-    let (agent_doc, _) = crate::store::config_client::read_desired_state_record_in_txn(
+    let (agent_doc, _) = crate::documents::read_desired_state_record_in_txn(
         txn,
         crate::Collection::Agent,
         node_did,

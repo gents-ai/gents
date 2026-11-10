@@ -92,7 +92,7 @@ pub(crate) async fn seed_registry_service(
     port: u16,
 ) {
     use crate::documents::apply_desired_state_plan;
-    use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     let did = node.node_identity_did().unwrap();
     let access = crate::ConfigAccess::local_as(node.clone(), identity::Did::new(did).unwrap());
     let value = serde_json::json!({"node_did":did,"service_id":service_id,"display_name":service_id,"description":format!("test service {service_id}"),"hostname":hostname,"mcp_port":port,"mcp_path":"/mcp","enabled":true});

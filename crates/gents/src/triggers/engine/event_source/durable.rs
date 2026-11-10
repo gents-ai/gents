@@ -311,7 +311,7 @@ impl EventSource {
         let record = access
             .transact_readonly("trigger.read_arrival_cursor", |txn| {
                 Box::pin(async {
-                    crate::store::config_client::event_source_cursor::load_for_source(
+                    crate::documents::event_source_cursor::load_for_source(
                         txn,
                         &owner,
                         &consumer,

@@ -139,7 +139,7 @@ pub(super) async fn seeded_request(
         let session_id = &session_id;
         let actor = &actor;
         Box::pin(async move {
-            let (agent_doc, _) = crate::store::config_client::read_desired_state_record_in_txn(
+            let (agent_doc, _) = crate::documents::read_desired_state_record_in_txn(
                 txn, crate::Collection::Agent, signer.node_did(), signer.did(),
             ).await?.expect("selected Agent must be visible to its signer");
             let response = txn.execute_with_variables(

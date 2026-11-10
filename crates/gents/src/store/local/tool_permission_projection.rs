@@ -730,7 +730,7 @@ mod tests {
         agent_did: &str,
         tools: serde_json::Value,
     ) -> anyhow::Result<()> {
-        use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+        use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         let mut value =
             serde_json::json!({"node_did": node_did, "tools_id": format!("{agent_did}:tools")});
         for (key, field) in tools.as_object().expect("Tools fields") {

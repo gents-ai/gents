@@ -1,12 +1,12 @@
 use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Map, Value};
 
+use crate::documents::patch::{diff_docs, FieldDelta, SelfConfigTarget};
 use crate::documents::Tools;
-use crate::store::config_client::patch::{diff_docs, FieldDelta, SelfConfigTarget};
-use crate::store::config_client::{
-    read_desired_state_record_in_txn, ConfigApplyTxn, DesiredStateApplyDocument,
-    DesiredStateApplyPlan,
+use crate::documents::{
+    read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
+use crate::store::config_client::ConfigApplyTxn;
 use crate::store::graphql::escape_graphql_string;
 use crate::tools::native::CommandNetworkMode;
 

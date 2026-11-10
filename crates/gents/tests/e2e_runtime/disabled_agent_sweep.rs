@@ -19,7 +19,7 @@ const MARKER: &str = "disabled-sibling-marker";
 
 async fn disable_agent(access: &gents::ConfigAccess, node_did: &str, agent_did: &str) {
     use gents::documents::apply_desired_state_plan;
-    use gents::store::config_client::{
+    use gents::documents::{
         read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     access

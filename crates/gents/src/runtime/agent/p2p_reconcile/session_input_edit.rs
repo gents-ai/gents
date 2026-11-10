@@ -103,7 +103,7 @@ async fn authority_rejection(
             "edit physical targets do not match the canonical session".into(),
         ));
     };
-    let Some((agent_doc, _)) = crate::store::config_client::read_desired_state_record_in_txn(
+    let Some((agent_doc, _)) = crate::documents::read_desired_state_record_in_txn(
         txn,
         crate::Collection::Agent,
         &command.node_did,
@@ -455,7 +455,7 @@ async fn test_signed_replacement_fields(
                     )
                     .await?
                     .context("test session missing")?;
-                let (agent, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                let (agent, _) = crate::documents::read_desired_state_record_in_txn(
                     txn,
                     crate::Collection::Agent,
                     node_did,

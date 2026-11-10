@@ -66,7 +66,7 @@ async fn create_failed_wake(admission: &PublishedAdmission, mutation: &str) {
                     session.session.agent_did == agent_did,
                     "fixture Agent mismatch"
                 );
-                let (agent_doc, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                let (agent_doc, _) = crate::documents::read_desired_state_record_in_txn(
                     txn,
                     crate::Collection::Agent,
                     node_did,
@@ -981,18 +981,17 @@ async fn a_retried_over_bound_wake_is_refused_again() {
         .client
         .transact_write("test.completion.configure_hop_bound", |txn| {
             Box::pin(async move {
-                let (_, mut node_input) =
-                    crate::store::config_client::read_desired_state_record_in_txn(
-                        txn,
-                        crate::Collection::Node,
-                        did,
-                        did,
-                    )
-                    .await?
-                    .context("owned Node is unavailable")?;
+                let (_, mut node_input) = crate::documents::read_desired_state_record_in_txn(
+                    txn,
+                    crate::Collection::Node,
+                    did,
+                    did,
+                )
+                .await?
+                .context("owned Node is unavailable")?;
                 node_input["max_request_hop"] = json!(8);
-                let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
-                    crate::store::config_client::DesiredStateApplyDocument {
+                let plan = crate::documents::DesiredStateApplyPlan::new(vec![
+                    crate::documents::DesiredStateApplyDocument {
                         collection: crate::Collection::Node,
                         add: node_input.clone(),
                         update: node_input,

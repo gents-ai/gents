@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use gents::documents::apply_desired_state_plan;
+use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::documents::{EvalSplit, InferenceBackend, InferenceProfile};
 use gents::eval::{load_trials, load_verdicts, Anchor, OutcomeKind, ProviderReason, TrialRecord};
-use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::{Collection, ConfigAccess, DocumentRuntimeOptions};
 use gents_eval::checks::CheckRegistry;
 use gents_eval::runner::embedded::{EmbeddedExecutor, EmbeddedHome};

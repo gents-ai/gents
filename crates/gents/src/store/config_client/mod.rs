@@ -32,22 +32,20 @@ pub use client_request_input::{client_request_input, ClientRequestInputError};
 pub use client_signed_agent::prepare_request_evidence;
 pub use client_signed_agent::ClientSigningCapability;
 pub(crate) use client_signed_agent::{
-    prepare_goal_delete_evidence, verify_goal_delete_evidence, verify_request_evidence,
+    configuration_replacement_patch, prepare_goal_delete_evidence, verify_goal_delete_evidence,
+    verify_request_evidence,
 };
 pub mod agent_session;
 #[cfg(test)]
 mod client_signed_agent_conformance;
 mod common;
-pub(crate) mod desired_state;
 mod destructive_decision;
 #[cfg(test)]
 mod dormant_file_request_conformance;
 mod error;
 #[cfg(test)]
 mod event_policy_conformance;
-pub(crate) mod event_source_cursor;
 mod graphql;
-mod inference_backend;
 mod node_deferred_operation;
 mod node_document_publication;
 mod node_permissions;
@@ -96,8 +94,6 @@ pub(crate) fn classified_conflict_for_test() -> ConfigClientError {
     retry::transaction_conflict(write_telemetry::ConflictSource::StructuredCode)
 }
 
-pub mod patch;
-
 pub use authored_document::{
     create_authored_document, AuthoredDocumentCreateError, DocumentSchemaSource,
 };
@@ -105,34 +101,11 @@ pub use client_agent_publication::{
     AgentPublicationObserver, ClientAgentJournal, PublicationStage, PublicationStatus,
 };
 pub use common::{mint_recreate_identity, mint_recreate_identity_timestamp};
-pub use desired_state::grant_selected_self_configuration;
-pub(crate) use desired_state::plan::document_identity;
-pub use desired_state::plan::{
-    stale_expectation, DesiredStateApplyCounts, DesiredStateApplyDocument, DesiredStateApplyPlan,
-    DesiredStateExpectation, DriftedDocument, StaleExpectation,
-};
-pub(crate) use desired_state::projection::canonical_struct_fields;
-pub use desired_state::projection::{config_projection, desired_state_document_digest};
-pub(crate) use desired_state::read::read_desired_state_document_in_txn;
-pub use desired_state::read::read_record as read_desired_state_record_in_txn;
-pub use desired_state::read::read_records as read_desired_state_records_in_txn;
-pub(crate) use desired_state::schema_fields::collection_is_installed;
-pub(crate) use desired_state::semantics::{DesiredStateSemantics, PendingEventGrants};
-pub use desired_state::validate::{
-    event_trigger_document_field_names, validate_event_trigger_document_fields,
-};
-pub(crate) use desired_state::validate::{validate_desired_state_plan, OutcomeSourceSchemaError};
-pub(crate) use desired_state::{
-    apply_desired_state_plan_with_semantics, configuration_node_doc, ConfigurationNodeBinding,
-};
-pub use inference_backend::{list_inference_backends_in_txn, load_inference_backend_in_txn};
 pub(crate) use node_deferred_operation::recover_deferred_node_operations;
 pub use node_deferred_operation::{
     maybe_link_deferred_operation_in_txn, require_node_update_in_txn, DeferredOperationError,
 };
-pub(crate) use node_document_publication::{
-    publish_node_managers_in_txn, publish_secret_configuration_in_txn,
-};
+pub(crate) use node_document_publication::publish_node_managers_in_txn;
 pub use pairing_reader::{PairingObservation, PairingReadReason};
 pub(crate) use schema_contract::collection_schema_contract_digest;
 pub use schema_contract::{SchemaContractError, SchemaFieldDelta};
@@ -810,5 +783,3 @@ pub async fn query_graphql_with_options(
             source: Box::new(error),
         })
 }
-
-pub use node_document_publication::publish_node_child_in_txn;

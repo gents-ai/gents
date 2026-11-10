@@ -245,7 +245,7 @@ pub(super) fn documents(
     config: &gents::documents::PackConfig,
     variables: &VariableFields,
 ) -> Result<Vec<Value>> {
-    let plan = gents::store::config_client::DesiredStateApplyPlan::from_pack_config(config)?;
+    let plan = gents::documents::DesiredStateApplyPlan::from_pack_config(config)?;
     let ids = |collection: gents::Collection| -> Vec<&str> {
         plan.documents()
             .iter()

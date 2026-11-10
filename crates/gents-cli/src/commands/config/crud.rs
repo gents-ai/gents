@@ -225,7 +225,7 @@ pub(super) async fn query_collection(
             .transact_readonly("cli.config.backend.read", |txn| {
                 Box::pin(async move {
                     if let Some(id) = id {
-                        let record = gents::store::config_client::read_desired_state_record_in_txn(
+                        let record = gents::documents::read_desired_state_record_in_txn(
                             txn,
                             Collection::InferenceBackend,
                             node_did,
@@ -242,7 +242,7 @@ pub(super) async fn query_collection(
                             })
                             .collect::<Result<Vec<_>>>();
                     }
-                    gents::store::config_client::list_inference_backends_in_txn(txn, node_did)
+                    gents::documents::list_inference_backends_in_txn(txn, node_did)
                         .await?
                         .into_iter()
                         .map(|backend| {
@@ -261,7 +261,7 @@ pub(super) async fn query_collection(
             })
             .await?
     } else {
-        let fields = gents::store::config_client::config_projection(spec.collection, None)?
+        let fields = gents::documents::config_projection(spec.collection, None)?
             .0
             .join(" ");
         let query = format!(
@@ -417,7 +417,7 @@ fn print_table_row(cells: &[&str; 3], widths: &[usize; 3]) {
 mod tests {
     use super::*;
     use gents::documents::apply_desired_state_plan;
-    use gents::store::config_client::DesiredStateApplyPlan;
+    use gents::documents::DesiredStateApplyPlan;
     use std::sync::Arc;
 
     #[tokio::test]

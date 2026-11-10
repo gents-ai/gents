@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use gents::documents::DesiredStateApplyPlan;
 use gents::documents::{Agent, InferenceProfile, Node};
-use gents::store::config_client::DesiredStateApplyPlan;
 use gents::store::graphql::escape_graphql_string;
 use gents::{
     default_inference_profile_id_for_agent, Collection, DocumentRuntimeOptions, Gents,
@@ -48,7 +48,7 @@ pub async fn bind_target(db: &TestDb, target: &InferenceTarget) -> RequestActors
         .access
         .transact_write("test.bind_live_backend", |txn| {
             use gents::documents::apply_desired_state_plan;
-            use gents::store::config_client::{
+            use gents::documents::{
                 read_desired_state_record_in_txn as read, DesiredStateApplyDocument,
             };
             let node_did = &node_did;
@@ -392,7 +392,7 @@ impl LiveUser {
         documents: Vec<(Collection, serde_json::Value)>,
     ) {
         use gents::documents::apply_desired_state_plan;
-        use gents::store::config_client::DesiredStateApplyDocument;
+        use gents::documents::DesiredStateApplyDocument;
         let plan = DesiredStateApplyPlan::new(
             documents
                 .into_iter()
@@ -529,7 +529,7 @@ impl LiveUser {
             .transact_readonly("test.live_user.read_node", |txn| {
                 let node_did = &node_did;
                 Box::pin(async move {
-                    let (_, node) = gents::store::config_client::read_desired_state_record_in_txn(
+                    let (_, node) = gents::documents::read_desired_state_record_in_txn(
                         txn,
                         Collection::Node,
                         node_did,

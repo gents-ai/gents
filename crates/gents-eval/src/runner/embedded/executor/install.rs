@@ -9,13 +9,13 @@ use serde_json::{json, Value};
 use crate::runner::embedded::home::EmbeddedHome;
 use crate::runner::executor::{InferenceBinding, TrialFixtures, TrialSpec};
 use gents::documents::apply_desired_state_plan;
+use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::documents::{InferenceSampling, PackConfig};
 use gents::pack::{
     declared_paths, digest_declared_assets, install_pack_documents,
     load_pack_install_config_with_provisioner, BoundPackConfig, DriftPolicy, InstalledVia,
     PackIdentity, PackInferenceBindings, PackInstallOptions, PackManifest,
 };
-use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::store::graphql::validate_collection_identifier;
 use gents::{Collection, ConfigAccess};
 
@@ -127,7 +127,7 @@ pub(super) async fn install(
         .transact_readonly("eval.trial.node_owner", |txn| {
             let node_did = &node_did;
             Box::pin(async move {
-                gents::store::config_client::read_desired_state_record_in_txn(
+                gents::documents::read_desired_state_record_in_txn(
                     txn,
                     Collection::Node,
                     node_did,
@@ -164,10 +164,7 @@ pub(super) async fn install(
             let node_did = &node_did;
             let agent_did = &agent_did;
             Box::pin(async move {
-                gents::store::config_client::grant_selected_self_configuration(
-                    txn, node_did, agent_did,
-                )
-                .await
+                gents::documents::grant_selected_self_configuration(txn, node_did, agent_did).await
             })
         })
         .await
@@ -546,7 +543,7 @@ async fn install_session_fixture(
     access.transact_write("eval.trial.fixture_session", |txn| {
         let (session, input, target, readers) = (&session, &input, &target, &readers);
         Box::pin(async move {
-            let (agent_doc, _) = gents::store::config_client::read_desired_state_record_in_txn(
+            let (agent_doc, _) = gents::documents::read_desired_state_record_in_txn(
                 txn, Collection::Agent, &session.node_did, &session.agent_did,
             ).await?.context("fixture session agent is unavailable")?;
             let response = txn.execute_client_signed_create(

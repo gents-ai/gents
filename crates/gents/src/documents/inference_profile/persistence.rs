@@ -1,19 +1,17 @@
 use anyhow::{Context, Result};
 
 use super::InferenceProfile;
-use crate::store::config_client::{
-    ConfigAccess, ConfigApplyTxn, DesiredStateApplyDocument, DesiredStateApplyPlan,
-};
+use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::Collection;
 
 pub async fn list_inference_profiles_in_txn(
     txn: &ConfigApplyTxn<'_>,
     node_did: &str,
 ) -> Result<Vec<InferenceProfile>> {
-    let fields =
-        crate::store::config_client::config_projection(Collection::InferenceProfile, None)?
-            .0
-            .join(" ");
+    let fields = crate::documents::config_projection(Collection::InferenceProfile, None)?
+        .0
+        .join(" ");
     let response = txn
         .execute(&format!(
             r#"{{ InferenceProfile(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ {fields} }} }}"#,
@@ -41,7 +39,7 @@ pub async fn write_inference_profile_document(
                     update: value,
                 }])?;
                 crate::documents::apply_desired_state_plan(txn, &plan).await?;
-                crate::store::config_client::read_desired_state_record_in_txn(
+                crate::documents::read_desired_state_record_in_txn(
                     txn,
                     Collection::InferenceProfile,
                     &profile.node_did,
@@ -119,15 +117,14 @@ mod tests {
                 let foreign = &foreign;
                 Box::pin(async move {
                     for expected in [initial, foreign] {
-                        let value =
-                            crate::store::config_client::read_desired_state_document_in_txn(
-                                txn,
-                                Collection::InferenceProfile,
-                                &expected.node_did,
-                                &expected.profile_id,
-                            )
-                            .await?
-                            .unwrap();
+                        let value = crate::documents::read_desired_state_document_in_txn(
+                            txn,
+                            Collection::InferenceProfile,
+                            &expected.node_did,
+                            &expected.profile_id,
+                        )
+                        .await?
+                        .unwrap();
                         let actual: InferenceProfile = serde_json::from_value(value)?;
                         assert_eq!(&actual, expected);
                     }

@@ -292,7 +292,7 @@ where
                         return Ok::<_, anyhow::Error>(false);
                     }
                     let session = crate::store::config_client::agent_session::load_agent_session_owner_in_txn(txn, &expected.node_did, &expected.session_id).await?;
-                    let agent = crate::store::config_client::read_desired_state_record_in_txn(
+                    let agent = crate::documents::read_desired_state_record_in_txn(
                         txn, crate::Collection::Agent, &expected.node_did, &expected.agent_did,
                     ).await?;
                     Ok(session.is_some_and(|session| session.doc_id == session_doc

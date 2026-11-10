@@ -1,7 +1,7 @@
-use crate::store::config_client::{
-    document_identity, read_desired_state_record_in_txn as read_record, ConfigApplyTxn,
-    DesiredStateApplyPlan,
+use crate::documents::{
+    document_identity, read_desired_state_record_in_txn as read_record, DesiredStateApplyPlan,
 };
+use crate::store::config_client::ConfigApplyTxn;
 use crate::Collection;
 use anyhow::{Context, Result};
 use std::collections::{BTreeMap, BTreeSet};
@@ -251,10 +251,9 @@ async fn rebind_cursor(
         return Ok(());
     }
     if let Some((agent, collection)) = old {
-        if let Some(cursor) = crate::store::config_client::event_source_cursor::load_for_source(
-            txn, owner, consumer, collection,
-        )
-        .await?
+        if let Some(cursor) =
+            crate::documents::event_source_cursor::load_for_source(txn, owner, consumer, collection)
+                .await?
         {
             txn.delete_actor_relationship(
                 "EventSourceCursor",
@@ -266,10 +265,9 @@ async fn rebind_cursor(
         }
     }
     if let Some((agent, collection)) = new {
-        if let Some(cursor) = crate::store::config_client::event_source_cursor::load_for_source(
-            txn, owner, consumer, collection,
-        )
-        .await?
+        if let Some(cursor) =
+            crate::documents::event_source_cursor::load_for_source(txn, owner, consumer, collection)
+                .await?
         {
             txn.add_actor_relationship(
                 "EventSourceCursor",

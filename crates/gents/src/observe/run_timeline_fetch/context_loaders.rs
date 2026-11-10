@@ -97,7 +97,7 @@ mod tests {
                         .await?
                         .expect("session");
                         let (agent, _) =
-                            crate::store::config_client::read_desired_state_record_in_txn(
+                            crate::documents::read_desired_state_record_in_txn(
                                 txn,
                                 crate::Collection::Agent,
                                 owner,

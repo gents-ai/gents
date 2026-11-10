@@ -163,7 +163,7 @@ pub async fn load_managed_fixture_user(db: &TestDb) -> gents::KeyIdentity {
 
 pub async fn managed_agent_fixture(db: &TestDb) -> ManagedAgentFixture {
     use gents::documents::apply_desired_state_plan;
-    use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 
     let user = managed_fixture_user(db).await;
     let user_did = identity::Did::new(user.did()).expect("valid user DID");
@@ -232,7 +232,7 @@ pub async fn grant_agent_session_writer(
         .transact_readonly("test.agent_session_writer.read", |txn| {
             Box::pin(async move {
                 Ok::<_, anyhow::Error>(
-                    gents::store::config_client::read_desired_state_record_in_txn(
+                    gents::documents::read_desired_state_record_in_txn(
                         txn,
                         gents::Collection::Agent,
                         node_did,
@@ -267,7 +267,7 @@ pub async fn install_managed_agent(
     gents_protocol::agent_identity::AgentIdentityBinding,
 ) {
     use gents::documents::apply_desired_state_plan;
-    use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     let runtime = db.node_identity.as_ref();
     let user_did = identity::Did::new(user.did()).expect("valid user DID");
     let binding =
@@ -404,7 +404,7 @@ pub async fn test_p2p_db_without_node(name: &str, admission: TestP2pAdmission) -
 /// the same User updates this document instead of racing a second owner.
 async fn install_runtime_node(db: &TestDb) {
     use gents::documents::apply_desired_state_plan;
-    use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 
     let runtime = db.node_identity.as_ref();
     let admin = gents::ConfigAccess::local_as(

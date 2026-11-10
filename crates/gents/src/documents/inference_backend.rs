@@ -7,12 +7,14 @@ pub use gents_loop::claude_platform::ClaudePlatform;
 
 mod metadata;
 pub mod observation_binding;
+mod read;
 
 pub use metadata::write_inference_backend_document;
 pub(crate) use metadata::{
     backend_metadata_fields, prepare_backend_metadata_in_txn, remove_backend_metadata_in_txn,
     write_backend_metadata_in_txn, write_inference_backend_in_txn,
 };
+pub use read::{list_inference_backends_in_txn, load_inference_backend_in_txn};
 
 /// Secret-free authentication selection stored in InferenceBackendMetadata.
 #[derive(Debug, Clone, PartialEq, Eq)]

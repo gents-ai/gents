@@ -26,7 +26,7 @@ pub(super) async fn insert_signed_as(
             .transact_readonly("test.queue.selected_agent", |txn| {
                 Box::pin(async {
                     Ok::<_, anyhow::Error>(
-                        gents::store::config_client::read_desired_state_record_in_txn(
+                        gents::documents::read_desired_state_record_in_txn(
                             txn,
                             gents::Collection::Agent,
                             &request.node_did,
@@ -157,7 +157,7 @@ pub(super) async fn row_as(fixture: &support::ManagedAgentFixture, doc: &str) ->
 
 async fn install_review_skill(db: &TestDb, fixture: &support::ManagedAgentFixture) {
     use gents::documents::apply_desired_state_plan;
-    use gents::store::config_client::{
+    use gents::documents::{
         read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     let owner = db.node_identity.did();

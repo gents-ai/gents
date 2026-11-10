@@ -214,8 +214,7 @@ pub(crate) async fn snapshot(access: &ConfigAccess, node_did: &str) -> Result<Sn
         .transact_write("accounts.config", |txn| {
             Box::pin(async move {
                 Ok::<_, anyhow::Error>((
-                    gents::store::config_client::list_inference_backends_in_txn(txn, node_did)
-                        .await?,
+                    gents::documents::list_inference_backends_in_txn(txn, node_did).await?,
                     gents::documents::list_inference_profiles_in_txn(txn, node_did).await?,
                 ))
             })
@@ -723,7 +722,7 @@ pub async fn remove_account(
                 let profiles =
                     gents::documents::list_inference_profiles_in_txn(txn, node_did).await?;
                 let (kept, deleted): (Vec<_>, Vec<_>) =
-                    gents::store::config_client::list_inference_backends_in_txn(txn, node_did)
+                    gents::documents::list_inference_backends_in_txn(txn, node_did)
                         .await?
                         .into_iter()
                         .filter(|backend| {

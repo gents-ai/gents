@@ -2,7 +2,7 @@ use super::*;
 use crate::runner::embedded::executor::install::{apply, desired};
 use crate::runner::embedded::home::EmbeddedHome;
 use crate::OutcomeKind;
-use gents::store::config_client::DesiredStateApplyPlan;
+use gents::documents::DesiredStateApplyPlan;
 use gents::{Collection, ConfigAccess};
 
 use serde_json::json;

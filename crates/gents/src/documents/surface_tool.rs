@@ -74,7 +74,7 @@ pub(crate) async fn revalidate_visible_datastore_tool_in_txn(
         txn.actor_did().is_some(),
         "datastore tool actor is required"
     );
-    let surface = crate::store::config_client::read_desired_state_document_in_txn(
+    let surface = crate::documents::read_desired_state_document_in_txn(
         txn,
         crate::Collection::DatastoreToolSurface,
         owner,
@@ -205,7 +205,7 @@ pub(crate) async fn revalidate_datastore_tool_in_txn(
         .and_then(|datastore| datastore.datastore_tool_surface_ids.as_deref())
         .unwrap_or(&[]);
     let borrowed = ids.iter().map(String::as_str).collect::<Vec<_>>();
-    let rows = crate::store::config_client::read_desired_state_records_in_txn(
+    let rows = crate::documents::read_desired_state_records_in_txn(
         txn,
         crate::Collection::DatastoreToolSurface,
         owner,

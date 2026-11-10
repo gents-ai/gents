@@ -20,16 +20,14 @@ pub(crate) async fn target_agent_exists(
             let node_did = node_did.clone();
             let agent_did = agent_did.clone();
             Box::pin(async move {
-                Ok(
-                    crate::store::config_client::read_desired_state_document_in_txn(
-                        txn,
-                        crate::Collection::Agent,
-                        &node_did,
-                        &agent_did,
-                    )
-                    .await?
-                    .is_some(),
+                Ok(crate::documents::read_desired_state_document_in_txn(
+                    txn,
+                    crate::Collection::Agent,
+                    &node_did,
+                    &agent_did,
                 )
+                .await?
+                .is_some())
             })
         })
         .await

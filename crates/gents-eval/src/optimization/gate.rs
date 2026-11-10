@@ -5,8 +5,8 @@ use serde_json::Value;
 use crate::optimization::subject::{baseline_text, MaterializedPack};
 use crate::optimization::target::TargetField;
 use gents::documents::template::parse_template_for_validation;
+use gents::documents::DesiredStateApplyPlan;
 use gents::pack::interpolate;
-use gents::store::config_client::DesiredStateApplyPlan;
 use gents::{Collection, ConfigReferences};
 
 mod seeds;

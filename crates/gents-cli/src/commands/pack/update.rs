@@ -315,7 +315,7 @@ mod tests {
         // client configures the one the worker slot names.
         {
             use gents::documents::apply_desired_state_plan;
-            use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+            use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
             let (access, _) = crate::resolve_config_access(Some(home.path()), None)
                 .await
                 .unwrap();

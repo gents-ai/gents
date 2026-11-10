@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 use super::*;
 use crate::documents::write_inference_backend_document;
 use crate::documents::AdvertisedModel;
+use crate::documents::{list_inference_backends_in_txn, read_desired_state_record_in_txn};
 use crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
 use crate::inference::auth::credential::{
     preset_account_backend, remove_account_in_txn, set_account_enabled, store_sign_in,
@@ -17,9 +18,6 @@ use crate::inference::auth::credential::{
 };
 use crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
 use crate::inference::usage_observation::{record_usage, UsageAccount};
-use crate::store::config_client::{
-    list_inference_backends_in_txn, read_desired_state_record_in_txn,
-};
 use crate::{Collection, InferenceBackend};
 
 fn claude_sign_in(did: &str, who: &str) -> OAuthCredential {

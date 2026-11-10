@@ -20,7 +20,7 @@ pub(crate) async fn agent_document_for_test(
     access
         .transact_readonly("test.goal.agent_document", |txn| {
             Box::pin(async move {
-                crate::store::config_client::read_desired_state_record_in_txn(
+                crate::documents::read_desired_state_record_in_txn(
                     txn,
                     crate::Collection::Agent,
                     node,

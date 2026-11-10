@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
 
 use super::Tools;
-use crate::store::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use crate::store::config_client::ConfigAccess;
 use crate::Collection;
 
 /// Replace a complete Tools document; omitted groups revoke their capabilities.
@@ -17,7 +18,7 @@ pub async fn write_tools_document(access: &ConfigAccess, tools: &Tools) -> Resul
                     update: value,
                 }])?;
                 crate::documents::apply_desired_state_plan(txn, &plan).await?;
-                crate::store::config_client::read_desired_state_record_in_txn(
+                crate::documents::read_desired_state_record_in_txn(
                     txn,
                     Collection::Tools,
                     &tools.node_did,
@@ -72,15 +73,14 @@ mod tests {
                 Box::pin(async move {
                     for (owner, expected) in [("did:key:owner", tools), ("did:key:other", foreign)]
                     {
-                        let (_, value) =
-                            crate::store::config_client::read_desired_state_record_in_txn(
-                                txn,
-                                Collection::Tools,
-                                owner,
-                                "same",
-                            )
-                            .await?
-                            .context("missing tools")?;
+                        let (_, value) = crate::documents::read_desired_state_record_in_txn(
+                            txn,
+                            Collection::Tools,
+                            owner,
+                            "same",
+                        )
+                        .await?
+                        .context("missing tools")?;
                         assert_eq!(serde_json::from_value::<Tools>(value)?, *expected);
                     }
                     Ok(())

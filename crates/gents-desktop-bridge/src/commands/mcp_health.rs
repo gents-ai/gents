@@ -237,7 +237,7 @@ mod probe_scope_tests {
         let second = other_runtime.node_did();
         for (node, hostname) in [(first, "first"), (second, "second")] {
             use gents::documents::apply_desired_state_plan;
-            use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+            use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
             let value = serde_json::json!({"node_did":node,"service_id":"shared","hostname":hostname,"mcp_port":8080,"enabled":true});
             let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
                 collection: gents::Collection::ToolServiceRegistry,

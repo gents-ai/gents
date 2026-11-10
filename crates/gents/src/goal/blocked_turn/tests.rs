@@ -7,10 +7,10 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde_json::{json, Value};
 
 use super::*;
+use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use crate::inference::auth::credential::{
     account_failure, account_failure_state, XAI_OAUTH_PRODUCT,
 };
-use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use crate::store::identity::NodeIdentity;
 use crate::Collection;
 

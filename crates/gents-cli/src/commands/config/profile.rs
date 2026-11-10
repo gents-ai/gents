@@ -881,13 +881,13 @@ mod tests {
             ),
         ]
         .into_iter()
-        .map(|(collection, value)| gents::store::config_client::DesiredStateApplyDocument {
+        .map(|(collection, value)| gents::documents::DesiredStateApplyDocument {
             collection,
             add: value.clone(),
             update: value,
         })
         .collect();
-        let plan = gents::store::config_client::DesiredStateApplyPlan::new(documents).unwrap();
+        let plan = gents::documents::DesiredStateApplyPlan::new(documents).unwrap();
         access
             .transact_write("test.profile.agents", |txn| {
                 let plan = &plan;

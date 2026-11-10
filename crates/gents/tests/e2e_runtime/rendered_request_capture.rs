@@ -3048,9 +3048,8 @@ impl OwnedCaptureFixture {
         tools: Vec<FixedOutputTool>,
         strip: bool,
     ) -> Self {
-        use gents::store::config_client::{
-            ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan, NodePermission,
-        };
+        use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+        use gents::store::config_client::{ConfigAccess, NodePermission};
         let db = crate::support::test_db(name).await;
         let root: Arc<dyn NodeIdentity> = db.node_identity.clone();
         let node = db.node.clone();

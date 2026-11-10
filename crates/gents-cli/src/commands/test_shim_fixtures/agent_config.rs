@@ -15,7 +15,7 @@ pub(crate) async fn configure_runtime_agent(
     agents_enabled: bool,
 ) {
     use gents::documents::{AgentContext, AgentTools, BashTools, HostTools, Tools};
-    use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     use gents::Collection;
 
     let agent_did = binding.agent_did.as_str();
@@ -23,7 +23,7 @@ pub(crate) async fn configure_runtime_agent(
     runtime_access(node, node_did)
         .transact_write("grok.runtime_fixture", |txn| {
             Box::pin(async move {
-                use gents::store::config_client::read_desired_state_record_in_txn as read;
+                use gents::documents::read_desired_state_record_in_txn as read;
                 let (_, mut agent) = read(txn, Collection::Agent, node_did, agent_did)
                     .await?
                     .expect("fixture agent");
@@ -136,7 +136,7 @@ pub(in crate::commands) async fn seed_test_agent_configuration(
         .transact_write("grok.test_agent_configuration", |txn| {
             Box::pin(async move {
                 use gents::documents::apply_desired_state_plan;
-                use gents::store::config_client::{
+                use gents::documents::{
                     read_desired_state_record_in_txn, DesiredStateApplyDocument,
                     DesiredStateApplyPlan,
                 };

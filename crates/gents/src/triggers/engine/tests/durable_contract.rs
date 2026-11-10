@@ -746,9 +746,8 @@ async fn saved_arrival_cursor(
 #[tokio::test]
 async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashes() {
     use crate::documents::apply_desired_state_plan;
-    use crate::store::config_client::{
-        ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan, NodePermission,
-    };
+    use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use crate::store::config_client::{ConfigAccess, NodePermission};
     use crate::store::identity::NodeIdentity as _;
     for case in contract()["cursors"].as_array().unwrap() {
         let home = tempfile::tempdir().unwrap();
@@ -1072,9 +1071,8 @@ async fn admit_callback_arrival(
 #[tokio::test]
 async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
     use crate::documents::apply_desired_state_plan;
-    use crate::store::config_client::{
-        ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan, NodePermission,
-    };
+    use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use crate::store::config_client::{ConfigAccess, NodePermission};
     for case in contract()["callback_cursors"].as_array().unwrap() {
         let name = &case["name"];
         use crate::store::identity::NodeIdentity as _;

@@ -7,9 +7,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::documents::PackConfig;
-use crate::store::config_client::{
-    ConfigAccess, ConfigApplyTxn, DesiredStateApplyDocument, DesiredStateApplyPlan,
-};
+use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::store::graphql::escape_graphql_string;
 use crate::Collection;
 
@@ -293,10 +292,9 @@ async fn dependency_snapshot_in_txn(
     }
     let mut documents = BTreeMap::new();
     for (collection, ids) in grouped {
-        let live = crate::store::config_client::read_desired_state_records_in_txn(
-            txn, collection, owner, &ids,
-        )
-        .await?;
+        let live =
+            crate::documents::read_desired_state_records_in_txn(txn, collection, owner, &ids)
+                .await?;
         anyhow::ensure!(
             live.len() == ids.len(),
             "installed dependency {coordinate} has missing configuration; reinstall it explicitly"
@@ -332,7 +330,7 @@ impl InstalledDependencySnapshot {
 pub struct InstallReport {
     pub agents: BTreeMap<String, String>,
     #[serde(flatten)]
-    pub applied: crate::store::config_client::DesiredStateApplyCounts,
+    pub applied: crate::documents::DesiredStateApplyCounts,
     pub created: Vec<String>,
     pub replaced: Vec<String>,
     pub adopted: Vec<String>,
@@ -461,10 +459,9 @@ async fn live_digests<'a>(
     let mut out = BTreeMap::new();
     for (collection, ids) in grouped {
         let ids: Vec<&str> = ids.into_iter().collect();
-        let records = crate::store::config_client::read_desired_state_records_in_txn(
-            txn, collection, owner, &ids,
-        )
-        .await?;
+        let records =
+            crate::documents::read_desired_state_records_in_txn(txn, collection, owner, &ids)
+                .await?;
         for (id, (_, live)) in records {
             out.insert(
                 (collection, id),
@@ -487,10 +484,9 @@ async fn ensure_removal_origin(
     }
     for (collection, ids) in grouped {
         let ids: Vec<&str> = ids.into_iter().collect();
-        let records = crate::store::config_client::read_desired_state_records_in_txn(
-            txn, collection, owner, &ids,
-        )
-        .await?;
+        let records =
+            crate::documents::read_desired_state_records_in_txn(txn, collection, owner, &ids)
+                .await?;
         for (id, (_, live)) in records {
             let tags = live
                 .get("tags")
@@ -543,7 +539,7 @@ async fn write_record_in_txn(
     documents: Vec<RecordedDocument>,
     explicit: bool,
     plugin_store: bool,
-    node_binding: Option<&crate::store::config_client::ConfigurationNodeBinding>,
+    node_binding: Option<&crate::documents::ConfigurationNodeBinding>,
     source: Option<&PackSource>,
 ) -> Result<()> {
     if let Some(source) = source {
@@ -645,8 +641,7 @@ async fn write_record_in_txn(
     );
     if prior.doc_id.is_none() {
         let doc_id = crate::store::graphql::created_doc_id(&mutation, RECORD)?;
-        let node_doc =
-            crate::store::config_client::configuration_node_doc(txn, owner, node_binding).await?;
+        let node_doc = crate::documents::configuration_node_doc(txn, owner, node_binding).await?;
         txn.add_resource_relationship(RECORD, &doc_id, "parent", "nodes", &node_doc)
             .await?;
         crate::store::config_client::publish_node_managers_in_txn(
@@ -671,7 +666,7 @@ pub(crate) async fn install_in_txn(
     pack: &PackIdentity,
     documents: Vec<DesiredStateApplyDocument>,
     policy: DriftPolicy,
-    node_binding: Option<&crate::store::config_client::ConfigurationNodeBinding>,
+    node_binding: Option<&crate::documents::ConfigurationNodeBinding>,
     source: Option<&PackSource>,
     variables: Option<&BTreeMap<String, Option<String>>>,
 ) -> Result<InstallReport> {
@@ -975,7 +970,7 @@ pub(crate) async fn record_plugin_store_change_as_with_node_binding(
     home: &Path,
     coordinate: &str,
     installed: Option<&PackIdentity>,
-    node_binding: Option<&crate::store::config_client::ConfigurationNodeBinding>,
+    node_binding: Option<&crate::documents::ConfigurationNodeBinding>,
 ) -> std::result::Result<(), PluginStoreChangeError> {
     record_plugin_store_change_with_stage(
         access,
@@ -1033,7 +1028,7 @@ pub(crate) async fn record_staged_plugin_store_change_as_with_node_binding(
 }
 
 pub(crate) struct PluginStageContext<'a> {
-    pub(crate) node_binding: Option<&'a crate::store::config_client::ConfigurationNodeBinding>,
+    pub(crate) node_binding: Option<&'a crate::documents::ConfigurationNodeBinding>,
     pub(crate) changes: Option<&'a crate::pack::plugin_lifecycle::PluginStageChanges>,
 }
 
@@ -1101,7 +1096,7 @@ async fn write_installed_plugin_identity(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
     pack: &PackIdentity,
-    node_binding: Option<&crate::store::config_client::ConfigurationNodeBinding>,
+    node_binding: Option<&crate::documents::ConfigurationNodeBinding>,
     source: Option<&PackSource>,
 ) -> Result<()> {
     let prior = read_record(txn, owner, &pack.coordinate).await?;
@@ -1161,7 +1156,7 @@ async fn write_plugin_record(
     home: &Path,
     coordinate: &str,
     installed: Option<&PackIdentity>,
-    node_binding: Option<&crate::store::config_client::ConfigurationNodeBinding>,
+    node_binding: Option<&crate::documents::ConfigurationNodeBinding>,
 ) -> std::result::Result<(), PluginStoreChangeError> {
     if let Some(pack) = installed {
         if let Some(conflict) =

@@ -438,10 +438,7 @@ async fn backend_for_user(
     access
         .transact_readonly("test.registry.backend", |txn| {
             Box::pin(async move {
-                crate::store::config_client::load_inference_backend_in_txn(
-                    txn, node_did, backend_id,
-                )
-                .await
+                crate::documents::load_inference_backend_in_txn(txn, node_did, backend_id).await
             })
         })
         .await
@@ -561,7 +558,7 @@ async fn seed_metadata(access: &crate::ConfigAccess, input: serde_json::Value) -
                 gents_protocol::schemas::INFERENCE_BACKEND_METADATA,
             ).await?;
             let doc = gents_protocol::graphql::extract_mutation_doc_id(&response, "InferenceBackendMetadata")?;
-            crate::store::config_client::publish_node_child_in_txn(txn, "InferenceBackendMetadata", &doc, &did).await?;
+            crate::documents::publish_node_child_in_txn(txn, "InferenceBackendMetadata", &doc, &did).await?;
             Ok::<(), anyhow::Error>(())
         })
     }).await

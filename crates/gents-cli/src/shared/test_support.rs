@@ -65,9 +65,8 @@ pub(crate) async fn publish_test_node(node: &std::sync::Arc<defra_node::Node>) -
 /// must be the node's runtime.
 pub(crate) async fn publish_test_node_as(node: &std::sync::Arc<defra_node::Node>, node_did: &str) {
     use gents::documents::apply_desired_state_plan;
-    use gents::store::config_client::{
-        ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
-    };
+    use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use gents::store::config_client::ConfigAccess;
 
     assert_eq!(
         node.node_identity_did(),
@@ -259,7 +258,7 @@ pub(crate) struct ClientHome {
 impl ClientHome {
     pub(crate) async fn new() -> Self {
         use gents::documents::apply_desired_state_plan;
-        use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+        use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         use gents::NodeIdentity as _;
 
         let home = gents::runtime::embedded::EmbeddedHome::create_temp("cli-client-home")
@@ -328,7 +327,7 @@ impl ClientHome {
         display_name: &str,
     ) -> gents_protocol::agent_identity::AgentIdentityBinding {
         use gents::documents::apply_desired_state_plan;
-        use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+        use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         use gents::NodeIdentity as _;
 
         let runtime = self.home.identity.as_ref();
@@ -448,7 +447,7 @@ impl ClientHome {
                 let (node_did, agent_did) = (&node_did, &agent_did);
                 Box::pin(async move {
                     let (agent_doc, _) =
-                        gents::store::config_client::read_desired_state_record_in_txn(
+                        gents::documents::read_desired_state_record_in_txn(
                             txn,
                             gents::Collection::Agent,
                             node_did,

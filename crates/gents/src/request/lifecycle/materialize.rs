@@ -1802,7 +1802,7 @@ async fn stage_task_delivery_with_receipt(
                 )
                 .await?
                 .context("Task session disappeared")?;
-            let (agent, _) = crate::store::config_client::read_desired_state_record_in_txn(
+            let (agent, _) = crate::documents::read_desired_state_record_in_txn(
                 txn,
                 crate::Collection::Agent,
                 &request.node_did,

@@ -85,7 +85,7 @@ pub(super) async fn disable_backend(f: &Fixture, backend: &str) {
     access
         .transact_write("test.disable_resume_backend", |txn| {
             Box::pin(async move {
-                let (_, mut value) = crate::store::config_client::read_desired_state_record_in_txn(
+                let (_, mut value) = crate::documents::read_desired_state_record_in_txn(
                     txn,
                     crate::Collection::InferenceBackend,
                     did,
@@ -94,8 +94,8 @@ pub(super) async fn disable_backend(f: &Fixture, backend: &str) {
                 .await?
                 .expect("selected backend");
                 value["enabled"] = false.into();
-                let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
-                    crate::store::config_client::DesiredStateApplyDocument {
+                let plan = crate::documents::DesiredStateApplyPlan::new(vec![
+                    crate::documents::DesiredStateApplyDocument {
                         collection: crate::Collection::InferenceBackend,
                         add: value.clone(),
                         update: value,

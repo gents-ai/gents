@@ -1,4 +1,4 @@
-use super::ConfigApplyTxn;
+use crate::store::config_client::ConfigApplyTxn;
 use crate::store::graphql::escape_graphql_string;
 use anyhow::{Context, Result};
 use gents_protocol::event_delivery::EventConsumer;
@@ -84,24 +84,28 @@ pub(crate) async fn seed_for_source(
 ) -> Result<CursorRecord> {
     let key = cursor_key(owner, consumer, collection);
     let schema = txn
-        .execute(&super::schema_introspection::introspection_query(
-            collection,
-        )?)
+        .execute(
+            &crate::store::config_client::schema_introspection::introspection_query(collection)?,
+        )
         .await?;
-    let after =
-        if super::schema_introspection::parse_collection_schema(schema.get("data")).is_some() {
-            let response = txn
-                .execute(&format!(
-            "{{ _documentArrivals(collection: \"{}\", after: \"0\", limit: 1) {{ head }} }}",
-            escape_graphql_string(collection)))
-                .await?;
-            response["data"]["_documentArrivals"]["head"]
-                .as_str()
-                .context("arrival journal omitted head")?
-                .to_owned()
-        } else {
-            "0".to_owned()
-        };
+    let after = if crate::store::config_client::schema_introspection::parse_collection_schema(
+        schema.get("data"),
+    )
+    .is_some()
+    {
+        let response = txn
+            .execute(&format!(
+                "{{ _documentArrivals(collection: \"{}\", after: \"0\", limit: 1) {{ head }} }}",
+                escape_graphql_string(collection)
+            ))
+            .await?;
+        response["data"]["_documentArrivals"]["head"]
+            .as_str()
+            .context("arrival journal omitted head")?
+            .to_owned()
+    } else {
+        "0".to_owned()
+    };
     let cursor = EventSourceCursor {
         cursor_key: key,
         owner_did: owner.into(),

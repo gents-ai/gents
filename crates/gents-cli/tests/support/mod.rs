@@ -279,7 +279,7 @@ impl UserSeededHome {
     ) -> anyhow::Result<std::sync::Arc<dyn gents::NodeIdentity>> {
         use anyhow::Context as _;
         use gents::documents::apply_desired_state_plan;
-        use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+        use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         use gents::Collection;
         use gents::NodeIdentity as _;
         let node_did = self.node_did().to_owned();
@@ -364,7 +364,7 @@ impl UserSeededHome {
                 let (node_did, agent_did) = (&node_did, &agent_did);
                 Box::pin(async move {
                     let (agent_doc, _) =
-                        gents::store::config_client::read_desired_state_record_in_txn(
+                        gents::documents::read_desired_state_record_in_txn(
                             txn,
                             Collection::Agent,
                             node_did,

@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
-use crate::store::config_client::{read_desired_state_record_in_txn, ConfigAccess, ConfigApplyTxn};
+use crate::documents::read_desired_state_record_in_txn;
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::store::graphql::{
     created_doc_id, escape_graphql_string, mutation_documents, required_rows,
 };

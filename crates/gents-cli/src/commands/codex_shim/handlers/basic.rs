@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use gents::documents::load_inference_backend_in_txn;
 use gents::inference::usage_observation::{usage_for_backend, UsageObservation};
-use gents::store::config_client::load_inference_backend_in_txn;
 use gents::tools::surface::{admit_authored_root, project_workspace_root_policy};
 use gents_codex_protocol as codex;
 use serde_json::json;

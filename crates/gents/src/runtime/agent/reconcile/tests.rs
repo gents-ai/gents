@@ -848,7 +848,7 @@ async fn seed_fixture_agent_session(
             let agent_did = &agent_did;
             let session_id = &session_id;
             Box::pin(async move {
-                let (agent_doc, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                let (agent_doc, _) = crate::documents::read_desired_state_record_in_txn(
                     txn,
                     crate::Collection::Agent,
                     node_did,

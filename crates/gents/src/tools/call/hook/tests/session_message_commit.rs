@@ -7,8 +7,8 @@ where
     T: serde::Serialize,
 {
     let value = serde_json::to_value(document).unwrap();
-    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
-        crate::store::config_client::DesiredStateApplyDocument {
+    let plan = crate::documents::DesiredStateApplyPlan::new(vec![
+        crate::documents::DesiredStateApplyDocument {
             collection,
             add: value.clone(),
             update: value,

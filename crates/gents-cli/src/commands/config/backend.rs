@@ -3,12 +3,12 @@ use crate::shared::ResolvedBackendConfig;
 use crate::{resolve_node_did, BackendResolutionMode};
 use anyhow::{Context, Result};
 use gents::documents::apply_desired_state_plan;
+use gents::documents::{
+    read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
+};
 use gents::documents::{BackendAuth, InferenceBackend};
 use gents::inference::backends::rotation::{set_backend_rotation, BackendRotation};
-use gents::store::config_client::{
-    read_desired_state_record_in_txn, ConfigAccess, DesiredStateApplyDocument,
-    DesiredStateApplyPlan,
-};
+use gents::store::config_client::ConfigAccess;
 use gents::{discover_backend_models, Collection};
 use serde_json::json;
 
@@ -338,7 +338,7 @@ mod tests {
         access
             .transact_readonly("test.backend.pool.read", |txn| {
                 Box::pin(async move {
-                    gents::store::config_client::load_inference_backend_in_txn(txn, DID, backend_id)
+                    gents::documents::load_inference_backend_in_txn(txn, DID, backend_id)
                         .await?
                         .context("backend missing")
                 })

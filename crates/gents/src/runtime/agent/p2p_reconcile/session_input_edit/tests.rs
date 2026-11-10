@@ -83,7 +83,7 @@ impl Fixture {
             .transact_readonly("test.edit.agent", |txn| {
                 Box::pin(async {
                     Ok::<_, anyhow::Error>(
-                        crate::store::config_client::read_desired_state_record_in_txn(
+                        crate::documents::read_desired_state_record_in_txn(
                             txn,
                             crate::Collection::Agent,
                             identity.did(),
@@ -174,7 +174,7 @@ impl Fixture {
                     )
                     .await?
                     .context("session missing")?;
-                    let (agent, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                    let (agent, _) = crate::documents::read_desired_state_record_in_txn(
                         txn,
                         crate::Collection::Agent,
                         self.identity.did(),

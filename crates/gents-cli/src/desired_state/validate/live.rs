@@ -86,8 +86,7 @@ pub(crate) async fn validate_manifest_against_live(
         if source.correlation_field.is_none() && expected_count_field.is_none() {
             let mut walks_templates = false;
             for (trigger, task) in &joined {
-                match gents::store::config_client::event_trigger_document_field_names(trigger, task)
-                {
+                match gents::documents::event_trigger_document_field_names(trigger, task) {
                     Ok(names) if !names.is_empty() => walks_templates = true,
                     Err(error) => errors.push(format!("{error:#}")),
                     Ok(_) => {}
@@ -141,7 +140,7 @@ pub(crate) async fn validate_manifest_against_live(
             .map(|field| (field.name.clone(), field))
             .collect();
         for (trigger, task) in joined {
-            if let Err(error) = gents::store::config_client::validate_event_trigger_document_fields(
+            if let Err(error) = gents::documents::validate_event_trigger_document_fields(
                 trigger, task, source, &declared,
             ) {
                 errors.push(format!("{error:#}"));

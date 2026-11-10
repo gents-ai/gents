@@ -118,7 +118,7 @@ pub(crate) async fn load_inference_profile_record(
         "document_config.inference_profile.read",
         |txn| {
             Box::pin(async move {
-                crate::store::config_client::read_desired_state_record_in_txn(
+                crate::documents::read_desired_state_record_in_txn(
                     txn,
                     crate::store::collection::Collection::InferenceProfile,
                     node_did,
@@ -138,7 +138,7 @@ pub async fn list_inference_profile_records(
     node_did: &str,
 ) -> Result<Vec<(String, InferenceProfile)>> {
     let escaped_node_did = escape_graphql_string(node_did);
-    let (fields, _) = crate::store::config_client::config_projection(
+    let (fields, _) = crate::documents::config_projection(
         crate::store::collection::Collection::InferenceProfile,
         None,
     )?;

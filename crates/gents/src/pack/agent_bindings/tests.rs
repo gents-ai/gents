@@ -192,11 +192,11 @@ pub(in crate::pack) async fn fixture() -> (
         .unwrap()
         .with_client_signed_agent_creates(),
     );
-    let seed = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+    let seed = crate::documents::DesiredStateApplyPlan::new(vec![
         (crate::Collection::Node, json!({"node_did":root.did()})),
         (crate::Collection::InferenceBackend, json!({"node_did":root.did(),"backend_id":"backend","name":"Local","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:8000/v1","auth":{"kind":"unauthenticated"}})),
         (crate::Collection::InferenceProfile, json!({"node_did":root.did(),"profile_id":"profile","backend_id":"backend","model_name":"model"})),
-    ].into_iter().map(|(collection, value)| crate::store::config_client::DesiredStateApplyDocument { collection, add:value.clone(), update:value }).collect()).unwrap();
+    ].into_iter().map(|(collection, value)| crate::documents::DesiredStateApplyDocument { collection, add:value.clone(), update:value }).collect()).unwrap();
     access
         .transact_write("test.pack_identity.seed", |txn| {
             let seed = &seed;

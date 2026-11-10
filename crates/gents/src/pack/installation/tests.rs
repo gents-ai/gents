@@ -313,13 +313,12 @@ async fn edit_tools(access: &ConfigAccess, id: &str, name: &str) {
 }
 
 async fn edit_tools_owned(access: &ConfigAccess, owner: &str, id: &str, name: &str) {
-    let edit =
-        crate::store::config_client::DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-            collection: Collection::Tools,
-            add: json!({"tools_id": id, "display_name": name, "node_did": owner}),
-            update: json!({"tools_id": id, "display_name": name, "node_did": owner}),
-        }])
-        .unwrap();
+    let edit = crate::documents::DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: Collection::Tools,
+        add: json!({"tools_id": id, "display_name": name, "node_did": owner}),
+        update: json!({"tools_id": id, "display_name": name, "node_did": owner}),
+    }])
+    .unwrap();
     access
         .transact_write("test.edit", |txn| {
             let edit = &edit;
@@ -1212,14 +1211,14 @@ async fn locally_installed_pack_agent_holds_the_projected_baseline() {
     let local = ConfigAccess::local_as(db.node.clone(), identity::Did::new(user.did()).unwrap());
     let backend = json!({"node_did":runtime.did(),"backend_id":"backend","name":"Test","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:1/v1","auth":{"kind":"unauthenticated"}});
     let profile = json!({"node_did":runtime.did(),"profile_id":"profile","backend_id":"backend","model_name":"test-model"});
-    let plan = crate::store::config_client::DesiredStateApplyPlan::new(
+    let plan = crate::documents::DesiredStateApplyPlan::new(
         [
             (crate::Collection::InferenceBackend, backend),
             (crate::Collection::InferenceProfile, profile),
         ]
         .into_iter()
         .map(
-            |(collection, value)| crate::store::config_client::DesiredStateApplyDocument {
+            |(collection, value)| crate::documents::DesiredStateApplyDocument {
                 collection,
                 add: value.clone(),
                 update: value,
@@ -1652,7 +1651,7 @@ async fn installing_a_pack_keeps_the_users_default_behavior() {
         add: value.clone(),
         update: value,
     };
-    let seed = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+    let seed = crate::documents::DesiredStateApplyPlan::new(vec![
         home(
             Collection::Agent,
             json!({"node_did":owner,"agent_did":binding.agent_did,"creation_nonce":binding.creation_nonce,"inference_profile_id":"profile"}),
@@ -2616,13 +2615,12 @@ async fn dependee_tools(access: &ConfigAccess, owner: &str) -> Value {
 }
 
 async fn write_dependee_tools(access: &ConfigAccess, tools: &Value) {
-    let edit =
-        crate::store::config_client::DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-            collection: Collection::Tools,
-            add: tools.clone(),
-            update: tools.clone(),
-        }])
-        .unwrap();
+    let edit = crate::documents::DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: Collection::Tools,
+        add: tools.clone(),
+        update: tools.clone(),
+    }])
+    .unwrap();
     access
         .transact_write("test.dependee.edit", |txn| {
             let edit = &edit;
@@ -3433,7 +3431,7 @@ async fn removing_a_plugin_pack_refuses_surviving_agents_and_rolls_back_document
             json!({"agent_did":binding.agent_did, "creation_nonce":binding.creation_nonce, "node_did":owner, "context_id":"surviving-context", "inference_profile_id":"profile"}),
         ),
     ];
-    let plan = crate::store::config_client::DesiredStateApplyPlan::new(
+    let plan = crate::documents::DesiredStateApplyPlan::new(
         docs.into_iter()
             .map(|(collection, value)| DesiredStateApplyDocument {
                 collection,
@@ -4811,14 +4809,14 @@ async fn pack_install_applies_exactly_the_declared_placement_readers() {
     let local = ConfigAccess::local_as(db.node.clone(), identity::Did::new(user.did()).unwrap());
     let backend = json!({"node_did":runtime.did(),"backend_id":"backend","name":"Test","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:1/v1","auth":{"kind":"unauthenticated"}});
     let profile = json!({"node_did":runtime.did(),"profile_id":"profile","backend_id":"backend","model_name":"test-model"});
-    let plan = crate::store::config_client::DesiredStateApplyPlan::new(
+    let plan = crate::documents::DesiredStateApplyPlan::new(
         [
             (crate::Collection::InferenceBackend, backend),
             (crate::Collection::InferenceProfile, profile),
         ]
         .into_iter()
         .map(
-            |(collection, value)| crate::store::config_client::DesiredStateApplyDocument {
+            |(collection, value)| crate::documents::DesiredStateApplyDocument {
                 collection,
                 add: value.clone(),
                 update: value,
@@ -4915,7 +4913,7 @@ async fn pack_install_applies_exactly_the_declared_placement_readers() {
                     .transact_readonly("test.placement_readers.read", |txn| {
                         let owner = runtime.did();
                         Box::pin(async move {
-                            crate::store::config_client::read_desired_state_record_in_txn(
+                            crate::documents::read_desired_state_record_in_txn(
                                 txn,
                                 crate::Collection::RepositoryPlacement,
                                 owner,

@@ -5,10 +5,8 @@ use defra_node::Node as EmbeddedNode;
 use identity::Did;
 use serde_json::{json, Map, Value};
 
-use crate::store::config_client::patch::{
-    apply_patch, ensure_admissible, FieldDelta, SelfConfigTarget,
-};
-use crate::store::config_client::validate_desired_state_plan;
+use crate::documents::patch::{apply_patch, ensure_admissible, FieldDelta, SelfConfigTarget};
+use crate::documents::validate_desired_state_plan;
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::tools::surface::SelfConfigProcessCeiling;
 
@@ -76,7 +74,7 @@ pub struct SelfConfigCore {
     no_lockout: bool,
     process_ceiling: SelfConfigProcessCeiling,
     held_grants: OperatorGrants,
-    node_binding: Option<crate::store::config_client::ConfigurationNodeBinding>,
+    node_binding: Option<crate::documents::ConfigurationNodeBinding>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -228,7 +226,7 @@ impl SelfConfigCore {
 
     pub(crate) fn with_node_binding(
         mut self,
-        binding: Option<crate::store::config_client::ConfigurationNodeBinding>,
+        binding: Option<crate::documents::ConfigurationNodeBinding>,
     ) -> Self {
         self.node_binding = binding;
         self
@@ -236,7 +234,7 @@ impl SelfConfigCore {
 
     pub(crate) async fn refresh_node_binding(
         &self,
-    ) -> Result<Option<crate::store::config_client::ConfigurationNodeBinding>> {
+    ) -> Result<Option<crate::documents::ConfigurationNodeBinding>> {
         let Some(binding) = self.node_binding.as_ref() else {
             return Ok(None);
         };
@@ -249,14 +247,12 @@ impl SelfConfigCore {
         let access = ConfigAccess::local_as(self.node.clone(), actor);
         let observed = access
             .transact_readonly("self_config.pack_node_binding", |txn| {
-                Box::pin(
-                    crate::store::config_client::read_desired_state_record_in_txn(
-                        txn,
-                        crate::Collection::Node,
-                        &self.node_did,
-                        &self.node_did,
-                    ),
-                )
+                Box::pin(crate::documents::read_desired_state_record_in_txn(
+                    txn,
+                    crate::Collection::Node,
+                    &self.node_did,
+                    &self.node_did,
+                ))
             })
             .await?
             .context("runtime cannot observe its Node for pack preparation")?;
@@ -278,9 +274,7 @@ impl SelfConfigCore {
         Ok(Some(refreshed))
     }
 
-    pub(crate) fn node_binding(
-        &self,
-    ) -> Option<&crate::store::config_client::ConfigurationNodeBinding> {
+    pub(crate) fn node_binding(&self) -> Option<&crate::documents::ConfigurationNodeBinding> {
         self.node_binding.as_ref()
     }
 

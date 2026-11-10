@@ -235,8 +235,7 @@ async fn create(
                     .execute_client_signed_create(mutation, variables, schema)
                     .await?;
                 let doc_id = gents_protocol::graphql::extract_mutation_doc_id(&response, name)?;
-                crate::store::config_client::publish_node_child_in_txn(txn, name, &doc_id, owner)
-                    .await?;
+                crate::documents::publish_node_child_in_txn(txn, name, &doc_id, owner).await?;
                 Ok::<(), anyhow::Error>(())
             })
         })

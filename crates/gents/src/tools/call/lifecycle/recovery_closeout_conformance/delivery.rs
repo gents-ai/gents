@@ -156,18 +156,17 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
         .transact_write("fixture.node.max_request_hop", |txn| {
             let did = did.as_str();
             Box::pin(async move {
-                let (_, mut node_input) =
-                    crate::store::config_client::read_desired_state_record_in_txn(
-                        txn,
-                        crate::Collection::Node,
-                        did,
-                        did,
-                    )
-                    .await?
-                    .ok_or_else(|| anyhow::anyhow!("owned Node is unavailable"))?;
+                let (_, mut node_input) = crate::documents::read_desired_state_record_in_txn(
+                    txn,
+                    crate::Collection::Node,
+                    did,
+                    did,
+                )
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("owned Node is unavailable"))?;
                 node_input["max_request_hop"] = serde_json::json!(1);
-                let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
-                    crate::store::config_client::DesiredStateApplyDocument {
+                let plan = crate::documents::DesiredStateApplyPlan::new(vec![
+                    crate::documents::DesiredStateApplyDocument {
                         collection: crate::Collection::Node,
                         add: node_input.clone(),
                         update: node_input,

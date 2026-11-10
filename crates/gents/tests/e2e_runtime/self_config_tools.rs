@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use gents::documents::apply_desired_state_plan;
-use gents::store::config_client::{
-    read_desired_state_record_in_txn, ConfigAccess, DesiredStateApplyDocument,
-    DesiredStateApplyPlan,
+use gents::documents::{
+    read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
+use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::escape_graphql_string;
 use gents::tools::builtin::self_config::build_runtime_self_config_tools;
 use gents::tools::surface::{
@@ -121,10 +121,8 @@ impl SelfConfig {
             .transact_write("test.self_config.grant_selected", |txn| {
                 let node_did = &node_did;
                 Box::pin(async move {
-                    gents::store::config_client::grant_selected_self_configuration(
-                        txn, node_did, agent_did,
-                    )
-                    .await
+                    gents::documents::grant_selected_self_configuration(txn, node_did, agent_did)
+                        .await
                 })
             })
             .await

@@ -71,7 +71,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
                     .await?
                     .ok_or_else(|| anyhow::anyhow!("fixture session is missing"))?
                     .doc_id;
-                let (agent_doc, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                let (agent_doc, _) = crate::documents::read_desired_state_record_in_txn(
                     txn,
                     crate::Collection::Agent,
                     did,

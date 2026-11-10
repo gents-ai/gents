@@ -101,7 +101,7 @@ async fn boot_background_turn_with_bounds(
     .await;
     if let Some(deadline_duration_secs) = execution_deadline_secs {
         assert!(deadline_duration_secs > 1);
-        use gents::store::config_client::{
+        use gents::documents::{
             read_desired_state_record_in_txn as read, DesiredStateApplyDocument,
             DesiredStateApplyPlan,
         };
@@ -1723,7 +1723,7 @@ async fn second_signed_principal_runtime_is_denied_foreign_process_handle() {
         .transact_readonly("test.foreign.agent", |txn| {
             Box::pin(async move {
                 Ok::<_, anyhow::Error>(
-                    gents::store::config_client::read_desired_state_record_in_txn(
+                    gents::documents::read_desired_state_record_in_txn(
                         txn,
                         gents::Collection::Agent,
                         node_did,

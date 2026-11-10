@@ -16,7 +16,7 @@ fn snapshot_coalesces_shared_roots_and_splits_strict_projections() {
     assert!(query.contains("_eq: \"did:alpha\""));
     assert_eq!(
         TRIGGER_FIELDS,
-        gents::store::config_client::config_projection(gents::Collection::Trigger, None)
+        gents::documents::config_projection(gents::Collection::Trigger, None)
             .unwrap()
             .0
             .join(" ")

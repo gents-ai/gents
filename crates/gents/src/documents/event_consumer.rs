@@ -2,17 +2,15 @@ use anyhow::{Context, Result};
 use gents_protocol::canonical::is_retired_reserved_id;
 use gents_protocol::event_delivery::EventConsumer;
 
+use crate::documents::event_source_cursor::{self, CursorRecord, ResolvedConsumerBinding};
+use crate::documents::{
+    read_desired_state_document_in_txn, read_desired_state_record_in_txn, ConfigurationNodeBinding,
+};
 use crate::documents::{
     Callback, CallbackBinding, ConcurrencyMode, EventSource, MissingReference, Task, Trigger,
     TriggerSource,
 };
-use crate::store::config_client::event_source_cursor::{
-    self, CursorRecord, ResolvedConsumerBinding,
-};
-use crate::store::config_client::{
-    read_desired_state_document_in_txn, read_desired_state_record_in_txn, ConfigApplyTxn,
-    ConfigurationNodeBinding,
-};
+use crate::store::config_client::ConfigApplyTxn;
 use crate::store::graphql::escape_graphql_string;
 use crate::Collection;
 
@@ -287,12 +285,11 @@ pub(crate) async fn seed_referencing_consumers(
 /// its documents and grants are applied.
 pub(crate) async fn seed_planned_consumers(
     txn: &ConfigApplyTxn<'_>,
-    plan: &crate::store::config_client::DesiredStateApplyPlan,
+    plan: &crate::documents::DesiredStateApplyPlan,
     node_binding: Option<&ConfigurationNodeBinding>,
 ) -> Result<()> {
     for document in plan.documents() {
-        let (owner, id) =
-            crate::store::config_client::document_identity(document.collection, &document.add)?;
+        let (owner, id) = crate::documents::document_identity(document.collection, &document.add)?;
         match document.collection {
             Collection::EventSource => {
                 seed_referencing_consumers(txn, owner, id, node_binding).await?;

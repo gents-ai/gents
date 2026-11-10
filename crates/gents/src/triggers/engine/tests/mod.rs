@@ -677,15 +677,14 @@ pub(super) async fn apply_user_config(
     trigger_id: &str,
 ) -> String {
     let owner = config.node.node_did.clone();
-    let plan =
-        crate::store::config_client::DesiredStateApplyPlan::from_pack_config(config).unwrap();
+    let plan = crate::documents::DesiredStateApplyPlan::from_pack_config(config).unwrap();
     client
         .transact_write("test.trigger_config", |txn| {
             let plan = &plan;
             let owner = &owner;
             Box::pin(async move {
                 crate::documents::apply_desired_state_plan(txn, plan).await?;
-                let (id, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                let (id, _) = crate::documents::read_desired_state_record_in_txn(
                     txn,
                     crate::Collection::Trigger,
                     owner,

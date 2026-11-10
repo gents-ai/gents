@@ -2,7 +2,7 @@ use crate::config_writes::{ConfigAccess, ConfigApplyTxn};
 use crate::{desired_state, shared::ConfigExportBundle, CONFIG_EXPORT_FORMAT};
 use anyhow::{Context, Result};
 use gents::store::graphql::escape_graphql_string;
-use gents::{store::config_client::config_projection, Collection};
+use gents::{documents::config_projection, Collection};
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
 
@@ -54,7 +54,7 @@ pub(crate) async fn read_owned_config_bundle_in_txn(
     for collection in Collection::ALL {
         let name = collection.graphql_type();
         let rows = if collection == Collection::InferenceBackend {
-            gents::store::config_client::list_inference_backends_in_txn(txn, &owner)
+            gents::documents::list_inference_backends_in_txn(txn, &owner)
                 .await?
                 .into_iter()
                 .map(serde_json::to_value)

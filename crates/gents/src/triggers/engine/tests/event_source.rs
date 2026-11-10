@@ -1174,7 +1174,7 @@ async fn per_group_timeout_uses_durable_first_seen_clock() {
         .transact_write("test.durable_group_clock", |txn| {
             let (owner, state, agent_did) = (&owner, &state, &agent_did);
             Box::pin(async move {
-                let (parent, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                let (parent, _) = crate::documents::read_desired_state_record_in_txn(
                     txn,
                     crate::Collection::Agent,
                     owner,

@@ -114,7 +114,7 @@ mod tests {
             .transact_write("test.default_account.grant_agent", |txn| {
                 let binding = &binding;
                 Box::pin(async move {
-                    crate::store::config_client::grant_selected_self_configuration(
+                    crate::documents::grant_selected_self_configuration(
                         txn,
                         runtime.did(),
                         &binding.agent_did,

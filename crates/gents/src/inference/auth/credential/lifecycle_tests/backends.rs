@@ -145,7 +145,7 @@ async fn a_lost_backend_comes_back_at_the_next_sign_in() {
                 .count()
         };
         let backend_id = format!("{}-{reference}", product.provider());
-        let plan = crate::store::config_client::DesiredStateApplyPlan::new(Vec::new())
+        let plan = crate::documents::DesiredStateApplyPlan::new(Vec::new())
             .unwrap()
             .with_removals(vec![(
                 crate::Collection::InferenceBackend,
@@ -184,7 +184,7 @@ async fn an_unrelated_invalid_profile_does_not_block_an_account_backend() {
                 gents_protocol::schemas::INFERENCE_PROFILE,
             ).await?;
             let doc = gents_protocol::graphql::extract_mutation_doc_id(&response, "InferenceProfile")?;
-            crate::store::config_client::publish_node_child_in_txn(txn, "InferenceProfile", &doc, did).await?;
+            crate::documents::publish_node_child_in_txn(txn, "InferenceProfile", &doc, did).await?;
             Ok::<(), anyhow::Error>(())
         })
     }).await.unwrap();

@@ -80,11 +80,11 @@ pub(super) async fn apply_pack_documents(
     pack: &super::installation::PackIdentity,
     config: &PackConfig,
     policy: super::installation::DriftPolicy,
-    expected: Vec<crate::store::config_client::DesiredStateExpectation>,
+    expected: Vec<crate::documents::DesiredStateExpectation>,
 ) -> Result<super::installation::InstallReport> {
     let documents = super::installation::installable_documents(config)?;
-    let guard = crate::store::config_client::DesiredStateApplyPlan::new(Vec::new())?
-        .with_expected(expected)?;
+    let guard =
+        crate::documents::DesiredStateApplyPlan::new(Vec::new())?.with_expected(expected)?;
     // The callback re-reads its expectations and re-plans the install inside
     // the transaction, so a confirmed conflict re-plans and re-signs it.
     access
@@ -111,8 +111,8 @@ pub(super) async fn apply_pack_documents(
 
 pub(crate) async fn prepare_pack_plan_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
-    documents: &[crate::store::config_client::DesiredStateApplyDocument],
-) -> Result<crate::store::config_client::DesiredStateApplyPlan> {
+    documents: &[crate::documents::DesiredStateApplyDocument],
+) -> Result<crate::documents::DesiredStateApplyPlan> {
     let mut prepared = Vec::with_capacity(documents.len());
     for authored in documents {
         let mut document = authored.clone();
@@ -122,25 +122,21 @@ pub(crate) async fn prepare_pack_plan_in_txn(
         let id = document.add[document.collection.unique_field()]
             .as_str()
             .context("pack document is missing logical ID")?;
-        if let Some((_, live)) = crate::store::config_client::read_desired_state_record_in_txn(
-            txn,
-            document.collection,
-            owner,
-            id,
-        )
-        .await?
+        if let Some((_, live)) =
+            crate::documents::read_desired_state_record_in_txn(txn, document.collection, owner, id)
+                .await?
         {
             merge_tags(&mut document.update, &live)?;
         }
         prepared.push(document);
     }
-    crate::store::config_client::DesiredStateApplyPlan::new(prepared)
+    crate::documents::DesiredStateApplyPlan::new(prepared)
 }
 
 pub fn pack_document_digests(
     config: &crate::documents::PackConfig,
 ) -> Result<std::collections::BTreeMap<(String, String), String>> {
-    let plan = crate::store::config_client::DesiredStateApplyPlan::from_pack_config(config)?;
+    let plan = crate::documents::DesiredStateApplyPlan::from_pack_config(config)?;
     plan.documents()
         .iter()
         .map(|document| {
@@ -162,7 +158,7 @@ pub(crate) fn pack_artifact_document_digest(value: &serde_json::Value) -> Result
         .as_object_mut()
         .context("pack document must be an object")?
         .remove("tags");
-    crate::store::config_client::desired_state_document_digest(&canonical)
+    crate::documents::desired_state_document_digest(&canonical)
 }
 
 fn merge_tags(desired: &mut serde_json::Value, live: &serde_json::Value) -> Result<()> {
@@ -236,7 +232,7 @@ pub(super) fn stamp_pack_origin(
         let Some(field) = collection.dir_name() else {
             continue;
         };
-        let (fields, _) = crate::store::config_client::config_projection(collection, None)?;
+        let (fields, _) = crate::documents::config_projection(collection, None)?;
         if !fields.contains(&"tags") {
             continue;
         }

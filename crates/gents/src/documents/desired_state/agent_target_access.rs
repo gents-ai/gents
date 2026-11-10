@@ -229,12 +229,14 @@ pub(super) async fn apply(
             if queued_agents.contains(doc) {
                 for writer in writers.difference(old) {
                     identity::Did::new(writer)?;
-                    txn.queue_relationship_grant(super::ConfigRelationshipGrant::Actor {
-                        collection: "Agent".to_owned(),
-                        doc_id: doc.clone(),
-                        relation: RELATION.to_owned(),
-                        target: writer.clone(),
-                    })?;
+                    txn.queue_relationship_grant(
+                        crate::store::config_client::ConfigRelationshipGrant::Actor {
+                            collection: "Agent".to_owned(),
+                            doc_id: doc.clone(),
+                            relation: RELATION.to_owned(),
+                            target: writer.clone(),
+                        },
+                    )?;
                 }
             } else {
                 change(txn, target, doc, writers.difference(old), true).await?;
@@ -250,10 +252,10 @@ mod tests {
 
     use serde_json::{json, Value};
 
-    use crate::store::config_client::{
-        read_desired_state_record_in_txn, ConfigAccess, DesiredStateApplyDocument,
-        DesiredStateApplyPlan,
+    use crate::documents::{
+        read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
+    use crate::store::config_client::ConfigAccess;
     use crate::store::identity::NodeIdentity as _;
     use crate::Collection;
 

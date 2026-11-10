@@ -90,8 +90,8 @@ impl ConfigCommandTool {
             .iter()
             .map(|(_, target, id)| (target.collection(), owner.clone(), id.clone()))
             .collect::<Vec<_>>();
-        let plan = crate::store::config_client::DesiredStateApplyPlan::new(Vec::new())?
-            .with_removals(removals)?;
+        let plan =
+            crate::documents::DesiredStateApplyPlan::new(Vec::new())?.with_removals(removals)?;
         let preview = verb == "preview";
         if !preview {
             self.execution.enter_mutation();
@@ -165,7 +165,7 @@ async fn cleanup_in_txn(
     owner: &str,
     targets: &[(String, SelfConfigTarget, String)],
     expected_digest: Option<&str>,
-    plan: &crate::store::config_client::DesiredStateApplyPlan,
+    plan: &crate::documents::DesiredStateApplyPlan,
     preview: bool,
 ) -> Result<(Vec<Value>, String)> {
     let mut receipt = Vec::with_capacity(targets.len());
@@ -196,7 +196,7 @@ async fn cleanup_in_txn(
             "resource": resource,
             "collection": target.collection_name(),
             "id": id,
-            "content_digest": crate::store::config_client::desired_state_document_digest(&Value::Object(document))?,
+            "content_digest": crate::documents::desired_state_document_digest(&Value::Object(document))?,
         }));
     }
     let plan_digest = cleanup_plan_digest(owner, &receipt)?;
@@ -206,7 +206,7 @@ async fn cleanup_in_txn(
             "cleanup target content changed: preview authorized {expected:?}, current plan is {plan_digest:?}; preview again"
         );
     }
-    crate::store::config_client::validate_desired_state_plan(txn, plan).await?;
+    crate::documents::validate_desired_state_plan(txn, plan).await?;
     if !preview {
         crate::documents::apply_desired_state_plan(txn, plan).await?;
         for (_, target, id) in targets {

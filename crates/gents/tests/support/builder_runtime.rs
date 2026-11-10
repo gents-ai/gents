@@ -40,7 +40,7 @@ async fn set_backend_capacity(
     max_concurrent: usize,
 ) {
     use gents::documents::apply_desired_state_plan;
-    use gents::store::config_client::{
+    use gents::documents::{
         read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     let owner = db.node_identity.did();

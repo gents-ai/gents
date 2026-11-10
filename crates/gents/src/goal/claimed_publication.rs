@@ -197,7 +197,7 @@ async fn stage_claimed_continuation(
         session.session.agent_did == identity.did(),
         "claimed publication requires the session's selected agent"
     );
-    let (agent_doc, _) = crate::store::config_client::read_desired_state_record_in_txn(
+    let (agent_doc, _) = crate::documents::read_desired_state_record_in_txn(
         txn,
         crate::Collection::Agent,
         &goal.node_did,

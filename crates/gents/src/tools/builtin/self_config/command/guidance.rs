@@ -35,9 +35,7 @@ impl ConfigCommandTool {
         if let Some(hint) = error.downcast_ref::<CommandGuidance>() {
             return (message, json!({"next_call":hint.next_call}));
         }
-        if let Some(schema) =
-            error.downcast_ref::<crate::store::config_client::OutcomeSourceSchemaError>()
-        {
+        if let Some(schema) = error.downcast_ref::<crate::documents::OutcomeSourceSchemaError>() {
             let next = if schema.missing_handoff {
                 json!({"argv":["collection","preview","update",schema.collection],"options":{"patch":[{"op":"add","path":format!("/{}/Fields/-",schema.collection),"value":{"Name":"handoff_id","Kind":"String"}}]}})
             } else {

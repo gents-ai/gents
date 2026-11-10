@@ -325,7 +325,7 @@ pub(crate) async fn load_or_create_group(
         if let Some(row)=decode_group(&txn.execute(&query).await?,delivery,correlation)? {return Ok(row);}
         let actor = delivery.actor()?.context("event group Agent is missing")?;
         anyhow::ensure!(txn.actor_did() == Some(actor.as_str()), "event group actor mismatch");
-        let (parent, _) = crate::store::config_client::read_desired_state_record_in_txn(
+        let (parent, _) = crate::documents::read_desired_state_record_in_txn(
             txn, crate::Collection::Agent, delivery.owner(), actor.as_str(),
         ).await?.context("event group Agent is unavailable")?;
         let state=EventGroupState {group_key:delivery.group_key(correlation),node_did:delivery.owner().into(),consumer:delivery.consumer(),correlation:correlation.into(),consumer_config_key:delivery.config_key(),first_seen_at:Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true),quiesced_at:None,quiesced_reason:None};

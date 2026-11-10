@@ -568,11 +568,11 @@ impl ConfigComponentPatch {
     pub(crate) fn into_patch(
         self,
     ) -> (
-        gents::store::config_client::patch::SelfConfigTarget,
+        gents::documents::patch::SelfConfigTarget,
         String,
-        gents::store::config_client::patch::SelfConfigPatch,
+        gents::documents::patch::SelfConfigPatch,
     ) {
-        use gents::store::config_client::patch::SelfConfigTarget;
+        use gents::documents::patch::SelfConfigTarget;
         let (target, id, changes) = match self {
             Self::Agent { id, changes } => (SelfConfigTarget::Agent, id, changes),
             Self::AgentContext { id, changes } => (SelfConfigTarget::AgentContext, id, changes),

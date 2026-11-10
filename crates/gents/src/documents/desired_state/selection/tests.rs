@@ -4,8 +4,9 @@ use anyhow::Context;
 use serde_json::json;
 
 use super::{apply_selection_changes, selected_ids, Change};
+use crate::documents::config_projection;
 use crate::lean_vocab_test::lean_identity_household_cases;
-use crate::store::config_client::{config_projection, ConfigAccess};
+use crate::store::config_client::ConfigAccess;
 use crate::store::identity::NodeIdentity;
 use crate::Collection;
 
@@ -76,9 +77,8 @@ fn modeled_tools_reference_sets_include_disabled_agent_targets() {
 
 #[tokio::test]
 async fn signed_skill_publication_and_self_configuration_use_native_grants() -> anyhow::Result<()> {
-    use crate::store::config_client::{
-        DesiredStateApplyDocument, DesiredStateApplyPlan, GraphqlEndpoint,
-    };
+    use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use crate::store::config_client::GraphqlEndpoint;
     let directory = tempfile::tempdir()?;
     let runtime_identity =
         crate::KeyIdentity::load_or_create(directory.path().join("runtime"), None)?;
@@ -300,7 +300,7 @@ async fn signed_skill_publication_and_self_configuration_use_native_grants() -> 
         add: created.clone(),
         update: created,
     }])?;
-    let binding = crate::store::config_client::ConfigurationNodeBinding {
+    let binding = crate::documents::ConfigurationNodeBinding {
         node_did: identity::Did::new(&runtime)?,
         doc_id: node_doc,
         enabled: true,

@@ -503,7 +503,7 @@ async fn tools_document_round_trips_defra_query_fields() {
         .transact_write("test.tools.read", |txn| {
             let doc = &doc;
             Box::pin(async move {
-                crate::store::config_client::read_desired_state_record_in_txn(
+                crate::documents::read_desired_state_record_in_txn(
                     txn,
                     crate::Collection::Tools,
                     &doc.node_did,
@@ -568,7 +568,7 @@ async fn tools_update_can_clear_lsp_config() {
         access
             .transact_write("test.tools.read", |txn| {
                 Box::pin(async move {
-                    crate::store::config_client::read_desired_state_record_in_txn(
+                    crate::documents::read_desired_state_record_in_txn(
                         txn,
                         crate::Collection::Tools,
                         node_did,
@@ -639,7 +639,7 @@ async fn tools_document_round_trips_read_only_commands() {
         .transact_write("test.tools.read", |txn| {
             let doc = &doc;
             Box::pin(async move {
-                crate::store::config_client::read_desired_state_record_in_txn(
+                crate::documents::read_desired_state_record_in_txn(
                     txn,
                     crate::Collection::Tools,
                     &doc.node_did,
@@ -713,13 +713,13 @@ async fn tools_document_round_trips_write_tools() {
         "entries": decls,
     }))
     .unwrap();
-    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
-        crate::store::config_client::DesiredStateApplyDocument {
+    let plan = crate::documents::DesiredStateApplyPlan::new(vec![
+        crate::documents::DesiredStateApplyDocument {
             collection: crate::Collection::DatastoreToolSurface,
             add: serde_json::to_value(&surface).unwrap(),
             update: serde_json::to_value(&surface).unwrap(),
         },
-        crate::store::config_client::DesiredStateApplyDocument {
+        crate::documents::DesiredStateApplyDocument {
             collection: crate::Collection::Tools,
             add: serde_json::to_value(&tools).unwrap(),
             update: serde_json::to_value(&tools).unwrap(),
@@ -771,7 +771,7 @@ async fn tools_document_round_trips_session_message_enablement() {
         .transact_write("test.tools.read", |txn| {
             let doc = &doc;
             Box::pin(async move {
-                crate::store::config_client::read_desired_state_record_in_txn(
+                crate::documents::read_desired_state_record_in_txn(
                     txn,
                     crate::Collection::Tools,
                     &doc.node_did,
@@ -842,8 +842,8 @@ async fn agent_description_round_trip_with_explicit_owner_fixture() {
         created_at: None,
     };
     let value = serde_json::to_value(&doc).unwrap();
-    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
-        crate::store::config_client::DesiredStateApplyDocument {
+    let plan = crate::documents::DesiredStateApplyPlan::new(vec![
+        crate::documents::DesiredStateApplyDocument {
             collection: crate::Collection::Agent,
             add: value.clone(),
             update: value,
@@ -914,23 +914,23 @@ async fn inference_retry_policy_fields_round_trip() {
         ..Default::default()
     };
 
-    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
-        crate::store::config_client::DesiredStateApplyDocument {
+    let plan = crate::documents::DesiredStateApplyPlan::new(vec![
+        crate::documents::DesiredStateApplyDocument {
             collection: crate::Collection::InferenceBackend,
             add: serde_json::to_value(&backend).unwrap(),
             update: serde_json::to_value(&backend).unwrap(),
         },
-        crate::store::config_client::DesiredStateApplyDocument {
+        crate::documents::DesiredStateApplyDocument {
             collection: crate::Collection::InferenceRetryPolicy,
             add: serde_json::to_value(&retry).unwrap(),
             update: serde_json::to_value(&retry).unwrap(),
         },
-        crate::store::config_client::DesiredStateApplyDocument {
+        crate::documents::DesiredStateApplyDocument {
             collection: crate::Collection::InferenceExecution,
             add: serde_json::to_value(&execution).unwrap(),
             update: serde_json::to_value(&execution).unwrap(),
         },
-        crate::store::config_client::DesiredStateApplyDocument {
+        crate::documents::DesiredStateApplyDocument {
             collection: crate::Collection::InferenceProfile,
             add: serde_json::to_value(&profile).unwrap(),
             update: serde_json::to_value(&profile).unwrap(),
@@ -1459,7 +1459,7 @@ async fn reference_loader_isolates_foreign_malformed_backends_and_rejects_owned_
                     gents_protocol::schemas::INFERENCE_BACKEND_METADATA,
                 ).await?;
                 let doc = crate::store::graphql::created_doc_id(&response, "InferenceBackendMetadata")?;
-                crate::store::config_client::publish_node_child_in_txn(
+                crate::documents::publish_node_child_in_txn(
                     txn, "InferenceBackendMetadata", &doc, node_did,
                 ).await?;
                 Ok::<_, anyhow::Error>(())

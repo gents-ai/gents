@@ -18,10 +18,7 @@ impl ConfigCommandTool {
                 |txn| {
                     Box::pin(async move {
                         Ok::<_, anyhow::Error>((
-                            crate::store::config_client::list_inference_backends_in_txn(
-                                txn, node_did,
-                            )
-                            .await?,
+                            crate::documents::list_inference_backends_in_txn(txn, node_did).await?,
                             crate::documents::list_inference_profiles_in_txn(txn, node_did).await?,
                         ))
                     })

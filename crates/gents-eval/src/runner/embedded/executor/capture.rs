@@ -306,7 +306,7 @@ async fn capture_inference_backends(
     trial_did: &str,
 ) -> Result<Vec<Value>> {
     let (allowed, _) =
-        gents::store::config_client::config_projection(gents::Collection::InferenceBackend, None)?;
+        gents::documents::config_projection(gents::Collection::InferenceBackend, None)?;
     let mut filter_fields = Vec::new();
     gents::tools::builtin::defra_query::collect_filter_field_keys(filter, &mut filter_fields);
     for field in fields.iter().chain(filter_fields.iter()) {
@@ -356,8 +356,7 @@ async fn capture_inference_backends(
                 let mut by_doc = BTreeMap::new();
                 for node in nodes {
                     for backend in
-                        gents::store::config_client::list_inference_backends_in_txn(txn, &node)
-                            .await?
+                        gents::documents::list_inference_backends_in_txn(txn, &node).await?
                     {
                         let doc = backend
                             .physical_doc_id

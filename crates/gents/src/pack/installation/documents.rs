@@ -173,7 +173,7 @@ pub struct PreparedDependency {
 pub struct PreparedDocumentPackInstall {
     pub installation_doc_id: Option<String>,
     pub agent_bindings: super::super::PackAgentBindings,
-    pub(crate) node_binding: Option<crate::store::config_client::ConfigurationNodeBinding>,
+    pub(crate) node_binding: Option<crate::documents::ConfigurationNodeBinding>,
     pub config: PackConfig,
     pub inference: PackInferenceBindingPreview,
     pub dependency_inference: BTreeMap<String, PackInferenceBindingPreview>,
@@ -871,7 +871,7 @@ async fn prepare_document_pack_install_inner(
     installation_doc_id: Option<String>,
     agent_bindings: super::super::PackAgentBindings,
     mut preloaded: BTreeMap<String, LoadedDependency>,
-    node_binding: Option<&crate::store::config_client::ConfigurationNodeBinding>,
+    node_binding: Option<&crate::documents::ConfigurationNodeBinding>,
     access: &ConfigAccess,
     owner: &str,
     manifest: &super::super::PackManifest,
@@ -1618,9 +1618,9 @@ pub(super) struct StageRecord {
 #[derive(Clone)]
 pub struct HostedDocumentGraph {
     identities: Vec<PackIdentity>,
-    documents: Vec<Vec<crate::store::config_client::DesiredStateApplyDocument>>,
+    documents: Vec<Vec<crate::documents::DesiredStateApplyDocument>>,
     records: Vec<StageRecord>,
-    node_binding: Option<crate::store::config_client::ConfigurationNodeBinding>,
+    node_binding: Option<crate::documents::ConfigurationNodeBinding>,
     plugin_root: bool,
 }
 
@@ -1785,10 +1785,10 @@ pub(super) async fn apply_document_graph_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     owner: &str,
     identities: &[PackIdentity],
-    documents: Vec<Vec<crate::store::config_client::DesiredStateApplyDocument>>,
+    documents: Vec<Vec<crate::documents::DesiredStateApplyDocument>>,
     records: &[StageRecord],
     policy: DriftPolicy,
-    node_binding: Option<&crate::store::config_client::ConfigurationNodeBinding>,
+    node_binding: Option<&crate::documents::ConfigurationNodeBinding>,
 ) -> Result<Vec<InstallReport>> {
     anyhow::ensure!(
         records.len() == identities.len(),
@@ -1839,7 +1839,7 @@ pub(super) async fn install_document_graph(
     policy: DriftPolicy,
     home: Option<&Path>,
     consent: bool,
-    node_binding: Option<crate::store::config_client::ConfigurationNodeBinding>,
+    node_binding: Option<crate::documents::ConfigurationNodeBinding>,
 ) -> Result<(
     Vec<InstallReport>,
     Vec<crate::plugin::store::InstalledPlugin>,

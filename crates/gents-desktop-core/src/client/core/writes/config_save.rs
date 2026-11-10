@@ -45,9 +45,9 @@ impl ClientCore {
         &self,
         node_did: &str,
         patches: &[(
-            gents::store::config_client::patch::SelfConfigTarget,
+            gents::documents::patch::SelfConfigTarget,
             String,
-            gents::store::config_client::patch::SelfConfigPatch,
+            gents::documents::patch::SelfConfigPatch,
         )],
     ) -> Result<()> {
         let access = self.operator_access(node_did)?;
@@ -64,7 +64,7 @@ impl ClientCore {
     pub async fn read_config_editor(
         &self,
         node_did: &str,
-        target: gents::store::config_client::patch::SelfConfigTarget,
+        target: gents::documents::patch::SelfConfigTarget,
         id: &str,
     ) -> Result<mutations::ConfigEditorDocument> {
         let access = self
@@ -108,7 +108,7 @@ impl ClientCore {
     pub async fn save_config_editor(
         &self,
         node_did: &str,
-        target: gents::store::config_client::patch::SelfConfigTarget,
+        target: gents::documents::patch::SelfConfigTarget,
         id: &str,
         revision: &mutations::ConfigEditorRevision,
         content: &str,

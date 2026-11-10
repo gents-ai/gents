@@ -73,8 +73,7 @@ fn a_document_pack_materializes_a_valid_configuration() {
     )
     .unwrap();
     assert!(config.agent("fixture-worker").is_some());
-    gents::store::config_client::DesiredStateApplyPlan::from_pack_config(&config.documents)
-        .unwrap();
+    gents::documents::DesiredStateApplyPlan::from_pack_config(&config.documents).unwrap();
 }
 
 #[tokio::test]
@@ -496,7 +495,7 @@ async fn documents_install_rolls_back_its_record_on_failure() {
                 let node_did = &node_did;
                 Box::pin(async move {
                     use gents::documents::apply_desired_state_plan;
-                    use gents::store::config_client::{
+                    use gents::documents::{
                         read_desired_state_record_in_txn, DesiredStateApplyDocument,
                         DesiredStateApplyPlan,
                     };

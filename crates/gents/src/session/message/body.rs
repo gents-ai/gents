@@ -55,7 +55,7 @@ pub(crate) async fn load_configured_task(
                 let owner = owner.clone();
                 let task_id = task_id.clone();
                 Box::pin(async move {
-                    crate::store::config_client::read_desired_state_document_in_txn(
+                    crate::documents::read_desired_state_document_in_txn(
                         txn,
                         crate::store::collection::Collection::Task,
                         &owner,

@@ -175,7 +175,7 @@ async fn agent_step(
     binding: &gents_protocol::agent_identity::AgentIdentityBinding,
     action: &str,
 ) -> anyhow::Result<()> {
-    use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     if action == "delete" {
         let response = access
             .execute(&format!(

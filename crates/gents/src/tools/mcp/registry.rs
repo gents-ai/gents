@@ -49,10 +49,8 @@ fn services_query_for(node_did: &str, service_id: Option<&str>) -> anyhow::Resul
         !node_did.trim().is_empty(),
         "MCP registry owner is required"
     );
-    let (fields, _) = crate::store::config_client::config_projection(
-        crate::Collection::ToolServiceRegistry,
-        None,
-    )?;
+    let (fields, _) =
+        crate::documents::config_projection(crate::Collection::ToolServiceRegistry, None)?;
     let owner = crate::store::graphql::escape_graphql_string(node_did);
     let service_filter = service_id
         .map(|id| {
