@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "post-notifications"
+description = "Allow a view to post a notification whose click it hears about."
+commands.allow = ["desktop_post_notification"]

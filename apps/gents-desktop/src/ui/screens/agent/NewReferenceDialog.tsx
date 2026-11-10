@@ -126,7 +126,7 @@ export function NewReferenceDialog({
   };
   return (
     <Dialog open={kind !== null} onOpenChange={(open) => !open && finish(null)}>
-      <DialogContent aria-modal="true" className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{kind ? TITLES[kind] : ""}</DialogTitle>
           <DialogDescription>

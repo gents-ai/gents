@@ -1089,8 +1089,7 @@ pub fn check_migration_compatibility(all_versions: &[CollectionVersion]) -> Resu
 /// A managed collection whose active version is not the one a store born on this build
 /// reaches. Stores on different versions of a replicated collection cannot merge each
 /// other's blocks, so this store cannot exchange that collection with canonical peers and
-/// clients (`gents_protocol::peer_schema`). Typically a store created by v1.0.0-rc1 (it
-/// registered the patched SDL directly instead of the rc0 root plus the patch).
+/// clients (`gents_protocol::peer_schema`).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct LineageMismatch {
     pub collection: String,
@@ -1100,93 +1099,17 @@ pub struct LineageMismatch {
 
 impl std::fmt::Display for LineageMismatch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let origin = if is_known_off_lineage(&self.collection, &self.active) {
-            "A pre-release build (v1.0.0-rc1, or an RC2 build before the canonical lineage) \
-             created or upgraded it with a schema this release does not use."
-        } else {
-            "It was created or upgraded by a build whose schema this release does not use."
-        };
         write!(
             f,
-            "{} is on a non-canonical schema lineage (active {}, canonical {}): this store \
-             cannot sync {} with peers or apps on the canonical lineage. {origin} Re-create it \
-             from this release: for a node, move its home aside and run `gents init` with the \
-             same identity key (`--key-path`), then re-enroll; for the desktop app, reset its \
-             local data. Data only this store holds is not carried over. See \
-             docs/upgrade-from-rc0.md",
+            "{} is on a non-canonical schema lineage (active {}, canonical {}): this store cannot sync {} with peers on the canonical lineage",
             self.collection, self.active, self.canonical, self.collection
         )
     }
 }
 
-/// The version every managed collection reaches on a store born on this build, which an
-/// upgraded v1.0.0-rc0 store reaches too.
+/// The version every managed collection reaches on a store born on this build.
 pub fn canonical_versions() -> Result<std::collections::BTreeMap<String, String>> {
-    let mut baseline = DEFAULT_REGISTRY.baseline.to_vec();
-    let mut steps = DEFAULT_REGISTRY.steps.to_vec();
-    crate::upgrades::include_existing_by_version(&|_| Ok(None), &mut baseline, &mut steps)?;
-    Ok(target_active_pins(&Registry {
-        baseline: &baseline,
-        steps: &steps,
-        ordinary_indexes: DEFAULT_REGISTRY.ordinary_indexes,
-    })
-    .into_iter()
-    .collect())
-}
-
-/// How a store that registers schemas without `ensure_migrations` (a paired phone that
-/// applies bundled SDL through its FFI) reaches a collection's canonical version: register
-/// `root_sdl`, then apply each of `patches` in order with `patch_collection`, making each
-/// result the active version. `None` for a collection whose canonical version is its fresh
-/// registration (register the protocol SDL as before).
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-pub struct CanonicalSchemaPlan {
-    pub collection: &'static str,
-    pub root_sdl: &'static str,
-    pub root_version: &'static str,
-    pub patches: Vec<&'static str>,
-    pub version: String,
-}
-
-pub fn canonical_schema_plan(collection: &str) -> Result<Option<CanonicalSchemaPlan>> {
-    let Some((name, root_sdl, root_version)) = crate::upgrades::CANONICAL_ROOTS
-        .iter()
-        .find(|(name, _, _)| *name == collection)
-        .copied()
-    else {
-        return Ok(None);
-    };
-    let mut baseline = DEFAULT_REGISTRY.baseline.to_vec();
-    let mut steps = DEFAULT_REGISTRY.steps.to_vec();
-    crate::upgrades::include_existing_by_version(&|_| Ok(None), &mut baseline, &mut steps)?;
-    let patches = steps
-        .iter()
-        .filter_map(|step| match step {
-            MigrationStep::PatchVersioned {
-                collection, patch, ..
-            } if *collection == name => Some(*patch),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    let version = canonical_versions()?
-        .remove(name)
-        .unwrap_or_else(|| root_version.to_string());
-    Ok(Some(CanonicalSchemaPlan {
-        collection: name,
-        root_sdl,
-        root_version,
-        patches,
-        version,
-    }))
-}
-
-/// Whether `version` of `collection` is one only v1.0.0-rc1 produced, off this release's
-/// lineage. Unlike [`non_canonical_lineages`], a version from another release is not flagged:
-/// use this to judge a peer, which may run a different build.
-pub fn is_known_off_lineage(collection: &str, version: &str) -> bool {
-    crate::upgrades::KNOWN_OFF_LINEAGE
-        .iter()
-        .any(|(name, off)| *name == collection && *off == version)
+    Ok(target_active_pins(&DEFAULT_REGISTRY).into_iter().collect())
 }
 
 /// Managed collections among `active` (name, active version) whose version differs from
@@ -1213,8 +1136,7 @@ pub fn non_canonical_lineages<'v>(
 
 /// Managed collections whose version this store is on, or will be on once
 /// `ensure_migrations` has applied the steps it qualifies for, differs from the canonical
-/// one. A store still on v1.0.0-rc0 reports nothing: its steps land it on the canonical
-/// versions.
+/// one.
 pub fn non_canonical_store_lineages(
     all_versions: &[CollectionVersion],
 ) -> Result<Vec<LineageMismatch>> {

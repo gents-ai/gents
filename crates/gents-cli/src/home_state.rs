@@ -283,7 +283,7 @@ fn desktop_paths() -> Result<gents_desktop_core::client::DesktopPaths> {
 fn cli_identity_paths_under(
     desktop: &gents_desktop_core::client::DesktopPaths,
 ) -> gents_desktop_core::client::DesktopPaths {
-    gents_desktop_core::client::DesktopPaths::from_root(desktop.root().join("cli"))
+    desktop.cli_client()
 }
 
 /// DID of the CLI's existing User client key, shared by the CLI and its shims.

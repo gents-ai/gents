@@ -170,26 +170,63 @@ async fn configure_session_chain(
     )
     .await
     .expect("record runtime backend health");
-    let escaped = escape_graphql_string(&child.agent_did);
-    let response = access
+    (parent.agent_did, child.agent_did)
+}
+
+/// Republishes the parent's Tools with its agents group selecting no target.
+async fn withdraw_child_target(db: &TestDb, owner: &dyn NodeIdentity) {
+    let tools = json!({"node_did": db.node_identity.did(), "tools_id": "parent-tools", "agents": {"enabled": true}});
+    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: Collection::Tools,
+        add: tools.clone(),
+        update: tools,
+    }])
+    .unwrap();
+    db.client_access(owner)
+        .transact_write("test.session_limit.withdraw_target", |txn| {
+            let plan = &plan;
+            Box::pin(async move { gents::documents::apply_desired_state_plan(txn, plan).await })
+        })
+        .await
+        .expect("withdraw the configured agent target");
+}
+
+/// Whether `caller` holds native `invoke` on `target`'s Agent document, the
+/// permission `agent_new` needs.
+async fn may_invoke(db: &TestDb, access: &ConfigAccess, caller: &str, target: &str) -> bool {
+    let agent = escape_graphql_string(target);
+    let agents = access
         .execute(&format!(
-            r#"{{ Agent(filter: {{ agent_did: {{ _eq: "{escaped}" }} }}) {{ _docID }} }}"#
+            r#"{{ Agent(filter: {{ agent_did: {{ _eq: "{agent}" }} }}, limit: 2) {{ _docID }} }}"#
         ))
         .await
-        .unwrap();
-    let child_doc = response["data"]["Agent"][0]["_docID"]
+        .expect("read target Agent");
+    let doc_id = agents["data"]["Agent"][0]["_docID"]
         .as_str()
-        .expect("child agent document");
-    access
-        .add_actor_relationship(
-            "Agent",
-            child_doc,
-            "session_writer",
-            &parent.agent_did.parse().unwrap(),
-        )
+        .expect("target Agent document")
+        .to_owned();
+    let caller: identity::Did = caller.parse().unwrap();
+    let observer = ConfigAccess::local_as(db.node.clone(), db.node_identity.did().parse().unwrap());
+    let decision = observer
+        .transact_readonly("test.session_limit.invoke", |txn| {
+            let doc_id = doc_id.clone();
+            let caller = caller.clone();
+            Box::pin(async move {
+                txn.observe_document_access(
+                    &caller,
+                    "Agent",
+                    &[doc_id],
+                    gents::defra_node::DocumentAccessMode::Named {
+                        permission: "invoke".to_owned(),
+                        node_permission: NodePermission::DocumentUpdate,
+                    },
+                )
+                .await
+            })
+        })
         .await
-        .expect("authorize parent to start child sessions");
-    (parent.agent_did, child.agent_did)
+        .expect("observe the caller's invoke permission");
+    decision == [gents::defra_node::DocumentAccessDecision::Allowed]
 }
 
 async fn child_of(
@@ -316,6 +353,7 @@ async fn start_child_session(
     session_id: &str,
     child_responses: Vec<StreamResponse>,
     max_turns: Option<i64>,
+    withdraw_target: bool,
 ) -> (
     String,
     String,
@@ -348,6 +386,17 @@ async fn start_child_session(
     let (parent_did, child_did) =
         configure_session_chain(db, &user, backend.endpoint(), max_turns).await;
     let access = db.client_access(&user);
+    assert!(
+        may_invoke(db, &access, &parent_did, &child_did).await,
+        "configuring the agent target grants the parent invoke on the child Agent"
+    );
+    if withdraw_target {
+        withdraw_child_target(db, &user).await;
+        assert!(
+            !may_invoke(db, &access, &parent_did, &child_did).await,
+            "withdrawing the agent target revokes the parent's invoke on the child Agent"
+        );
+    }
     let request = build_signed_client_request(
         &access,
         RequestSpec::new(
@@ -410,6 +459,7 @@ async fn started_session_without_an_execution_document_runs_past_a_low_turn_limi
         "e2e-session-limit-default-session",
         responses,
         None,
+        false,
     )
     .await;
     let child = wait_for_terminal_child(
@@ -468,6 +518,7 @@ async fn started_session_loop_enforces_its_execution_documents_turn_limit() {
         "e2e-session-limit-explicit-session",
         (0..8).map(child_tool_turn).collect(),
         Some(EXPLICIT_CHILD_MAX_TURNS),
+        false,
     )
     .await;
     let child = wait_for_terminal_child(
@@ -508,5 +559,51 @@ async fn started_session_loop_enforces_its_execution_documents_turn_limit() {
         child_behavior.max_turns_provenance,
         MaxTurnsProvenance::ExecutionProfile
     );
+    runtime.runtime.shutdown().await;
+}
+
+/// #3606: the configured agent target is what lets the parent open the child
+/// session (the two tests above run `agent_new` on that grant alone); once the
+/// target is withdrawn the same `agent_new` call opens nothing.
+#[tokio::test]
+async fn agent_new_is_refused_once_its_configured_target_is_withdrawn() {
+    const REQUEST_ID: &str = "e2e-session-limit-withdrawn-request";
+    let db = test_db("e2e-session-limit-withdrawn").await;
+    let (_, child_did, access, _, runtime) = start_child_session(
+        &db,
+        REQUEST_ID,
+        "e2e-session-limit-withdrawn-session",
+        vec![StreamResponse::completes(CHILD_PROMPT, ["child done"])],
+        None,
+        true,
+    )
+    .await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let response = access
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{REQUEST_ID}" }} }}) {{ lifecycle_state }} }}"#
+            ))
+            .await
+            .expect("read parent request");
+        let state = response["data"]["AgentRequest"][0]["lifecycle_state"].as_str();
+        if matches!(state, Some("completed") | Some("failed")) {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "parent request did not finish: {response}; provider bodies: {:?}",
+            runtime.backend.observed_completion_bodies()
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let child = ConfigAccess::local_as(db.node.clone(), child_did.parse().unwrap());
+    for (viewer, view) in [("user", &access), ("child agent", &child)] {
+        let opened = child_of(view, REQUEST_ID, &child_did).await;
+        assert!(
+            opened.is_none(),
+            "agent_new must open no child session after the target is withdrawn ({viewer}): {opened:?}"
+        );
+    }
     runtime.runtime.shutdown().await;
 }

@@ -1,18 +1,43 @@
 use super::*;
 use crate::snapshot::tests::push_canonical_text_message;
-use gents::session::canonical_rows::{
+use gents::store::config_client::ConfigAccess;
+use gents_desktop_core::client::{ClientStoreRows, TranscriptWindow};
+use gents_protocol::output::rows::{
     output_segment_create_variables, transcript_message_create_variables,
     CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
-use gents::store::config_client::ConfigAccess;
-use gents_desktop_core::client::{ClientStoreRows, TranscriptWindow};
 use gents_protocol::output::{MessageBlock, MessageRole};
 
 #[tokio::test]
 async fn persisted_background_inputs_keep_origin_across_transcript_windows() {
-    let node = std::sync::Arc::new(crate::tests::support::node_builder().build().await.unwrap());
+    use gents::NodeIdentity as _;
+    let home = tempfile::tempdir().unwrap();
+    let identity = gents::KeyIdentity::load_or_create(home.path().join("node.key"), None).unwrap();
+    let amy = identity.did().to_owned();
+    let binding = gents::store::identity::provision_agent_identity(&identity).unwrap();
+    let agent = binding.agent_did.clone();
+    let node = std::sync::Arc::new(
+        gents::defra_node::Node::builder()
+            .with_node_identity_did(&amy)
+            .build()
+            .await
+            .unwrap(),
+    );
     gents::ensure_runtime_schemas(&node).await.unwrap();
     let access = ConfigAccess::local(node.clone());
+    for mutation in [
+        format!(
+            r#"mutation {{ create_Agent(input: {{node_did:"{amy}", agent_did:"{agent}", creation_nonce:"{}", inference_profile_id:"profile", enabled:true}}) {{ _docID }} }}"#,
+            binding.creation_nonce
+        ),
+        format!(
+            r#"mutation {{ create_AgentSession(input: {{node_did:"{amy}", agent_did:"{agent}", session_id:"origin", created_at:"2026-10-26T00:00:00Z"}}) {{ _docID }} }}"#
+        ),
+    ] {
+        ConfigAccess::write_local(&node, "test.background_origin", &mutation)
+            .await
+            .unwrap();
+    }
     let mut requests = Vec::new();
     for (id, input) in [
         (
@@ -22,7 +47,7 @@ async fn persisted_background_inputs_keep_origin_across_transcript_windows() {
         ("person", "null"),
     ] {
         let query = format!(
-            r#"mutation {{ create_AgentRequest(input: {{purpose:"normal", node_did:"did:test:amy", agent_id:"agent", request_id:"{id}", session_id:"origin", lifecycle_state:"completed", input:{input}, created_at:"2026-10-26T00:00:00Z"}}) {{ _docID }} }}"#
+            r#"mutation {{ create_AgentRequest(input: {{purpose:"normal", node_did:"{amy}", agent_did:"{agent}", request_id:"{id}", session_id:"origin", lifecycle_state:"completed", input:{input}, created_at:"2026-10-26T00:00:00Z"}}) {{ _docID }} }}"#
         );
         let response = ConfigAccess::write_local(&node, "test.background_origin", &query)
             .await
@@ -65,8 +90,10 @@ async fn persisted_background_inputs_keep_origin_across_transcript_windows() {
             MessageRole::User,
             content,
         );
-        let header = rows.transcript_messages.pop().unwrap().message;
-        let segment = rows.output_segments.pop().unwrap().segment;
+        let mut header = rows.transcript_messages.pop().unwrap().message;
+        let mut segment = rows.output_segments.pop().unwrap().segment;
+        header.node_did.clone_from(&amy);
+        segment.node_did.clone_from(&amy);
         ConfigAccess::transact_local_write(&node, None, "test.background_origin_output", |txn| {
             let mut header = header.clone();
             let segment = segment.clone();
@@ -96,7 +123,7 @@ async fn persisted_background_inputs_keep_origin_across_transcript_windows() {
         let page = gents_desktop_core::client::load_session_transcript_window_on(
             &access,
             "origin",
-            Some("did:test:amy"),
+            Some(&amy),
             None,
             window,
             Some(20),
@@ -105,14 +132,20 @@ async fn persisted_background_inputs_keep_origin_across_transcript_windows() {
         .unwrap();
         let items = render_transcript_rows(&ClientStore::default(), &page, "origin");
         assert_eq!(items.len(), 4);
-        for (item, expected) in items.iter().zip([success, failure, wake]) {
+        for (item, (expected, notification)) in
+            items
+                .iter()
+                .zip([(success, true), (failure, true), (wake, false)])
+        {
             assert!(matches!(item, RenderedTimelineItem::AutomatedInput {
-                origin: RequestOriginView::BackgroundCompletion, content: Some(content), ..
-            } if content == expected));
+                origin: RequestOriginView::BackgroundCompletion { notification: observed },
+                content: Some(content),
+                ..
+            } if content == expected && *observed == notification));
         }
         assert!(
             matches!(&items[3], RenderedTimelineItem::UserMessage { content: Some(content), .. } if content == wake)
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.unwrap();
 }

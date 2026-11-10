@@ -1,11 +1,11 @@
-use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
-use gents::runtime::agent::p2p_reconcile::enrollment::{
+use super::enrollment::{
     AuthorizationRevision as PureRevision, AuthorizationRevisionKind as PureRevisionKind,
     EnrollmentDecision as PureDecision, EnrollmentDecisionKind as PureDecisionKind,
     EnrollmentOffer as PureOffer, EnrollmentRequest as PureRequest,
     EnrollmentRouteDirection as PureRouteDirection, EnrollmentRouteReceipt as PureRouteReceipt,
 };
+use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use gents_protocol::enrollment::{
     enrollment_schema_fingerprint, AuthorizationRevisionKind, AuthorizationRevisionRecord,
     EnrollmentDecisionKind, EnrollmentDecisionRecord, EnrollmentRequestRecord,
@@ -13,11 +13,11 @@ use gents_protocol::enrollment::{
 };
 use serde::Deserialize;
 
-pub(super) const STATUS_ENROLLMENT_QUERY: &str = r#"{
+pub const STATUS_ENROLLMENT_QUERY: &str = r#"{
   NetworkAdminPin { network_id admin_did }
   NetworkEnrollmentRequest {
     _docID protocol_version request_id request_digest offer_id offer_token challenge network_id
-    admin_did server_peer candidate_did candidate_peer candidate_ticket owner_node_did profile
+    admin_did server_peer candidate_did candidate_peer candidate_name candidate_ticket owner_node_did profile
     client_nonce issued_at expires_at candidate_sig
   }
   NetworkEnrollmentDecision {
@@ -38,37 +38,39 @@ pub(super) const STATUS_ENROLLMENT_QUERY: &str = r#"{
 }"#;
 
 #[derive(Deserialize)]
-pub(super) struct EnrollmentPinRow {
-    pub(super) network_id: String,
-    pub(super) admin_did: String,
+pub struct EnrollmentPinRow {
+    pub network_id: String,
+    pub admin_did: String,
 }
 
 #[derive(Clone, Deserialize)]
-pub(super) struct EnrollmentRequestRow {
+pub struct EnrollmentRequestRow {
     #[serde(rename = "_docID")]
-    pub(super) doc_id: String,
-    pub(super) protocol_version: i64,
-    pub(super) request_id: String,
-    pub(super) request_digest: String,
-    pub(super) offer_id: String,
-    pub(super) offer_token: String,
-    pub(super) challenge: String,
-    pub(super) network_id: String,
-    pub(super) admin_did: String,
-    pub(super) server_peer: String,
-    pub(super) candidate_did: String,
-    pub(super) candidate_peer: String,
-    pub(super) candidate_ticket: String,
-    pub(super) owner_node_did: String,
-    pub(super) profile: String,
-    pub(super) client_nonce: String,
-    pub(super) issued_at: String,
-    pub(super) expires_at: String,
-    pub(super) candidate_sig: String,
+    pub doc_id: String,
+    pub protocol_version: i64,
+    pub request_id: String,
+    pub request_digest: String,
+    pub offer_id: String,
+    pub offer_token: String,
+    pub challenge: String,
+    pub network_id: String,
+    pub admin_did: String,
+    pub server_peer: String,
+    pub candidate_did: String,
+    pub candidate_peer: String,
+    #[serde(default)]
+    pub candidate_name: Option<String>,
+    pub candidate_ticket: String,
+    pub owner_node_did: String,
+    pub profile: String,
+    pub client_nonce: String,
+    pub issued_at: String,
+    pub expires_at: String,
+    pub candidate_sig: String,
 }
 
 impl EnrollmentRequestRow {
-    pub(super) fn to_record(&self) -> Result<EnrollmentRequestRecord> {
+    pub fn to_record(&self) -> Result<EnrollmentRequestRecord> {
         Ok(EnrollmentRequestRecord {
             protocol_version: enrollment_version(self.protocol_version)?,
             request_id: self.request_id.clone(),
@@ -81,6 +83,7 @@ impl EnrollmentRequestRow {
             server_peer: self.server_peer.clone(),
             candidate_did: self.candidate_did.clone(),
             candidate_peer: self.candidate_peer.clone(),
+            candidate_name: self.candidate_name.clone(),
             candidate_ticket: self.candidate_ticket.clone(),
             owner_node_did: self.owner_node_did.clone(),
             profile: self.profile.clone(),
@@ -93,26 +96,26 @@ impl EnrollmentRequestRow {
 }
 
 #[derive(Deserialize)]
-pub(super) struct EnrollmentDecisionRow {
-    pub(super) protocol_version: i64,
-    pub(super) decision_id: String,
-    pub(super) request_id: String,
-    pub(super) request_digest: String,
-    pub(super) network_id: String,
-    pub(super) admin_did: String,
-    pub(super) candidate_did: String,
-    pub(super) candidate_peer: String,
-    pub(super) owner_node_did: String,
-    pub(super) decision: String,
-    pub(super) authorization_sequence: i64,
-    pub(super) authorization_expires_at: String,
-    pub(super) decided_at: String,
-    pub(super) signer_did: String,
-    pub(super) admin_sig: String,
+pub struct EnrollmentDecisionRow {
+    pub protocol_version: i64,
+    pub decision_id: String,
+    pub request_id: String,
+    pub request_digest: String,
+    pub network_id: String,
+    pub admin_did: String,
+    pub candidate_did: String,
+    pub candidate_peer: String,
+    pub owner_node_did: String,
+    pub decision: String,
+    pub authorization_sequence: i64,
+    pub authorization_expires_at: String,
+    pub decided_at: String,
+    pub signer_did: String,
+    pub admin_sig: String,
 }
 
 impl EnrollmentDecisionRow {
-    pub(super) fn to_record(&self) -> Result<EnrollmentDecisionRecord> {
+    pub fn to_record(&self) -> Result<EnrollmentDecisionRecord> {
         Ok(EnrollmentDecisionRecord {
             protocol_version: enrollment_version(self.protocol_version)?,
             decision_id: self.decision_id.clone(),
@@ -139,46 +142,46 @@ impl EnrollmentDecisionRow {
 }
 
 #[derive(Deserialize)]
-pub(super) struct EnrollmentRevisionRow {
-    pub(super) protocol_version: i64,
-    pub(super) revision_id: String,
-    pub(super) request_id: String,
-    pub(super) request_digest: String,
-    pub(super) network_id: String,
-    pub(super) admin_did: String,
-    pub(super) member_did: String,
-    pub(super) member_peer: String,
-    pub(super) owner_node_did: String,
-    pub(super) sequence: i64,
-    pub(super) authorization_expires_at: String,
-    pub(super) kind: String,
-    pub(super) issued_at: String,
-    pub(super) signer_did: String,
-    pub(super) admin_sig: String,
+pub struct EnrollmentRevisionRow {
+    pub protocol_version: i64,
+    pub revision_id: String,
+    pub request_id: String,
+    pub request_digest: String,
+    pub network_id: String,
+    pub admin_did: String,
+    pub member_did: String,
+    pub member_peer: String,
+    pub owner_node_did: String,
+    pub sequence: i64,
+    pub authorization_expires_at: String,
+    pub kind: String,
+    pub issued_at: String,
+    pub signer_did: String,
+    pub admin_sig: String,
 }
 
 #[derive(Deserialize)]
-pub(super) struct EnrollmentRouteReceiptRow {
-    pub(super) protocol_version: i64,
-    pub(super) receipt_id: String,
-    pub(super) request_id: String,
-    pub(super) request_digest: String,
-    pub(super) network_id: String,
-    pub(super) admin_did: String,
-    pub(super) member_did: String,
-    pub(super) member_peer: String,
-    pub(super) server_peer: String,
-    pub(super) owner_node_did: String,
-    pub(super) authorization_sequence: i64,
-    pub(super) authorization_expires_at: String,
-    pub(super) direction: String,
-    pub(super) applied_at: String,
-    pub(super) signer_did: String,
-    pub(super) admin_sig: String,
+pub struct EnrollmentRouteReceiptRow {
+    pub protocol_version: i64,
+    pub receipt_id: String,
+    pub request_id: String,
+    pub request_digest: String,
+    pub network_id: String,
+    pub admin_did: String,
+    pub member_did: String,
+    pub member_peer: String,
+    pub server_peer: String,
+    pub owner_node_did: String,
+    pub authorization_sequence: i64,
+    pub authorization_expires_at: String,
+    pub direction: String,
+    pub applied_at: String,
+    pub signer_did: String,
+    pub admin_sig: String,
 }
 
 impl EnrollmentRouteReceiptRow {
-    pub(super) fn to_record(&self) -> Result<EnrollmentRouteReceiptRecord> {
+    pub fn to_record(&self) -> Result<EnrollmentRouteReceiptRecord> {
         Ok(EnrollmentRouteReceiptRecord {
             protocol_version: enrollment_version(self.protocol_version)?,
             receipt_id: self.receipt_id.clone(),
@@ -205,7 +208,7 @@ impl EnrollmentRouteReceiptRow {
 }
 
 impl EnrollmentRevisionRow {
-    pub(super) fn to_record(&self) -> Result<AuthorizationRevisionRecord> {
+    pub fn to_record(&self) -> Result<AuthorizationRevisionRecord> {
         Ok(AuthorizationRevisionRecord {
             protocol_version: enrollment_version(self.protocol_version)?,
             revision_id: self.revision_id.clone(),
@@ -231,7 +234,7 @@ impl EnrollmentRevisionRow {
     }
 }
 
-pub(super) fn to_pure_offer(
+pub fn to_pure_offer(
     offer: &gents_protocol::enrollment::EnrollmentOfferRecord,
     verified: bool,
 ) -> PureOffer {
@@ -255,7 +258,7 @@ pub(super) fn to_pure_offer(
     }
 }
 
-pub(super) fn to_pure_request(
+pub fn to_pure_request(
     request: &EnrollmentRequestRecord,
     verified: bool,
     fresh: bool,
@@ -270,6 +273,7 @@ pub(super) fn to_pure_request(
         server_peer: request.server_peer.clone(),
         candidate_did: request.candidate_did.clone(),
         candidate_peer: request.candidate_peer.clone(),
+        candidate_name: request.candidate_name.clone(),
         observed_candidate_peer: if verified {
             request.candidate_peer.clone()
         } else {
@@ -291,10 +295,7 @@ pub(super) fn to_pure_request(
     }
 }
 
-pub(super) fn to_pure_decision(
-    decision: &EnrollmentDecisionRecord,
-    verified: bool,
-) -> PureDecision {
+pub fn to_pure_decision(decision: &EnrollmentDecisionRecord, verified: bool) -> PureDecision {
     PureDecision {
         request_id: decision.request_id.clone(),
         request_digest: decision.request_digest.clone(),
@@ -318,10 +319,7 @@ pub(super) fn to_pure_decision(
     }
 }
 
-pub(super) fn to_pure_revision(
-    revision: &AuthorizationRevisionRecord,
-    verified: bool,
-) -> PureRevision {
+pub fn to_pure_revision(revision: &AuthorizationRevisionRecord, verified: bool) -> PureRevision {
     PureRevision {
         request_id: revision.request_id.clone(),
         request_digest: revision.request_digest.clone(),
@@ -341,10 +339,7 @@ pub(super) fn to_pure_revision(
     }
 }
 
-pub(super) fn to_pure_receipt(
-    receipt: &EnrollmentRouteReceiptRecord,
-    verified: bool,
-) -> PureRouteReceipt {
+pub fn to_pure_receipt(receipt: &EnrollmentRouteReceiptRecord, verified: bool) -> PureRouteReceipt {
     PureRouteReceipt {
         request_id: receipt.request_id.clone(),
         request_digest: receipt.request_digest.clone(),

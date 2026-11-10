@@ -1,22 +1,28 @@
 use super::super::super::principal_identity::PrincipalIdentity;
 use super::super::route_manager::ClientRouteManager;
 use super::super::sync_state::ClientSyncStateOwner;
-use super::authority::{
-    apply_current_generational_conflicts, raw_authority_targets, scoped_authority_outcomes,
-};
-use super::projection::project_desktop_approval;
 use super::reconcile::{
     authenticate_enrolled_server, demote_enrollment_peer, enrolled_server_address,
-    prioritized_current_approvals, reconcile_status_enrollment_approvals, ApprovedStatusEnrollment,
-    DesktopApprovalProjection, EnrollmentAuthorityOutcome,
+    prioritized_current_approvals, reconcile_status_enrollment_approvals,
 };
-use super::rows::{EnrollmentRevisionRow, EnrollmentRouteReceiptRow, STATUS_ENROLLMENT_QUERY};
 use super::*;
 use crate::client::peer_directory::RemovalCause;
 use crate::client::DesktopPaths;
 use defra_p2p_adapter::P2pDocumentRequest;
 use defra_p2p_adapter::TransportPeerId;
-use gents::runtime::agent::p2p_reconcile::enrollment_candidate::enrollment_request_input;
+use gents::runtime::agent::p2p_reconcile::enrollment_candidate::{
+    enrollment_request_input, sign_enrollment_request,
+};
+use gents::runtime::agent::p2p_reconcile::enrollment_member_authority::EnrollmentAuthorityOutcome;
+use gents::runtime::agent::p2p_reconcile::enrollment_member_authority::{
+    apply_current_generational_conflicts, raw_authority_targets, scoped_authority_outcomes,
+};
+use gents::runtime::agent::p2p_reconcile::enrollment_projection::{
+    project_desktop_approval, ApprovedStatusEnrollment, DesktopApprovalProjection,
+};
+use gents::runtime::agent::p2p_reconcile::enrollment_rows::{
+    EnrollmentRevisionRow, EnrollmentRouteReceiptRow, STATUS_ENROLLMENT_QUERY,
+};
 use gents_protocol::enrollment::derive_enrollment_id;
 use gents_protocol::enrollment::{
     AuthorizationRevisionKind, AuthorizationRevisionRecord, EnrollmentDecisionRecord,
@@ -505,6 +511,7 @@ async fn signed_current_receipt_opens_generation_and_revocation_closes_it() {
         server_peer: server_peer.clone(),
         candidate_did: candidate.did().into(),
         candidate_peer: "client-peer".into(),
+        candidate_name: None,
         candidate_ticket: "client-ticket".into(),
         owner_node_did: offer.owner_node_did.clone(),
         profile: offer.profile.clone(),
@@ -597,6 +604,7 @@ async fn signed_current_receipt_opens_generation_and_revocation_closes_it() {
         server_peer: request.server_peer.clone(),
         candidate_did: request.candidate_did.clone(),
         candidate_peer: request.candidate_peer.clone(),
+        candidate_name: request.candidate_name.clone(),
         candidate_ticket: request.candidate_ticket.clone(),
         owner_node_did: request.owner_node_did.clone(),
         profile: request.profile.clone(),
@@ -1061,6 +1069,7 @@ fn signed_enrollment_authority_with_owner_at(
         server_peer: offer.server_peer.clone(),
         candidate_did: candidate.did().into(),
         candidate_peer: candidate_peer.into(),
+        candidate_name: None,
         candidate_ticket: "client-ticket".into(),
         owner_node_did: offer.owner_node_did.clone(),
         profile: offer.profile.clone(),
@@ -1709,6 +1718,10 @@ async fn locally_removed_enrollment_stays_absent_across_reconcile() {
         "revocation removes the outcome and prunes the retirement with it"
     );
     assert!(core.peer_records().await.is_empty());
+    assert!(
+        core.ended_access().await.is_empty(),
+        "a node removed on this desktop first isn't one whose access ended"
+    );
 
     Arc::new(core).shutdown().await.unwrap();
 }
@@ -2267,6 +2280,10 @@ async fn a_saved_peer_removed_for_an_absent_receipt_reinstalls_when_it_returns()
             .is_empty(),
         "an automatic teardown must not retire a generation the operator kept"
     );
+    assert!(
+        core.ended_access().await.is_empty(),
+        "authority still current without its receipt hasn't ended this desktop's access"
+    );
 
     commit_route_receipt(&core, &authority).await;
     let authority_map = reconcile().await;
@@ -2281,6 +2298,25 @@ async fn a_saved_peer_removed_for_an_absent_receipt_reinstalls_when_it_returns()
             .map(|record| record.enrollment_request_digest.as_deref())
             .collect::<Vec<_>>(),
         vec![Some(authority.request.request_digest.as_str())]
+    );
+
+    commit_revision(&core, &authority.revoked).await;
+    reconcile().await;
+    assert!(
+        core.peer_records().await.is_empty(),
+        "a revoked node is torn down"
+    );
+    let ended = core.ended_access().await;
+    assert_eq!(
+        ended
+            .iter()
+            .map(|ended| (ended.node_did.as_str(), ended.reason))
+            .collect::<Vec<_>>(),
+        vec![(
+            authority.request.owner_node_did.as_str(),
+            crate::client::EndedAccessReason::Revoked
+        )],
+        "the desktop keeps why its access ended"
     );
 
     Arc::new(core).shutdown().await.unwrap();

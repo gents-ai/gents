@@ -113,8 +113,13 @@ impl<'a> FreshBackendStore<'a> {
             .await?;
         file.write_all(&bytes).await?;
         file.sync_all().await?;
-        let data = self.data.clone();
-        tokio::task::spawn_blocking(move || std::fs::File::open(data)?.sync_all()).await??;
+        // A directory handle is unix-only: Windows refuses `File::open` on a
+        // directory (os error 5), and NTFS journals the new entry itself.
+        #[cfg(unix)]
+        {
+            let data = self.data.clone();
+            tokio::task::spawn_blocking(move || std::fs::File::open(data)?.sync_all()).await??;
+        }
         Ok(())
     }
 }

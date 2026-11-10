@@ -170,11 +170,7 @@ export function CompactToolGroup({ tools }: { tools: RenderedToolCallView[] }) {
     (actionStatus(entry.tool) === "running" ? active : settled).push(entry);
   }
   const sections: ActionEntry[][] = settled.length ? [settled] : [];
-  if (active.length > 2) {
-    sections.push(active.slice(0, -1), [active.at(-1)!]);
-  } else {
-    sections.push(...active.map((entry) => [entry]));
-  }
+  if (active.length) sections.push(active);
   return (
     <>
       {sections.map((entries) => {
@@ -227,7 +223,9 @@ export function CompactToolGroup({ tools }: { tools: RenderedToolCallView[] }) {
           running
             ? entries.length === 1
               ? runningAction(first)
-              : `${entries.length} actions running`
+              : entries.every((entry) => actionKind(entry) === "command")
+                ? `Running ${entries.length} commands`
+                : `Running ${entries.length} actions`
             : settledParts.join(" · ") || failedLabel,
         );
         const label =
