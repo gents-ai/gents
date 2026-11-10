@@ -56,6 +56,13 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "tools::builtin::self_config::command::grants::scope_tests::yolo_group_is_the_engineer_preset",
+            package: "gents",
+            source_path: "crates/gents/src/tools/builtin/self_config/command/grants.rs",
+            module_path: "tools::builtin::self_config::command::grants::scope_tests",
+            function: "yolo_group_is_the_engineer_preset",
+        },
+        ConformanceConsumer::RustTest {
             id: "pack::provenance::ownership_tests::document_ownership_matches_executable_model",
             package: "gents",
             source_path: "crates/gents/src/pack/provenance.rs",

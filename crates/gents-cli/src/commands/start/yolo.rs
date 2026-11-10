@@ -24,7 +24,7 @@ to what was asked, and ask before anything destructive or hard to undo.";
 /// Returns the yolo agent's DID and whether this call made it. An agent's DID is derived
 /// from a fresh creation nonce, so a later run finds the yolo agent by its display name and
 /// description rather than make another. It clones the node's default agent, The Engineer on
-/// a home that `gents` set up, so it runs with the same Tools document.
+/// a home that `gents` set up, so it runs with the same Tools, its self-configuration included.
 pub(super) async fn ensure_agent(
     home: &Path,
     config: &StoredInitConfig,
@@ -52,6 +52,7 @@ pub(super) async fn ensure_agent(
             .as_str()
             .context("the yolo agent row has no agent_did")?;
         ensure_root_reader(&access, node_did, yolo, &source).await?;
+        grant_self_configuration(&access, node_did, yolo, &source).await?;
         wait_until_ready(&access, node_did, yolo).await?;
         return Ok((yolo.to_owned(), false));
     }
@@ -94,6 +95,7 @@ pub(super) async fn ensure_agent(
         made["agent_did"]
     );
     ensure_root_reader(&access, node_did, &yolo, &source).await?;
+    grant_self_configuration(&access, node_did, &yolo, &source).await?;
     eprintln!("Made the yolo agent {yolo}, with the tools of {source}.");
     wait_until_ready(&access, node_did, &yolo).await?;
     Ok((yolo, true))
@@ -116,6 +118,22 @@ pub(super) async fn default_agent(access: &ConfigAccess, node_did: &str) -> Resu
         .filter(|did| !did.is_empty())
         .map(str::to_owned)
         .with_context(|| format!("node {node_did} names no default agent"))
+}
+
+/// The yolo agent configures itself (Lean `SelfConfig.yoloGroup`): a clone
+/// drops its source's self-configuration, so the User, running this command,
+/// grants it the default agent's self-config group and write on its own
+/// configuration, and nothing beyond it. Granting again changes nothing, so a
+/// yolo agent made before this grant existed gets it on its next run.
+async fn grant_self_configuration(
+    access: &ConfigAccess,
+    node_did: &str,
+    yolo: &str,
+    source: &str,
+) -> Result<()> {
+    gents::tools::builtin::self_config::grant_own_self_configuration(access, node_did, yolo, source)
+        .await
+        .with_context(|| format!("granting the yolo agent {yolo} its own self-configuration"))
 }
 
 /// Gives the yolo agent reader on the published WorkspaceRoot covering its tool root, the

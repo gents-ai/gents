@@ -500,6 +500,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "PackPlacementReaderCases",
         ),
         (
+            !snapshot.self_config_scope_cases.groups.is_empty(),
+            "self_config_scope_cases",
+            "SelfConfigScopeCases",
+        ),
+        (
             !snapshot.pack_document_ownership_cases.is_empty(),
             "pack_document_ownership_cases",
             "PackDocumentOwnershipCases",

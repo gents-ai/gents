@@ -1072,6 +1072,11 @@ def caseCoverage : List CoverageEntry :=
       "Covers production patch admissibility and accepted merges, replays every Tools row through the always-on operator-grant guard (guard_tools_keep_grants) and every Context and Agent row, clone rows included, through reselection_keeps_grants, and replays guarded rows through the production Tools/Agent no-lockout guards, the Backend auth fence and the Profile account choice fence. Reference validation and unchanged stored state after rejection require the shared configuration transaction owner.")
       "self-config" [Surface.agentFacing]
   , tagged (consumerCoverage
+      "self_config_scope_cases"
+      "SelfConfigScopeCases"
+      "tools::builtin::self_config::command::grants::scope_tests::yolo_group_is_the_engineer_preset")
+      "self-config" [Surface.agentFacing]
+  , tagged (consumerCoverage
       "agent_decision_cases"
       "AgentDecisionCases"
       "conformance::self_config::generated_agent_decision_cases_drive_production_agent_admission")
