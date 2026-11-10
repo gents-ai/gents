@@ -698,19 +698,170 @@ fn generated_runtime_connection_observations_drive_the_owner() {
             "{case}"
         );
     }
-    for (rust, lean) in [
-        (
-            gents::store::config_client::SUBSCRIPTION_RENEWAL_PERIOD,
-            "renewalPeriodMs",
-        ),
-        (SNAPSHOT_RETRY_DELAY, "snapshotRetryDelayMs"),
-    ] {
-        assert_eq!(
-            u64::try_from(rust.as_millis()).unwrap(),
-            contract[lean].as_u64().unwrap(),
-            "{lean}"
-        );
+    assert_eq!(
+        u64::try_from(gents::store::config_client::SUBSCRIPTION_RENEWAL_PERIOD.as_millis())
+            .unwrap(),
+        contract["renewalPeriodMs"].as_u64().unwrap()
+    );
+    let retries = contract["snapshotRetries"].as_array().unwrap();
+    assert!(retries.len() > 30);
+    for case in retries {
+        let failures = u32::try_from(case["failures"].as_u64().unwrap()).unwrap();
+        // An answered read restarts the count whether it published or a
+        // newer publication superseded it.
+        let settlements: &[Settlement] = match case["outcome"].as_str().unwrap() {
+            "succeeded" => &[Settlement::Published, Settlement::Superseded],
+            "refused" => &[Settlement::Refused],
+            "unreachable" => &[Settlement::TransportFailed],
+            other => panic!("unexpected snapshot outcome {other}"),
+        };
+        for settlement in settlements {
+            let mut queue = Queue::default();
+            queue.failures.insert("node".into(), failures);
+            queue.settle("node", *settlement, base);
+            assert_eq!(
+                u64::from(queue.failures.get("node").copied().unwrap_or_default()),
+                case["failuresAfter"].as_u64().unwrap(),
+                "{case} {settlement:?}"
+            );
+            assert_eq!(
+                queue
+                    .retry_at
+                    .get("node")
+                    .map(|due| u64::try_from(due.duration_since(base).as_millis()).unwrap()),
+                case["retryDelayMs"].as_u64(),
+                "{case} {settlement:?}"
+            );
+        }
     }
+}
+
+fn millis(delay: Duration) -> u64 {
+    u64::try_from(delay.as_millis()).unwrap()
+}
+
+/// A read that keeps failing while the node's subscriptions stay up is retried
+/// on the reconnect schedule rather than every 250 ms, and an answered read
+/// starts the schedule over.
+#[test]
+fn failing_reads_back_off_until_a_read_is_answered() {
+    let mut queue = Queue::default();
+    let node = "did:test:failing-reads";
+    let base = Instant::now();
+    let mut waits = Vec::new();
+    for _ in 0..12 {
+        queue.settle(node, Settlement::TransportFailed, base);
+        waits.push(millis(queue.retry_at[node].duration_since(base)));
+        assert!(queue.pending.contains(node), "the read stays queued");
+        queue.retry_at.remove(node);
+    }
+    assert_eq!(
+        waits,
+        [250, 250, 250, 250, 250, 500, 1000, 2000, 4000, 8000, 16000, 30000]
+    );
+    queue.settle(node, Settlement::Published, base);
+    queue.settle(node, Settlement::TransportFailed, base);
+    assert_eq!(millis(queue.retry_at[node].duration_since(base)), 250);
+}
+
+/// Reconnecting now ends the node's source with its reconnect due at once,
+/// clears the read retry timer so the restarted source loads as soon as it
+/// arms, and starts both schedules over, whatever they had grown to.
+#[tokio::test]
+async fn retry_now_reconnects_at_once_and_starts_the_backoff_over() {
+    let (store, _) = ObservedStore::new(ClientStore::default());
+    let metrics = ObserverMetrics::default();
+    let mut sources = remote::Sources::default();
+    let mut queue = Queue::default();
+    let node = "did:test:retry-now";
+    let mut at = Instant::now();
+    for _ in 0..8 {
+        sources.start_inert(node);
+        sources.observe(
+            node,
+            remote::Origin::Source,
+            RuntimeConnectionEvent::TransportFailed,
+            &store,
+            at,
+            &metrics,
+        );
+        at = sources.next_reconnect().unwrap();
+        assert!(sources.take_due_reconnects(at));
+    }
+    let generation = sources.start_inert(node);
+    apply_source_notice(
+        &mut queue,
+        &mut sources,
+        &store,
+        node,
+        generation,
+        RuntimeConnectionEvent::SubscriptionsReady,
+        &metrics,
+    );
+    for _ in 0..8 {
+        queue.settle(node, Settlement::TransportFailed, at);
+    }
+    assert_eq!(millis(queue.retry_at[node].duration_since(at)), 2000);
+    assert!(!queue.startable(node, generation, false));
+    sources.observe(
+        node,
+        remote::Origin::Source,
+        RuntimeConnectionEvent::TransportFailed,
+        &store,
+        at,
+        &metrics,
+    );
+    assert_eq!(
+        millis(sources.next_reconnect().unwrap().duration_since(at)),
+        4000
+    );
+    let shown = store.runtime_connection(node);
+
+    assert!(apply_retry_now(&mut queue, &mut sources, &store, node, at));
+    assert_eq!(sources.next_reconnect(), Some(at), "due at once");
+    assert!(sources.take_due_reconnects(at));
+    assert!(!queue.retry_at.contains_key(node));
+    assert_eq!(
+        store.runtime_connection(node),
+        shown,
+        "the shown status is kept"
+    );
+    let generation = sources.start_inert(node);
+    apply_source_notice(
+        &mut queue,
+        &mut sources,
+        &store,
+        node,
+        generation,
+        RuntimeConnectionEvent::SubscriptionsReady,
+        &metrics,
+    );
+    assert!(queue.startable(node, generation, false), "loads on arm");
+
+    queue.settle(node, Settlement::TransportFailed, at);
+    assert_eq!(
+        millis(queue.retry_at[node].duration_since(at)),
+        millis(snapshot_retry_delay(remote::RETRY_NOW_COUNT))
+    );
+    sources.observe(
+        node,
+        remote::Origin::Source,
+        RuntimeConnectionEvent::TransportFailed,
+        &store,
+        at,
+        &metrics,
+    );
+    assert_eq!(
+        sources.next_reconnect().unwrap().duration_since(at),
+        remote::reconnect_delay(remote::RETRY_NOW_COUNT)
+    );
+    assert!(!apply_retry_now(
+        &mut queue,
+        &mut sources,
+        &store,
+        "did:test:unobserved",
+        at
+    ));
 }
 
 /// The snapshot owner's failures map to `RuntimeConnectionObservation.SnapshotOutcome`:
@@ -1007,6 +1158,10 @@ fn generated_reconnect_backoff_drives_the_sources() {
     assert_eq!(
         u64::try_from(remote::RECONNECT_STABLE.as_millis()).unwrap(),
         contract["stableMs"].as_u64().unwrap()
+    );
+    assert_eq!(
+        u64::from(remote::RETRY_NOW_COUNT),
+        contract["retryNowCount"].as_u64().unwrap()
     );
 }
 
@@ -1506,6 +1661,7 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
         op("publish", 0, "shared"),
         op("seed_unowned", 0, ""),
         op("timer", 0, ""),
+        op("retry_now", 0, ""),
         op("finish", 0, "rows"),
         op("finish", 0, "shared"),
         op("finish", 0, "transport_failed"),
@@ -1695,6 +1851,18 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
                 }
                 "timer" => {
                     queue.retry_at.remove(&node_did);
+                }
+                // What the loop's retry arm does; the due reconnect restarts
+                // the source on the next `armed`.
+                "retry_now" => {
+                    assert!(apply_retry_now(
+                        &mut queue,
+                        &mut sources,
+                        &store,
+                        &node_did,
+                        now
+                    ));
+                    in_flight.remove(&node_did);
                 }
                 "finish" => {
                     if let Some(captured) = in_flight.remove(&node_did) {

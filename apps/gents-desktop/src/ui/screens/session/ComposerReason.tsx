@@ -1,11 +1,15 @@
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import type { SendStatus } from "@source-inc/gents-desktop-chat";
 import { selectedNodeReadinessDecision } from "@source-inc/gents-desktop-client";
-import { buttonVariants } from "@gents/ui/components/button";
+import { Button, buttonVariants } from "@gents/ui/components/button";
+import { Spinner } from "@gents/ui/components/spinner";
+import { useApp } from "@/app/AppContext";
 import type { NodeView } from "../../../hooks/fleetStore";
-import { useNodeConfigReadOnly } from "@/hooks/useClient";
+import { useHomeDid, useNodeConfigReadOnly } from "@/hooks/useClient";
+import { isLocalNode } from "@/lib/firstRun";
 import { connectionTitle } from "@/lib/nodeConnection";
 import { href } from "@/lib/router";
+import { useLocalServerRun } from "../agent/LocalServer";
 
 /** Why nothing typed here could be sent, for as long as that holds: the
     node has no inference it can use, the node is offline, it refuses this
@@ -79,6 +83,21 @@ function SetUp({ deployment }: { deployment: NodeView }) {
   );
 }
 
+/** This computer's own node, stopped, which the person can start from here;
+    null for any other node, or before its state is read. */
+function useStoppedLocalNode(deployment: NodeView | null) {
+  const { actions } = useApp();
+  const homeDid = useHomeDid();
+  const local = useLocalServerRun();
+  const watched =
+    deployment !== null && isLocalNode(deployment, homeDid) && local.offered;
+  useEffect(
+    () => (watched ? actions.watchLocalServer() : undefined),
+    [actions, watched],
+  );
+  return watched && local.known && !local.running ? local : null;
+}
+
 /** The box that stands in the composer's place while `reason` holds; the
     composer keeps its cell beneath, so the page doesn't move. */
 export function ComposerReasonBox({
@@ -91,6 +110,7 @@ export function ComposerReasonBox({
   /** what still applies, such as the agent picker, at the box's foot */
   leading?: ReactNode;
 }) {
+  const stopped = useStoppedLocalNode(reason.kind === "offline" ? deployment : null);
   const title =
     reason.kind === "inference"
       ? reason.title
@@ -103,7 +123,9 @@ export function ComposerReasonBox({
     reason.kind === "inference"
       ? "Sessions here need a model to answer."
       : reason.kind === "offline"
-        ? "Messages can be sent once it's back, or from another node."
+        ? stopped
+          ? "It isn't running on this computer. Start it to send messages here, or send from another node."
+          : "Messages can be sent once it's back, or from another node."
         : reason.kind === "refused"
           ? "Ask its owner to restore this device's access; it reconnects by itself once they do. Or send from another node."
           : reason.kind === "noEndpoint"
@@ -124,6 +146,16 @@ export function ComposerReasonBox({
             {leading}
             <span className="ml-auto flex flex-wrap items-center gap-2">
               {reason.kind !== "unsendable" && SWITCH}
+              {stopped && (
+                <Button
+                  size="sm"
+                  variant="raised"
+                  disabled={stopped.busy || stopped.starting}
+                  onClick={stopped.start}
+                >
+                  {stopped.busy || stopped.starting ? <Spinner /> : null} Start node
+                </Button>
+              )}
               {reason.kind === "inference" && deployment && (
                 <SetUp deployment={deployment} />
               )}

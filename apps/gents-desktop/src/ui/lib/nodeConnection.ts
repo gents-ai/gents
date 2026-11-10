@@ -48,6 +48,17 @@ export function connectionTitle(
   }
 }
 
+/** What a connection check says: the node's connection once it answered
+    (`answer`, as `DeploymentView.runtimeConnection`), or that it hasn't
+    answered yet. */
+export function checkedConnectionText(answer: string | null, name: string): string {
+  if (answer === null) return `${name} hasn't answered yet`;
+  const connection = nodeConnection({ runtimeConnection: answer });
+  return connection === "connected"
+    ? `${name} is online`
+    : connectionTitle(connection, name);
+}
+
 const UNAVAILABLE_DETAIL: Record<"disconnected" | "refused" | "noEndpoint", string> = {
   disconnected: "This shows once it's back.",
   refused:

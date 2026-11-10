@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use defra_node::{HttpConfig, Node as EmbeddedNode, P2PConfig};
+use defra_node::{HttpConfig, P2PConfig};
 #[cfg(test)]
 use defra_node::{NodeBuilder, StorageBackend};
 use defra_p2p_adapter::P2POperations as P2POps;
@@ -12,16 +12,16 @@ use tokio::time::{sleep, Instant};
 
 use super::super::observe::{spawn_observer, ObservedStore};
 use super::super::paths::DesktopPaths;
-use super::super::peer_directory::{PeerDirectory, PeerRecord};
+use super::super::peer_directory::PeerDirectory;
 use super::super::principal_identity::PrincipalIdentity;
 use super::super::schema::subscribe_all_collections;
 use super::p2p_ops::{
     p2p_connect_peer, p2p_connected_peers, p2p_listen_addresses, p2p_local_peer_id,
 };
-use super::route_manager::{is_enrollment_peer, ClientRouteManager};
+use super::route_manager::ClientRouteManager;
 use super::supervisor::spawn_p2p_supervisor_task;
 use super::{
-    ClientCore, ClientCoreOptions, ClientPeerStatus, P2PHealth, BOOTSTRAP_OPERATION_BACKOFF,
+    ClientCore, ClientCoreOptions, P2PHealth, BOOTSTRAP_OPERATION_BACKOFF,
     BOOTSTRAP_OPERATION_TIMEOUT,
 };
 
@@ -136,7 +136,6 @@ impl ClientCore {
                 Vec::new(),
             );
             sync_state.clear_ephemeral_pairing_readiness().await?;
-            let records = sync_state.records();
             checkpoint("peer_directory");
             gents::store::local::store_key::upgrade::finish(paths.node_data_dir())?;
             subscribe_all_collections(node.as_ref()).await?;
@@ -164,28 +163,14 @@ impl ClientCore {
                 options.operator_identity_interaction,
             ));
 
-            let (peer_statuses, bootstrap_errors) = bootstrap_saved_peers(
-                &node,
-                &p2p,
-                &records,
-                &options,
-                &node_identity,
-                &route_manager,
-                &mut || checkpoint("saved_peer"),
-            )
-            .await;
             let initial_health =
                 super::supervisor::probe_p2p_health(&p2p, &P2PHealth::default()).await;
-            checkpoint("bootstrap_and_health");
-            for status in peer_statuses {
-                if let Some(expected) = records
-                    .iter()
-                    .find(|record| record.peer_id == status.peer_id)
-                {
-                    sync_state.replace_peer(expected, status);
-                }
-            }
+            checkpoint("p2p_health");
             sync_state.replace_transport_observation(initial_health);
+            // Saved peers are dialed by the supervisor's first cycle, which
+            // runs at once: a dial waits up to `BOOTSTRAP_OPERATION_TIMEOUT`
+            // for an unreachable peer, and the observer reads every runtime
+            // over GraphQL without one.
             let observer = spawn_observer(
                 Arc::clone(&store),
                 sync_state.clone(),
@@ -230,7 +215,6 @@ impl ClientCore {
                 last_mutation_error: std::sync::RwLock::new(None),
                 local_peer_id,
                 listen_addresses,
-                bootstrap_errors,
             })
         }
         .await;
@@ -272,76 +256,6 @@ fn desktop_p2p_config(paths: &DesktopPaths, options: &ClientCoreOptions) -> P2PC
         // DefraDB forwards merges to explicit downstream replicators itself.
         rebroadcast_on_merge: false,
     }
-}
-
-pub(super) async fn bootstrap_saved_peers(
-    node: &Arc<EmbeddedNode>,
-    p2p: &Arc<dyn P2POps>,
-    records: &[PeerRecord],
-    options: &ClientCoreOptions,
-    _actor: &PrincipalIdentity,
-    route_manager: &Arc<ClientRouteManager>,
-    peer_settled: &mut (dyn FnMut() + Send),
-) -> (Vec<ClientPeerStatus>, Vec<String>) {
-    let mut statuses = Vec::with_capacity(records.len());
-    let mut errors = Vec::new();
-
-    for record in records {
-        let mut status = ClientPeerStatus {
-            peer_id: record.peer_id.clone(),
-            label: record.label.clone(),
-            node_did: record.node_did.clone(),
-            addr: record.addr.clone(),
-            dial_succeeded: false,
-            last_error: None,
-            pairing: Vec::new(),
-            routes: Vec::new(),
-        };
-
-        // Enrollment documents, including a current signed route receipt, are
-        // the sole authority for reconnecting this peer.
-        if bootstrap_deferred_to_enrollment_authority(record) {
-            statuses.push(status);
-            peer_settled();
-            continue;
-        }
-
-        match connect_peer_with_retry(node.event_bus().as_ref(), p2p, &record.addr, &record.label)
-            .await
-        {
-            Ok(()) => {
-                status.dial_succeeded = true;
-
-                if options.install_replicators_on_bootstrap {
-                    match route_manager.lock().await.configure(record).await {
-                        Ok(()) => {}
-                        Err(error) => {
-                            let message = format!(
-                                "peer {} local runtime pairing failed: {}",
-                                record.label, error
-                            );
-                            status.last_error = Some(message.clone());
-                            errors.push(message);
-                        }
-                    }
-                }
-            }
-            Err(error) => {
-                let message = format!("peer {} dial failed: {}", record.label, error);
-                status.last_error = Some(message.clone());
-                errors.push(message);
-            }
-        }
-
-        statuses.push(status);
-        peer_settled();
-    }
-
-    (statuses, errors)
-}
-
-fn bootstrap_deferred_to_enrollment_authority(record: &PeerRecord) -> bool {
-    is_enrollment_peer(record)
 }
 
 pub(super) async fn connect_peer_with_retry(

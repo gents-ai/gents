@@ -45,8 +45,8 @@ pub use inference_observation::{InferenceActivity, InferenceObservation, Inferen
 pub use observation_scope::ClientObservationAttachment;
 pub use writes::{ChatRouteRefusal, LocalHomeAccessError, RefreshedRequestProjection};
 
-/// Peer bootstrap retries need a deadline so an unreachable peer does not hold
-/// startup indefinitely.
+/// A saved peer's dial retries need a deadline so an unreachable peer does
+/// not hold the P2P supervisor's repair cycle indefinitely.
 const BOOTSTRAP_OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
 /// Route installation must report an unresponsive peer-add operation.
 const PEER_ADD_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
@@ -391,7 +391,6 @@ pub struct ClientCore {
     last_mutation_error: StdRwLock<Option<String>>,
     local_peer_id: String,
     listen_addresses: Vec<String>,
-    bootstrap_errors: Vec<String>,
 }
 
 #[cfg(test)]
@@ -582,10 +581,6 @@ impl ClientCore {
         self.store.subscribe_changes()
     }
 
-    pub fn bootstrap_errors(&self) -> &[String] {
-        &self.bootstrap_errors
-    }
-
     pub fn last_mutation_error(&self) -> Option<String> {
         self.last_mutation_error
             .read()
@@ -595,6 +590,25 @@ impl ClientCore {
 
     pub async fn request_p2p_repair(&self) -> Result<()> {
         self.send_p2p_command(P2PSupervisorCommand::RepairNow).await
+    }
+
+    /// Reconnects `node_did`'s runtime now instead of after its backoff, and
+    /// returns its connection status once the restarted connection has read
+    /// the runtime or failed to. `None` when the node is not observed or the
+    /// client is shutting down.
+    pub async fn reconnect_runtime_now(
+        &self,
+        node_did: &str,
+    ) -> Option<super::RuntimeConnectionStatus> {
+        let settled = self.observer.lock().await.as_ref()?.retry_now(node_did);
+        settled.await
+    }
+
+    /// [`Self::reconnect_runtime_now`] for every runtime, without waiting.
+    pub async fn reconnect_all_runtimes_now(&self) {
+        if let Some(observer) = self.observer.lock().await.as_ref() {
+            observer.retry_all_now();
+        }
     }
 
     /// Reads the selected node, or every routed node, and publishes the read

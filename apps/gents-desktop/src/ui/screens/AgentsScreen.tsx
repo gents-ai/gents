@@ -45,7 +45,12 @@ import { Spinner } from "@gents/ui/components/spinner";
 import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { configIsRead, inferenceIsConfigured, isLocalNode } from "@/lib/firstRun";
-import { CONNECTION_LABEL, isOnline, nodeConnection } from "@/lib/nodeConnection";
+import {
+  CONNECTION_LABEL,
+  checkedConnectionText,
+  isOnline,
+  nodeConnection,
+} from "@/lib/nodeConnection";
 import { href } from "@/lib/router";
 import { NodeAvatar, nodeAvatarOf } from "./AgentAvatar";
 import { NodeHoverCard } from "./HoverCards";
@@ -485,7 +490,7 @@ const AgentRow = memo(function AgentRow({
 }) {
   const {
     stores,
-    actions: { fetchPeerStatus },
+    actions: { reconnectNode },
   } = useApp();
   const configRead = useStore(stores.client, (state) =>
     state.snapshot ? configIsRead(state.snapshot, d.nodeDid) : false,
@@ -502,14 +507,12 @@ const AgentRow = memo(function AgentRow({
     nodeDid: d.nodeDid,
     section: "agent",
   });
+  /* connects again now, so the answer is the node's own, not a wait's */
   const check = async () => {
     try {
-      const r = (await fetchPeerStatus(d.peerId)) as {
-        reachable?: boolean;
-      };
-      toast(r?.reachable ? `${d.label} is reachable` : `${d.label} is not reachable`);
+      toast(checkedConnectionText(await reconnectNode(d.nodeDid), name));
     } catch (e) {
-      toast(`Status check failed: ${errorText(e)}`);
+      toast(`Couldn't check ${name}: ${errorText(e)}`);
     }
   };
   return (
@@ -649,7 +652,9 @@ const AgentRow = memo(function AgentRow({
             >
               Rename
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => void check()}>Check peer</DropdownMenuItem>
+            <DropdownMenuItem onClick={() => void check()}>
+              Check connection
+            </DropdownMenuItem>
             <DropdownMenuItem onClick={() => onHide(d, !hidden)}>
               {hidden ? "Show in menus" : "Hide from menus"}
             </DropdownMenuItem>

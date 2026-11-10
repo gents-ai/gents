@@ -501,23 +501,22 @@ async fn restart_clears_and_defers_persisted_enrollment_until_current_authority(
         core.local_peer_id().to_owned(),
         core.options().operator_identity_interaction,
     ));
-    let options = ClientCoreOptions {
-        install_replicators_on_bootstrap: true,
-        ..ClientCoreOptions::local_only()
-    };
-    let (statuses, errors) = super::bootstrap::bootstrap_saved_peers(
-        &core.node_arc(),
+    super::supervisor::run_saved_peer_repair_cycle(
+        core.node().event_bus().as_ref(),
         &p2p,
-        &owner.records(),
-        &options,
-        core.node_identity(),
+        &owner,
+        &Arc::new(core.node_identity().clone()),
         &route_manager,
-        &mut || {},
+        true,
+        false,
+        &mut BTreeMap::new(),
+        &BTreeMap::new(),
     )
     .await;
-    assert!(errors.is_empty());
+    let statuses = owner.snapshot().peers;
     assert_eq!(statuses.len(), 1);
     assert!(!statuses[0].dial_succeeded);
+    assert!(statuses[0].last_error.is_none());
     assert!(statuses[0].pairing.is_empty());
     assert!(statuses[0].routes.is_empty());
     assert!(recording.connect_calls().is_empty());
@@ -1158,6 +1157,49 @@ async fn the_client_store_is_encrypted_with_its_recorded_key() {
         !paths.store_key_path().exists(),
         "no replacement key is created"
     );
+}
+
+/// A saved peer the client cannot dial does not hold startup: the observer
+/// runs as soon as the client starts, and the dial is left to the P2P
+/// supervisor, whose retries outlast the bound here.
+#[tokio::test]
+async fn startup_observes_runtimes_without_waiting_for_saved_peer_dials() {
+    use crate::client::paths::DesktopPaths;
+
+    const NODE: &str = "did:test:unreachable-runtime";
+    let tmp = tempfile::TempDir::new().expect("tmpdir");
+    let paths = DesktopPaths::from_root(tmp.path().join("client"));
+    paths.ensure_root_dirs().await.unwrap();
+    let mut directory = PeerDirectory::open_writer(paths.peer_directory_path())
+        .await
+        .unwrap();
+    let mut peer = PeerRecord::new(
+        "Unreachable",
+        "127.0.0.1:9/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
+        NODE,
+    );
+    peer.graphql = Some("http://127.0.0.1:9/api/v0/graphql".into());
+    directory.upsert(peer).await.unwrap();
+    drop(directory);
+
+    let core = tokio::time::timeout(
+        BOOTSTRAP_OPERATION_TIMEOUT / 4,
+        ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only()),
+    )
+    .await
+    .expect("startup does not wait for the saved peer's dial")
+    .expect("client core");
+    let core = Arc::new(core);
+    assert_eq!(
+        tokio::time::timeout(
+            BOOTSTRAP_OPERATION_TIMEOUT / 4,
+            core.reconnect_runtime_now(NODE)
+        )
+        .await
+        .expect("the observer answers while the dial is still retrying"),
+        Some(crate::client::RuntimeConnectionStatus::Disconnected)
+    );
+    core.shutdown().await.expect("shutdown");
 }
 
 #[tokio::test]

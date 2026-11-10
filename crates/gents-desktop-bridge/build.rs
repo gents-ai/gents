@@ -55,6 +55,7 @@ const COMMANDS: &[&str] = &[
     "desktop_workspace_list",
     "desktop_client_snapshot",
     "desktop_set_selected_node",
+    "desktop_node_reconnect",
     "desktop_observer_metrics",
     "desktop_session_snapshot",
     "desktop_session_context_details",

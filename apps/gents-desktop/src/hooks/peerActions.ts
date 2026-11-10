@@ -59,12 +59,12 @@ export function createPeerActions({
     }
   }
 
-  async function fetchPeerStatus(peerId: string) {
-    try {
-      return await api.fetchPeerStatus(peerId);
-    } catch (err) {
-      throw new Error(formatPeerConnectionError(err, "peer-status"));
-    }
+  /** Reconnects a node now rather than after its backoff, or every node with
+      `null`. Resolves with the node's runtime connection once it answered,
+      or null when it hasn't answered in time or the client isn't running. */
+  async function reconnectNode(nodeDid: string | null): Promise<string | null> {
+    if (!api.reconnectNode || !clientRuns()) return null;
+    return api.reconnectNode(nodeDid);
   }
 
   async function requestStatusEnrollment(serverAddress: string) {
@@ -101,7 +101,7 @@ export function createPeerActions({
   }
 
   return {
-    fetchPeerStatus,
+    reconnectNode,
     requestStatusEnrollment,
     initLocalRuntime,
     removePeer,

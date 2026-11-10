@@ -9,6 +9,7 @@ Minimal default: core + client-lifecycle (no runtime-admin, no config mutation)
 - `allow-desktop-client-start`
 - `allow-desktop-client-shutdown`
 - `allow-desktop-set-selected-node`
+- `allow-desktop-node-reconnect`
 - `allow-desktop-app-quit`
 
 ## Permission Table
@@ -1550,6 +1551,32 @@ Enables the desktop_node_config_save command without any pre-configured scope.
 <td>
 
 Denies the desktop_node_config_save command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-node-reconnect`
+
+</td>
+<td>
+
+Enables the desktop_node_reconnect command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-node-reconnect`
+
+</td>
+<td>
+
+Denies the desktop_node_reconnect command without any pre-configured scope.
 
 </td>
 </tr>
@@ -3629,7 +3656,7 @@ Aggregate snapshot, observer metrics
 </td>
 <td>
 
-Client start/shutdown, selected-agent, and application quit
+Client start/shutdown, selected-agent, runtime reconnect, and application quit
 
 </td>
 </tr>

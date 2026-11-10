@@ -253,6 +253,43 @@ where
     Ok(())
 }
 
+/// How long a reconnect of one node waits for the node's answer. A runtime
+/// whose connection attempt outlasts it keeps connecting; the caller reads its
+/// status from the snapshot.
+const NODE_RECONNECT_ANSWER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Reconnects `node_did`'s runtime now, or every runtime when it is `None`,
+/// instead of after the reconnect backoff. For one node, returns its runtime
+/// connection once it answered (`DeploymentView.runtimeConnection`), or `None`
+/// when it has not answered in time or is not observed.
+#[tauri::command]
+pub async fn desktop_node_reconnect(
+    state: State<'_, DesktopAppState>,
+    node_did: Option<String>,
+) -> Result<Option<String>, BridgeError> {
+    let core = current_core(&state).ok_or_else(|| {
+        BridgeError::new(
+            BridgeErrorCode::ClientNotRunning,
+            "desktop client not initialized",
+        )
+    })?;
+    let Some(node_did) = node_did
+        .map(|did| did.trim().to_owned())
+        .filter(|did| !did.is_empty())
+    else {
+        core.reconnect_all_runtimes_now().await;
+        return Ok(None);
+    };
+    Ok(tokio::time::timeout(
+        NODE_RECONNECT_ANSWER_TIMEOUT,
+        core.reconnect_runtime_now(&node_did),
+    )
+    .await
+    .ok()
+    .flatten()
+    .map(|status| status.as_str().to_owned()))
+}
+
 #[derive(serde::Serialize, ts_rs::TS)]
 pub struct DesktopObserverMetrics {
     pub events_received: u64,

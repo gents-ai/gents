@@ -1,4 +1,5 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryNavProvider } from "@gents/shell";
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
@@ -37,11 +38,13 @@ const readiness = (reason: string | null) => ({
 function show(
   overrides: Record<string, unknown>,
   session: DesktopSessionSnapshot | null = null,
+  api: Record<string, unknown> = {},
 ) {
   const app = testApp({
     api: {
       sessionProvenance: vi.fn().mockResolvedValue(null),
       fetchOperationsSnapshot: vi.fn().mockResolvedValue(null),
+      ...api,
     },
     deployments: [node(overrides)],
     session,
@@ -95,6 +98,58 @@ describe("the composer's reason box", () => {
     expect(box()).toHaveTextContent(/is offline/);
     expect(screen.getByRole("link", { name: "Switch node" })).toBeInTheDocument();
     inputOutOfReach();
+  });
+
+  describe("for this computer's own node, stopped", () => {
+    const server = (state: string) => {
+      const startManagedServer = vi
+        .fn()
+        .mockResolvedValue({ state: "running", nodeName: "Forge", nodeDid: NODE });
+      const reconnectNode = vi.fn().mockResolvedValue("connected");
+      const app = show({ runtimeConnection: "disconnected" }, null, {
+        managedServerStatus: vi
+          .fn()
+          .mockResolvedValue({ state, nodeName: "Forge", nodeDid: NODE }),
+        startManagedServer,
+        reconnectNode,
+      });
+      return { app, startManagedServer, reconnectNode };
+    };
+
+    it("offers to start it, and connects to it once it runs", async () => {
+      const { startManagedServer, reconnectNode } = server("stopped");
+      const start = await screen.findByRole("button", { name: "Start node" });
+      expect(box()).toContainElement(start);
+      expect(box()).toHaveTextContent(/isn't running on this computer/);
+      expect(screen.getByRole("link", { name: "Switch node" })).toBeInTheDocument();
+      await userEvent.click(start);
+      expect(startManagedServer).toHaveBeenCalledWith("Forge", undefined);
+      /* its connection waited out a backoff while it was down */
+      await waitFor(() => expect(reconnectNode).toHaveBeenCalledWith(NODE));
+    });
+
+    it("offers no start while it runs", async () => {
+      const { app } = server("running");
+      await waitFor(() =>
+        expect(app.stores.localServer.getState().status?.state).toBe("running"),
+      );
+      expect(box()).toHaveTextContent(/is offline/);
+      expect(screen.queryByRole("button", { name: "Start node" })).toBeNull();
+    });
+
+    it("offers no start for another computer's node", async () => {
+      const { app } = server("stopped");
+      await waitFor(() =>
+        expect(app.stores.localServer.getState().status?.state).toBe("stopped"),
+      );
+      act(() =>
+        publish(app, [
+          node({ source: "enrollment", runtimeConnection: "disconnected" }),
+        ]),
+      );
+      expect(box()).toHaveTextContent(/is offline/);
+      expect(screen.queryByRole("button", { name: "Start node" })).toBeNull();
+    });
   });
 
   it("says a node refuses this app instead of connecting forever", () => {

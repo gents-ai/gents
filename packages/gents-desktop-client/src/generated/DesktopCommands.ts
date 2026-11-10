@@ -209,6 +209,7 @@ export type DesktopCommands = {
   desktop_native_e2e_config: { args: Record<string, never>; result: NativeE2eConfig | null };
   desktop_native_e2e_status: { args: { status: NativeE2eStatus }; result: void };
   desktop_node_config_save: { args: { request: NodeConfigSaveRequest }; result: DesktopClientSnapshot };
+  desktop_node_reconnect: { args: { nodeDid?: string | null }; result: string | null };
   desktop_observer_metrics: { args: Record<string, never>; result: DesktopObserverMetrics | null };
   desktop_open_db_explorer: { args: Record<string, never>; result: string };
   desktop_open_external_url: { args: { url: string }; result: void };

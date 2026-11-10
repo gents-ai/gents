@@ -23,7 +23,7 @@ use super::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct RouteReconcileFence {
+pub(super) struct RouteReconcileFence {
     record: PeerRecord,
     enrollment: Option<super::enrollment::reconcile::EnrollmentAuthorizationGeneration>,
 }
@@ -214,7 +214,7 @@ fn removal_retry_delay(failures: u32) -> Duration {
     clippy::too_many_arguments,
     reason = "supervisor state borrowed from separate owners"
 )]
-async fn run_saved_peer_repair_cycle(
+pub(super) async fn run_saved_peer_repair_cycle(
     bus: &dyn events::Bus,
     p2p: &Arc<dyn P2POps>,
     sync_state: &ClientSyncStateOwner,

@@ -50,6 +50,8 @@ export function createDesktopApiAdapter(
       invokeDesktop("desktop_open_external_url", { url }),
     setSelectedNode: (nodeDid) =>
       invokeDesktop("desktop_set_selected_node", { nodeDid }),
+    reconnectNode: (nodeDid) =>
+      invokeDesktop("desktop_node_reconnect", { nodeDid }),
     removePeer: (peerId) => invokeDesktop("desktop_peer_remove", { peerId }),
     renamePeer: (peerId, label) =>
       invokeDesktop("desktop_peer_rename", {

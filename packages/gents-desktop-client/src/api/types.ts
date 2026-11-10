@@ -206,6 +206,11 @@ export type DesktopApiAdapter = {
     enabled: boolean,
   ) => Promise<ManagedServerStatus>;
   setSelectedNode: (nodeDid: string | null) => Promise<void>;
+  /** Reconnects a node's runtime now instead of after its backoff, or every
+   *  node's with `null`. For one node, resolves with its runtime connection
+   *  (`DeploymentView.runtimeConnection`) once it answered, or `null` when it
+   *  has not answered in time. */
+  reconnectNode?: (nodeDid: string | null) => Promise<string | null>;
   removePeer: (peerId: string) => Promise<DesktopClientSnapshot>;
   renamePeer: (peerId: string, label: string) => Promise<DesktopClientSnapshot>;
   fetchPeerStatus: (peerId: string) => Promise<unknown>;

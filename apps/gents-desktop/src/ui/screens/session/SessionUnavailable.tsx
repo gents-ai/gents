@@ -88,7 +88,7 @@ export function missingSessionText(
 export function SessionUnavailable() {
   const {
     stores,
-    actions: { refreshSession, refreshSnapshot },
+    actions: { reconnectNode, refreshSession, refreshSnapshot },
   } = useApp();
   const sessionId = stores.selection.use.sessionId();
   const nodeDid = useSelectedNodeDid();
@@ -96,9 +96,12 @@ export function SessionUnavailable() {
   const load = useSessionLoad();
   const { title, detail } = missingSessionText(fleet, nodeDid);
   const [busy, setBusy] = useState(false);
+  const node = nodeOf(fleet, nodeDid);
   const retry = async () => {
     setBusy(true);
     try {
+      if (node && nodeConnection(node) !== "connected")
+        await reconnectNode(node.nodeDid);
       await Promise.all([refreshSnapshot(), refreshSession(sessionId)]);
     } catch (e) {
       toastFailure("load the session", e);

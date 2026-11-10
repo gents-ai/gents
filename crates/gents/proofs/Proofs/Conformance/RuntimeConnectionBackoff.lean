@@ -3,7 +3,8 @@ import Proofs.ClientShell.ObservationOrdering
 /-! Executes the reconnect schedule: for each origin and event whether it
 reconnects, and for each consecutive reconnect count and connected duration the
 count a reconnect is scheduled with (`reconnectAttempt`) and its delay
-(`reconnectDelayMs`). -/
+(`reconnectDelayMs`), and the count a reconnect the user asked for starts from
+(`retryNowCount`). -/
 namespace Conformance.RuntimeConnectionBackoff
 open _root_.RuntimeConnectionObservation
 
@@ -45,7 +46,8 @@ def scheduleJson : String :=
 
 def casesJson : String :=
   "{\"reconnects\":" ++ reconnectsJson ++ ",\"schedule\":" ++ scheduleJson ++
-  ",\"stableMs\":" ++ toString reconnectStableMs ++ "}"
+  ",\"stableMs\":" ++ toString reconnectStableMs ++
+  ",\"retryNowCount\":" ++ toString retryNowCount ++ "}"
 end Conformance.RuntimeConnectionBackoff
 
 def main : IO Unit := IO.println Conformance.RuntimeConnectionBackoff.casesJson

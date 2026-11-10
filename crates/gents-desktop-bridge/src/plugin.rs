@@ -165,6 +165,7 @@ where
             tauri_commands::workspace::desktop_workspace_list,
             tauri_commands::lifecycle::desktop_client_snapshot,
             tauri_commands::lifecycle::desktop_set_selected_node,
+            tauri_commands::lifecycle::desktop_node_reconnect,
             tauri_commands::lifecycle::desktop_observer_metrics,
             tauri_commands::chat::desktop_session_snapshot,
             tauri_commands::chat::desktop_session_context_details,

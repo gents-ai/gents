@@ -41,6 +41,13 @@ export function createLocalServer({ api, store, client }: LocalServerParams) {
     localServer.read(store, status);
     return status;
   };
+  /* the app waits longer between tries the longer a node is down; one just
+     started is tried at once */
+  const reconnect = (status: ManagedServerStatus) => {
+    if (status.nodeDid && api.reconnectNode)
+      void api.reconnectNode(status.nodeDid).catch(() => {});
+    return status;
+  };
 
   function refreshLocalServer(): Promise<ManagedServerStatus | null> {
     if (!api.managedServerStatus) return Promise.resolve(null);
@@ -140,7 +147,9 @@ export function createLocalServer({ api, store, client }: LocalServerParams) {
           authority?.toolCeiling,
           authority?.toolRoot,
         ]),
-      ).then(settled);
+      )
+        .then(settled)
+        .then(reconnect);
     },
     enrollLocalServer() {
       const enroll = api.enrollManagedServer;
@@ -176,7 +185,9 @@ export function createLocalServer({ api, store, client }: LocalServerParams) {
           authority.toolCeiling,
           authority.toolRoot,
         ]),
-      ).then(settled);
+      )
+        .then(settled)
+        .then(reconnect);
     },
     setLocalServerAutoStart(enabled: boolean) {
       const set = api.setManagedServerAutoStart;
