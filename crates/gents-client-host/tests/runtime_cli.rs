@@ -60,6 +60,7 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
             "--node-name",
             "Gents",
             "--engineer",
+            "--no-default-packs",
             "--tool-package",
             "write",
             "--tool-root",

@@ -402,10 +402,11 @@ mod tests {
             .map(String::from),
         );
 
-        let Some(Command::Init(args)) = Cli::try_parse_from(argv).unwrap().command else {
+        let Some(Command::Init(mut args)) = Cli::try_parse_from(argv).unwrap().command else {
             panic!("setup's argv should parse as init");
         };
         assert!(args.engineer);
+        args.no_default_packs = true;
         crate::commands::init::init_home(args).await.unwrap();
 
         let config = crate::home_state::read_init_config(&home).unwrap().unwrap();

@@ -6,6 +6,17 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- `gents init --engineer` installs the Engineer's default packs into a fresh
+  home: `gents/pack_builder`, `gents/web`, `gents/dynamic_workflows`,
+  `gents/charts` and `gents/data_tables`, resolved by name from the home's
+  pack store and then the registry (nothing is bundled). Init names them,
+  asks per pack before granting the permissions its plugins request, wires
+  plugins into the Engineer's Tools and attaches skills to its Context.
+  Without a terminal, `--approve-default-packs` approves; otherwise a pack
+  that requests permissions is left uninstalled. `--no-default-packs` skips
+  them. A pack that cannot be resolved or approved never fails init: it is
+  listed under `default_packs.not_installed` with the command that installs
+  it later.
 - The `schema` tool can clean up application collections: `collection empty`
   deletes every document and keeps the definition, and `collection remove`
   deletes an empty collection, each behind a preview that states the loss.

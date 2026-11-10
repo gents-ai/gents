@@ -32,6 +32,7 @@ use crate::{
     BackendResolutionMode,
 };
 
+pub(crate) mod default_packs;
 mod model_choice;
 
 const STANDARD_READONLY_SYSTEM_PROMPT: &str = r#"You are a terminal-native engineering and operations agent running for the user inside a local DefraDB runtime.
@@ -354,7 +355,7 @@ pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
         .with_client_signing_capability(client_signing)?
         .with_client_signed_agent_creates(),
     );
-    let result = async {
+    let result: Result<Value> = async {
         gents::store::schema::migration::ensure_all_runtime_migrations(init_node.clone()).await?;
         gents::store::local::store_key::upgrade::finish(&data_dir)?;
         let binding = if fresh_store {
@@ -479,7 +480,26 @@ pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
     if let Err(error) = init_node.shutdown().await {
         tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
     }
-    result
+    let mut output = result?;
+    // The pack installer opens the home itself, so the store claim this init
+    // held is released first.
+    drop(access);
+    drop(held_store_access);
+    if args.engineer && fresh_store && !args.no_default_packs {
+        let engineer = output["default_agent_did"]
+            .as_str()
+            .context("init reports no default agent")?
+            .to_owned();
+        output["default_packs"] = default_packs::install(
+            &home_dir,
+            &engineer,
+            default_packs::ENGINEER_DEFAULT_PACKS,
+            None,
+            default_packs::Approval::resolve(args.approve_default_packs, !args.unattended),
+        )
+        .await;
+    }
+    Ok(output)
 }
 
 /// A consumed marker is never removed by ordinary initialization; an
@@ -2879,6 +2899,9 @@ mod tests {
             disable_defra_query: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
+            approve_default_packs: false,
+            no_default_packs: true,
+            unattended: false,
         }
     }
 }

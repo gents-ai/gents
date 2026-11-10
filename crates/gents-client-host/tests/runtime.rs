@@ -916,7 +916,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         ])
         .arg(provider.endpoint());
     if matches!(journey, Journey::EditorQuestions) {
-        init.arg("--engineer");
+        init.args(["--engineer", "--no-default-packs"]);
     }
     let output = initialization::Initialization::spawn(&mut init, root)?
         .wait(Duration::from_secs(30))

@@ -258,6 +258,111 @@ impl WirePlan<'_> {
     }
 }
 
+/// What the plugins of `manifest` and its `dependencies` ask for beyond a
+/// sealed sandbox, as `[{plugin, asks}]`: what an install grants only with
+/// the installer's consent.
+pub(crate) fn requested_authority(
+    manifest: &gents::pack::PackManifest,
+    dependencies: &[&gents::pack::PackManifest],
+) -> Result<Value> {
+    Ok(super::review::identity_and_authority(manifest, dependencies)?["authority"].take())
+}
+
+/// Attaches the Skill documents the installed pack `coordinate` (archive
+/// `digest`) ships to `agent`'s Context, through the transaction a wire
+/// writes with. Returns the skills the pack ships.
+pub(crate) async fn attach_pack_skills(
+    access: &ConfigAccess,
+    owner: &str,
+    agent: &str,
+    coordinate: &str,
+    digest: &str,
+) -> Result<Vec<String>> {
+    let skills: Vec<String> = installed_pack_documents(access, owner, coordinate)
+        .await?
+        .into_iter()
+        .filter(|(collection, _)| *collection == Collection::Skill)
+        .map(|(_, id)| id)
+        .collect();
+    if skills.is_empty() {
+        return Ok(skills);
+    }
+    let plan = SkillPlan {
+        owner,
+        agent,
+        skills: &skills,
+    };
+    if matches!(access, ConfigAccess::Local(_)) {
+        use gents::NodeIdentity as _;
+        let client = crate::home_state::load_client_identity().await?;
+        anyhow::ensure!(
+            access.actor_did().as_deref() == Some(client.did()),
+            "attaching pack skills requires the held User identity selected by the local transaction"
+        );
+        let scope = PackApprovalScope {
+            node_did: owner.to_owned(),
+            pack_digests: vec![digest.to_owned()],
+            nonce: uuid::Uuid::new_v4().to_string(),
+        };
+        let approver = Arc::new(LocalWireApprover {
+            actor: client.client_signing_capability()?,
+            scope: scope.clone(),
+        });
+        access
+            .transact_verified_pack_with_approver(
+                "cli.pack.attach_skills",
+                scope,
+                approver,
+                |txn| {
+                    let plan = &plan;
+                    Box::pin(async move { plan.apply(txn.approved_interpreter()?).await })
+                },
+            )
+            .await
+            .map_err(|failure| failure.error)?;
+    } else {
+        access
+            .transact_write("cli.pack.attach_skills", |txn| {
+                let plan = &plan;
+                Box::pin(async move { plan.apply(txn).await })
+            })
+            .await?;
+    }
+    Ok(skills)
+}
+
+struct SkillPlan<'a> {
+    owner: &'a str,
+    agent: &'a str,
+    skills: &'a [String],
+}
+
+impl SkillPlan<'_> {
+    async fn apply(&self, txn: &ConfigApplyTxn<'_>) -> Result<()> {
+        let (context, _) = load_agent_context_and_tools_in_txn(txn, self.owner, self.agent).await?;
+        let mut context =
+            context.with_context(|| format!("{} has no Context document", self.agent))?;
+        let added: Vec<String> = self
+            .skills
+            .iter()
+            .filter(|id| !context.skill_ids.contains(id))
+            .cloned()
+            .collect();
+        if added.is_empty() {
+            return Ok(());
+        }
+        context.skill_ids.extend(added);
+        let value = serde_json::to_value(&context)?;
+        let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+            collection: Collection::AgentContext,
+            add: value.clone(),
+            update: value,
+        }])?;
+        apply_desired_state_plan(txn, &plan).await?;
+        Ok(())
+    }
+}
+
 struct LocalWireApprover {
     actor: ClientSigningCapability,
     scope: PackApprovalScope,

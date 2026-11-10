@@ -149,6 +149,7 @@ impl LiveBox {
             .env("CODEX_HOME", self.root.join("codex-home"))
             .env("TERM", "xterm-256color")
             .env("RUST_LOG", "error")
+            .env("GENTS_REGISTRY", "http://127.0.0.1:9")
             .env_remove("GENTS_HOME")
             .env_remove("XDG_CONFIG_HOME")
             .env_remove("XDG_RUNTIME_DIR")
