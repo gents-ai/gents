@@ -419,19 +419,16 @@ async fn agent_apply_in_txn(
                 )?;
                 apply_tool_grant_selection(&mut tools, args.enable_lsp, args.network_mode);
                 // A new Agent DID holds no WorkspaceRoot relationship yet.
-                let root = tools.host.as_ref().and_then(|host| host.root.clone());
-                if let (true, Some(root)) = (
-                    policy.configured
-                        && crate::tools::surface::ResolvedToolSelection::from_document(&tools)?
-                            .requires_filesystem_root(),
-                    root,
-                ) {
-                    let published = crate::tools::surface::published_root_covering_in_txn(
-                        txn,
-                        owner,
-                        std::path::Path::new(&root),
-                    )
-                    .await?;
+                let published = match crate::tools::surface::tools_root_reader_in_txn(
+                    txn, owner, &policy, &tools,
+                )
+                .await?
+                {
+                    crate::tools::surface::ToolRootReader::NotNeeded => None,
+                    crate::tools::surface::ToolRootReader::Published(root) => Some(Some(root)),
+                    crate::tools::surface::ToolRootReader::Unpublished(_) => Some(None),
+                };
+                if let Some(published) = published {
                     root_access =
                         crate::tools::surface::reader_grant_step(&id, published.as_deref(), true);
                 }

@@ -97,13 +97,48 @@ async fn yolo_makes_one_agent_with_the_default_agents_tools_and_reuses_it() -> R
     let (_serve, graphql, node_did) =
         served_home(&home_dir, &model_name, mock_endpoint.endpoint()).await?;
 
-    for _ in 0..2 {
-        let stdout = gents_without_a_terminal(
+    let yolo_turn = || {
+        gents_without_a_terminal(
             &home_dir,
             &["--yolo", "-p", "Reply with exactly the configured token."],
-        )?;
-        assert_eq!(stdout.trim(), reply);
-    }
+        )
+    };
+    assert_eq!(yolo_turn()?.trim(), reply);
+    // A yolo agent without its WorkspaceRoot reader, as one made before `--yolo` granted it,
+    // gets the reader back when it is reused.
+    let first = graphql_query(
+        &graphql,
+        &format!(
+            r#"{{
+                Agent(filter: {{node_did: {{_eq: "{node_did}"}}, display_name: {{_eq: "Yolo"}}}}) {{ agent_did }}
+                WorkspaceRoot(filter: {{node_did: {{_eq: "{node_did}"}}}}) {{ root_path }}
+            }}"#
+        ),
+    )
+    .await?;
+    let made = first["data"]["Agent"][0]["agent_did"]
+        .as_str()
+        .context("the first run made the yolo agent")?;
+    let roots = first["data"]["WorkspaceRoot"]
+        .as_array()
+        .context("WorkspaceRoot rows")?;
+    assert_eq!(roots.len(), 1, "{first}");
+    let root = roots[0]["root_path"].as_str().context("root_path")?;
+    run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "workspace-root",
+            "revoke-reader",
+            "--graphql",
+            &graphql,
+            "--path",
+            root,
+            "--agent-did",
+            made,
+        ],
+    )?;
+    assert_eq!(yolo_turn()?.trim(), reply);
 
     let rows = graphql_query(
         &graphql,

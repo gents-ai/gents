@@ -51,6 +51,8 @@ pub(super) async fn ensure_agent(
         let yolo = agent["agent_did"]
             .as_str()
             .context("the yolo agent row has no agent_did")?;
+        ensure_root_reader(&access, node_did, yolo, &source).await?;
+        wait_until_ready(&access, node_did, yolo).await?;
         return Ok((yolo.to_owned(), false));
     }
     if let Some(disabled) = yolos.first().and_then(|row| row["agent_did"].as_str()) {
@@ -91,17 +93,7 @@ pub(super) async fn ensure_agent(
         "the yolo agent was made as {}, not {yolo}",
         made["agent_did"]
     );
-    // A new Agent DID holds no WorkspaceRoot reader; only a User grants it, and
-    // this command runs as the User who asked for an agent with these tools.
-    let root_access = &made["host_root_access"];
-    if root_access["state"] == "waiting_for_user" {
-        let root = root_access["published_root"].as_str().with_context(|| {
-            format!("the yolo agent {yolo} needs reader on the WorkspaceRoot covering {source}'s tool root, and no published root covers it")
-        })?;
-        gents::tools::surface::grant_workspace_root_reader(&access, root, &yolo)
-            .await
-            .with_context(|| format!("granting the yolo agent {yolo} reader on {root}"))?;
-    }
+    ensure_root_reader(&access, node_did, &yolo, &source).await?;
     eprintln!("Made the yolo agent {yolo}, with the tools of {source}.");
     wait_until_ready(&access, node_did, &yolo).await?;
     Ok((yolo, true))
@@ -124,6 +116,30 @@ pub(super) async fn default_agent(access: &ConfigAccess, node_did: &str) -> Resu
         .filter(|did| !did.is_empty())
         .map(str::to_owned)
         .with_context(|| format!("node {node_did} names no default agent"))
+}
+
+/// Gives the yolo agent reader on the published WorkspaceRoot covering its tool root, the
+/// grant a new Agent DID lacks and only a User makes; this command runs as the User who asked
+/// for an agent with these tools. Adding a relationship the agent already holds changes
+/// nothing, so a yolo agent made before this grant existed gets it on its next run.
+async fn ensure_root_reader(
+    access: &ConfigAccess,
+    node_did: &str,
+    yolo: &str,
+    source: &str,
+) -> Result<()> {
+    use gents::tools::surface::ToolRootReader;
+    match gents::tools::surface::agent_tool_root_reader(access, node_did, yolo).await? {
+        ToolRootReader::NotNeeded => Ok(()),
+        ToolRootReader::Published(root) => {
+            gents::tools::surface::grant_workspace_root_reader(access, &root, yolo)
+                .await
+                .with_context(|| format!("granting the yolo agent {yolo} reader on {root}"))
+        }
+        ToolRootReader::Unpublished(root) => bail!(
+            "the yolo agent {yolo} needs reader on the WorkspaceRoot covering {source}'s tool root {root}, and no published root covers it"
+        ),
+    }
 }
 
 /// The runtime takes on a new agent when it next reconciles, admits it again once its root
