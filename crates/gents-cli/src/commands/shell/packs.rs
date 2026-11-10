@@ -387,8 +387,18 @@ pub(super) async fn install(
     grant: bool,
     slots: Vec<String>,
 ) -> Result<Value, PackChangeError> {
-    let install =
-        move |home| crate::packs::install(home, pack, None, slots, documents(edited), grant, false);
+    let install = move |home| {
+        crate::packs::install(
+            home,
+            pack,
+            None,
+            slots,
+            documents(edited),
+            grant,
+            false,
+            None,
+        )
+    };
     change(&runtime, &home, install).await
 }
 

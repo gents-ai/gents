@@ -2,7 +2,6 @@ use rapidhash::{HashMapExt, RapidHashMap};
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
-use defra_node::Node as EmbeddedNode;
 use gents_protocol::output::{
     MessagePublication, MessageRole, ReconstructionError, TerminalOutput,
 };

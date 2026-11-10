@@ -47,7 +47,9 @@ async fn list(args: MailboxListArgs) -> Result<()> {
         .ensure_supported("automation mailbox list", &[OutputFormat::Json])?;
     let (access, _) =
         resolve_config_access(args.access.home.as_deref(), args.access.graphql.as_deref()).await?;
-    print_json(&serde_json::to_value(served_items(&access, args.all).await?)?)
+    print_json(&serde_json::to_value(
+        served_items(&access, args.all).await?,
+    )?)
 }
 
 /// The items this actor may read, newest first, open ones unless `all`.

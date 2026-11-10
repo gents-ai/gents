@@ -141,7 +141,7 @@ pub(in crate::commands::shell) async fn allowed(
 ) -> anyhow::Result<Vec<String>> {
     let contexts = query_collection_sorted(access, CONTEXT_SPEC, node_did).await?;
     let agents = load_inference_setup_state(access, node_did).await?.agents;
-    let using = agents.iter().find(|shown| shown.agent_id == agent);
+    let using = agents.iter().find(|shown| shown.agent_did == agent);
     let Some(using) = using.and_then(|agent| agent.context_id.as_deref()) else {
         return Ok(Vec::new());
     };

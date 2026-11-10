@@ -585,6 +585,7 @@ async fn a_plugins_pack_asking_for_authority_is_a_typed_refusal() {
             EditedDocuments::Refuse,
             grant_authority,
             false,
+            None,
         )
     };
 
@@ -648,7 +649,12 @@ async fn update_returns_the_edited_refusal_for_one_package() {
     let tools = access
         .execute(r#"{ Tools(filter: {tools_id: {_eq: "demo-tools"}}) { display_name } }"#)
         .await;
-    access.local_node().unwrap().shutdown().await;
+    access
+        .local_node()
+        .unwrap()
+        .shutdown()
+        .await
+        .expect("node shutdown");
     assert_eq!(
         tools.unwrap()["data"]["Tools"][0]["display_name"],
         "edited",

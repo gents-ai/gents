@@ -10,7 +10,6 @@ use gents::tools::background::job::dispatch::split_address;
 use gents::tools::background::job::view::{
     list_jobs, load_job_view, JobFilter, JobKey, StateFilter,
 };
-use gents::tools::background::status::ProcessControlScope;
 use gents::tools::call::control::client::send::ControlSendError;
 use gents_protocol::job::{
     JobChildState, JobControlKind, JobControlOutcome, JobOrigin, JobPauseReason, JobPhaseState,
@@ -336,15 +335,6 @@ async fn job_control(args: JobControlArgs, kind: JobControlKind) -> Result<()> {
         println!("{line}");
     }
     Ok(())
-}
-
-pub(crate) fn operator_scope(view: &JobView) -> ProcessControlScope {
-    ProcessControlScope {
-        request_id: String::new(),
-        session_id: view.scope.session_id.clone(),
-        node_did: view.scope.node_did.clone(),
-        requester_did: view.scope.requester_did.clone(),
-    }
 }
 
 async fn control_job(
@@ -1350,17 +1340,6 @@ mod tests {
         assert!(run.sleeps.is_empty());
         assert_eq!(run.changes, 1);
         assert_eq!(exit_code(&run.ended), 1);
-    }
-
-    #[test]
-    fn operator_scope_copies_the_job_scope() {
-        let mut row = view("s1", "call-1", "alpha", JobState::Running, 1);
-        row.scope.requester_did = Some("did:key:requester".to_owned());
-        let scope = operator_scope(&row);
-        assert_eq!(scope.request_id, "");
-        assert_eq!(scope.session_id, "s1");
-        assert_eq!(scope.node_did, ACTOR);
-        assert_eq!(scope.requester_did.as_deref(), Some("did:key:requester"));
     }
 
     #[tokio::test]

@@ -29,7 +29,7 @@ use crate::commands::config::crud::{
     SCHEDULE_SPEC, SKILL_SPEC, TOOLS_SPEC, TRIGGER_SPEC,
 };
 use crate::commands::config::task_run::{enqueue_task_run_on, TaskRunOutput};
-use crate::commands::mailbox::{dismiss_served, served_items};
+use crate::commands::mailbox::served_items;
 use crate::commands::status::load_runtime_status_output;
 use crate::commands::task::load_task_inventory;
 
@@ -84,7 +84,7 @@ pub(super) async fn read_menu(
         MenuId::Tasks => load_task_inventory(&access, None)
             .await
             .map(|inventory| tasks(&inventory.tasks)),
-        MenuId::Mailbox => served_items(&access, node_did, false)
+        MenuId::Mailbox => served_items(&access, false)
             .await
             .map(|items| mailbox(&items)),
         MenuId::Status => load_runtime_status_output(Some(home), &work.endpoint, node_did)
@@ -179,10 +179,12 @@ pub(super) async fn act(
                 .map(|_| format!("Deleted {label}"))
                 .map_err(|error| format!("Couldn’t delete {label}: {error:#}"))
         }
-        MenuAct::Dismiss { item } => dismiss_served(&access, node_did, item)
-            .await
-            .map(|_| "dismissed".to_string())
-            .map_err(|error| format!("could not dismiss it: {error:#}")),
+        MenuAct::Dismiss { item } => {
+            gents::session::mailbox::dismiss_mailbox_item_on(&access, item)
+                .await
+                .map(|_| "dismissed".to_string())
+                .map_err(|error| format!("could not dismiss it: {error:#}"))
+        }
         MenuAct::SetFolderAccess { path, access } => grant(home, path, access)
             .await
             .map_err(|error| format!("{error:#}")),
@@ -404,7 +406,7 @@ fn agents(agents: &[AgentView], profiles: &[InferenceProfile]) -> Vec<MenuRow> {
         let more = vec![(
             "Inference profile…".to_string(),
             MenuAct::ChooseProfile {
-                agent: agent.agent_id.clone(),
+                agent: agent.agent_did.clone(),
                 name: name.clone(),
             },
         )];
@@ -419,7 +421,7 @@ fn agents(agents: &[AgentView], profiles: &[InferenceProfile]) -> Vec<MenuRow> {
             false => (format!(" ○ {name}   off   {model}"), Tone::Label),
         };
         let make_default = MenuAct::SetDefaultAgent {
-            agent: agent.agent_id.clone(),
+            agent: agent.agent_did.clone(),
             name: name.clone(),
         };
         MenuRow {
@@ -449,12 +451,12 @@ fn profiles(state: &InferenceSetupState, agent: &str) -> Vec<MenuRow> {
     let current = state
         .agents
         .iter()
-        .find(|view| view.agent_id == agent)
+        .find(|view| view.agent_did == agent)
         .and_then(|view| view.inference_profile_id.as_deref());
     let name = state
         .agents
         .iter()
-        .find(|view| view.agent_id == agent)
+        .find(|view| view.agent_did == agent)
         .map_or(agent, |view| view.display_name.as_str());
     let shown = |profile: &InferenceProfile| {
         let label = profile_label(profile);
@@ -501,7 +503,7 @@ fn tools(documents: &[Value]) -> Vec<MenuRow> {
 fn tasks(tasks: &[Value]) -> Vec<MenuRow> {
     let shown = |task: &Value| {
         let id = task["task_id"].as_str().unwrap_or_default();
-        let agent = task["agent_id"].as_str().unwrap_or_default();
+        let agent = task["agent_did"].as_str().unwrap_or_default();
         let enabled = task["enabled"].as_bool().unwrap_or(false);
         let (text, tone) = match enabled {
             true => (format!(" ● {id}   {agent}"), Tone::Plain),
@@ -743,8 +745,8 @@ mod tests {
     #[test]
     fn task_rows_offer_run_and_on_off() {
         let rows = tasks(&[
-            json!({ "task_id": "digest", "display_name": "Digest", "agent_id": "engineer", "enabled": true }),
-            json!({ "task_id": "sweep", "agent_id": "scout", "enabled": false }),
+            json!({ "task_id": "digest", "display_name": "Digest", "agent_did": "engineer", "enabled": true }),
+            json!({ "task_id": "sweep", "agent_did": "scout", "enabled": false }),
         ]);
 
         let run = |task: &str| {
@@ -933,13 +935,13 @@ mod tests {
                 "model_name": "model",
             }],
             "agents": [
-                { "node_did": "owner", "agent_id": "engineer", "inference_profile_id": "profile" },
-                { "node_did": "owner", "agent_id": "reviewer", "inference_profile_id": "profile" },
+                { "node_did": "owner", "agent_did": "engineer", "inference_profile_id": "profile" },
+                { "node_did": "owner", "agent_did": "reviewer", "inference_profile_id": "profile" },
             ],
             "tasks": [{
                 "node_did": "owner",
                 "task_id": "digest",
-                "agent_id": "engineer",
+                "agent_did": "engineer",
                 "prompt_template": "digest the day",
             }],
         }))
@@ -980,6 +982,6 @@ mod tests {
             ]
         );
         assert_eq!(texts(tasks), [" ○ digest   engineer   off"]);
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 }

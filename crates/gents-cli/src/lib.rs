@@ -547,7 +547,10 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
                 commands::optimization::dispatch(command, runtime).await
             }
         },
-        Command::Codex(_) | Command::Shell(_) | Command::NativeFsRunner(_) | Command::DocsBundle(_) => {
+        Command::Codex(_)
+        | Command::Shell(_)
+        | Command::NativeFsRunner(_)
+        | Command::DocsBundle(_) => {
             unreachable!("handled before telemetry initialization")
         }
     };

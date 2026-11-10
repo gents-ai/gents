@@ -62,7 +62,7 @@ pub(super) fn form(node: &Value, agents: &[AgentView]) -> Form {
             true => name.clone(),
             false => format!("{name} · disabled, enabled when saved as default"),
         };
-        (agent.agent_id.clone(), label)
+        (agent.agent_did.clone(), label)
     });
     let default = field(
         "default_agent_id",

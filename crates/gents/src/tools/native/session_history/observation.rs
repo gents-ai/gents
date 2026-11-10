@@ -4,11 +4,9 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 
 use super::{clean, context_calls};
-use crate::store::config_client::ConfigRead;
 use crate::store::graphql::escape_graphql_string;
 
 pub(super) enum RequestBindings<'a> {
-    All,
     Physical(&'a [String]),
     Page(Option<&'a str>),
 }
@@ -28,7 +26,6 @@ pub(super) async fn load_session_request_bindings(
         .map(|did| format!(r#""{}""#, escape_graphql_string(did)))
         .unwrap_or_else(|| "null".into());
     let (physical_filter, limit) = match selection {
-        RequestBindings::All => (String::new(), None),
         RequestBindings::Physical(ids) => {
             if ids.is_empty() {
                 return Ok(BTreeMap::new());

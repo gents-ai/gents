@@ -398,11 +398,11 @@ fn task_of<'a>(trigger: &Value, sources: &'a Sources) -> Option<&'a Value> {
 }
 
 fn agent_of<'a>(task: &Value, sources: &'a Sources) -> Option<&'a AgentView> {
-    let agent = &task["agent_id"];
+    let agent = &task["agent_did"];
     sources
         .agents
         .iter()
-        .find(|known| *agent == known.agent_id.as_str())
+        .find(|known| *agent == known.agent_did.as_str())
 }
 
 fn find<'a>(documents: &'a [Value], field: &str, id: &Value) -> Option<&'a Value> {
@@ -499,11 +499,11 @@ mod tests {
                 "filter": null,
             })],
             tasks: vec![
-                json!({ "task_id": "triage", "display_name": "Triage", "agent_id": "engineer", "enabled": true }),
-                json!({ "task_id": "sweep", "display_name": null, "agent_id": "engineer", "enabled": false }),
-                json!({ "task_id": "orphan", "display_name": "Orphan", "agent_id": "gone", "enabled": true }),
-                json!({ "task_id": "padded", "display_name": " Padded ", "agent_id": "engineer", "enabled": true }),
-                json!({ "task_id": "blank", "display_name": "  ", "agent_id": "engineer", "enabled": true }),
+                json!({ "task_id": "triage", "display_name": "Triage", "agent_did": "engineer", "enabled": true }),
+                json!({ "task_id": "sweep", "display_name": null, "agent_did": "engineer", "enabled": false }),
+                json!({ "task_id": "orphan", "display_name": "Orphan", "agent_did": "gone", "enabled": true }),
+                json!({ "task_id": "padded", "display_name": " Padded ", "agent_did": "engineer", "enabled": true }),
+                json!({ "task_id": "blank", "display_name": "  ", "agent_did": "engineer", "enabled": true }),
             ],
             agents: vec![agent("engineer", "Engineer", true, false)],
         }

@@ -1,4 +1,3 @@
-mod agent_config;
 mod jobs;
 mod tool_admission;
 mod tool_completion;
@@ -12,5 +11,4 @@ mod transcript;
 pub(crate) mod streaming_backend;
 
 #[cfg(unix)]
-pub(crate) use agent_config::configure_runtime_agent;
 pub(crate) use jobs::seed_job_row;

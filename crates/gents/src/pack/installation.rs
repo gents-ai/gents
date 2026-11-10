@@ -25,12 +25,11 @@ pub use catalog::{installed_catalog, InstalledCatalogEntry};
 pub use declared_access::declared_readers;
 pub use documents::{
     apply_hosted_document_graph, apply_prepared_dependency_schemas, assemble_document_graph_report,
-    document_pack_schema_paths, hosted_document_graph,
-    install_prepared_document_graph, install_prepared_document_pack, plugin_data_unique_keys,
-    prepare_document_pack_archive, prepare_document_pack_archive_with_runtime,
-    prepare_document_pack_install, prepare_hosted_document_pack_archive,
-    DependencyVariableOverrides, HostedDocumentGraph, HostedPackPreparation, PreparedDependency,
-    PreparedDocumentPackInstall,
+    document_pack_schema_paths, hosted_document_graph, install_prepared_document_graph,
+    install_prepared_document_pack, plugin_data_unique_keys, prepare_document_pack_archive,
+    prepare_document_pack_archive_with_runtime, prepare_document_pack_install,
+    prepare_hosted_document_pack_archive, DependencyVariableOverrides, HostedDocumentGraph,
+    HostedPackPreparation, PreparedDependency, PreparedDocumentPackInstall,
 };
 pub use hosted::{stage_hosted_pack, HostedHomePublication, HostedPackStage, HostedPackStageError};
 pub use removal::ensure_plugins_unreferenced;
@@ -672,14 +671,18 @@ pub(crate) async fn install_in_txn(
         prior.variables.clone_from(variables);
     }
     super::agent_bindings::validate_bindings(&pack.agent_bindings)?;
-    if !pack.agent_bindings.is_empty() {
-        if prior.doc_id != pack.installation_doc_id {
-            return Err(anyhow::anyhow!("pack installation changed after preparation; prepare the installation again").into());
-        }
+    if !pack.agent_bindings.is_empty() && prior.doc_id != pack.installation_doc_id {
+        return Err(anyhow::anyhow!(
+            "pack installation changed after preparation; prepare the installation again"
+        )
+        .into());
     }
     for (slot, binding) in &prior.agent_bindings {
         if pack.agent_bindings.get(slot) != Some(binding) {
-            return Err(anyhow::anyhow!("pack agent bindings changed after preparation; prepare the installation again").into());
+            return Err(anyhow::anyhow!(
+                "pack agent bindings changed after preparation; prepare the installation again"
+            )
+            .into());
         }
     }
     for binding in pack.agent_bindings.values() {
@@ -688,7 +691,10 @@ pub(crate) async fn install_in_txn(
                 && document.add["agent_did"].as_str() == Some(binding.agent_did.as_str())
         }) {
             if agent.add["creation_nonce"].as_str() != Some(binding.creation_nonce.as_str()) {
-                return Err(anyhow::anyhow!("pack agent creation nonce does not match its installation binding").into());
+                return Err(anyhow::anyhow!(
+                    "pack agent creation nonce does not match its installation binding"
+                )
+                .into());
             }
         }
     }

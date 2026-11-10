@@ -671,7 +671,7 @@ mod tests {
             !crate::home_state::default_data_dir(home.path()).exists(),
             "the home's store is never opened"
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
         Ok(())
     }
 

@@ -51,7 +51,8 @@ pub(super) fn conditions(form: &Form) -> Vec<(&str, &str, &str)> {
 
 pub(super) fn agent(id: &str, name: &str, enabled: bool, is_default: bool) -> AgentView {
     AgentView {
-        agent_id: id.to_string(),
+        creation_nonce: String::new(),
+        agent_did: id.to_string(),
         node_did: "owner".to_string(),
         display_name: name.to_string(),
         description: None,

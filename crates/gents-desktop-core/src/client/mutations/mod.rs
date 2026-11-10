@@ -9,9 +9,9 @@ pub use chat::{
     SubmitRequestOptions, SubmittedRequest,
 };
 pub use manage::{
-    delete_agent_context_on, delete_agent_on, delete_event_source_on, delete_inference_backend_on,
-    delete_inference_profile_on, delete_schedule_on, delete_skill_on, delete_task_on,
-    delete_tool_service_registry_on, delete_tools_on, delete_trigger_on,
+    apply_config_components_on, delete_agent_context_on, delete_agent_on, delete_event_source_on,
+    delete_inference_backend_on, delete_inference_profile_on, delete_schedule_on, delete_skill_on,
+    delete_task_on, delete_tool_service_registry_on, delete_tools_on, delete_trigger_on,
     patch_config_components_on, prepare_access_review_task_on, read_backend_authentication_on,
     read_config_editor_on, resolve_schedule_now_on, resolve_task_now_on,
     save_backend_authentication_on, save_config_editor_on, select_agent_model_on,

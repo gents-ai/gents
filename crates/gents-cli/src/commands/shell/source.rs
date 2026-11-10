@@ -7,10 +7,8 @@ use std::time::Duration;
 
 use anyhow::Context;
 use chrono::{DateTime, Local, Utc};
-use futures_util::stream::BoxStream;
-use futures_util::{Stream, StreamExt};
 use gents::session::mailbox::MailboxItem;
-use gents::store::config_client::{ConfigAccess, SubscribeError};
+use gents::store::config_client::{ConfigAccess, GraphqlSubscription, SubscriptionEnd};
 use gents_codex_protocol as codex;
 use gents_shell::app::ChatLine;
 use gents_shell::keys::KeySet;
@@ -168,7 +166,7 @@ pub(super) const WATCHED: &str = r#"subscription { AgentToolCall(filter: { _or: 
 pub(super) const MAILBOX_WATCHED: &str =
     r#"subscription { MailboxItem(filter: { kind: { _in: ["ask", "gate"] } }) { _docID } }"#;
 
-type Changes = BoxStream<'static, Result<Value, SubscribeError>>;
+type Changes = GraphqlSubscription;
 
 /// What a subscription watches: the work views' tool calls, or the mailbox.
 #[derive(Clone, Copy)]
@@ -181,6 +179,8 @@ enum Watched {
     Changed(Feed),
     /// With the error, when the stream broke rather than closed.
     Ended(Feed, Option<String>),
+    /// The subscription's bearer is due for renewal: subscribe again and reread.
+    Renew(Feed),
     Read(Box<Read>),
     Asked(Box<Asked>),
     Tree(Result<Vec<Change>, String>),
@@ -209,14 +209,10 @@ struct Asked {
 /// would be lost: each read subscribes first when asked.
 async fn watch(work: &Work, document: &str, subscribe: bool) -> Option<Result<Changes, String>> {
     let changes = match subscribe {
-        true => work.endpoint.subscribe(document).await,
+        true => work.access().subscribe(document).await,
         false => return None,
     };
-    Some(
-        changes
-            .map(StreamExt::boxed)
-            .map_err(|error| error.to_string()),
-    )
+    Some(changes.map_err(|error| format!("{error:#}")))
 }
 
 /// The jobs of `sessions` only, and every background call.
@@ -279,20 +275,20 @@ impl<T> Shown<T> {
     }
 }
 
-/// Ends when the source does, which drops the stream and its connection.
-async fn forward<S>(changes: S, feed: Feed, watching: mpsc::UnboundedSender<Watched>)
-where
-    S: Stream<Item = Result<Value, SubscribeError>>,
-{
-    let mut changes = std::pin::pin!(changes);
+/// Ends when the source does, which drops the subscription and its connection.
+async fn forward(mut changes: Changes, feed: Feed, watching: mpsc::UnboundedSender<Watched>) {
     let ended = loop {
         tokio::select! {
-            change = changes.next() => match change {
-                Some(Ok(_)) => {
+            change = changes.recv() => match change {
+                Ok(Some(_)) => {
                     let _ = watching.send(Watched::Changed(feed));
                 }
-                Some(Err(error)) => break Some(error.to_string()),
-                None => break None,
+                Ok(None) if changes.end() == Some(SubscriptionEnd::RenewalDue) => {
+                    let _ = watching.send(Watched::Renew(feed));
+                    return;
+                }
+                Ok(None) => break None,
+                Err(error) => break Some(format!("{error:#}")),
             },
             () = watching.closed() => return,
         }
@@ -1051,6 +1047,14 @@ impl Source {
                 self.mailbox_live = false;
                 self.tell(Update::Notice(prompts_not_live(error.as_deref())));
             }
+            Watched::Renew(Feed::Work) => {
+                self.live = false;
+                self.reread_work();
+            }
+            Watched::Renew(Feed::Mailbox) => {
+                self.mailbox_live = false;
+                self.reread_prompts();
+            }
             Watched::Read(read) => self.landed(*read),
             Watched::Asked(asked) => self.asked(*asked),
             Watched::Tree(tree) => {
@@ -1355,7 +1359,8 @@ impl Source {
         let Ok(work) = &self.work else {
             return;
         };
-        let dismissed = gents::session::mailbox::dismiss_mailbox_item_on(&work.access(), item).await;
+        let dismissed =
+            gents::session::mailbox::dismiss_mailbox_item_on(&work.access(), item).await;
         if let Err(error) = dismissed {
             self.tell(Update::Notice(format!("{error:#}")));
         }
@@ -1530,7 +1535,6 @@ impl Source {
         };
         let principal = &self.principal;
         let submitted = async {
-            crate::request_helpers::ensure_local_request_signer(Some(&work.home), principal)?;
             // The owner requires a retry key, by which it recognises a retried submission.
             let request_id = uuid::Uuid::new_v4().to_string();
             let options = crate::RequestSubmitOptions {

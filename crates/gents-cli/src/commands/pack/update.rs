@@ -437,6 +437,7 @@ mod tests {
         let fixture = super::super::test_support::fixture_dir("assets_fixture");
         crate::request_helpers::capture_report(super::super::install(PackInstallArgs {
             package: fixture.to_str().unwrap().to_owned(),
+            dependency_variables: Vec::new(),
             inference_slots: Vec::new(),
             preview: false,
             scope: scope.clone(),

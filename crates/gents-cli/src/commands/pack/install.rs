@@ -264,7 +264,8 @@ async fn install_documents_pack_inner(
             let Some(path) = source.manifest().config.as_deref() else {
                 continue;
             };
-            let config: serde_json::Value = serde_json::from_slice(source.asset(path)?)?;
+            let config: serde_json::Value =
+                serde_json::from_slice(source.asset(path)?).map_err(anyhow::Error::from)?;
             if has_plugin_references(&config) {
                 needs_runtime_store = true;
                 break;
@@ -291,7 +292,8 @@ async fn install_documents_pack_inner(
                 args,
                 explicit,
             )
-            .await;
+            .await
+            .map_err(Into::into);
         }
     }
     install_documents_pack_resolved_inner(access, owner, pack, args, explicit, dependencies, local)
@@ -698,47 +700,51 @@ pub(super) async fn install_documents_command_with_local(
     local_endpoint: Option<gents::store::config_client::GraphqlEndpoint>,
 ) -> Result<(), PackChangeError> {
     let result = async {
-        let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
-        let bind_mode = if args.scope.graphql.is_some() {
-            Some(ManifestNodeDidBindingArg::Live)
-        } else {
-            Some(ManifestNodeDidBindingArg::Home)
-        };
-        let owner = super::super::config::binding::resolve_target_node_did(
-            args.scope.node_did.as_deref(),
-            if args.scope.node_did.is_some() {
-                None
+        let (home, owner, local) = async {
+            let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
+            let bind_mode = if args.scope.graphql.is_some() {
+                Some(ManifestNodeDidBindingArg::Live)
             } else {
-                bind_mode
-            },
-            args.scope.home.as_deref(),
-            args.scope.graphql.as_deref(),
-            Some(&access),
-        )
+                Some(ManifestNodeDidBindingArg::Home)
+            };
+            let owner = super::super::config::binding::resolve_target_node_did(
+                args.scope.node_did.as_deref(),
+                if args.scope.node_did.is_some() {
+                    None
+                } else {
+                    bind_mode
+                },
+                args.scope.home.as_deref(),
+                args.scope.graphql.as_deref(),
+                Some(&access),
+            )
+            .await?;
+            let local = if let Some(endpoint) = local_endpoint {
+                let config = crate::home_state::read_init_config(&home)?
+                    .context("home is not initialized")?;
+                let runtime = crate::home_state::load_initialized_home_identity(&home, &config)?;
+                anyhow::ensure!(
+                    runtime.did() == owner,
+                    "selected Node does not match the held runtime"
+                );
+                let node = access
+                    .local_node()
+                    .context("local pack install requires the owned Node")?
+                    .clone();
+                Some(LocalPackAccess {
+                    writer: gents::store::config_client::ConfigAccess::Graphql(endpoint),
+                    schema: gents::store::config_client::ConfigAccess::local_as(
+                        node,
+                        identity::Did::new(&owner)?,
+                    ),
+                    runtime,
+                })
+            } else {
+                None
+            };
+            anyhow::Ok((home, owner, local))
+        }
         .await?;
-        let local = if let Some(endpoint) = local_endpoint {
-            let config =
-                crate::home_state::read_init_config(&home)?.context("home is not initialized")?;
-            let runtime = crate::home_state::load_initialized_home_identity(&home, &config)?;
-            anyhow::ensure!(
-                runtime.did() == owner,
-                "selected Node does not match the held runtime"
-            );
-            let node = access
-                .local_node()
-                .context("local pack install requires the owned Node")?
-                .clone();
-            Some(LocalPackAccess {
-                writer: gents::store::config_client::ConfigAccess::Graphql(endpoint),
-                schema: gents::store::config_client::ConfigAccess::local_as(
-                    node,
-                    identity::Did::new(&owner)?,
-                ),
-                runtime,
-            })
-        } else {
-            None
-        };
         let mut output = install_documents_pack_inner(
             &access,
             &owner,
@@ -784,10 +790,12 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError
             install_documents_command_with_local(access, &pack, &args, local_endpoint).await
         }
         PackKind::Assets | PackKind::Plugins => {
-            anyhow::ensure!(
-                args.dependency_variables.is_empty(),
-                "--dependency-variable applies only to document packs with dependencies"
-            );
+            if !args.dependency_variables.is_empty() {
+                return Err(anyhow::anyhow!(
+                    "--dependency-variable applies only to document packs with dependencies"
+                )
+                .into());
+            }
             let requested = parse_inference_slot_bindings(&args.inference_slots)?;
             if args.scope.graphql.is_some()
                 || (args.scope.node_did.is_some() && requested.is_empty())
@@ -846,7 +854,7 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError
                     true,
                 )
                 .await?;
-                return crate::print_json(&result);
+                return Ok(crate::print_json(&result)?);
             }
             let notify_scope = notification_scope.clone();
             let notify_home = home.clone();

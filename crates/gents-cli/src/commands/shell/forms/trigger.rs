@@ -1,5 +1,4 @@
-use gents::documents::{default_agent_id_for_node, PackConfig, Trigger};
-use gents_desktop_core::inference::AgentView;
+use gents::documents::{PackConfig, Trigger};
 use gents_shell::source::{Doc, FieldKind, Form, FormError, FormRef};
 use serde_json::{json, Value};
 
@@ -41,18 +40,15 @@ pub(super) fn new_form(sources: &Sources) -> Form {
         let default = if agent.is_default { " (default)" } else { "" };
         let off = if agent.enabled { "" } else { " · off" };
         let label = format!("{}{default}{off}", agent.display_name);
-        (agent.agent_id.clone(), label)
+        (agent.agent_did.clone(), label)
     });
     // The desktop's `defaultAgentOf`, else the first agent (`:119-120`,
     // `operationalState.ts:84-101`).
     let listed = &sources.agents;
-    let conventional =
-        |agent: &&AgentView| agent.agent_id == default_agent_id_for_node(&agent.node_did);
     let agent = listed.iter().find(|agent| agent.is_default);
-    let agent = agent.or_else(|| listed.iter().find(conventional));
     let agent = agent.or_else(|| listed.iter().find(|agent| agent.enabled));
     let agent = agent.or(listed.first());
-    let agent = agent.map_or("", |agent| agent.agent_id.as_str());
+    let agent = agent.map_or("", |agent| agent.agent_did.as_str());
     let presets = PRESETS.map(|(id, label, _)| (id, label));
     let fields = vec![
         hinted(
@@ -226,7 +222,7 @@ pub(super) fn created(
                 "task_id": task_id,
                 "display_name": display_name,
                 "description": null,
-                "agent_id": agent_id,
+                "agent_did": agent_id,
                 "prompt_template": prompt,
                 "emit_outcome": false,
                 "goal_objective_template": null,
@@ -237,14 +233,14 @@ pub(super) fn created(
             (task_id, agent_id)
         }
         false => {
-            let agent = task.and_then(|task| task["agent_id"].as_str());
+            let agent = task.and_then(|task| task["agent_did"].as_str());
             (task_id.to_string(), agent.unwrap_or_default())
         }
     };
     let off = sources
         .agents
         .iter()
-        .any(|agent| agent.agent_id == agent_id && !agent.enabled);
+        .any(|agent| agent.agent_did == agent_id && !agent.enabled);
     config["triggers"] = json!([{
         "node_did": node_did,
         "trigger_id": id,
@@ -473,8 +469,8 @@ mod tests {
                 "event_kind": "created",
             })],
             tasks: vec![
-                json!({ "task_id": "triage", "display_name": "Triage", "agent_id": "scout", "enabled": true }),
-                json!({ "task_id": "sweep", "display_name": " ", "agent_id": "engineer", "enabled": true }),
+                json!({ "task_id": "triage", "display_name": "Triage", "agent_did": "scout", "enabled": true }),
+                json!({ "task_id": "sweep", "display_name": " ", "agent_did": "engineer", "enabled": true }),
             ],
             agents: vec![
                 agent("engineer", "Engineer", true, true),

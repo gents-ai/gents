@@ -2682,6 +2682,7 @@ async fn prepare_graph(
         overrides,
     )
     .await
+    .map_err(super::PackChangeError::into_anyhow)
 }
 
 async fn install_prepared_graph(

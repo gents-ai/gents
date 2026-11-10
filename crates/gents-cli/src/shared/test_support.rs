@@ -10,10 +10,9 @@ pub(crate) fn node_builder() -> defra_node::NodeBuilder {
 }
 
 /// A node holding `config`, and the URL of the GraphQL it serves as a home's runtime does.
-pub(crate) async fn served_config(
-    config: Value,
-) -> (std::sync::Arc<defra_node::EmbeddedNode>, String) {
-    use gents::store::config_client::{apply_desired_state_plan, DesiredStateApplyPlan};
+pub(crate) async fn served_config(config: Value) -> (std::sync::Arc<defra_node::Node>, String) {
+    use gents::documents::apply_desired_state_plan;
+    use gents::store::config_client::DesiredStateApplyPlan;
 
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let graphql = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());

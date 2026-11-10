@@ -439,7 +439,7 @@ pub async fn prepare_document_pack_archive(
     plugin_home: Option<&Path>,
     environment: &(dyn Fn(&str) -> Option<String> + Sync),
     overrides: &DependencyVariableOverrides,
-) -> Result<PreparedDocumentPackInstall> {
+) -> Result<PreparedDocumentPackInstall, PackChangeError> {
     prepare_document_pack_archive_with_provisioner(
         access,
         owner,
@@ -487,14 +487,15 @@ pub async fn prepare_document_pack_archive_with_runtime(
     environment: &(dyn Fn(&str) -> Option<String> + Sync),
     runtime: &dyn crate::store::identity::NodeIdentity,
     overrides: &DependencyVariableOverrides,
-) -> Result<PreparedDocumentPackInstall> {
+) -> Result<PreparedDocumentPackInstall, PackChangeError> {
     let node = access
         .local_node()
         .context("local pack preparation requires an embedded Node")?;
-    anyhow::ensure!(
-        runtime.did() == owner && node.node_identity_did() == Some(owner),
-        "held runtime identity does not match the selected Node"
-    );
+    if runtime.did() != owner || node.node_identity_did() != Some(owner) {
+        return Err(
+            anyhow::anyhow!("held runtime identity does not match the selected Node").into(),
+        );
+    }
     let provisioner = super::super::agent_bindings::AgentProvisioner {
         node,
         runtime,
@@ -532,7 +533,7 @@ pub(crate) async fn prepare_document_pack_archive_with_provisioner(
     environment: &(dyn Fn(&str) -> Option<String> + Sync),
     provisioner: Option<&super::super::agent_bindings::AgentProvisioner<'_>>,
     overrides: &DependencyVariableOverrides,
-) -> Result<PreparedDocumentPackInstall> {
+) -> Result<PreparedDocumentPackInstall, PackChangeError> {
     prepare_document_pack_archive_inputs(
         access,
         owner,
@@ -597,6 +598,7 @@ pub async fn prepare_hosted_document_pack_archive(
         overrides,
     )
     .await
+    .map_err(PackChangeError::into_anyhow)
 }
 
 #[expect(
@@ -615,7 +617,7 @@ async fn prepare_document_pack_archive_inputs(
     provisioner: Option<&super::super::agent_bindings::AgentProvisioner<'_>>,
     hosted: Option<&HostedPackPreparation>,
     overrides: &DependencyVariableOverrides,
-) -> Result<PreparedDocumentPackInstall> {
+) -> Result<PreparedDocumentPackInstall, PackChangeError> {
     let declared = super::super::agent_bindings::declared_dependencies(archive.manifest());
     validate_dependency_overrides(dependencies, overrides)?;
     let mut preloaded = BTreeMap::new();
@@ -623,10 +625,12 @@ async fn prepare_document_pack_archive_inputs(
     for dependency in dependencies {
         let manifest = dependency.manifest();
         let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
-        anyhow::ensure!(
-            declared.contains(&coordinate),
-            "prepared dependency {coordinate:?} is not declared by the root pack"
-        );
+        if !declared.contains(&coordinate) {
+            return Err(anyhow::anyhow!(
+                "prepared dependency {coordinate:?} is not declared by the root pack"
+            )
+            .into());
+        }
         require_documents_dependency(manifest)?;
         let loaded = load_dependency(
             access,
@@ -643,10 +647,9 @@ async fn prepare_document_pack_archive_inputs(
         )
         .await?;
         available.insert(coordinate.clone(), loaded.bound.agent_bindings.clone());
-        anyhow::ensure!(
-            preloaded.insert(coordinate, loaded).is_none(),
-            "duplicate prepared dependency"
-        );
+        if preloaded.insert(coordinate, loaded).is_some() {
+            return Err(anyhow::anyhow!("duplicate prepared dependency").into());
+        }
     }
     let root = root_install_variables(access, owner, archive.manifest()).await?;
     let captured = std::sync::Mutex::new(BTreeMap::new());
@@ -693,7 +696,6 @@ async fn prepare_document_pack_archive_inputs(
         overrides,
     )
     .await
-    .map_err(PackChangeError::into_anyhow)
 }
 
 /// The installed root's live configuration, read before an upgrade so the
@@ -894,11 +896,20 @@ async fn prepare_document_pack_install_inner(
         if serde_json::to_value(archive.manifest()).map_err(anyhow::Error::from)?
             != serde_json::to_value(manifest).map_err(anyhow::Error::from)?
         {
-            return Err(anyhow::anyhow!("prepared pack manifest does not match the archive").into());
+            return Err(
+                anyhow::anyhow!("prepared pack manifest does not match the archive").into(),
+            );
         }
     }
-    if !(document_ux_install_allowed( !manifest.metadata.ux.is_empty(), plugin_home.is_some() || hosted.is_some(), installed_via )) {
-        return Err(anyhow::anyhow!("document packs with UX require an operator install with the node's local home").into());
+    if !document_ux_install_allowed(
+        !manifest.metadata.ux.is_empty(),
+        plugin_home.is_some() || hosted.is_some(),
+        installed_via,
+    ) {
+        return Err(anyhow::anyhow!(
+            "document packs with UX require an operator install with the node's local home"
+        )
+        .into());
     }
     for dependency in dependencies {
         if let Some(hosted) = hosted {
@@ -908,7 +919,12 @@ async fn prepare_document_pack_install_inner(
                     dependency.manifest().metadata.namespace,
                     dependency.manifest().name
                 );
-                if hosted.operator_ux_digests.get(&coordinate).map(String::as_str) != Some(dependency.digest()) {
+                if hosted
+                    .operator_ux_digests
+                    .get(&coordinate)
+                    .map(String::as_str)
+                    != Some(dependency.digest())
+                {
                     return Err(anyhow::anyhow!("dependency {coordinate} with UX must be operator installed at the reviewed digest").into());
                 }
             }
@@ -923,8 +939,20 @@ async fn prepare_document_pack_install_inner(
     }
     validate_dependency_overrides(dependencies, overrides)?;
     for slot in requested.keys() {
-        if !(std::iter::once(manifest) .chain(dependencies.iter().map(|p| p.manifest())) .any(|m| m .metadata .inference_slots .iter() .any(|declared| &declared.name == slot))) {
-            return Err(anyhow::anyhow!("pack {} and its dependencies have no inference slot {slot:?}", manifest.name).into());
+        if !std::iter::once(manifest)
+            .chain(dependencies.iter().map(|p| p.manifest()))
+            .any(|m| {
+                m.metadata
+                    .inference_slots
+                    .iter()
+                    .any(|declared| &declared.name == slot)
+            })
+        {
+            return Err(anyhow::anyhow!(
+                "pack {} and its dependencies have no inference slot {slot:?}",
+                manifest.name
+            )
+            .into());
         }
     }
     let selected = |manifest: &super::super::PackManifest| {
@@ -1127,7 +1155,10 @@ async fn prepare_document_pack_install_inner(
                 );
                 if let Some(previous) = shipped_digests.insert(coordinate.clone(), digest.clone()) {
                     if previous != digest {
-                        return Err(anyhow::anyhow!("pack graph ships conflicting artifacts for plugin {coordinate}").into());
+                        return Err(anyhow::anyhow!(
+                            "pack graph ships conflicting artifacts for plugin {coordinate}"
+                        )
+                        .into());
                     }
                 }
             }
@@ -1801,7 +1832,11 @@ pub(super) async fn apply_document_graph_in_txn(
             )
             .await?;
             if current.as_ref() != Some(snapshot) {
-                return Err(anyhow::anyhow!("installed dependency {} changed during preparation; retry the install", identity.coordinate).into());
+                return Err(anyhow::anyhow!(
+                    "installed dependency {} changed during preparation; retry the install",
+                    identity.coordinate
+                )
+                .into());
             }
             if !record.reconfigure {
                 reports.push(InstallReport::default());

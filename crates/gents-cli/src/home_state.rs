@@ -327,14 +327,6 @@ fn cli_identity_paths_under(
     desktop.cli_client()
 }
 
-/// DID of the CLI's existing User client key, shared by the CLI and its shims.
-pub(crate) fn cli_client_did() -> Result<identity::Did> {
-    let client =
-        gents_desktop_core::client::PrincipalIdentity::load_existing(&cli_identity_paths()?)
-            .context("CLI client identity is unavailable; initialize the CLI client first")?;
-    identity::Did::new(client.did().to_owned()).context("CLI client DID is not ACP-addressable")
-}
-
 /// The CLI's held User key signs every client-authored command; a registry
 /// lookup by DID cannot present the key to owners that need its capability.
 pub(crate) fn held_client_identity(

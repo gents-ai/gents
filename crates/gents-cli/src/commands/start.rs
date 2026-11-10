@@ -550,7 +550,7 @@ mod tests {
                 graphql: format!("http://{graphql}/api/v0/graphql"),
                 node_name: "fixture".into(),
                 node_did: node_did.into(),
-                default_agent_id: "a".into(),
+                default_agent_did: "a".into(),
                 p2p_transport: "none".into(),
                 p2p_peer_id: None,
                 p2p_listen_addresses: Vec::new(),

@@ -1856,7 +1856,7 @@ fn skill_settings(did: &str) -> Value {
     ]);
     let commit = json!({ "node_did": did, "skill_id": "commit", "name": "commit" });
     config["skills"].as_array_mut().unwrap().push(commit);
-    let agent = |id: &str| json!({ "node_did": did, "agent_id": id, "display_name": id, "inference_profile_id": "profile" });
+    let agent = |id: &str| json!({ "node_did": did, "agent_did": id, "display_name": id, "inference_profile_id": "profile" });
     let mut a = agent("a");
     a["context_id"] = json!("main");
     config["agents"]
@@ -1870,7 +1870,7 @@ fn skill_settings(did: &str) -> Value {
 /// `skill_settings` and signed by an initialized home's key, as on a home `gents init` set up.
 struct OnNode {
     shell: Shell,
-    node: Arc<defra_node::EmbeddedNode>,
+    node: Arc<defra_node::Node>,
     work: Work,
     did: String,
     _dirs: [tempfile::TempDir; 2],
@@ -1933,7 +1933,7 @@ async fn skills_list_only_what_the_agents_context_allows() {
         skills: vec![shown_skill("commit", "Writes commits")],
     };
     assert_eq!(told.last(), Some(&allowed));
-    on.node.shutdown().await;
+    on.node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -1952,7 +1952,7 @@ async fn an_agent_with_no_context_offers_no_skills() {
         skills: Vec::new(),
     };
     assert_eq!(told.last(), Some(&none));
-    on.node.shutdown().await;
+    on.node.shutdown().await.expect("node shutdown");
 }
 
 /// With work off the context cannot be read, so every enabled skill is listed and admission
@@ -2115,7 +2115,7 @@ async fn a_goal_starts_with_its_objective_as_the_sessions_next_message() {
         (&json!("ship it"), &json!("s1")),
         "{requests}"
     );
-    on.node.shutdown().await;
+    on.node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -2158,7 +2158,7 @@ async fn a_goal_with_no_session_starts_one_first() {
     );
     let set = Update::Notice(source::GOAL_SET.to_string());
     assert_eq!(told.last(), Some(&set));
-    on.node.shutdown().await;
+    on.node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -2200,7 +2200,7 @@ async fn a_refused_goal_shows_the_owners_reason() {
         gents::goal::submit_goal_backed_request(&access, did, "s1", "ship more", None, &create);
     let owner = owner.await.unwrap_err();
     assert_eq!(*message, format!("Couldn’t set the goal: {owner:#}"));
-    on.node.shutdown().await;
+    on.node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -2481,7 +2481,7 @@ pub(super) fn home_serving(
             graphql: graphql.to_string(),
             node_name: "fixture".into(),
             node_did: node_did.clone(),
-            default_agent_id: "a".into(),
+            default_agent_did: "a".into(),
             p2p_transport: "none".into(),
             p2p_peer_id: None,
             p2p_listen_addresses: Vec::new(),
@@ -3918,7 +3918,7 @@ fn node_settings_of(did: &str) -> Value {
         }],
         "agents": [{
             "node_did": did,
-            "agent_id": "engineer",
+            "agent_did": "engineer",
             "display_name": "Engineer",
             "inference_profile_id": "profile",
         }],
@@ -3926,7 +3926,7 @@ fn node_settings_of(did: &str) -> Value {
             "node_did": did,
             "task_id": "triage",
             "display_name": "Triage",
-            "agent_id": "engineer",
+            "agent_did": "engineer",
             "prompt_template": "triage the inbox",
         }],
         "schedules": [{
@@ -3956,12 +3956,12 @@ fn node_settings_of(did: &str) -> Value {
 }
 
 /// A node served with `node_settings`, and the shell's work on it.
-async fn served_settings() -> (Arc<defra_node::EmbeddedNode>, Work, tempfile::TempDir) {
+async fn served_settings() -> (Arc<defra_node::Node>, Work, tempfile::TempDir) {
     served(node_settings()).await
 }
 
 /// A node served with `config`, and the shell's work on it.
-async fn served(config: Value) -> (Arc<defra_node::EmbeddedNode>, Work, tempfile::TempDir) {
+async fn served(config: Value) -> (Arc<defra_node::Node>, Work, tempfile::TempDir) {
     let (node, graphql) = crate::shared::test_support::served_config(config).await;
     let home = tempfile::tempdir().unwrap();
     let work = Work {
@@ -3997,7 +3997,7 @@ async fn a_skill_turns_off_on_a_served_node() {
             " ○ Review   2 tools · disabled"
         ]
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -4032,7 +4032,7 @@ async fn a_skill_copy_is_renamed_as_the_desktop_does() {
             ),
         ]
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -4059,7 +4059,7 @@ async fn a_duplicate_is_a_new_document_off() {
         panic!("{:?}", rows[2]);
     };
     assert!(copy.starts_with("trig-"), "{copy}");
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -4088,7 +4088,7 @@ async fn a_trigger_reads_its_own_nodes_schedule() {
             " ● Nightly   Every day at 02:00 · run Triage with Engineer"
         ]
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -4127,7 +4127,7 @@ async fn a_schedule_in_use_is_not_deleted() {
             " A trigger binds a task to a schedule."
         ]
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 /// The values the shell sends for `form` as it opened: no heading, fixed or hidden field.
@@ -4211,7 +4211,7 @@ async fn owner_rules_come_back_in_the_status() {
         menu_texts(&work, MenuId::Schedules).await,
         [" + New schedule", " Daily   0 2 * * *"]
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -4248,7 +4248,7 @@ async fn an_edit_keeps_what_the_form_does_not_show() {
     assert_eq!(stored["instructions"], json!("Stage, then commit."));
     assert_eq!(stored["tags"], json!(["gents:pack:git", "vcs", "daily"]));
     assert_eq!(stored["created_at"], json!("2026-01-01T00:00:00Z"));
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -4263,7 +4263,7 @@ async fn new_then_nothing_writes_nothing() {
 
     assert_eq!(form.unwrap().title, "New skill");
     assert_eq!(skills().await.unwrap(), before);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -4336,7 +4336,7 @@ async fn a_new_form_saves_under_the_id_it_showed() {
         (&drafts["name"], &drafts["enabled"]),
         (&json!("drafts"), &json!(false))
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -4399,7 +4399,7 @@ async fn a_schedule_runs_now_through_its_trigger() {
     assert!(task.contains(":manual:triage:"), "{written}");
     let no_trigger = "Couldn’t run the schedule: schedule weekly has no enabled Trigger";
     assert_eq!(refused, (no_trigger.to_string(), Tone::Warn));
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -4499,7 +4499,7 @@ async fn a_new_trigger_on_a_preset_writes_schedule_task_and_trigger() {
     assert_eq!(
         tasks
             .iter()
-            .map(|task| shown(task, &["display_name", "agent_id", "prompt_template"]))
+            .map(|task| shown(task, &["display_name", "agent_did", "prompt_template"]))
             .collect::<Vec<_>>(),
         [[
             json!("Summarise the inbox."),
@@ -4515,7 +4515,7 @@ async fn a_new_trigger_on_a_preset_writes_schedule_task_and_trigger() {
             " ○ Summarise the inbox.   Every day at 09:00 · run Summarise the inbox. with Engineer",
         ]
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -4548,7 +4548,7 @@ async fn a_schedule_trigger_refuses_a_concurrency_it_cannot_honour() {
     assert_eq!(serial, Ok("Saved".to_string()));
     let stored = load_one(&access, TRIGGER_SPEC, "owner", "nightly").await;
     assert_eq!(stored.unwrap()["concurrency"], json!("serial"));
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 /// The shell's work on `home` with no runtime behind it: reads and writes that need none.
@@ -4606,7 +4606,7 @@ async fn a_remote_tool_without_a_host_shows_the_owners_reason() {
         (&service["mcp_port"], &service["enabled"]),
         (&json!(3333), &json!(false))
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -4677,7 +4677,7 @@ async fn a_node_save_keeps_what_the_form_does_not_show() {
     ] {
         assert_eq!(after[kept], before[kept], "{kept}");
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -4685,7 +4685,7 @@ async fn changing_the_default_agent_enables_it() {
     let mut config = node_settings();
     config["agents"].as_array_mut().unwrap().push(json!({
         "node_did": "owner",
-        "agent_id": "scout",
+        "agent_did": "scout",
         "display_name": "Scout",
         "inference_profile_id": "profile",
         "enabled": false,
@@ -4695,7 +4695,7 @@ async fn changing_the_default_agent_enables_it() {
     let scout = || async {
         let state = gents_desktop_core::inference::load_inference_setup_state(&access, "owner");
         let agents = state.await.unwrap().agents;
-        let scout = agents.into_iter().find(|agent| agent.agent_id == "scout");
+        let scout = agents.into_iter().find(|agent| agent.agent_did == "scout");
         let scout = scout.unwrap();
         (scout.enabled, scout.is_default)
     };
@@ -4730,7 +4730,7 @@ async fn changing_the_default_agent_enables_it() {
             "   Engineer   profile · model"
         ]
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -4930,7 +4930,7 @@ fn two_profiles() -> Value {
             "model_name": "other-model", "display_name": "Other",
         }));
     config["agents"].as_array_mut().unwrap().push(json!({
-        "node_did": "owner", "agent_id": "scout", "display_name": "Scout",
+        "node_did": "owner", "agent_did": "scout", "display_name": "Scout",
         "inference_profile_id": "profile",
     }));
     config
@@ -4989,7 +4989,7 @@ async fn choosing_a_profile_moves_only_that_agent() {
         ]
     );
     assert_eq!(profile_rows(&work, "engineer").await, engineer);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[test]
@@ -5072,7 +5072,7 @@ async fn choosing_a_profile_rereads_the_agents_not_the_profiles() {
     };
     assert_eq!(*menu, MenuId::Agents);
     assert!(rows.as_ref().unwrap()[0].text.contains("Other"), "{rows:?}");
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 /// A registry search's answer.

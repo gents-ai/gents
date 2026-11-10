@@ -8,10 +8,10 @@ async fn captured_context_details_require_exact_owner_and_admission_identity() {
         PIN_FIXED_DID,
         "session-a",
     )
-        .await
-        .unwrap()
-        .latest_context
-        .unwrap();
+    .await
+    .unwrap()
+    .latest_context
+    .unwrap();
     context.accounting.estimator = "openai_chat_wire_json_bytes_div_4_v1".into();
     context.accounting.components.documents = 0;
     let body = json!({"messages":[{"role":"system","content":"private system"},{"role":"user","content":"hello"}],"tools":[{"type":"function"}]});
@@ -187,8 +187,8 @@ async fn ui_accounting_separates_compaction_usage_from_current_context() {
         PIN_FIXED_DID,
         "session-a",
     )
-        .await
-        .unwrap();
+    .await
+    .unwrap();
     let response = node
         .execute(r#"{ AgentRequest(filter: {request_id: {_eq: "request-a-new"}}) {_docID} }"#)
         .await;
@@ -209,12 +209,12 @@ async fn ui_accounting_separates_compaction_usage_from_current_context() {
             }}) {{_docID}} }}"#, escape_graphql_string(doc))).await;
         crate::store::graphql::ensure_no_errors(&response, "context generation fixture").unwrap();
         let observed = load_session_investigation(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
-        PIN_FIXED_DID,
-        "session-a",
-    )
-            .await
-            .unwrap();
+            &crate::store::config_client::ConfigAccess::local(node.clone()),
+            PIN_FIXED_DID,
+            "session-a",
+        )
+        .await
+        .unwrap();
         assert_eq!(
             observed
                 .latest_context

@@ -582,7 +582,7 @@ mod tests {
                 "model_name": "claude-old",
             }],
             "agents": [
-                { "node_did": "owner", "agent_id": "engineer", "inference_profile_id": "profile-anthropic" },
+                { "node_did": "owner", "agent_did": "engineer", "inference_profile_id": "profile-anthropic" },
             ],
         })
     }
@@ -672,7 +672,7 @@ mod tests {
         let values = [&sampling["temperature"], &sampling["top_p"]];
         assert_eq!(values, [&json!(0.7), &json!(0.95)]);
         assert_eq!(stored(&access, Collection::Agent).await, agents);
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     /// The shell takes a whole number as the desktop's `Number()` does.

@@ -76,12 +76,13 @@ async fn launch_codex(args: &[String], notice_after_exit: Option<&str>) -> Resul
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "codex".to_string());
-    let status =
-        gents::tools::exec::native_spawn::spawn_tokio(tokio::process::Command::new(&bin).args(args))
-            .with_context(|| format!("launching `{bin}`: {}", codex_install_message()))?
-            .wait()
-            .await
-            .with_context(|| format!("waiting for `{bin}`"))?;
+    let status = gents::tools::exec::native_spawn::spawn_tokio(
+        tokio::process::Command::new(&bin).args(args),
+    )
+    .with_context(|| format!("launching `{bin}`: {}", codex_install_message()))?
+    .wait()
+    .await
+    .with_context(|| format!("waiting for `{bin}`"))?;
     if let Some(notice) = notice_after_exit {
         eprintln!("{notice}");
     }
