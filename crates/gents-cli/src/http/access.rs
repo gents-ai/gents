@@ -47,6 +47,7 @@ impl HttpAuthority {
         self
     }
 
+    #[cfg(test)]
     pub(crate) fn protect_http(
         self,
         config: gents::defra_node::HttpConfig,
@@ -54,7 +55,7 @@ impl HttpAuthority {
         config.with_router_transform(std::sync::Arc::new(move |router| self.wrap(router)))
     }
 
-    fn wrap(&self, router: axum::Router) -> axum::Router {
+    pub(crate) fn wrap(&self, router: axum::Router) -> axum::Router {
         router.layer(axum::middleware::from_fn_with_state(
             self.clone(),
             require_authority,
