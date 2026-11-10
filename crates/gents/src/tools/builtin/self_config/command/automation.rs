@@ -21,7 +21,7 @@ impl ConfigCommandTool {
                     .await
             }
             other => bail!(
-                "unknown mcp-service command {other:?}; accepted: get, preview, edit; see [\"help\",\"mcp-service\"]"
+                "unknown mcp-service command {other:?}; accepted: list, get, create, update, delete, preview, edit; see [\"help\",\"mcp-service\"]"
             ),
         }
     }

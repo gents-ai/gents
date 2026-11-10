@@ -358,7 +358,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
         },
         "mcp-service" => Page {
             what: "an MCP service registration (mcp_service grant). SERVICE_ID goes in target_id.",
-            commands: &["mcp-service get", "mcp-service preview|edit  set: service fields"],
+            commands: &["mcp-service list|get", "mcp-service [preview] create|update|delete  set: service fields", "mcp-service preview|edit  set: service fields"],
             notes: "Creating a registration grants no tools; select its service ID in Tools remote.services.",
             next: "select its tools in an agent's Tools remote.services.",
         },
@@ -374,7 +374,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
                 "cleanup preview  options.target: RESOURCE=ID or a list of them",
                 "cleanup remove  options.digest from the preview and the same options.target",
             ],
-            notes: "RESOURCE: agent, context, tools, agent-target, profile, sampling, execution, retry-policy, compaction, backend, mcp-service, task, schedule, trigger, event-source, datastore, skill. Datastore surfaces and skills are removable once unreferenced. Application collections are emptied and removed with the schema tool (collection empty, collection remove) once nothing here names them. Remove refuses if any target changed since the preview. Agent and context need the agent catalog grant; the Engineer agent cannot be removed.",
+            notes: "RESOURCE: agent, context, tools, agent-target, profile, sampling, execution, retry-policy, compaction, backend, mcp-service, task, schedule, trigger, event-source, datastore, skill, page, plugin-source. Datastore surfaces and skills are removable once unreferenced. Application collections are emptied and removed with the schema tool (collection empty, collection remove) once nothing here names them. Remove refuses if any target changed since the preview. Agent and context need the agent catalog grant; the Engineer agent cannot be removed.",
             next: "read back to confirm the targets are gone.",
         },
         "policy" => Page {
@@ -834,3 +834,41 @@ mod pack_page_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod accepted_command_tests {
+    use super::page;
+
+    #[test]
+    fn cleanup_page_lists_exactly_the_resources_cleanup_accepts() {
+        let notes = page("cleanup").expect("cleanup help page exists").notes;
+        let listed: Vec<&str> = notes
+            .strip_prefix("RESOURCE: ")
+            .and_then(|rest| rest.split_once(". "))
+            .expect("cleanup notes open with the resource list")
+            .0
+            .split(", ")
+            .collect();
+        for name in &listed {
+            assert!(
+                super::super::cleanup::cleanup_target(name).is_ok(),
+                "{name} is listed but refused"
+            );
+        }
+        for accepted in ["page", "plugin-source"] {
+            assert!(listed.contains(&accepted), "{accepted} is accepted but unlisted");
+        }
+    }
+
+    #[test]
+    fn mcp_service_page_lists_the_document_verbs() {
+        let commands = page("mcp-service")
+            .expect("mcp-service help page exists")
+            .commands
+            .join("\n");
+        for verbs in ["list|get", "create|update|delete", "preview|edit"] {
+            assert!(commands.contains(verbs), "{verbs} missing from {commands}");
+        }
+    }
+}
+

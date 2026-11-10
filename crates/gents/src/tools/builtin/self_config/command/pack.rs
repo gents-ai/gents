@@ -46,7 +46,7 @@ impl ConfigCommandTool {
                     "installed": record,
                 }.pretty()
             }
-            _ => bail!("plugin supports list, get and run; call [\"help\",\"plugin\"]"),
+            _ => bail!("plugin supports build, list, get and run; call [\"help\",\"plugin\"]"),
         }
     }
 
