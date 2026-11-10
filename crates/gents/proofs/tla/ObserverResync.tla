@@ -2,7 +2,7 @@
 \* The desktop observer's delivery and resync loop for runtime documents
 \* (`observe.rs`, `observe/delivery.rs`, `observe/projection_store.rs`) and
 \* the direct refresh path beside it (`ClientCore::refresh_store`,
-\* `refresh_node`, `refresh_config_source`).
+\* `refresh_node`, `refresh_written_node`).
 \*
 \* Runtime. Each node's runtime commits projected writes (`db`). DefraDB
 \* delivers a change event for a commit only on a subscription armed before
