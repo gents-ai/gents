@@ -60,6 +60,7 @@ export function createBridgeHttpAdapter(
     provisionAgentIdentity: unsupported("provisionAgentIdentity"),
     removePeer: unsupported("removePeer"),
     renamePeer: unsupported("renamePeer"),
+    dismissEndedAccess: unsupported("dismissEndedAccess"),
     listWorkspace: unsupported("listWorkspace"),
     fetchRequestTimeline: unsupported("fetchRequestTimeline"),
     fetchSessionGoal: unsupported("fetchSessionGoal"),

@@ -4,8 +4,8 @@ use gents_protocol::goal_control::{GoalControlOutcome, GoalOperation};
 
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::types::{
-    GoalControlAction, GoalControlRequest, GoalControlResult, GoalControlView, SessionGoalState,
-    SessionGoalView,
+    GoalControlAction, GoalControlRequest, GoalControlResult, GoalControlView, GoalView,
+    SessionGoalState, SessionGoalView,
 };
 use gents::goal::SessionGoalObservationState;
 use gents_protocol::goal_control::SessionGoalObservation;
@@ -20,6 +20,34 @@ pub async fn session_goal(
         let waiting = waiting_question_ids(core, node_did, session_id, &observation);
         goal_view(observation, waiting)
     }))
+}
+
+/// The session snapshot's Goal: shown only when the owner's read observed a
+/// verified envelope carrying one (Lean `SessionObservation.view` = `.goal`).
+/// Goal documents the reader may also be able to read never supply it. Every
+/// other state shows none here, which is not verified absence: the state and
+/// its next action are `desktop_session_goal`'s.
+pub(crate) fn verified_session_goal(state: SessionGoalObservationState) -> Option<GoalView> {
+    let SessionGoalObservationState::Observed(observation) = state else {
+        return None;
+    };
+    let snapshot = observation.goal?.snapshot;
+    let text = |value: String| Some(value).filter(|value| !value.trim().is_empty());
+    Some(GoalView {
+        goal_id: snapshot.goal_id,
+        objective: text(snapshot.objective),
+        status: text(snapshot.status),
+        token_budget: snapshot.token_budget,
+        tokens_used: snapshot.tokens_used.max(0),
+        active_time_seconds: snapshot.active_time_seconds.max(0),
+        consecutive_blocked_audits: snapshot.consecutive_blocked_audits.max(0),
+        continuation_sequence: snapshot.continuation_sequence.max(0),
+        wrapup_requested: snapshot.wrapup_requested,
+        wrapup_completed: snapshot.wrapup_completed,
+        last_blocked_reason: snapshot.last_blocked_reason.and_then(text),
+        last_failure: snapshot.last_failure.and_then(text),
+        completion_evidence: snapshot.completion_evidence.and_then(text),
+    })
 }
 
 /// Carries the owner's state and `next` to the desktop DTO.

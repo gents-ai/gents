@@ -1015,10 +1015,14 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         console::ConsoleChild::spawn(host_command.as_std(), &root.join("client-host.log"))?;
     wait_listener(&mut host, &paths).await?;
     let mut client = Attachment::start_with_binary(&paths, &host_binary).await;
-    // Bearer authorization and client-signed writes need the Node's held key.
+    // The operator observes and configures as the User `init` made the Node's
+    // administrator, whose `session_read` covers the client's sessions and
+    // requests; the Node key holds no relation on them.
+    let operator =
+        gents_desktop_core::client::PrincipalIdentity::load_existing(&homes.cli_identity())?;
     let access = gents::ConfigAccess::Graphql(
-        gents::store::config_client::GraphqlEndpoint::as_principal(graphql, identity.did())
-            .with_client_signing_capability(identity.client_signing_capability()?)?,
+        gents::store::config_client::GraphqlEndpoint::as_principal(graphql, operator.did())
+            .with_client_signing_capability(operator.client_signing_capability()?)?,
     );
     if matches!(journey, Journey::Conversation | Journey::RuntimeReplacement) {
         client
@@ -1076,6 +1080,22 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         })
         .await
         .context("runtime did not observe the enrollment request")??;
+        // Approval admits the route only; the Node's authority for the
+        // enrolled User is the separate explicit grant (Lean
+        // `Identity.EnrollmentGrant`).
+        let granted = Command::new(&cli)
+            .current_dir(root)
+            .envs(homes.env())
+            .args(["p2p", "enrollment", "grant", pending_id, "--home"])
+            .arg(&node_home)
+            .kill_on_drop(true)
+            .output();
+        let granted = tokio::time::timeout(Duration::from_secs(30), granted).await??;
+        ensure!(
+            granted.status.success(),
+            "enrollment grant failed: {}",
+            String::from_utf8_lossy(&granted.stderr)
+        );
         let approved = Command::new(&cli)
             .current_dir(root)
             .envs(homes.env())
@@ -1437,12 +1457,19 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 "goal controls must preserve the current owned turn"
             );
         }
+        // The snapshot shows a Goal only as the Agent's verified observation
+        // shows it (Lean `SessionObservation.view`); that no Goal document
+        // reaches the client is checked on its own store after the host stops.
         let projection = read_session(&mut client, &mut id, node_did, session).await?;
         ensure!(
             projection["sessionId"] == session
                 && projection["nodeDid"] == node_did
-                && projection["goal"].is_null(),
-            "ordinary client routes must not replicate raw Goal documents"
+                && projection["goal"]["goalId"] == view["goal"]["goalId"]
+                && projection["goal"]["status"] == view["goal"]["status"]
+                && projection["goal"]["objective"] == view["goal"]["objective"],
+            "the session snapshot must show the Agent's verified Goal observation: {} vs {}",
+            projection["goal"],
+            view["goal"]
         );
     }
     if matches!(journey, Journey::Editor) {
@@ -2564,6 +2591,31 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     stop(&mut host)
         .await
         .context("stopping the fixture client host")?;
+    if matches!(journey, Journey::Goal) {
+        // Ordinary client routes replicate no application document (Lean
+        // `ScopeTemplates.builtinCatalog`, `Identity.unlisted_collection_stays_local`):
+        // the client's own store holds the Goal caller receipts it wrote, and
+        // no Goal.
+        let reopened = Arc::new(
+            ClientCore::start_with_paths_and_options(
+                paths.clone(),
+                ClientCoreOptions::local_only(),
+            )
+            .await?,
+        );
+        let local = gents::store::config_client::ConfigAccess::local(reopened.node_arc())
+            .execute("{ Goal { _docID } PendingChatSubmission { _docID } }")
+            .await;
+        reopened.shutdown().await?;
+        let local = local?;
+        ensure!(
+            local["data"]["PendingChatSubmission"]
+                .as_array()
+                .is_some_and(|rows| !rows.is_empty())
+                && local["data"]["Goal"].as_array().is_some_and(Vec::is_empty),
+            "ordinary client routes must not replicate raw Goal documents: {local}"
+        );
+    }
     Ok(())
 }
 
@@ -2774,7 +2826,7 @@ async fn exercise_message_edit(
                 )
                 .await;
             *id += 1;
-            if view["sessionId"] == child {
+            if view["kind"] == "observed" && view["observation"]["sessionId"] == child {
                 return;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -2978,6 +3030,7 @@ async fn wait_goal(
     session: &str,
     status: &str,
 ) -> Result<Value> {
+    let mut last = Value::Null;
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             let view = client
@@ -2988,17 +3041,20 @@ async fn wait_goal(
                 )
                 .await;
             *id += 1;
-            if view["nodeDid"] == node_did
-                && view["sessionId"] == session
-                && view["goal"]["status"] == status
+            let observation = &view["observation"];
+            if view["kind"] == "observed"
+                && observation["nodeDid"] == node_did
+                && observation["sessionId"] == session
+                && observation["goal"]["status"] == status
             {
-                return view;
+                return observation.clone();
             }
+            last = view;
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
     .await
-    .context("the signed goal observation did not reach the client")
+    .with_context(|| format!("the signed goal observation did not reach the client; last: {last}"))
 }
 
 async fn configure_inference(

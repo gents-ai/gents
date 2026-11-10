@@ -1227,6 +1227,67 @@ async fn a_reader_granted_only_the_fork_reads_its_whole_retained_transcript() {
 }
 
 #[tokio::test]
+async fn edit_fork_reuses_canonical_request_reads_for_the_retained_prefix() {
+    use crate::NodeIdentity as _;
+    const SOURCE: &str = "fork-shared-source";
+    const CHILD: &str = "fork-shared-child";
+    let (db, user, client, binding) = fork_reader_node("fork-shared-reads").await;
+    let node_did = db.node_identity.did().to_owned();
+    let mut lifecycle =
+        signed_claimed_authored_request(&db, &user, &client, &binding, "shared-request", SOURCE)
+            .await;
+    let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
+        db.node.clone(),
+        &lifecycle,
+        std::time::Duration::ZERO,
+    )
+    .unwrap();
+    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    let mut keys = Vec::new();
+    for sequence in 1..=21 {
+        let name = format!("message-{sequence}");
+        keys.push(gents_protocol::output::rows::authored_message_key(
+            &lifecycle.request().doc_id,
+            &name,
+        ));
+        writer
+            .publish_authored_message(&lifecycle, &name, &Message::user(&name))
+            .await
+            .unwrap();
+    }
+    lifecycle
+        .terminalize_owned(
+            crate::request::lifecycle::RequestTerminalOutcome::Completed,
+            gents_protocol::output::TerminalOutput::NoMessage,
+            None,
+        )
+        .await
+        .unwrap();
+    let params = ForkParams {
+        source_session_id: SOURCE,
+        boundary: ForkBoundary::BeforeMessageKey(&keys[20]),
+        caller_node_did: &node_did,
+        caller_requester_did: Some(user.did()),
+        target_agent_did: None,
+    };
+    let (result, scans) =
+        count_request_output_scans(fork_edit_on(&client, params, CHILD, user.did())).await;
+    assert_eq!(result.unwrap(), CHILD);
+    assert_eq!(
+        scans, 1,
+        "retained messages from one request share one output scan"
+    );
+    assert_eq!(
+        history_on(&client, CHILD, &node_did, Some(user.did()), None)
+            .await
+            .unwrap()
+            .len(),
+        20
+    );
+    db.node.shutdown().await.expect("shut down test node");
+}
+
+#[tokio::test]
 async fn retained_edit_fork_survives_reopen_without_copying_or_rechecking_current_agent() {
     use crate::NodeIdentity as _;
     const SOURCE: &str = "retained-source";

@@ -431,6 +431,7 @@ async fn router_holds_request_during_generation_handoff_and_dispatches_after_ali
         crate::runtime::node_readiness_publisher::AgentAdmissionObservation::for_test(2, []),
     );
     let mut pending_request = None;
+    let mut deferred = Default::default();
     let (request, routed_snapshot, routed_observation) = {
         let wait = wait_for_next_request_with_latest_snapshot(
             node_did,
@@ -442,6 +443,7 @@ async fn router_holds_request_during_generation_handoff_and_dispatches_after_ali
                 admission_changed: &mut admission_rx,
                 readiness_changed: &mut readiness_rx,
                 pending_request: &mut pending_request,
+                deferred: &mut deferred,
             },
             &mut shutdown_rx,
             None,
@@ -548,6 +550,7 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
     admission_gate.open().await;
     let mut admission_rx = admission_gate.subscribe();
     let mut pending_request = None;
+    let mut deferred = Default::default();
     let router_node_did = node_did.clone();
     let router_task = tokio::spawn(async move {
         wait_for_next_request_with_latest_snapshot(
@@ -560,6 +563,7 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
                 admission_changed: &mut admission_rx,
                 readiness_changed: &mut readiness_rx,
                 pending_request: &mut pending_request,
+                deferred: &mut deferred,
             },
             &mut shutdown_rx,
             Some(&runtime_status_for_router),

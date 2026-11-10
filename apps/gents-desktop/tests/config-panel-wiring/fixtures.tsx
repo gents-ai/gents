@@ -14,6 +14,8 @@ export const deployment: DeploymentView = {
   runtimeConnection: "connected",
   chatSafe: true,
   chatRefusal: null,
+  leaseExpiresAt: null,
+  operatorAccess: true,
   lastError: null,
   node: {
     nodeDid: "did:key:z6MkAgent",
