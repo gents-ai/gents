@@ -25,16 +25,21 @@ gents config pack install gents/dynamic_workflows --home ./.gents --node-did "$N
 gents config pack wire gents/workflow --agent <A> --targets-from gents/dynamic_workflows
 ```
 
+`--agent` takes the agent's DID (`gents config agent list`). The install's
+`--wire <agent-did>` does the same wiring in one step.
+
 The wired job block copies `Tools/workflow-caller`: `agent_targets` and
 `dynamic_targets` are `wf-read-only`. A pack may ship `policy.dynamic` only as
 `off` or `check` (gents `job_block_admissible`), and `check` refuses every
-dynamic spawn, so the operator sets `run` on the agent's Tools after wiring:
+dynamic spawn and message, so no workflow runs until the agent's Tools say
+`run`. The operator sets it on the agent's Tools document, whose ID
+`gents config tools list` shows:
 
 ```sh
-gents config tools --agent <A> set integrations.plugins[gents/workflow].job.policy.dynamic=run
+gents config tools show <tools-id> --home ./.gents \
+  | jq 'del(._docID) | (.integrations.plugins[] | select(.plugin == "gents/workflow") | .job.policy.dynamic) = "run"' > tools.json
+gents config tools set --home ./.gents --file tools.json
 ```
-
-(or edit the Tools document; the exact `gents config` spelling is the host's).
 
 ## Authoring
 

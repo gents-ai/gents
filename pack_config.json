@@ -2,7 +2,7 @@
   "node": {},
   "agents": [
     {
-      "agent_id": "wf-read-only",
+      "agent_slot": "wf-read-only",
       "context_id": "wf-read-only-context",
       "display_name": "Workflow read-only worker",
       "description": "Does one read-only task a workflow step gives it and answers in the shape asked.",
@@ -64,7 +64,7 @@
   ],
   "agent_targets": [
     {
-      "agent_id": "wf-read-only",
+      "agent_did": "gents:agent-slot:wf-read-only",
       "name": "wf-read-only",
       "target_id": "wf-read-only",
       "target_node_did": "${GENTS_PACK_NODE_DID}",
