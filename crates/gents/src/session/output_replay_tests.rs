@@ -1026,6 +1026,66 @@ async fn recovered_stopped_reasoning_replays_only_with_its_authenticated_prefix(
         .all(|block| !matches!(block, AssistantContent::Reasoning(_))));
 }
 
+/// Lean `claude_reasoning_only_is_not_replayed`: a recovered turn that kept
+/// only its stopped reasoning, with no ordinary content, is no replay base on
+/// the Claude wire, even beside its authenticated capture.
+#[tokio::test]
+async fn recovered_reasoning_without_text_is_not_replayed_on_the_claude_wire() {
+    use gents_protocol::message::AssistantContent;
+    let fixture = fixture_with_provider_payload_options(
+        true,
+        gents_protocol::rendered_request::CaptureScopeKind::Inference,
+        false,
+        true,
+    )
+    .await;
+    let capture = fixture
+        .insert_capture(RenderedRequestSource::ClaudeCliSubscription)
+        .await
+        .unwrap();
+    let candidate = fixture.candidates().await.unwrap().remove(0);
+    let tag = ReplayTag {
+        request_doc_id: fixture.request_doc_id.clone(),
+        source: OutputSource::ProviderTurn {
+            scope: candidate.coordinate.scope,
+            turn_index: candidate.coordinate.turn_index,
+            attempt: candidate.coordinate.attempt,
+        },
+    };
+    let Message::Assistant { id, content, .. } = candidate.message.clone() else {
+        panic!("expected assistant")
+    };
+    assert!(matches!(content[0], AssistantContent::Reasoning(_)));
+    let rows = vec![TaggedAssistantRow {
+        source: Some(tag.clone()),
+        physical_header: Some(candidate.header_doc_id),
+        block_indices: candidate.block_indices[..1].to_vec(),
+        id,
+        content: content[..1].to_vec(),
+    }];
+    let evidence = super::output::replay_tags::resolve_canonical_replay_tag(
+        &fixture.access,
+        fixture.scope(),
+        &fixture.boundary,
+        &tag,
+    )
+    .await
+    .unwrap();
+    let resolve = |_: &ReplayTag| evidence.clone();
+    let no_reasoning = |replayed: &[TaggedAssistantRow]| {
+        replayed.iter().all(|row| {
+            row.content
+                .iter()
+                .all(|block| !matches!(block, AssistantContent::Reasoning(_)))
+        })
+    };
+    let stage = replay_stage(&rows, &capture.issuer, capture.wire, resolve);
+    assert!(no_reasoning(&stage), "{stage:?}");
+    let body = flatten(&capture.body, capture.wire).unwrap();
+    let selected = select_replay(&rows, &capture.issuer, capture.wire, resolve, &body);
+    assert!(no_reasoning(&selected), "{selected:?}");
+}
+
 #[tokio::test]
 async fn signed_capture_restores_exact_authenticated_suffix_and_rejects_rewritten_prefix() {
     use gents_protocol::message::AssistantContent;

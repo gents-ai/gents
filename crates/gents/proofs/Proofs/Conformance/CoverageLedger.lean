@@ -793,6 +793,26 @@ def caseCoverage : List CoverageEntry :=
       "pack::installation::hosted::tests::hosted_home_publication_conforms_to_lean"
       "Binds actual home record write and failure to modeled success; native commit and cancellation ordering are exercised by the transaction owner.")
       "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "pack_document_ownership_cases"
+      "PackDocumentOwnershipCases"
+      "pack::provenance::ownership_tests::document_ownership_matches_executable_model")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "pack_source_selection_cases"
+      "PackSourceSelectionCases"
+      "pack::installation::tests::install_source_selection_matches_lean")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "pack_install_variable_cases"
+      "PackInstallVariableCases"
+      "pack::interpolate::install_variable_conformance::variable_precedence_matches_the_executable_model")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "pack_install_upgrade_cases"
+      "PackInstallUpgradeCases"
+      "pack::interpolate::install_variable_conformance::upgrade_variable_precedence_matches_the_executable_model")
+      "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "agent_steer_disposition_cases"
       "AgentSteerDispositionCases"

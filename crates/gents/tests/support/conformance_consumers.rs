@@ -56,6 +56,34 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "pack::provenance::ownership_tests::document_ownership_matches_executable_model",
+            package: "gents",
+            source_path: "crates/gents/src/pack/provenance.rs",
+            module_path: "pack::provenance::ownership_tests",
+            function: "document_ownership_matches_executable_model",
+        },
+        ConformanceConsumer::RustTest {
+            id: "pack::installation::tests::install_source_selection_matches_lean",
+            package: "gents",
+            source_path: "crates/gents/src/pack/installation/tests.rs",
+            module_path: "pack::installation::tests",
+            function: "install_source_selection_matches_lean",
+        },
+        ConformanceConsumer::RustTest {
+            id: "pack::interpolate::install_variable_conformance::variable_precedence_matches_the_executable_model",
+            package: "gents",
+            source_path: "crates/gents/src/pack/interpolate.rs",
+            module_path: "pack::interpolate::install_variable_conformance",
+            function: "variable_precedence_matches_the_executable_model",
+        },
+        ConformanceConsumer::RustTest {
+            id: "pack::interpolate::install_variable_conformance::upgrade_variable_precedence_matches_the_executable_model",
+            package: "gents",
+            source_path: "crates/gents/src/pack/interpolate.rs",
+            module_path: "pack::interpolate::install_variable_conformance",
+            function: "upgrade_variable_precedence_matches_the_executable_model",
+        },
+        ConformanceConsumer::RustTest {
             id: "pack::installation::tests::pack_install_applies_exactly_the_declared_placement_readers",
             package: "gents",
             source_path: "crates/gents/src/pack/installation/tests.rs",

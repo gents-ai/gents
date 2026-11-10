@@ -2298,7 +2298,8 @@ fn engine_style_pack_job_block_installs() {
 // --- Documents dependencies ---------------------------------------------
 
 /// `dependee_fixture` at `version` with its Tools and Context display names
-/// rendered from install variables.
+/// rendered from install variables, and its Tools' unique id from
+/// `${UPGRADE_ID:-fixture-dependee-tools}`, which the Context selects.
 fn dependee_with_variables(
     version: &str,
     tools: &str,
@@ -2314,6 +2315,9 @@ fn dependee_with_variables(
     edit("pack_config.json", &|config| {
         config["tools"][0]["display_name"] = json!(tools);
         config["contexts"][0]["display_name"] = json!(context);
+        let id = json!("${UPGRADE_ID:-fixture-dependee-tools}");
+        config["tools"][0]["tools_id"] = id.clone();
+        config["contexts"][0]["tools_id"] = id;
     });
     edit("manifest.json", &|manifest| {
         manifest["version"] = json!(version)
@@ -2767,7 +2771,7 @@ async fn installing_a_dependent_preserves_the_installed_dependency_environment()
         .unwrap();
     assert_eq!(
         rows["data"]["PackInstallation"][0]["variables"],
-        json!({"DEPENDEE_LABEL": "explicit", "DEPENDEE_NAME": null})
+        json!({"DEPENDEE_LABEL": "explicit", "DEPENDEE_NAME": null, "UPGRADE_ID": null})
     );
     let refused = BTreeMap::from([(
         "fixture/dependee_fixture".to_owned(),

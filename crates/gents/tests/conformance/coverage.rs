@@ -500,6 +500,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "PackPlacementReaderCases",
         ),
         (
+            !snapshot.pack_document_ownership_cases.is_empty(),
+            "pack_document_ownership_cases",
+            "PackDocumentOwnershipCases",
+        ),
+        (
             !snapshot.agent_target_access_cases.is_empty(),
             "agent_target_access_cases",
             "AgentTargetAccessCases",
@@ -910,6 +915,33 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "hosted_pack_schema_cases".into(),
             "HostedPackSchemaCases".into(),
         ));
+    }
+    // Pack generators the proofs build as their own executables, outside the
+    // snapshot; their Rust consumers run them directly.
+    let lakefile = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("proofs/lakefile.lean"),
+    )
+    .expect("reading the proofs lakefile");
+    for (module, key, class) in [
+        (
+            "PackSourceSelection",
+            "pack_source_selection_cases",
+            "PackSourceSelectionCases",
+        ),
+        (
+            "PackInstallVariables",
+            "pack_install_variable_cases",
+            "PackInstallVariableCases",
+        ),
+        (
+            "PackInstallUpgrade",
+            "pack_install_upgrade_cases",
+            "PackInstallUpgradeCases",
+        ),
+    ] {
+        if lakefile.contains(&format!("`Proofs.Conformance.{module},")) {
+            emitted.insert((key.into(), class.into()));
+        }
     }
     if !snapshot.hosted_pack_home_cases.is_empty() {
         emitted.insert((
