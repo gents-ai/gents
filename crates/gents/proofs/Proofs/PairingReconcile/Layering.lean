@@ -88,7 +88,9 @@ theorem no_overlay_adds_no_collections
   · simp [mergeMaterialized] at hm
     rw [hm]
 
-/-- Revoking the overlay leaves exactly the base route. -/
+/-- Revoking the overlay leaves exactly the base route. This is a statement about
+future pushes only: documents the overlay already delivered remain on the peer
+(`ScopeTemplates.appCollectionsTemplate`). -/
 theorem removing_overlay_restores_base (base overlay merged : Layer) (localDid peerDid : String)
     (distinct : peerDid ≠ localDid)
     (hm : mergeLayered localDid peerDid (some base) (some overlay) = some merged) :

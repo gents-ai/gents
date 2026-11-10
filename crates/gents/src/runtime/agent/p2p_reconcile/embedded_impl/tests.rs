@@ -133,3 +133,54 @@ async fn protocol_allowlist_rejects_local_data_before_transport() {
         }
     }
 }
+
+/// Every collection a Gents node creates is refused as application data, by
+/// name at admission and by name or collection ID at the transport guard, so
+/// renaming a request cannot route Gents documents onto a pairing.
+#[tokio::test]
+async fn every_gents_collection_is_refused_by_name_and_by_id() {
+    use crate::runtime::agent::p2p_reconcile::{
+        resolve_embedded_collection_id,
+        templates::{admit_app_collections, AppCollectionAdmissionError},
+    };
+    use gents_protocol::peer_schema::AppCollectionRefusal;
+    let db = crate::support::test_p2p_db("engineer-p2p-managed-catalog").await;
+    let admin = EmbeddedRemoteP2pAdmin::new(db.node.clone());
+    let names = db.node.list_collections().unwrap();
+    assert!(names.iter().any(|name| name == "AgentSession"), "{names:?}");
+    for name in names {
+        let admitted =
+            admit_app_collections(db.node.clone(), &BTreeSet::from([name.clone()])).await;
+        assert!(
+            matches!(
+                admitted,
+                Err(AppCollectionAdmissionError::Refused {
+                    refusal: AppCollectionRefusal::Managed,
+                    ..
+                })
+            ),
+            "{name}: {admitted:?}"
+        );
+        let id = resolve_embedded_collection_id(&db.node, &name)
+            .unwrap()
+            .expect("registered collection ID");
+        assert!(
+            admit_app_collections(db.node.clone(), &BTreeSet::from([id.clone()]))
+                .await
+                .is_err(),
+            "{name} admitted by collection ID {id}"
+        );
+        if gents_protocol::schemas::is_replicated_protocol_collection(&name) {
+            continue;
+        }
+        for token in [name.clone(), id] {
+            let refused = admin
+                .add_replicator(&[], std::slice::from_ref(&token), &PairingFilters::new())
+                .await;
+            assert!(
+                matches!(&refused, Err(RemoteP2pAdminError::RuntimeLocalCollection(n)) if *n == name),
+                "{token}: {refused:?}"
+            );
+        }
+    }
+}

@@ -442,7 +442,8 @@ async fn application_collections_replicate_only_after_each_node_opts_in() {
     let opting_agent_b = pairing_agent(&db_b).await;
     let tool_a = pairing_tool(&db_a, Some(opting_agent_a.clone()), true);
     let tool_b = pairing_tool(&db_b, Some(opting_agent_b), true);
-    let other_agent_tool = pairing_tool(&db_a, Some(pairing_agent(&db_a).await), true);
+    let other_agent = pairing_agent(&db_a).await;
+    let other_agent_tool = pairing_tool(&db_a, Some(other_agent.clone()), true);
 
     let agent_a = Gents::from_default_agent_documents(
         db_a.node.clone(),
@@ -593,6 +594,42 @@ async fn application_collections_replicate_only_after_each_node_opts_in() {
         let refused = p2p_call(&other_agent_tool, call).await.unwrap_err();
         assert!(refused.contains("managed by another owner"), "{refused}");
     }
+    // Native ACP, not only the tool's check, keeps the sibling out: it holds the
+    // same delete grant, yet deleting the overlay directly as itself removes nothing.
+    let overlay = p2p_call(&tool_a, json!({"action":"pairings_get","peer_id":peer_b}))
+        .await
+        .unwrap();
+    assert_eq!(
+        overlay["outcome"]["desired"].as_array().map(Vec::len),
+        Some(1)
+    );
+    let sibling = gents::ConfigAccess::local_managed_agent(
+        db_a.node.clone(),
+        identity::Did::new(other_agent.did()).expect("sibling DID"),
+        other_agent.as_ref(),
+    )
+    .expect("sibling access");
+    let deleted = sibling
+        .write(
+            "test.pairing.sibling_delete",
+            &format!(
+                r#"mutation {{ delete_DataPlanePairingDesired(filter: {{peer_id: {{_eq: "{}"}}}}) {{ _docID }} }}"#,
+                escape_graphql_string(&peer_b)
+            ),
+        )
+        .await;
+    assert!(
+        !deleted
+            .as_ref()
+            .is_ok_and(|value| value["data"]["delete_DataPlanePairingDesired"]
+                .as_array()
+                .is_some_and(|rows| !rows.is_empty())),
+        "{deleted:?}"
+    );
+    let kept = p2p_call(&tool_a, json!({"action":"pairings_get","peer_id":peer_b}))
+        .await
+        .unwrap();
+    assert_eq!(kept["outcome"]["desired"], overlay["outcome"]["desired"]);
 
     write_change_proposed(db_b.node.as_ref(), "b-before-its-opt-in", "signup").await;
     assert_stays_local(

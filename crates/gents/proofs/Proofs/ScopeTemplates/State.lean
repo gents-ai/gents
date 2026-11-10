@@ -97,7 +97,28 @@ def clientTemplate : Template :=
     scope := .clientRoute, delivery := .push }
 
 /-- Application data replicates only where a node opted in for that peer: its
-Agent-owned overlay supplies the collections, so the route itself carries none. -/
+Agent-owned overlay supplies the collections, so the route itself carries none.
+
+Accepted limits (maintainer decisions, 2026-11-09):
+
+- Receiver consent is enrollment. The route exists only toward a peer that
+  currently holds an approved enrollment in the sending node's network, which
+  the peer obtained by requesting to join with that node's offer; the
+  reconciler replaces the overlay's peer and address with that enrollment's,
+  and the route closes when the enrollment is revoked or its lease expires.
+  Enrollment does not imply that the peer wants any particular application
+  collection, and the peer is not asked again: replicator pushes skip DefraDB's
+  receiver-side collection check (external premise, pinned DefraDB). Receiver
+  gating needs further design and would live in DefraDB.
+- The opt-in covers this node's documents in the named collections, including
+  documents written before it. Revoking stops new pushes; documents already
+  delivered stay on the peer, because replicated data cannot be recalled.
+- Peer schema compatibility is not checked before applying: preview reports
+  only local collection identities, and a mismatch surfaces as failed delivery
+  on the peer. It affects whether data arrives, not which data is sent.
+- Which collections an Agent may pair is bounded only by `decideAppCollection`
+  and the P2P mutation grant (`Identity.Configuration.toolOperationSources`);
+  there is no per-collection pairing grant. -/
 def appCollectionsTemplate : Template :=
   { id := "app-collections", collections := [], scope := .perCollection [],
     delivery := .push }

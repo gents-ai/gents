@@ -194,15 +194,23 @@ impl P2pTool {
         Ok(identity)
     }
 
+    fn require_mutation(&self) -> Result<()> {
+        ensure!(
+            self.mutate,
+            "P2P mutations are disabled by the tool grant; read-only actions still work; next call: p2p {{\"action\":\"help\",\"topic\":\"scope\"}}"
+        );
+        Ok(())
+    }
+
     /// The Agent whose managed identity owns this request's pairing overlay.
     /// The overlay is Agent-owned, so there is no Node identity fallback.
     fn pairing_agent(&self, runtime: &dyn NodeIdentity) -> Result<Arc<dyn NodeIdentity>> {
         let agent = self.agent.clone().context(
-            "pairing requires the running agent's own identity, and the Node identity must not stand in for it",
+            "pairing requires the running agent's own identity, and the Node identity must not stand in for it; run pairings from an agent session; next call: p2p {\"action\":\"help\",\"topic\":\"scope\"}",
         )?;
         ensure!(
             agent.did() != runtime.did(),
-            "pairing requires the running agent's own identity, not the Node identity"
+            "pairing requires the running agent's own identity, not the Node identity; next call: p2p {{\"action\":\"help\",\"topic\":\"scope\"}}"
         );
         if let Some(context) =
             crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
@@ -402,13 +410,13 @@ impl P2pTool {
             options
                 .get("collections")
                 .cloned()
-                .context("collections is required")?,
+                .context("collections is required for pairings_preview and pairings_apply; next call: p2p {\"action\":\"help\",\"topic\":\"pairings\"}")?,
         )
         .context("collections must be a list of application collection names; next call: p2p {\"action\":\"help\",\"topic\":\"pairings\"}")?;
         ensure!(!collections.is_empty(), "collections must name application collections; next call: p2p {{\"action\":\"help\",\"topic\":\"pairings\"}}");
         ensure!(
             collections.len() <= 16,
-            "at most 16 application collections per pairing"
+            "at most 16 application collections per pairing; next call: p2p {{\"action\":\"help\",\"topic\":\"pairings\"}}"
         );
         for name in &collections {
             validate_collection_identifier(name)?;
@@ -624,7 +632,7 @@ impl P2pTool {
                 ))
             }
             ["enrollment", "offer"] => {
-                ensure!(self.mutate, "P2P mutations are disabled by the tool grant");
+                self.require_mutation()?;
                 let projection = GraphqlEnrollmentStore::new(self.node.clone(), actor.clone())
                     .load_projection()
                     .await?;
@@ -686,7 +694,7 @@ impl P2pTool {
                 ))
             }
             ["enrollment", "request"] => {
-                ensure!(self.mutate, "P2P mutations are disabled by the tool grant");
+                self.require_mutation()?;
                 let request =
                     crate::runtime::agent::p2p_reconcile::enrollment_candidate::request_enrollment(
                         &self.node,
@@ -701,7 +709,7 @@ impl P2pTool {
                 ))
             }
             ["enrollment", "renewal_policy"] => {
-                ensure!(self.mutate, "P2P mutations are disabled by the tool grant");
+                self.require_mutation()?;
                 let enabled = options
                     .get("auto_renew")
                     .and_then(Value::as_bool)
@@ -729,7 +737,7 @@ impl P2pTool {
                 ))
             }
             ["enrollment", operation @ ("approve" | "deny" | "revoke")] => {
-                ensure!(self.mutate, "P2P mutations are disabled by the tool grant");
+                self.require_mutation()?;
                 let store = GraphqlEnrollmentStore::new(self.node.clone(), actor);
                 let id = text("request_id")?;
                 let result = match *operation {
@@ -784,7 +792,7 @@ impl P2pTool {
                         json!({"enrollment_request_id":active.request.request_id}),
                     ));
                 }
-                ensure!(self.mutate, "P2P mutations are disabled by the tool grant");
+                self.require_mutation()?;
                 let parent_node_doc_id = self.local_node_doc_id(actor.as_ref()).await?;
                 let addresses =
                     graphql_string_list_literal([active.request.candidate_ticket.as_str()]);
@@ -810,7 +818,7 @@ impl P2pTool {
                 ))
             }
             ["pairings", "revoke"] => {
-                ensure!(self.mutate, "P2P mutations are disabled by the tool grant");
+                self.require_mutation()?;
                 let peer = text("peer_id")?;
                 let agent = self.pairing_agent(actor.as_ref())?;
                 // Another Agent's overlay is invisible inside this Agent's
@@ -860,7 +868,7 @@ fn help(resource: Option<&str>) -> Result<&'static str> {
     Ok(match resource {
         None => "Actions: status; network_list, network_get; pairings_list, pairings_get, pairings_preview, pairings_apply, pairings_revoke; enrollment_offer, enrollment_request, enrollment_pending, enrollment_approve, enrollment_deny, enrollment_revoke, enrollment_history, enrollment_renewal_policy. Action help with topic status, network, pairings, enrollment or scope explains each; scope covers grants and capability boundaries. Identity comes from the running node and its agent. Mutation grants are explicit.",
         Some("status" | "network") => "status returns native connected peer references (raw IDs or transport addresses) and native sync facts. network_list lists up to 50 registered peers with exact DIDs and addresses. network_get takes peer_id, validates the transport identity and returns its registry record plus observed connection. A registry entry is discovery, not enrollment authority or current connectivity; network_get's connected field is the observed transport connection. status defaults to backlog facts; details:true returns native diagnostic counters.",
-        Some("pairings") => "Pairing replicates application collections from this node to one enrolled peer on this node's own initiative. Enrollment never starts it. Recipe: the peer joins this node (enrollment_offer, enrollment_request, enrollment_approve), both nodes hold the same collection definition, then this node calls pairings_preview with peer_id, peer_did and collections (1-16 names), then pairings_apply with the same fields, then pairings_get to confirm the replicator. pairings_apply replicates only this node's writes toward that peer; for data to flow both ways, the peer must apply its own pairing toward this node, which needs this node enrolled in the peer's network the same way. pairings_revoke with peer_id deletes this agent's overlay and stops new data; documents already delivered stay on the peer. Collections must exist here and have no document policy. Gents protocol, runtime and credential collections are always refused. Collections with @policy are refused because a replica on the peer is owned by its signer and the policy's grants do not replicate; only that signer could read it there. Preview reports local schema identities but does not check the peer. pairings_list and pairings_get show desired, applied, enrolled and connected separately; details:true adds native replicator filters. An overlay another agent owns is not changed. The desired document is not proof of a live route; confirm with pairings_get, then a read on the peer.",
+        Some("pairings") => "Pairing replicates application collections from this node to one enrolled peer on this node's own initiative. Enrollment never starts it. Recipe: the peer joins this node (enrollment_offer, enrollment_request, enrollment_approve), both nodes hold the same collection definition, then this node calls pairings_preview with peer_id, peer_did and collections (1-16 names), then pairings_apply with the same fields, then pairings_get to confirm the replicator. pairings_apply replicates this node's documents in those collections toward that peer, including documents written before the opt-in, and only in that direction; for data to flow both ways, the peer must apply its own pairing toward this node, which needs this node enrolled in the peer's network the same way. pairings_revoke with peer_id deletes this agent's overlay and stops new data; documents already delivered stay on the peer. Collections must exist here and have no document policy. Gents protocol, runtime and credential collections are always refused. Collections with @policy are refused because a replica on the peer is owned by its signer and the policy's grants do not replicate; only that signer could read it there. Preview reports local schema identities but does not check the peer. pairings_list and pairings_get show desired, applied, enrolled and connected separately; details:true adds native replicator filters. An overlay another agent owns is not changed. The desired document is not proof of a live route; confirm with pairings_get, then a read on the peer.",
         Some("enrollment") => "Joining: the approving node runs enrollment_offer and hands offer_token to the joining node, which runs enrollment_request; the approver then finds it with enrollment_pending and approves it. enrollment_offer requires mutation authority and returns this node's signed offer_token, peer_id and DID; the token is valid 5 minutes unless valid_for_secs asks for up to 3600, which a relay through people or other agents needs, and the joining node must request before expires_at; the token only lets its holder ask to join, approval stays here, and it is single use: give each joining node its own offer, because requests from two nodes made with one offer are both refused. enrollment_request requires offer_token from the approving node and mutation authority. It verifies the peer's signed offer, signs a request with this node's identity and delivers it; the peer's operator approves it there with approve_on_peer. enrollment_pending discovers signed request IDs. enrollment_approve, enrollment_deny or enrollment_revoke requires request_id and mutation authority; deny signs a refusal of a pending request, revoke ends an approved one. The existing enrollment owner verifies the operator, network and request and signs the durable decision. Approval admits the peer to this node's network for 30 days by default; lease_seconds may set a lease of up to 90 days. It materializes its enrollment route, so approve only a request you were asked to approve whose peer_did you checked. Enrollment is one-way: approval enrolls the requester in this node's network, not this node in the requester's. Enrollment in both directions needs each node enrolled in the other's network, through a second offer, request and approval the other way. Do not invent a DID or substitute an unsigned enrollment document. enrollment_history lists up to 50 current pending, approved, denied and revoked requests, newest first, with decision times and signers; requests that expired undecided or were superseded by the same peer's later request are omitted. Approved entries carry lease_state, lease_remaining_days and renewal_due, which turns true inside the last 7 days of the lease. Automatic renewal is off by default. enrollment_renewal_policy sets auto_renew and an optional maximum lease_seconds for this network; disabling it immediately stops automatic approvals. Renewal is re-enrollment before expiry: the same four calls with a fresh offer, request and approval for the same peer; the approval takes the peer's next authorization sequence and supersedes the old generation in place, so the peer's enrollment route stays. After expiry the peer's routes and remote requests stop until it re-enrolls. Approval replicates no application data; pairings is a separate opt-in.",
         Some("scope") => "P2P carries discovery and enrollment documents, plus application collections this node has explicitly paired toward an enrolled peer. Enrollment alone starts no application sync. Gents protocol, runtime and credential collections are never paired, whatever tool grants or document ACP say. Collections with a document policy are refused because only their signer could read them on the peer. Pairing writes an overlay owned by this agent's own DID, so DefraDB ACP decides who may change it; the Node identity is never used in its place. Everything else stays on its home node; read it through query. Enrollment is a separate signed authority, and mutation authority gates offers, requests, decisions and pairings.",
         Some(resource) => bail!("unknown P2P help topic {resource:?}; topics: {HELP_TOPICS:?}; next call: p2p {{\"action\":\"help\",\"topic\":\"scope\"}}"),
@@ -878,7 +886,7 @@ impl Tool for P2pTool {
             |description: &str| json!({"type":"string","minLength":1,"description":description});
         ToolDefinition {
             name: Self::NAME.into(),
-            description: "Inspect this node's P2P peers, enroll nodes and opt application collections into replication toward an enrolled peer. Pick an action and send only its fields: status [details]; network_list; network_get peer_id; pairings_list [details]; pairings_get peer_id [details]; pairings_preview and pairings_apply peer_id peer_did collections; pairings_revoke peer_id; enrollment_offer [valid_for_secs]; enrollment_request offer_token; enrollment_pending; enrollment_approve request_id [lease_seconds]; enrollment_deny and enrollment_revoke request_id; enrollment_renewal_policy auto_renew [lease_seconds]; enrollment_history. A node joins in four calls: the approver's enrollment_offer, the joining node's enrollment_request, then the approver's enrollment_pending and enrollment_approve; the reverse direction needs the same four calls the other way. Enrollment alone replicates no application data: pairings_apply is this node's explicit opt-in toward one peer. Action help with a topic explains rules. Enrollment and DefraDB enforce access.".into(),
+            description: "Inspect this node's P2P peers, enroll nodes and opt application collections into replication toward an enrolled peer. Pick an action and send only its fields: status [details]; network_list; network_get peer_id; pairings_list [details]; pairings_get peer_id [details]; pairings_preview and pairings_apply peer_id peer_did collections; pairings_revoke peer_id; enrollment_offer [valid_for_secs]; enrollment_request offer_token; enrollment_pending; enrollment_approve request_id [lease_seconds]; enrollment_deny and enrollment_revoke request_id; enrollment_renewal_policy auto_renew [lease_seconds]; enrollment_history. A node joins in four calls: the approver's enrollment_offer, the joining node's enrollment_request, then the approver's enrollment_pending and enrollment_approve; the reverse direction needs the same four calls the other way. Action help with a topic explains rules. Enrollment and DefraDB enforce access.".into(),
             parameters: json!({
                 "type": "object",
                 "required": ["action"],
