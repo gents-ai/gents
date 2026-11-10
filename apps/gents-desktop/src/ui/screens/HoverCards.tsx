@@ -1,4 +1,4 @@
-import { useState, type ReactElement, type ReactNode } from "react";
+import { useRef, useState, type ReactElement, type ReactNode } from "react";
 import { NodeAvatar, nodeAvatarOf } from "./AgentAvatar";
 import { ArrowUpRight, Copy, MessageSquarePlus, Play } from "lucide-react";
 import { toast } from "sonner";
@@ -274,11 +274,37 @@ export function NodeHoverCard({
   children: ReactElement;
 }) {
   const [open, setOpen] = useState(false);
+  /* a link followed with a mouse or pen leaves that pointer resting on it, and
+     the card must not open over the page it led to, where it covers the
+     controls below the trigger, until the pointer leaves and returns. Keyboard
+     activation (click detail 0) and touch (whose pointerleave precedes its
+     click) park no pointer, so they keep the card's focus and hover opening */
+  const followed = useRef(false);
+  const pressedBy = useRef<string | null>(null);
   const online = deployment.dialSucceeded;
   const page = nodeSection(deployment.nodeDid, "agent");
   return (
-    <HoverCard open={open} onOpenChange={setOpen}>
-      <HoverCardTrigger delay={500} render={children} />
+    <HoverCard open={open} onOpenChange={(next) => setOpen(next && !followed.current)}>
+      <HoverCardTrigger
+        delay={500}
+        render={children}
+        onPointerDown={(event) => {
+          pressedBy.current = event.pointerType;
+        }}
+        onClick={(event) => {
+          const parked =
+            event.detail > 0 &&
+            pressedBy.current !== null &&
+            pressedBy.current !== "touch";
+          pressedBy.current = null;
+          if (!parked || !event.currentTarget.hasAttribute("href")) return;
+          followed.current = true;
+          setOpen(false);
+        }}
+        onPointerLeave={() => {
+          followed.current = false;
+        }}
+      />
       <HoverCardContent side={side} align="start" className="w-80">
         <CardTitle
           name={deployment.node.displayName ?? deployment.label}
