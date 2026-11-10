@@ -5,10 +5,12 @@ import {
 } from "@source-inc/gents-desktop-client";
 import type { NodeView } from "../../hooks/fleetStore";
 
-/** A page's heading for a node whose runtime connection isn't up: a sentence
-    for each of the owner's reasons, its short label for any other. */
+/** A sentence for how a node's runtime connection stands, one for each of
+    the owner's reasons, its short label for any other. */
 export function connectionLine(name: string, status: OperationalStatus) {
   switch (status.reason) {
+    case "connected":
+      return `Connected to ${name}`;
     case "connecting":
       return `Connecting to ${name}`;
     case "disconnected":

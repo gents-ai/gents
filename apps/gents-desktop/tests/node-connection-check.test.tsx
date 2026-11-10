@@ -45,7 +45,7 @@ describe("checking a node's connection", () => {
   };
 
   it("asks the observer and says the node is connected once it answers", async () => {
-    expect(await check("connected")).toBe("Juno · Connected");
+    expect(await check("connected")).toBe("Connected to Juno");
   });
 
   it("names why it isn't connected", async () => {
