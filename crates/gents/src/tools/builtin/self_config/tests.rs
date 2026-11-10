@@ -8204,7 +8204,7 @@ async fn native_pack_local_path_installs_mixed_documents_pack_with_fenced_plugin
     .unwrap();
     assert_eq!(get["manifest"]["kind"], "documents");
     assert_eq!(get["installable"], true);
-    assert_eq!(get["source"], "store");
+    assert_eq!(get["source"], "local");
     let digest = get["artifact_digest"].as_str().unwrap().to_owned();
     assert_eq!(
         get["installation_blockers"]
