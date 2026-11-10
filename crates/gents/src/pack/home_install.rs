@@ -40,16 +40,13 @@ pub struct HomePackInstall {
     /// [`recorded_provenance`].
     #[serde(default)]
     pub installed_via: Option<InstalledVia>,
-    #[serde(deserialize_with = "deserialize_required_source")]
+    /// `None` is an unknown source. Records written before sources were
+    /// recorded carry neither field and read as unknown with no history;
+    /// every record written now serializes both.
+    #[serde(default)]
     pub source: Option<PackSource>,
+    #[serde(default)]
     pub source_history: Vec<PackSourceHistory>,
-}
-
-fn deserialize_required_source<'de, D>(deserializer: D) -> Result<Option<PackSource>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    serde::Deserialize::deserialize(deserializer)
 }
 
 /// Lean `provenanceOf`. `record` is `None` without a record, `Some(None)` for
@@ -321,14 +318,77 @@ mod tests {
     use super::*;
 
     #[test]
-    fn source_fields_are_required_in_install_records() {
-        let record = sample("acme/tools");
-        let serialized = serde_json::to_value(record).unwrap();
-        for field in ["source", "source_history"] {
-            let mut missing = serialized.clone();
-            missing.as_object_mut().unwrap().remove(field);
-            assert!(serde_json::from_value::<HomePackInstall>(missing).is_err());
+    fn a_written_record_always_carries_its_source_fields() {
+        let home = tempfile::tempdir().unwrap();
+        let mut known = sample("acme/known");
+        known.source = Some(PackSource::Store);
+        for record in [sample("acme/unknown"), known] {
+            record_after_install(home.path(), record.clone(), InstalledVia::Operator, true)
+                .unwrap();
+            let path = record_path(home.path(), &record.coordinate).unwrap();
+            let stored: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+            assert_eq!(
+                stored["source"],
+                serde_json::to_value(&record.source).unwrap(),
+                "{stored}"
+            );
+            assert_eq!(stored["source_history"], serde_json::json!([]), "{stored}");
         }
+    }
+
+    /// A record main wrote before sources were recorded: no `source`, no
+    /// `source_history`.
+    fn write_record_without_source_fields(home: &Path, coordinate: &str) {
+        let mut json = serde_json::to_value(sample(coordinate)).unwrap();
+        let object = json.as_object_mut().unwrap();
+        object.remove("source");
+        object.remove("source_history");
+        let path = record_path(home, coordinate).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, serde_json::to_vec(&json).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_record_without_source_fields_reads_as_an_unknown_source() {
+        let home = tempfile::tempdir().unwrap();
+        write_record_without_source_fields(home.path(), "acme/legacy");
+
+        let listed = list_home_installs(home.path()).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].source, None);
+        assert!(listed[0].source_history.is_empty());
+        let (readable, skipped) = list_home_installs_with_skips(home.path()).unwrap();
+        assert_eq!(readable, listed);
+        assert!(skipped.is_empty(), "{skipped:?}");
+        let read = read_home_install(home.path(), "acme/legacy")
+            .unwrap()
+            .unwrap();
+        assert_eq!(read, listed[0]);
+
+        // An update over it keeps the history it now begins.
+        let mut update = sample("acme/legacy");
+        update.version = "2.0.0".into();
+        update.digest = format!("sha256:{}", "b".repeat(64));
+        update.source = Some(PackSource::Store);
+        record_after_install(home.path(), update, InstalledVia::Operator, true).unwrap();
+        let updated = read_home_install(home.path(), "acme/legacy")
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.source, Some(PackSource::Store));
+        assert_eq!(
+            updated.source_history,
+            vec![PackSourceHistory {
+                version: "1.0.0".into(),
+                digest: format!("sha256:{}", "a".repeat(64)),
+                source: None,
+            }]
+        );
+
+        // Removal reads nothing it cannot parse.
+        write_record_without_source_fields(home.path(), "acme/legacy");
+        forget_home_install(home.path(), "acme/legacy").unwrap();
+        assert!(list_home_installs(home.path()).unwrap().is_empty());
     }
 
     fn sample(coordinate: &str) -> HomePackInstall {
