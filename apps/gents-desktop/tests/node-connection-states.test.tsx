@@ -144,7 +144,7 @@ describe("a node's connection", () => {
       () => useNodeConfigReadOnly(forge("disconnected", true) as NodeView),
       { wrapper: withApp(app) },
     );
-    expect(result.current).toBe("Read-only here: Forge · Reconnecting.");
+    expect(result.current).toBe("Read-only here: Can’t reach Forge.");
   });
 });
 
@@ -160,13 +160,13 @@ const states = (
 
   it("loads while its node connects, without saying it's empty", () => {
     show("connecting", false);
-    expect(screen.getByText("Forge · Connecting…")).toBeVisible();
+    expect(screen.getByText("Connecting to Forge…")).toBeVisible();
     expect(screen.queryByText(empty, { exact: false })).toBeNull();
   });
 
   it("says its node refuses this app, without saying it's empty", () => {
     show("refused", false);
-    expect(screen.getByText("Forge · Refused")).toBeVisible();
+    expect(screen.getByText("Forge doesn’t accept this app")).toBeVisible();
     expect(screen.getByText(/restore this device's access/)).toBeVisible();
     expect(screen.queryByText(empty, { exact: false })).toBeNull();
   });
@@ -175,7 +175,7 @@ const states = (
     show("disconnected", true);
     expect(screen.getByText(shown)).toBeVisible();
     expect(screen.getByTestId("node-connection-stale")).toHaveTextContent(
-      "Forge · Reconnecting. This may be out of date.",
+      "Can’t reach Forge. This may be out of date.",
     );
   });
 };

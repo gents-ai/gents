@@ -5,9 +5,22 @@ import {
 } from "@source-inc/gents-desktop-client";
 import type { NodeView } from "../../hooks/fleetStore";
 
-/** The node's name beside how its runtime connection stands. */
-export const connectionLine = (name: string, status: OperationalStatus) =>
-  `${name} · ${status.shortLabel}`;
+/** A page's heading for a node whose runtime connection isn't up: a sentence
+    for each of the owner's reasons, its short label for any other. */
+export function connectionLine(name: string, status: OperationalStatus) {
+  switch (status.reason) {
+    case "connecting":
+      return `Connecting to ${name}`;
+    case "disconnected":
+      return `Can’t reach ${name}`;
+    case "refused":
+      return `${name} doesn’t accept this app`;
+    case "no_endpoint":
+      return `${name} has no address`;
+    default:
+      return `${name} · ${status.shortLabel}`;
+  }
+}
 
 /** Where a page of one node's data says the connection isn't up: in place of
     the page while it connects (`loading`) or while nothing can be shown
