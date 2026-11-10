@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 use crate::documents::PackConfig;
 use crate::pack::archive::PackArchive;
 use crate::store::config_client::{ConfigAccess, SchemaInstallPlan};
+use crate::tools::{
+    background::job::settings::pack_job_block_admissible, surface::ResolvedToolSelection,
+};
 
 use super::super::home_install::materialize_asset_pack;
 use super::super::{
@@ -751,7 +754,7 @@ async fn prepare_document_pack_archive_inputs(
 /// default agent when the node's User installs. The root is still admitted by
 /// the node's WorkspaceRoot policy when the agent runs, and the agent still
 /// needs the User's reader grant on the published root that covers it
-/// ([`crate::tools::surface::pack_agent_root_readers`]). With no such root to
+/// (`tools::surface::agents_tool_root_readers`). With no such root to
 /// take, the document is left as the pack wrote it.
 async fn default_host_tool_roots(
     access: &ConfigAccess,
@@ -766,10 +769,7 @@ async fn default_host_tool_roots(
                 .as_deref()
                 .is_none_or(|root| root.trim().is_empty())
         });
-        if unset
-            && crate::tools::surface::ResolvedToolSelection::from_document(tools)?
-                .requires_filesystem_root()
-        {
+        if unset && ResolvedToolSelection::from_document(tools)?.requires_filesystem_root() {
             rootless.push(index);
         }
     }
@@ -1214,7 +1214,7 @@ async fn prepare_document_pack_install_inner(
         )
         .collect();
     for tools in &config.tools {
-        crate::tools::background::job::settings::pack_job_block_admissible(
+        pack_job_block_admissible(
             tools,
             &manifest.metadata,
             &coordinate,

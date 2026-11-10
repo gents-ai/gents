@@ -125,22 +125,22 @@ impl PackInstaller {
         let Some(Ok(Some(record))) = self
             .home
             .as_deref()
-            .map(|home| crate::pack::read_home_install(home, coordinate))
+            .map(|home| node_packs::read_home_install(home, coordinate))
         else {
             return cause;
         };
-        let (namespace, _) = crate::pack::registry::split_pack_coordinate(coordinate);
+        let (namespace, _) = node_packs::split_pack_coordinate(coordinate);
         let plugins: BTreeSet<String> = record
             .plugins
             .iter()
             .map(|plugin| format!("{namespace}/{}", plugin.name))
             .collect();
         let node_did = self.core.node_did();
-        let Ok(owned) = crate::pack::installed_pack_documents(access, node_did, coordinate).await
+        let Ok(owned) = node_packs::installed_pack_documents(access, node_did, coordinate).await
         else {
             return cause;
         };
-        let selections = crate::pack::visible_plugin_selections(access, node_did, &plugins)
+        let selections = node_packs::visible_plugin_selections(access, node_did, &plugins)
             .await
             .ok()
             .map(|selections| {

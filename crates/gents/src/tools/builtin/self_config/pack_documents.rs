@@ -108,10 +108,20 @@ impl PackInstaller {
             .await?;
         // Reader on a published root is the User's to grant, so an agent the
         // pack ships with host tools waits for it; the receipt names the step.
-        let host_root_access = crate::tools::surface::pack_agent_root_readers(
+        let shipped_agents: Vec<String> = node_packs::installed_pack_documents(
             &access,
             self.core.node_did(),
             &distribution.coordinate(),
+        )
+        .await?
+        .into_iter()
+        .filter(|(collection, _)| *collection == crate::Collection::Agent)
+        .map(|(_, agent)| agent)
+        .collect();
+        let host_root_access = crate::tools::surface::agents_tool_root_readers(
+            &access,
+            self.core.node_did(),
+            &shipped_agents,
         )
         .await?
         .into_iter()

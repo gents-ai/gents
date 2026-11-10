@@ -361,7 +361,7 @@ impl ConfigCommandTool {
             "by_reference": report.by_reference,
             "agents": report.agents,
             "bind_agents": (!report.agents.is_empty()).then(|| json!({
-                "var": report.agents.iter().map(|(slot, agent)| format!("{}={agent}", crate::pack::agent_binding_variable(slot))).collect::<Vec<_>>(),
+                "var": report.agents.iter().map(|(slot, agent)| format!("{}={agent}", node_packs::agent_binding_variable(slot))).collect::<Vec<_>>(),
                 "note": "Installing this pack makes a new agent for each slot. To install it on this node onto the agents it was exported from, pass these as options.var to pack preview install and pack install.",
             })),
             "inference_slots": report.inference_slots,

@@ -1,5 +1,5 @@
 use super::*;
-use crate::pack::wiring::PluginWiring;
+use node_packs::PluginWiring;
 
 impl PackInstaller {
     /// `pack wire PACKAGE`: selects each plugin the installed pack ships on an
@@ -18,7 +18,7 @@ impl PackInstaller {
             .home
             .as_deref()
             .context("pack wire requires a runtime plugin home")?;
-        let record = crate::pack::read_home_install(home, &coordinate)?.ok_or_else(|| {
+        let record = node_packs::read_home_install(home, &coordinate)?.ok_or_else(|| {
             anyhow::Error::from(command::CommandGuidance {
                 message: format!(
                     "{coordinate} is not installed on this node, so it has no plugin to wire. Install it first; pack list shows what is installed"
@@ -31,11 +31,11 @@ impl PackInstaller {
             "{coordinate} ships no plugin, so pack wire has nothing to select. Its agents are reached through agent-target and tools update set.agents"
         );
         let agent = agent.unwrap_or(self.core.agent_did());
-        let (namespace, _) = crate::pack::registry::split_pack_coordinate(&coordinate);
+        let (namespace, _) = node_packs::split_pack_coordinate(&coordinate);
         let access = self.core.access()?;
         let mut wired = Vec::new();
         for shipped in &record.plugins {
-            let plugin = crate::plugin::store::read_record(home, namespace, &shipped.name)
+            let plugin = PluginWiring::installed_plugin(home, namespace, &shipped.name)
                 .with_context(|| {
                     format!("reading the installed plugin {namespace}/{}", shipped.name)
                 })?;

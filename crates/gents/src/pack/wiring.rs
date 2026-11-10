@@ -7,12 +7,12 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 
 use super::home_install::recorded_provenance;
+use super::plugin_lifecycle::InstalledPlugin;
 use super::{installed_pack_documents, read_home_install, InstalledVia, PackKind};
 use crate::documents::{
     apply_desired_state_plan, load_agent_context_and_tools_in_txn, unwire_plugin, wire_plugin,
     Tools, WireReport,
 };
-use crate::plugin::store::InstalledPlugin;
 use crate::store::collection::Collection;
 use crate::store::config_client::{
     read_desired_state_records_in_txn, ConfigAccess, ConfigApplyTxn, DesiredStateApplyDocument,
@@ -33,9 +33,10 @@ pub struct PluginWiring {
     pub remove: bool,
     /// Computes the same report and writes nothing.
     pub preview: bool,
-    /// The node owner approved dynamic scripts for this plugin: its job block
-    /// goes from `check` to `run` (Lean `consentedDynamic`).
-    pub dynamic_consent: bool,
+    /// The job settings owner's consent step, set when the node owner
+    /// approved dynamic scripts for this plugin: its job block goes from
+    /// `check` to `run` (Lean `consentedDynamic`).
+    pub dynamic_consent: Option<fn(&mut Tools, &str, &mut WireReport)>,
     /// The caller's own command that shows why an agent's Tools or Context
     /// cannot be read, named when they cannot.
     pub next_step: String,
@@ -89,9 +90,19 @@ impl PluginWiring {
             targets_from: targets,
             remove: false,
             preview: false,
-            dynamic_consent: false,
+            dynamic_consent: None,
             next_step: String::new(),
         })
+    }
+
+    /// The published record of the installed plugin `namespace/name`, which
+    /// [`Self::read`] wires.
+    pub fn installed_plugin(
+        home: &std::path::Path,
+        namespace: &str,
+        name: &str,
+    ) -> Result<InstalledPlugin> {
+        super::plugin_lifecycle::installed_plugin(home, namespace, name)
     }
 
     fn coordinate(&self) -> String {
@@ -128,12 +139,8 @@ impl PluginWiring {
                 &self.targets_from,
             )?
         };
-        if self.dynamic_consent && !self.remove {
-            crate::tools::background::job::settings::consent_dynamic_run(
-                &mut tools,
-                &self.coordinate(),
-                &mut report,
-            );
+        if let Some(consent) = self.dynamic_consent.filter(|_| !self.remove) {
+            consent(&mut tools, &self.coordinate(), &mut report);
         }
         tools.validate()?;
         if !self.preview {

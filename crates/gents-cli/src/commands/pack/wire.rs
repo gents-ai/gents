@@ -122,7 +122,9 @@ async fn wire_in_owned(
     .await?;
     plan.remove = request.remove;
     plan.preview = request.preview;
-    plan.dynamic_consent = request.dynamic_consent;
+    plan.dynamic_consent = request
+        .dynamic_consent
+        .then_some(gents::tools::background::job::settings::consent_dynamic_run as _);
     plan.next_step = format!("gents config tools explain --agent {}", request.agent);
     let report = if request.preview {
         access
@@ -202,8 +204,14 @@ pub(crate) async fn grant_pack_root_readers(
 ) -> Result<Vec<Value>> {
     use gents::tools::surface::ToolRootReader;
     let mut granted = Vec::new();
+    let agents: Vec<String> = installed_pack_documents(access, owner, coordinate)
+        .await?
+        .into_iter()
+        .filter(|(collection, _)| *collection == Collection::Agent)
+        .map(|(_, agent)| agent)
+        .collect();
     for (agent, reader) in
-        gents::tools::surface::pack_agent_root_readers(access, owner, coordinate).await?
+        gents::tools::surface::agents_tool_root_readers(access, owner, &agents).await?
     {
         granted.push(match reader {
             ToolRootReader::Published(root) => {

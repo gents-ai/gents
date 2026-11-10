@@ -19,7 +19,12 @@ use super::{
 };
 use crate::store::config_client::{ConfigAccess, ConfigurationNodeBinding, SchemaInstallPlan};
 
+pub use super::registry::split_pack_coordinate;
+pub use super::wiring::PluginWiring;
 pub(crate) use super::AgentProvisioner;
+pub use super::{
+    agent_binding_variable, installed_pack_documents, read_home_install, visible_plugin_selections,
+};
 pub use super::{DriftPolicy, PluginPinConflict, PluginSelection};
 
 /// One requested install, update or inspection of a pack.

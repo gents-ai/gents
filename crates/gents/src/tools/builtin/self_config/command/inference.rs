@@ -58,7 +58,10 @@ impl ConfigCommandTool {
                 let mut request = match target {
                     SelfConfigTarget::Tools => refuse_uninstalled_plugins(
                         refuse_silent_tools_drops(tools_request(&core, patch), allow_drop),
-                        self.plugins.clone(),
+                        {
+                            let plugins = self.plugins.clone();
+                            move |plugin: &str| plugins.installed_record(plugin).map(|_| ())
+                        },
                     ),
                     SelfConfigTarget::InferenceBackend => backend_request(patch),
                     _ => unreachable!("bound resource"),

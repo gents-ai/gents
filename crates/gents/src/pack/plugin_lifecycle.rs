@@ -6,6 +6,16 @@ use anyhow::{Context, Result};
 
 use super::{HomePackInstall, InstalledPackPlugin, InstalledVia, PackIdentity, PackKind};
 use crate::plugin::{install, store};
+pub(super) use store::InstalledPlugin;
+
+/// The published record of the installed plugin `namespace/name`.
+pub(super) fn installed_plugin(
+    home: &Path,
+    namespace: &str,
+    name: &str,
+) -> Result<InstalledPlugin> {
+    store::read_record(home, namespace, name)
+}
 
 /// Reviewed plugin records held by the staging owner until notification finishes.
 /// The private fields prevent a caller from inventing installed manifest facts.
