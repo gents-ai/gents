@@ -5594,6 +5594,7 @@ async fn a_created_agent_with_host_tools_names_the_users_root_reader_grant() {
     let created = hosted["agent_did"].as_str().unwrap();
     let access = &hosted["host_root_access"];
     assert_eq!(access["state"], "waiting_for_user", "{hosted}");
+    assert_eq!(access["published_root"], root.as_str(), "{hosted}");
     assert_eq!(
         access["user_command"],
         format!("gents config workspace-root grant-reader --graphql GRAPHQL_URL --path {root} --agent-did {created}"),

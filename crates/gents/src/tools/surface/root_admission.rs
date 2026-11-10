@@ -272,6 +272,7 @@ pub(crate) fn reader_grant_step(
     };
     serde_json::json!({
         "state": if known_missing { "waiting_for_user" } else { "requires_user_grant" },
+        "published_root": published_root,
         "answer": answer,
         "user_command": format!(
             "gents config workspace-root grant-reader --graphql GRAPHQL_URL --path {path} --agent-did {agent_did}"

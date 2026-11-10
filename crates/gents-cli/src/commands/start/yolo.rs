@@ -5,6 +5,7 @@ use anyhow::{bail, ensure, Context, Result};
 use gents::store::config_client::GraphqlEndpoint;
 use gents::store::graphql::escape_graphql_string;
 use gents::tools::builtin::self_config::{configure_agent, ConfigureAgentParams, StringUpdate};
+use gents_protocol::node_readiness::{AgentReadinessEntry, AgentReadinessState};
 use gents_protocol::row::{decode_node_readiness_snapshot, NodeReadinessRow};
 use serde_json::Value;
 
@@ -90,8 +91,19 @@ pub(super) async fn ensure_agent(
         "the yolo agent was made as {}, not {yolo}",
         made["agent_did"]
     );
+    // A new Agent DID holds no WorkspaceRoot reader; only a User grants it, and
+    // this command runs as the User who asked for an agent with these tools.
+    let root_access = &made["host_root_access"];
+    if root_access["state"] == "waiting_for_user" {
+        let root = root_access["published_root"].as_str().with_context(|| {
+            format!("the yolo agent {yolo} needs reader on the WorkspaceRoot covering {source}'s tool root, and no published root covers it")
+        })?;
+        gents::tools::surface::grant_workspace_root_reader(&access, root, &yolo)
+            .await
+            .with_context(|| format!("granting the yolo agent {yolo} reader on {root}"))?;
+    }
     eprintln!("Made the yolo agent {yolo}, with the tools of {source}.");
-    wait_until_assigned(&access, node_did, &yolo).await?;
+    wait_until_ready(&access, node_did, &yolo).await?;
     Ok((yolo, true))
 }
 
@@ -114,24 +126,46 @@ pub(super) async fn default_agent(access: &ConfigAccess, node_did: &str) -> Resu
         .with_context(|| format!("node {node_did} names no default agent"))
 }
 
-/// The runtime takes on a new agent when it next reconciles, and refuses a request for one it
-/// has not taken on. Only the NodeReadiness document it then publishes says so to another
-/// process, so this bounded wait reads that document again; it blocks no runtime thread.
-async fn wait_until_assigned(access: &ConfigAccess, node_did: &str, agent_did: &str) -> Result<()> {
+/// The runtime takes on a new agent when it next reconciles, admits it again once its root
+/// reader grant lands, and refuses a request for one it has not made ready. Only the
+/// NodeReadiness document it then publishes says so to another process, so this bounded wait
+/// reads that document again; it blocks no runtime thread.
+async fn wait_until_ready(access: &ConfigAccess, node_did: &str, agent_did: &str) -> Result<()> {
     let deadline = Instant::now() + ASSIGN_WAIT;
-    while !assigned(access, node_did, agent_did).await? {
+    loop {
+        let state = readiness(access, node_did, agent_did).await?;
+        if state
+            .as_ref()
+            .is_some_and(|entry| entry.state == AgentReadinessState::Ready)
+        {
+            return Ok(());
+        }
         if Instant::now() >= deadline {
+            let detail = match state {
+                Some(entry) => format!(
+                    "the runtime reports it {:?}{}",
+                    entry.state,
+                    entry
+                        .reason
+                        .map(|reason| format!(" ({reason:?})"))
+                        .unwrap_or_default()
+                ),
+                None => "the runtime has not taken it on".to_owned(),
+            };
             bail!(
-                "this home's runtime has not taken on the yolo agent {agent_did} after {} s. Check `gents status`, then run `gents --yolo` again.",
+                "the yolo agent {agent_did} is not ready after {} s: {detail}. Check `gents status`, then run `gents --yolo` again.",
                 ASSIGN_WAIT.as_secs()
             );
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
-    Ok(())
 }
 
-async fn assigned(access: &ConfigAccess, node_did: &str, agent_did: &str) -> Result<bool> {
+async fn readiness(
+    access: &ConfigAccess,
+    node_did: &str,
+    agent_did: &str,
+) -> Result<Option<AgentReadinessEntry>> {
     let rows = crate::graphql_rows(
         access,
         "NodeReadiness",
@@ -142,16 +176,16 @@ async fn assigned(access: &ConfigAccess, node_did: &str, agent_did: &str) -> Res
     )
     .await?;
     let Some(row) = rows.into_iter().next() else {
-        return Ok(false);
+        return Ok(None);
     };
     let row: NodeReadinessRow = serde_json::from_value(row).context("reading NodeReadiness")?;
-    Ok(
-        decode_node_readiness_snapshot(&row, node_did).is_ok_and(|snapshot| {
-            snapshot.router_generation == snapshot.active_generation
-                && snapshot
-                    .agents
-                    .iter()
-                    .any(|agent| agent.agent_did == agent_did)
-        }),
-    )
+    Ok(decode_node_readiness_snapshot(&row, node_did)
+        .ok()
+        .filter(|snapshot| snapshot.router_generation == snapshot.active_generation)
+        .and_then(|snapshot| {
+            snapshot
+                .agents
+                .into_iter()
+                .find(|agent| agent.agent_did == agent_did)
+        }))
 }
