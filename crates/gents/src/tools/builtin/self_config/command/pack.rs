@@ -169,14 +169,20 @@ impl ConfigCommandTool {
             "preview" => {
                 let operation = argv
                     .get(1)
-                    .context("pack preview requires install, update or remove")?;
+                    .context("pack preview requires install, update, remove or wire")?;
                 if operation == "remove" {
                     anyhow::ensure!(argv.len() == 3, "pack preview remove takes one PACKAGE");
                     return installer.preview_remove(&argv[2]).await;
                 }
+                if operation == "wire" {
+                    let (package, agent, remove) = self.parse_pack_wire(&argv[2..])?;
+                    return installer
+                        .wire(&package, agent.as_deref(), remove, false)
+                        .await;
+                }
                 anyhow::ensure!(
                     matches!(operation.as_str(), "install" | "update"),
-                    "pack preview supports install, update and remove"
+                    "pack preview supports install, update, remove and wire"
                 );
                 let (change, _) = parse_pack_change(&argv[2..])?;
                 installer.preview(operation, change).await
@@ -206,8 +212,42 @@ impl ConfigCommandTool {
                     .remove(&parsed.positionals[0], with_collections, edited, argv)
                     .await
             }
+            "wire" => {
+                let (package, agent, remove) = self.parse_pack_wire(&argv[1..])?;
+                self.execution.enter_mutation();
+                installer
+                    .wire(&package, agent.as_deref(), remove, true)
+                    .await
+            }
             other => bail!("unknown pack command {other:?}; see [\"help\",\"pack\"]"),
         }
+    }
+
+    /// `PACKAGE [--remove]` with `options.agent`: another agent's Tools take
+    /// the agent catalog grant, as every edit of them does.
+    fn parse_pack_wire(&self, argv: &[String]) -> Result<(String, Option<String>, bool)> {
+        let rest = argv
+            .iter()
+            .filter(|word| *word != "--remove")
+            .cloned()
+            .collect::<Vec<_>>();
+        let remove = rest.len() < argv.len();
+        let parsed = ParsedArgs::parse(&rest)?;
+        anyhow::ensure!(
+            parsed.positionals.len() == 1
+                && parsed.switches.is_empty()
+                && parsed.options.keys().all(|name| name == "agent"),
+            "pack wire takes one PACKAGE, optionally --remove, and options.agent (default: you)"
+        );
+        let agent = parsed.one("agent")?.map(ToOwned::to_owned);
+        anyhow::ensure!(
+            agent
+                .as_deref()
+                .is_none_or(|agent| agent == self.core.agent_did())
+                || self.categories.contains("node"),
+            "wiring a pack into another agent's Tools needs the agent catalog grant (category node); without options.agent the pack is wired into your own Tools"
+        );
+        Ok((parsed.positionals[0].clone(), agent, remove))
     }
 }
 

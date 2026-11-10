@@ -32,6 +32,7 @@ pub mod registry;
 pub mod resolve;
 pub mod store;
 mod ux;
+pub mod wiring;
 pub use home_install::{
     forget_home_install, installer_provenance, list_home_installs, list_home_installs_with_skips,
     list_readable_home_installs, read_home_install, record_after_install, write_home_install,

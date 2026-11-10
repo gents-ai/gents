@@ -751,6 +751,43 @@ mod tests {
             let config = &config;
             async move { config.call(call.to_string()).await.unwrap_err().to_string() }
         };
+        // The Engineer wires and unwires a pack itself, through the owner the
+        // operator's command uses; a preview writes nothing.
+        let unwired = call(json!({"argv": ["pack", "wire", "fixture/crew", "--remove"]})).await;
+        assert_eq!(unwired["committed"], true, "{unwired}");
+        assert_eq!(
+            unwired["wired"][0]["changed"][0], "removed plugin fixture/probe",
+            "{unwired}"
+        );
+        let preview = call(json!({"argv": ["pack", "preview", "wire", "fixture/crew"]})).await;
+        assert_eq!(preview["committed"], false, "{preview}");
+        assert_eq!(
+            preview["apply_with"]["argv"],
+            json!(["pack", "wire", "fixture/crew"]),
+            "{preview}"
+        );
+        let unselected = call(json!({"argv": ["tools", "get"]})).await;
+        assert_eq!(
+            unselected["document"]["integrations"]["plugins"]
+                .as_array()
+                .map_or(0, Vec::len),
+            0,
+            "{unselected}"
+        );
+        let rewired = call(preview["apply_with"].clone()).await;
+        assert!(
+            rewired["wired"][0]["changed"][0]
+                .as_str()
+                .unwrap()
+                .starts_with("added plugin fixture/probe at sha256:"),
+            "{rewired}"
+        );
+        let selected = call(json!({"argv": ["tools", "get"]})).await;
+        assert_eq!(
+            selected["document"]["integrations"]["plugins"][0]["plugin"], "fixture/probe",
+            "{selected}"
+        );
+
         let still_wired = refused(json!({"argv": ["pack", "remove", "fixture/crew"]})).await;
         assert!(
             still_wired.contains(

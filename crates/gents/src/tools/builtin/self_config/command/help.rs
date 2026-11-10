@@ -421,6 +421,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
                 "pack preview install|update PACKAGE [--inference-slot NAME=PROFILE_ID ...] [--var NAME=VALUE ...]",
                 "pack install|update PACKAGE  the same pairs, options.digest from the preview, options.edited (overwrite|keep) for live-edited documents",
                 "pack [preview] remove PACKAGE [--with-collections]  options.edited",
+                "pack [preview] wire PACKAGE [--remove]  options.agent (default you); selects its plugins on Tools with their job block, agent targets and skills",
                 "pack scaffold NAME  options: namespace (default gents), kind (documents|assets|plugins), template, language, page (true adds a page)",
                 "pack add PART ID  options.dir: the pack (default tool root); PART: agent (options.slot), task (options.agent), trigger (options.task, options.on), schema (ID is the collection), skill (options.from), plugin (options.language or options.prebuilt), page",
                 "pack export NAME  options: IDs per kind (agent, context, tools, skill, compaction, datastore, agent-target, task, trigger, event-source, schedule, page, plugin-source), collection, tag, namespace; writes live documents and what they reference to a new pack at NAME",
