@@ -167,6 +167,17 @@ export function packContents(deployment: NodeView, pack: string) {
     .filter((kind) => kind.count > 0);
 }
 
+/** How many of the node's documents an earlier Gents tagged with this
+    pack's bare name rather than its "namespace/name" coordinate. This
+    version refuses to update, reinstall or remove those documents, so the
+    pack's page names them instead of showing it as empty. */
+export function bareOriginCount(deployment: NodeView, pack: string): number {
+  const name = pack.slice(pack.lastIndexOf("/") + 1);
+  return nodeDocuments(deployment)
+    .flatMap(({ items }) => items)
+    .filter((doc) => packOrigin(doc.tags) === name).length;
+}
+
 /** The settings a pack installed that belong to something else it
     installed, each with its collection. */
 export function packSettings(deployment: NodeView, pack: string): PackItem[] {

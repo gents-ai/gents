@@ -25,7 +25,7 @@ import { CARD, PackMenu, PackMeta, Section, ErrorDetail } from "./PackCard";
 import { isExternalUrl } from "../../../lib/externalLinks";
 import { copyText } from "../../lib/clipboard";
 import { isPackName, packLink, type PackReviewRequest } from "@/lib/packReview";
-import { packSettings } from "../agent/packContents";
+import { bareOriginCount, packSettings } from "../agent/packContents";
 import {
   type Resource,
   type ResourceTree,
@@ -374,6 +374,7 @@ export function PackPage({
     shown && node
       ? resourceTree(parts, packSettings(node, pack), nodeLinks(node))
       : { tree: [], other: [] };
+  const bareOrigins = shown && node ? bareOriginCount(node, pack) : 0;
   const would = report ? previewTree(report) : null;
   const publisher = publisherOf(read, me);
   const page = text(registry?.homepage);
@@ -538,6 +539,19 @@ export function PackPage({
               </>
             )}
           </dl>
+        </Section>
+      )}
+
+      {bareOrigins > 0 && added.tree.length + added.other.length === 0 && (
+        <Section title="What it adds">
+          <p role="alert" className="text-sm text-warning">
+            {bareOrigins === 1 ? "1 document" : `${bareOrigins} documents`} on this node
+            came from this pack when an earlier Gents tagged pack documents with the
+            bare name, and this version requires {pack}. It cannot update, reinstall or
+            remove them. To start this node&apos;s packs fresh, reset its home (
+            <code>gents runtime desktop reset</code>
+            previews the reset and backs the home up), then install the pack again.
+          </p>
         </Section>
       )}
 

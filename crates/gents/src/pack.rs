@@ -80,7 +80,9 @@ pub use plugin::{
     PluginService, MAX_TOOL_INSTRUCTIONS_BYTES, PLUGIN_ARTIFACT_PREFIX, SUPPORTED_PLUGIN_LANGUAGES,
 };
 pub(crate) use provenance::pack_artifact_document_digest;
-pub use provenance::{pack_document_digests, pack_origin_from_tags, pack_origin_tag};
+pub use provenance::{
+    pack_document_digests, pack_origin_from_tags, pack_origin_tag, PackOriginError,
+};
 pub use ux::{
     is_valid_directive_name, is_valid_ux_data_tool_name, PackUxPlugin, UxContributions,
     UxDataSurface, MAX_UX_DATA_SURFACE_ID_LEN, UX_PLUGIN_AREAS, UX_PLUGIN_PREFIX,

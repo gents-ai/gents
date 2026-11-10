@@ -21,30 +21,55 @@ pub fn pack_origin_tag(coordinate: &str) -> Result<String> {
     Ok(format!("{PACK_ORIGIN_PREFIX}{coordinate}"))
 }
 
-pub fn pack_origin_from_tags(tags: &[String]) -> Result<Option<&str>> {
+/// Why a configuration document's pack origin cannot be read or does not
+/// belong to the pack acting on it.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum PackOriginError {
+    /// Lean `pack_document_unqualified_origin_refused`: a bare name cannot
+    /// be told apart from the same name under another namespace.
+    #[error(
+        "this document carries the pack origin {origin:?}: an earlier Gents tagged pack documents \
+         with the bare pack name, and this version requires a namespace/name coordinate, so it \
+         cannot update, reinstall or remove the documents of a pack installed that way. To start \
+         this node's packs fresh, reset its home (`gents runtime desktop reset` previews the reset \
+         and backs the home up) or set up a new home, then install the pack again"
+    )]
+    Unqualified { origin: String },
+    #[error("configuration document carries more than one pack origin")]
+    Multiple,
+    #[error("configuration document belongs to pack {origin:?}, not {coordinate:?}")]
+    Foreign { origin: String, coordinate: String },
+}
+
+pub fn pack_origin_from_tags(tags: &[String]) -> Result<Option<&str>, PackOriginError> {
     let mut origins = tags
         .iter()
         .filter_map(|tag| tag.strip_prefix(PACK_ORIGIN_PREFIX));
     let origin = origins.next();
-    anyhow::ensure!(
-        origins.next().is_none(),
-        "configuration document carries more than one pack origin"
-    );
+    if origins.next().is_some() {
+        return Err(PackOriginError::Multiple);
+    }
     if let Some(origin) = origin {
-        anyhow::ensure!(
-            is_coordinate(origin),
-            "configuration document pack origin must be a namespace/name coordinate: {origin:?}"
-        );
+        if !is_coordinate(origin) {
+            return Err(PackOriginError::Unqualified {
+                origin: origin.to_owned(),
+            });
+        }
     }
     Ok(origin)
 }
 
-pub(super) fn ensure_origin_owned(tags: &[String], coordinate: &str) -> Result<()> {
+pub(super) fn ensure_origin_owned(
+    tags: &[String],
+    coordinate: &str,
+) -> Result<(), PackOriginError> {
     if let Some(origin) = pack_origin_from_tags(tags)? {
-        anyhow::ensure!(
-            origin == coordinate,
-            "configuration document belongs to pack {origin:?}, not {coordinate:?}"
-        );
+        if origin != coordinate {
+            return Err(PackOriginError::Foreign {
+                origin: origin.to_owned(),
+                coordinate: coordinate.to_owned(),
+            });
+        }
     }
     Ok(())
 }
@@ -255,7 +280,21 @@ mod ownership_tests {
 
     #[test]
     fn pack_origins_require_a_full_coordinate() {
-        assert!(pack_origin_from_tags(&["gents:pack:game".into()]).is_err());
+        let bare = pack_origin_from_tags(&["gents:pack:game".into()]).unwrap_err();
+        assert_eq!(
+            bare,
+            PackOriginError::Unqualified {
+                origin: "game".into()
+            }
+        );
+        let message = bare.to_string();
+        for needle in [
+            "namespace/name",
+            "gents runtime desktop reset",
+            "install the pack again",
+        ] {
+            assert!(message.contains(needle), "{message}");
+        }
         let tags = ["gents:pack:example/game".into()];
         assert_eq!(pack_origin_from_tags(&tags).unwrap(), Some("example/game"));
     }

@@ -35,7 +35,7 @@ import {
   showPublisher,
   publisherOf,
 } from "../src/ui/screens/packs/model";
-import { packSettings } from "../src/ui/screens/agent/packContents";
+import { bareOriginCount, packSettings } from "../src/ui/screens/agent/packContents";
 import { renderIn, testApp, withFlags } from "./app-fixture";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
 
@@ -144,6 +144,22 @@ describe("a pack's parts", () => {
     plugins();
     expect(localPlugins(uxPluginRecords()).map((p) => p.id)).toEqual(["mine"]);
     expect(statusOf(research)).toEqual({ text: "1.0.0 · 1.1.0 available", warn: true });
+  });
+});
+
+describe("a pack installed before origins named its namespace", () => {
+  it("counts the documents tagged with its bare name, not its coordinate's", () => {
+    const bare: DeploymentView = {
+      ...deployment,
+      agents: [
+        ...deployment.agents,
+        { ...deployment.agents[0]!, agentDid: "b1", tags: ["gents:pack:research"] },
+      ],
+      skills: deployment.skills.map((s) => ({ ...s, tags: ["gents:pack:research"] })),
+    };
+    expect(bareOriginCount(bare, RESEARCH)).toBe(1 + deployment.skills.length);
+    expect(bareOriginCount(node, RESEARCH)).toBe(0);
+    expect(bareOriginCount(bare, "demo/other")).toBe(0);
   });
 });
 
