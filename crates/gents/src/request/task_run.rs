@@ -322,6 +322,7 @@ pub fn resolve_invocation_key(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn prepare_task_run_input(
     access: &ConfigAccess,
     verifier: &dyn NodeIdentity,

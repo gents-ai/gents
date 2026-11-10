@@ -43,6 +43,9 @@ pub(crate) struct RequiredReference {
     pub(crate) field: &'static str,
 }
 
+/// Tool names by the `DatastoreToolSurface` that holds them.
+pub(crate) type SurfaceTools = BTreeMap<String, Vec<String>>;
+
 impl ConfigReferences {
     pub(crate) fn documents(&self) -> impl Iterator<Item = (&(Collection, String), &Value)> {
         self.documents.iter()
@@ -227,7 +230,7 @@ impl ConfigReferences {
     pub(crate) fn application_collection_users(
         &self,
         name: &str,
-    ) -> Result<(BTreeMap<String, Vec<String>>, Vec<String>)> {
+    ) -> Result<(SurfaceTools, Vec<String>)> {
         let mut surfaces = BTreeMap::new();
         let mut sources = Vec::new();
         for ((collection, id), value) in &self.documents {
