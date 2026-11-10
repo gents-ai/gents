@@ -50,7 +50,7 @@ vi.mock("sonner", () => ({
 }));
 
 const RESEARCH = "demo/research";
-const tag = ["gents:pack:research"];
+const tag = ["gents:pack:demo/research"];
 const node: DeploymentView = {
   ...deployment,
   agents: [
@@ -217,14 +217,14 @@ describe("what a pack added, as it fits together", () => {
 describe("what an installed pack added, its settings under what owns them", () => {
   it("folds contexts and their compaction into agents, and nests targets under their caller", () => {
     const pack = "gents/code_review";
-    const tags = ["gents:pack:code_review"];
+    const tags = ["gents:pack:gents/code_review"];
     const lenses = ["recon", "scan", "verify", "triage"];
     const owner = deployment.nodeDid;
     const fit = {
       ...deployment,
       agents: lenses.map((l) => ({
         ...deployment.agents[0]!,
-        agentId: `review-${l}`,
+        agentDid: `review-${l}`,
         displayName: `Review ${l}`,
         contextId: `review-${l}-context`,
         tags,
@@ -259,7 +259,7 @@ describe("what an installed pack added, its settings under what owns them", () =
         node_did: owner,
         target_id: `code-review-${l}`,
         target_node_did: owner,
-        agent_id: `review-${l}`,
+        agent_did: `review-${l}`,
         name: `code-review-${l}`,
         tags,
       })),

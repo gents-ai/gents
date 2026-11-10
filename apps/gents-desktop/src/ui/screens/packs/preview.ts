@@ -136,6 +136,17 @@ const content = (d: PackReviewDocument | undefined): Record<string, unknown> =>
   (d?.content as Record<string, unknown> | undefined) ?? {};
 
 const str = (value: unknown) => (typeof value === "string" ? value : null);
+
+/* A preview names each agent by its slot, since the Agent DID is minted only
+   when the pack installs: a bound preview writes the slot itself, an unbound
+   one the slot reference (`gents:agent-slot:<slot>`) its documents author. */
+const AGENT_SLOT_REFERENCE = "gents:agent-slot:";
+const agentSlot = (value: unknown) => {
+  const agent = str(value);
+  return agent?.startsWith(AGENT_SLOT_REFERENCE)
+    ? agent.slice(AGENT_SLOT_REFERENCE.length)
+    : agent;
+};
 const capital = (word: string) => word.charAt(0).toUpperCase() + word.slice(1);
 
 const strs = (value: unknown) =>
@@ -174,11 +185,11 @@ export function previewTree(report: PackInstallReport): ResourceTree {
     id ? documents.find((d) => d.collection === collection && d.id === id) : undefined;
   const parts = previewParts(documents);
   const { tree, other } = resourceTree(parts, previewSettings(documents), {
-    agentOfTask: (taskId) => str(content(find("Task", taskId)).agent_id),
-    contextOfAgent: (agentId) => {
+    agentOfTask: (taskId) => agentSlot(content(find("Task", taskId)).agent_did),
+    contextOfAgent: (agentDid) => {
       const context = find(
         "AgentContext",
-        str(content(find("Agent", agentId)).context_id),
+        str(content(find("Agent", agentDid)).context_id),
       );
       if (!context) return undefined;
       const fields = content(context);
@@ -196,7 +207,8 @@ export function previewTree(report: PackInstallReport): ResourceTree {
         ...jobTargets(tools.integrations),
       ];
     },
-    agentOfTarget: (targetId) => str(content(find("AgentTarget", targetId)).agent_id),
+    agentOfTarget: (targetId) =>
+      agentSlot(content(find("AgentTarget", targetId)).agent_did),
   });
   const unsectioned = parts
     .filter((p) => p.section === null)

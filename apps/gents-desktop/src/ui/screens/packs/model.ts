@@ -275,7 +275,7 @@ export type Resource = {
     targets a tool set calls, and the agent a target reaches. */
 export type ResourceLinks = {
   agentOfTask: (taskId: string) => string | null | undefined;
-  contextOfAgent: (agentId: string) =>
+  contextOfAgent: (agentDid: string) =>
     | {
         context_id?: string | null;
         tools_id?: string | null;
@@ -290,9 +290,9 @@ export type ResourceLinks = {
 /** the ties among what a node has */
 export function nodeLinks(node: NodeView): ResourceLinks {
   return {
-    agentOfTask: (taskId) => node.tasks.find((x) => x.taskId === taskId)?.agentId,
-    contextOfAgent: (agentId) => {
-      const agent = node.agents.find((x) => x.agentId === agentId);
+    agentOfTask: (taskId) => node.tasks.find((x) => x.taskId === taskId)?.agentDid,
+    contextOfAgent: (agentDid) => {
+      const agent = node.agents.find((x) => x.agentDid === agentDid);
       return agent?.contextId
         ? node.contexts.find((c) => c.context_id === agent.contextId)
         : undefined;
@@ -308,7 +308,7 @@ export function nodeLinks(node: NodeView): ResourceLinks {
       ];
     },
     agentOfTarget: (targetId) =>
-      node.agentTargets?.find((t) => t.target_id === targetId)?.agent_id,
+      node.agentTargets?.find((t) => t.target_id === targetId)?.agent_did,
   };
 }
 

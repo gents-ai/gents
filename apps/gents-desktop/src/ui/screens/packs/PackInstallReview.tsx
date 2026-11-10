@@ -230,9 +230,7 @@ export function PackInstallReview({
   const choosesEdits = already !== null || why === "edited";
   const needsAllow = asks.length > 0 || why === "authority";
   const overlaps =
-    report?.documents && node
-      ? overlapsOf(report.documents, node, report.pack, installed ?? [])
-      : [];
+    report?.documents && node ? overlapsOf(report.documents, node, pack) : [];
   const yours = overlaps.filter((overlap) => overlap.owner === null);
   const others = overlaps.filter((overlap) => overlap.owner !== null);
   /* a pack already installed shares its own collections */

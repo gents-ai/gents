@@ -92,7 +92,7 @@ export function nodeDocuments(deployment: NodeView) {
     {
       ...kind("Agent"),
       collection: "Agent",
-      items: of(deployment.agents, (a) => ({ id: a.agentId, name: a.displayName })),
+      items: of(deployment.agents, (a) => ({ id: a.agentDid, name: a.displayName })),
     },
     {
       ...kind("Skill"),
@@ -154,14 +154,13 @@ export function nodeDocuments(deployment: NodeView) {
 }
 
 /** The documents a pack installed, by kind, each with the section that lists
-    them. An installed pack is named "namespace/name"; the documents it
-    installed carry its name alone as their origin. */
+    them. An installed pack is named "namespace/name", and the documents it
+    installed carry that full coordinate as their origin. */
 export function packContents(deployment: NodeView, pack: string) {
-  const origin = pack.slice(pack.lastIndexOf("/") + 1);
   return nodeDocuments(deployment)
     .map(({ one, many, section, items }) => {
       const mine = items
-        .filter((doc) => packOrigin(doc.tags) === origin)
+        .filter((doc) => packOrigin(doc.tags) === pack)
         .map(({ id, name }) => ({ id, name }));
       return { one, many, section, items: mine, count: mine.length };
     })
@@ -171,11 +170,8 @@ export function packContents(deployment: NodeView, pack: string) {
 /** The settings a pack installed that belong to something else it
     installed, each with its collection. */
 export function packSettings(deployment: NodeView, pack: string): PackItem[] {
-  const origin = pack.slice(pack.lastIndexOf("/") + 1);
   const mine = <T extends Tagged>(docs: readonly T[] | undefined) =>
-    (docs ?? []).filter(
-      (doc) => packOrigin(doc.tags ? [...doc.tags] : null) === origin,
-    );
+    (docs ?? []).filter((doc) => packOrigin(doc.tags ? [...doc.tags] : null) === pack);
   return [
     ...mine(deployment.contexts).map((c) => ({
       collection: "AgentContext",

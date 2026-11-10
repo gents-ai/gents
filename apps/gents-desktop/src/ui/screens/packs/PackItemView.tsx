@@ -93,7 +93,8 @@ function FieldList({ title, fields }: { title?: string; fields: Fields }) {
 const agentView = (d: PackReviewDocument, nodeDid: string): AgentView => {
   const f = fieldsOf(d);
   return {
-    agentId: d.id ?? "",
+    creationNonce: "",
+    agentDid: d.id ?? "",
     nodeDid,
     displayName: str(f.display_name) ?? d.id ?? "",
     description: str(f.description),
@@ -162,7 +163,8 @@ function DocumentBody({
         skill={skillView(d, node.nodeDid)}
         preview={{
           pack,
-          agentHref: (agentId) => href(previewPage(request, docRef("Agent", agentId))),
+          agentHref: (agentDid) =>
+            href(previewPage(request, docRef("Agent", agentDid))),
         }}
       />
     );

@@ -62,13 +62,12 @@ export type PackOverlap = {
 /** The documents a preview would write that the node already has under the
     same id, other than ones this pack installed: one someone made is taken
     over and replaced, and one another pack installed refuses the install.
-    A document carries its pack's name alone; `installed` names it in full
-    where it can. */
+    `pack` and each document's origin are full "namespace/name"
+    coordinates. */
 export function overlapsOf(
   documents: readonly PackReviewDocument[],
   node: NodeView,
   pack: string,
-  installed: readonly { pack: string }[],
 ): PackOverlap[] {
   const existing = nodeDocuments(node);
   return documents.flatMap((d) => {
@@ -77,12 +76,13 @@ export function overlapsOf(
     if (!kind || !doc) return [];
     const origin = packOrigin(doc.tags);
     if (origin === pack) return [];
-    const owner = origin
-      ? (installed.find((p) => p.pack.slice(p.pack.lastIndexOf("/") + 1) === origin)
-          ?.pack ?? origin)
-      : null;
     return [
-      { key: `${d.collection}:${doc.id}`, kind: kind.one, name: doc.name, owner },
+      {
+        key: `${d.collection}:${doc.id}`,
+        kind: kind.one,
+        name: doc.name,
+        owner: origin,
+      },
     ];
   });
 }

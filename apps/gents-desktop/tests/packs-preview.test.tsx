@@ -39,7 +39,7 @@ const doc = (collection: string, id: string, name: string | null, content: objec
 
 const DOCUMENTS = [
   doc("Agent", "writer", "Writer", {
-    agent_id: "writer",
+    agent_slot: "writer",
     display_name: "Writer",
     context_id: "writer-ctx",
     inference_profile_id: "default",
@@ -63,7 +63,7 @@ const DOCUMENTS = [
   doc("Task", "nightly", "Nightly", {
     task_id: "nightly",
     display_name: "Nightly",
-    agent_id: "writer",
+    agent_did: "gents:agent-slot:writer",
     prompt_template: "Write tonight's notes",
     emit_outcome: false,
   }),
@@ -249,7 +249,7 @@ const LENSES = [
 const CODE_REVIEW = [
   ...LENSES.flatMap(([lens, name]) => [
     doc("Agent", `review-${lens}`, name, {
-      agent_id: `review-${lens}`,
+      agent_did: `review-${lens}`,
       display_name: name,
       context_id: `review-${lens}-context`,
     }),
@@ -265,7 +265,7 @@ const CODE_REVIEW = [
     }),
     doc("AgentTarget", `code-review-${lens}`, `code-review-${lens}`, {
       target_id: `code-review-${lens}`,
-      agent_id: `review-${lens}`,
+      agent_did: `review-${lens}`,
       name: `code-review-${lens}`,
     }),
   ]),

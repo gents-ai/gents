@@ -34,7 +34,7 @@ export function SkillEditor({
   skill: SkillView;
   /** a skill a pack would add: the pack it comes from, and where the
       agents that would use it open */
-  preview?: { pack: string; agentHref: (agentId: string) => string };
+  preview?: { pack: string; agentHref: (agentDid: string) => string };
 }) {
   const { changeConfig } = useApp().actions;
   const base = {
@@ -129,12 +129,12 @@ export function SkillEditor({
                     {i > 0 && ", "}
                     <a
                       href={
-                        preview?.agentHref(agent.agentId) ??
+                        preview?.agentHref(agent.agentDid) ??
                         href({
                           name: "agent",
                           nodeDid: deployment.nodeDid,
                           section: "agents",
-                          item: agent.agentId,
+                          item: agent.agentDid,
                         })
                       }
                       className="text-foreground underline-offset-2 hover:underline"

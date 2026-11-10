@@ -609,9 +609,9 @@ describe("what's already on the node", () => {
         ...node.agents,
         {
           ...node.agents[1]!,
-          agentId: "scout",
+          agentDid: "scout",
           displayName: "Scout",
-          tags: ["gents:pack:research"],
+          tags: ["gents:pack:demo/research"],
         },
       ],
     });
@@ -639,9 +639,9 @@ describe("what's already on the node", () => {
           ...node.agents,
           {
             ...node.agents[1]!,
-            agentId: "scout",
+            agentDid: "scout",
             displayName: "Scout",
-            tags: ["gents:pack:docs"],
+            tags: ["gents:pack:acme/docs"],
           },
         ],
       },
