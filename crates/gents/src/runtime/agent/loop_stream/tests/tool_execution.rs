@@ -1498,7 +1498,7 @@ impl ToolDyn for AdmissionChild {
 
     fn admit(&self, args: &str) -> Result<(), ToolError> {
         let args: serde_json::Value = serde_json::from_str(args).unwrap();
-        if args["admit"] == true {
+        if args.get("admit").is_none_or(|value| value == true) {
             return Ok(());
         }
         Err(ToolError::ReportedFailure {
@@ -1525,8 +1525,7 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
         ["child_admission"]
         .as_array()
         .unwrap();
-    let hook_owned =
-        crate::tools::call::hook::persistence::HookOwnedTool::ROUTES.map(|(name, _)| name);
+    let hook_owned = [crate::goal::GET_GOAL_TOOL_NAME];
     for selected in [false, true] {
         let mut children = Vec::new();
         let mut expected = std::collections::BTreeMap::new();
@@ -1538,7 +1537,11 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
             };
             for name in names {
                 let ordinal = children.len() as u32 + 1;
-                let arguments = serde_json::json!({"admit": case["admitted"], "ordinal": ordinal});
+                let arguments = if name == crate::goal::GET_GOAL_TOOL_NAME && case["admitted"] == true {
+                    serde_json::json!({})
+                } else {
+                    serde_json::json!({"admit": case["admitted"], "ordinal": ordinal})
+                };
                 children.push((ordinal, name, arguments.to_string()));
                 expected.insert(ordinal, (case.clone(), case["expected"] == true));
             }
@@ -1558,6 +1561,7 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
             }
         }
         let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
+        let hook = hook.with_goal_tool_authority(true, false);
         let stream = run_loop_stream(
             ScriptedModel::new_turns(plugin_call_then_text_turns()),
             Some(hook.clone()),
@@ -1602,7 +1606,7 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
             assert_eq!(observed, *admissible, "dispatcher result {case}");
             assert_eq!(
                 invoked.contains(&u64::from(ordinal)),
-                *admissible,
+                *admissible && case["route"] == "ordinary",
                 "invocation {case}"
             );
             assert_eq!(

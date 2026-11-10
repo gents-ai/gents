@@ -9,13 +9,21 @@ use super::{
 impl PackPlugin {
     pub fn validate(&self) -> Result<()> {
         anyhow::ensure!(
-            self.host_imports.is_empty() || self.job.0,
+            !self.host_imports.contains(&super::HostImport::RunScript) || self.job.0,
             "host_imports needs job: true; the host runs a call's script only as a job step"
         );
         anyhow::ensure!(
-            self.host_imports.is_empty()
+            !self.host_imports.contains(&super::HostImport::RunScript)
                 || self.input_schema.pointer("/properties/script").is_some(),
             "host_imports: run_script needs a `script` property in input_schema"
+        );
+        anyhow::ensure!(
+            !self.host_imports.contains(&super::HostImport::HostCall)
+                || (!self.job.0
+                    && self.data.is_none()
+                    && self.model_slot.is_none()
+                    && self.host_imports.len() == 1),
+            "host_call serves ordinary tool invocations, without job, data or model bindings"
         );
         if let Some(service) = &self.service {
             anyhow::ensure!(

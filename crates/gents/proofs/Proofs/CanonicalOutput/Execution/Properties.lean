@@ -306,16 +306,18 @@ theorem prepared_batch_enables_composed_recovery
 theorem accounting_cancels_exact_owned_pending
     (world : World) (generation : Generation) (tool : OwnedTool)
     (howned : ownedByGeneration world generation tool = true)
+    (hforeground : backgroundInvocationLive (world.toolContexts.length + 1) world tool = false)
     (hpending : tool.context.state = .pending) :
     accountOneOwnedTool world generation true tool =
       ({ tool with context := { tool.context with state := .cancelled } },
         world.transcript.terminalizeToolCall tool.document .cancelled) := by
-  simp [accountOneOwnedTool, howned, hpending,
+  simp [accountOneOwnedTool, howned, hforeground, hpending,
     ToolExecution.ToolCallContext.step?]
 
 theorem accounting_hands_off_running_without_claiming_stop
     (world : World) (generation : Generation) (tool : OwnedTool)
     (howned : ownedByGeneration world generation tool = true)
+    (hforeground : backgroundInvocationLive (world.toolContexts.length + 1) world tool = false)
     (hrunning : tool.context.state = .running) :
     accountOneOwnedTool world generation true tool =
       (handoffRunningTool world tool,
@@ -323,7 +325,7 @@ theorem accounting_hands_off_running_without_claiming_stop
       (handoffRunningTool world tool).context.state = .running ∧
       tool.document ∉
         (world.transcript.releaseParentInFlight tool.document).inFlight := by
-  simp [accountOneOwnedTool, howned, hrunning, handoffRunningTool,
+  simp [accountOneOwnedTool, howned, hforeground, hrunning, handoffRunningTool,
     Transcript.TranscriptState.releaseParentInFlight]
 
 theorem handoff_preserves_mode_and_state
@@ -337,7 +339,7 @@ theorem accounting_ignores_foreign_request_even_same_generation
     accountOneOwnedTool world generation true tool = (tool, world.transcript) := by
   have hnotOwned : acceptedHeaderBindsToolGeneration world tool generation = false := by
     unfold acceptedHeaderBindsToolGeneration
-    cases tool.provenance <;> simp [hforeign]
+    split <;> simp [hforeign]
   simp [accountOneOwnedTool, ownedByGeneration, hnotOwned]
 
 theorem explicit_background_control_updates_physical_and_parent_hook
@@ -358,7 +360,14 @@ theorem explicit_background_control_updates_physical_and_parent_hook
           { tool with context := { tool.context with awaitMode := .background } }
         transcript := world.transcript.releaseParentInFlight tool.document } := by
   simp [changeToolControlCore, toolControlAction, hlookup, howned, hstuck, direct,
+    invocationLease?, backgroundInvocationLive, invocationParent?,
     ToolExecution.ToolCallContext.step?, hrunning, hforeground, hlease]
+
+theorem accounting_preserves_live_background_ownership
+    (world : World) (generation : Generation) (tool : OwnedTool)
+    (hlive : backgroundInvocationLive (world.toolContexts.length + 1) world tool = true) :
+    accountOneOwnedTool world generation true tool = (tool, world.transcript) := by
+  simp [accountOneOwnedTool, hlive]
 
 theorem tool_control_success_preserves_projection_coherence
     (world post : World) (generation : Generation) (document : DocId)

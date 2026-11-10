@@ -2,8 +2,11 @@ use super::*;
 use crate::store::config_client::ConfigApplyTxn;
 use crate::store::identity::NodeIdentity;
 
-async fn write_config<T>(node: &Arc<EmbeddedNode>, collection: crate::Collection, document: &T)
-where
+async fn write_config_with_access<T>(
+    access: &crate::ConfigAccess,
+    collection: crate::Collection,
+    document: &T,
+) where
     T: serde::Serialize,
 {
     let value = serde_json::to_value(document).unwrap();
@@ -15,27 +18,29 @@ where
         },
     ])
     .unwrap();
-    // Configuration is owned by the runtime that installed the fixture Agent
-    // (see `test_support::install_test_agent_binding`); relationship writes
-    // need that authenticated owner.
-    let owner = node
-        .node_identity_did()
-        .expect("fixture node has a runtime identity");
-    crate::store::config_client::ConfigAccess::local_as(
-        node.clone(),
-        identity::Did::new(owner).unwrap(),
-    )
-    .transact_write("test.write_config", |txn| {
-        let plan = &plan;
-        Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
-    })
-    .await
-    .unwrap();
+    access
+        .transact_write("test.write_config", |txn| {
+            let plan = &plan;
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+        })
+        .await
+        .unwrap();
 }
 
 async fn enable_agents_tools(node: &Arc<EmbeddedNode>, did: &str, agent_did: &str) {
-    write_config(
-        node,
+    let owner = node.node_identity_did().unwrap();
+    let access =
+        crate::store::config_client::ConfigAccess::local_as(node.clone(), owner.parse().unwrap());
+    enable_agents_tools_with_access(&access, did, agent_did).await;
+}
+
+pub(super) async fn enable_agents_tools_with_access(
+    access: &crate::ConfigAccess,
+    did: &str,
+    agent_did: &str,
+) {
+    write_config_with_access(
+        access,
         crate::Collection::AgentTarget,
         &crate::documents::AgentTargetDocument {
             target_id: "general:general".to_owned(),
@@ -48,8 +53,8 @@ async fn enable_agents_tools(node: &Arc<EmbeddedNode>, did: &str, agent_did: &st
         },
     )
     .await;
-    write_config(
-        node,
+    write_config_with_access(
+        access,
         crate::Collection::Tools,
         &serde_json::json!({
             "node_did": did,
@@ -58,8 +63,8 @@ async fn enable_agents_tools(node: &Arc<EmbeddedNode>, did: &str, agent_did: &st
         }),
     )
     .await;
-    write_config(
-        node,
+    write_config_with_access(
+        access,
         crate::Collection::Task,
         &serde_json::json!({
             "node_did": did,

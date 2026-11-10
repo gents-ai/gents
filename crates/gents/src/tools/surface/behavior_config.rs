@@ -302,7 +302,13 @@ impl AgentToolSurfaceConfig {
                             }
                     })
                 });
-            if !allowed_mcp_wrapper && !host_tools.is_backgroundable_tool_name(name) {
+            let selected_plugin = plugin_tools
+                .iter()
+                .any(|plugin| plugin.job.is_none() && plugin.tool_name() == name);
+            if !allowed_mcp_wrapper
+                && !selected_plugin
+                && !host_tools.is_backgroundable_tool_name(name)
+            {
                 anyhow::bail!(
                     "agent {agent_name} backgroundable_tool_names entry {name:?} is not a registered backgroundable tool"
                 );

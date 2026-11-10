@@ -146,6 +146,16 @@ private def invocationJson : Json :=
           | some current => PluginInvocation.reusable original current))]
 
 private def toolCallsJson : Json := Json.mkObj [
+  ("host_call_lifetime", toJson <| [(300, false, none), (300, false, some 100),
+      (300, false, some 600), (300, true, some 36000), (300, true, some 0)].map
+    fun (declared, background, remaining) => Json.mkObj [
+      ("declared", toJson declared), ("background", toJson background),
+      ("remaining", toJson remaining),
+      ("expected", toJson (PluginCalls.hostCallLifetime declared background remaining))]),
+  ("sleep", toJson <| [(0, 0), (1, 0), (0, 1), (30, 30), (31, 30), (1000, 60000)].map
+    fun (milliseconds, remaining) => Json.mkObj [
+      ("milliseconds", toJson milliseconds), ("remaining", toJson remaining),
+      ("expected", toJson (PluginCalls.sleepAdmissible milliseconds remaining))]),
   ("supported", toJson <| [("ordinary", PluginCalls.DispatchRoute.ordinary),
     ("hook_owned", .hookOwned)].map fun (route, value) =>
       Json.mkObj [("route", toJson route), ("expected", toJson (PluginCalls.supported value))]),
@@ -412,13 +422,14 @@ def routeCasesJson : String := (toJson <| routeCases.map fun c => Json.mkObj [
 
 theorem route_regressions :
     routeCases.map routeVerdict =
-      [ false, false, false, true, false, false, false, false
-      , false, false, false, false, false, false, false, false ] := by
+      [ false, false, false, true, false, false, false, true
+      , false, false, false, true, false, false, false, true ] := by
   native_decide
 
 def casesJson : String := (Json.mkObj [("consent", consentJson), ("budgets", budgetsJson),
   ("publication", publicationJson), ("tool_calls", toolCallsJson), ("child_admission", childAdmissionJson),
   ("tool_effects", PluginEffects.casesJson),
+  ("tool_effect_receipts", PluginEffects.receiptCasesJson),
   ("tool_effect_terminals", PluginEffects.terminalCasesJson),
   ("tool_effect_accounting", PluginEffects.accountingCasesJson),
   ("model_slots", modelSlotsJson), ("network", networkJson),

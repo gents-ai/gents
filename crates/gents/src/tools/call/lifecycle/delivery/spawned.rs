@@ -3,7 +3,6 @@ use crate::store::graphql::{created_doc_id, escape_graphql_string};
 use crate::tools::call::lifecycle::{ToolCallLifecycle, ToolCallState};
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
-use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole, OutputOutcome};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 impl ToolCallLifecycle {
@@ -101,7 +100,6 @@ impl ToolCallLifecycle {
                 self.state,
                 ToolCallState::Running | ToolCallState::Completed
             ) && !self.is_spawned_background()
-                && self.plugin_effect.is_none()
                 && self.tool_name == crate::tools::native::SPAWN_PROCESS_TOOL_NAME,
             "spawned background admission requires the accepted spawn_process owner"
         );
@@ -198,27 +196,17 @@ impl ToolCallLifecycle {
                     }
 
                     let now = fixture_now.unwrap_or_else(Utc::now);
-                    let (accepted, _) = crate::session::load_canonical_message_in_txn(
-                        txn,
-                        &accepted_header_doc_id,
-                        &node_did,
-                        requester_did.as_deref(),
-                    )
-                    .await?;
+                    let accepted = ToolCallLifecycle::load_accepted_binding_in_txn(
+                        txn, &parent_doc_id, &node_did, &session_id, requester_did.as_deref(), true,
+                    ).await?;
                     anyhow::ensure!(
                         accepted.session_id == session_id
-                            && accepted.request_doc_id.as_deref() == Some(request_doc_id.as_str())
-                            && accepted.role == MessageRole::Assistant
-                            && accepted.outcome == OutputOutcome::Complete
-                            && accepted.sequence == message_sequence
-                            && matches!(&accepted.publication,
-                                MessagePublication::RequestExecution { execution_generation }
-                                if execution_generation == &generation)
-                            && accepted.blocks.iter().any(|block| matches!(block,
-                                MessageBlock::ToolCall { tool_call_doc_id, id, name, .. }
-                                if tool_call_doc_id == &parent_doc_id
-                                    && id == &parent_tool_call_id
-                                    && name == crate::tools::native::SPAWN_PROCESS_TOOL_NAME)),
+                            && accepted.request_doc_id == request_doc_id
+                            && accepted.message_sequence == message_sequence
+                            && accepted.execution_generation == generation
+                            && accepted.accepted_header_doc_id == accepted_header_doc_id
+                            && accepted.id == parent_tool_call_id
+                            && accepted.tool_name == crate::tools::native::SPAWN_PROCESS_TOOL_NAME,
                         "spawned admission parent is not exactly bound by its accepted provider header"
                     );
                     let parent_row = txn.execute(&format!(r#"{{ AgentToolCall(filter: {{

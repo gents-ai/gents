@@ -1260,6 +1260,8 @@ fn non_empty(value: Option<&str>) -> Option<&str> {
     value.and_then(|value| (!value.is_empty()).then_some(value))
 }
 
+type SharedLoopTools = Arc<Vec<Box<dyn ToolDyn>>>;
+
 #[derive(Clone)]
 pub struct DefraSessionHook {
     node: Arc<EmbeddedNode>,
@@ -1278,6 +1280,7 @@ pub struct DefraSessionHook {
         Arc<Mutex<RapidHashMap<String, crate::request::streaming::AcceptedToolCall>>>,
     effect_tool_calls: Arc<Mutex<RapidHashMap<String, (ToolCallLifecycle, String)>>>,
     effect_lifecycles: Arc<Mutex<RapidHashMap<String, ToolCallLifecycle>>>,
+    selected_loop_tools: Arc<Mutex<Option<SharedLoopTools>>>,
     background_tool_registry: BackgroundToolRegistry,
     background_executions: BackgroundExecutionRegistry,
     background_live_outputs: BackgroundLiveOutputState,
@@ -1491,6 +1494,7 @@ impl DefraSessionHook {
             accepted_tool_calls: Arc::new(Mutex::new(RapidHashMap::new())),
             effect_tool_calls: Arc::new(Mutex::new(RapidHashMap::new())),
             effect_lifecycles: Arc::new(Mutex::new(RapidHashMap::new())),
+            selected_loop_tools: Default::default(),
             background_tool_registry: BackgroundToolRegistry::default(),
             background_executions,
             background_live_outputs,
@@ -1585,6 +1589,7 @@ impl DefraSessionHook {
             accepted_tool_calls: Arc::new(Mutex::new(RapidHashMap::new())),
             effect_tool_calls: Arc::new(Mutex::new(RapidHashMap::new())),
             effect_lifecycles: Arc::new(Mutex::new(RapidHashMap::new())),
+            selected_loop_tools: Default::default(),
             background_tool_registry: BackgroundToolRegistry::default(),
             background_executions,
             background_live_outputs,
@@ -1629,7 +1634,7 @@ impl DefraSessionHook {
         self
     }
 
-    /// Bind the Agent's job tools; a plugin child call naming one is refused.
+    /// Bind the Agent's job tools for their owning dispatch path.
     pub(crate) fn with_job_tools(
         mut self,
         job_tools: RapidHashMap<String, crate::tools::background::job::JobBinding>,
@@ -2109,6 +2114,9 @@ impl gents_loop::session_hook::CanonicalSessionHook<crate::request::streaming::A
 #[async_trait::async_trait]
 impl gents_loop::session_hook::SessionHook for DefraSessionHook {
     type Error = crate::runtime::agent::stream_processor::RuntimeSeamError;
+    async fn bind_tool_surface(&self, tools: SharedLoopTools) {
+        *self.selected_loop_tools.lock().await = Some(tools);
+    }
     fn observe_provider(&self, observation: gents_loop::session_hook::ProviderObservation) {
         if let Some(owner) = self
             .inference_observation
@@ -2147,31 +2155,19 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
             .cloned()
             .ok_or_else(|| "plugin effect has no running parent".to_owned())?;
         drop(parents);
-        let mut child = parent
-            .admit_plugin_effect(ordinal, tool_name, arguments)
+        let await_mode = if matches!(
+            crate::tools::call::hook::persistence::HookOwnedTool::of(tool_name),
+            Some(crate::tools::call::hook::persistence::HookOwnedTool::SessionMessage)
+        ) {
+            gents_protocol::tool_call::AwaitMode::Background
+        } else {
+            gents_protocol::tool_call::AwaitMode::Foreground
+        };
+        let child = parent
+            .admit_plugin_effect_with_mode(ordinal, tool_name, arguments, await_mode)
             .await
             .map_err(|error| format!("cannot admit plugin effect: {error:#}"))?;
         let internal_id = child.plugin_effect_internal_id().to_owned();
-        if !crate::plugin::tool_calls::supported(
-            tool_name,
-            &self
-                .job_tools
-                .keys()
-                .cloned()
-                .collect::<std::collections::BTreeSet<String>>(),
-        ) {
-            let reason = format!(
-                "{tool_name} controls request, session or process lifecycle; call it directly outside the plugin"
-            );
-            child
-                .spawn_failed(
-                    crate::tools::call::lifecycle::FailureClass::PolicyDenied,
-                    &reason,
-                )
-                .await
-                .map_err(|error| format!("cannot persist plugin effect refusal: {error:#}"))?;
-            return Err(reason);
-        }
         let mut pending = self.effect_tool_calls.lock().await;
         if pending.contains_key(&internal_id) {
             return Err("plugin effect is already awaiting dispatch".into());
@@ -2217,7 +2213,10 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
             current.inherit_signer(&binding)?;
             let Some(outcome) = interruption else {
                 anyhow::ensure!(
-                    current.is_terminal(),
+                    current.is_terminal()
+                        || (current.is_running()
+                            && current.await_mode()
+                                == gents_protocol::tool_call::AwaitMode::Background),
                     "plugin child did not durably terminalize"
                 );
                 crate::tools::call::lifecycle::query::load_tool_call_result(

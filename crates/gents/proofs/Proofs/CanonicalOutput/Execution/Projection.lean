@@ -208,73 +208,85 @@ def directAcceptedHeaderMetadataBindsTool (world : World) (tool : OwnedTool) : B
             decide (row.kind.referencesToolCall tool.document))
   | _ => false
 
-def metadataOwnedByGeneration (world : World) (generation : Generation)
-    (tool : OwnedTool) : Bool :=
-  let direct (document : DocId) :=
-    tool.requestDoc == world.requestId && world.messages.any fun message =>
-      message.header.request == some tool.requestDoc &&
-        message.header.session == tool.session && message.sequence == tool.acceptedSequence &&
-        message.header.role == .assistant && message.header.outcome == .complete &&
-        message.header.publication == .requestExecution generation &&
-        (toolIntents message).any (fun intent => intent.call == document)
+def invocationParent? (tool : OwnedTool) : Option DocId :=
   match tool.provenance with
-  | .acceptedIntent => direct tool.document && directAcceptedHeaderMetadataBindsTool world tool
-  | .spawnedBackground parentDoc | .pluginEffect parentDoc _ =>
-      direct parentDoc && tool.document != parentDoc &&
-        match ownedToolByDocument? world parentDoc with
-        | some parent => parent.provenance == .acceptedIntent &&
-            parent.requestDoc == tool.requestDoc && parent.session == tool.session &&
-            parent.acceptedSequence == tool.acceptedSequence &&
-            directAcceptedHeaderMetadataBindsTool world parent
-        | none => false
+  | .acceptedIntent => none
+  | .spawnedBackground parent | .pluginEffect parent _ => some parent
+
+def invocationName? (world : World) (tool : OwnedTool) : Option String :=
+  match tool.provenance with
+  | .acceptedIntent => ((world.messages.flatMap toolIntents).find?
+      (fun intent => intent.call == tool.document)).map (·.name)
+  | .pluginEffect _ _ => do
+      let arguments ← tool.effectArguments
+      let record ← world.segments.find? (fun segment => segment.id == arguments)
+      match reconstructExtent world.segments record with
+      | .ok [(declaration, _)] => declaration.tool.map (·.name)
+      | _ => none
+  | .spawnedBackground _ => none
+
+def invocationLinkValid (world : World) (tool parent : OwnedTool) : Bool :=
+  tool.document != parent.document && parent.requestDoc == tool.requestDoc &&
+    parent.session == tool.session && parent.acceptedSequence == tool.acceptedSequence &&
+    match tool.provenance with
+    | .acceptedIntent => false
+    | .spawnedBackground _ => tool.context.awaitMode == .background &&
+        invocationName? world parent == some "spawn_process"
+    | .pluginEffect _ ordinal => ordinal > 0 && ordinal ≤ ToolPolicy.PluginCalls.maxEffects
+
+/-- A derived invocation inherits its exact accepted root through recorded tool
+edges. Fuel bounds malformed cyclic documents without introducing another identity. -/
+def invocationAncestryWith : Nat → (DocId → Option OwnedTool) →
+    (OwnedTool → OwnedTool → Bool) → (OwnedTool → Bool) → OwnedTool → Bool
+  | 0, _, _, _, _ => false
+  | fuel + 1, lookup, link, accepted, tool => match invocationParent? tool with
+    | none => accepted tool
+    | some parentDoc => match lookup parentDoc with
+      | none => false
+      | some parent => link tool parent &&
+          invocationAncestryWith fuel lookup link accepted parent
+
+def invocationAncestryValid (fuel : Nat) (world : World) (tool : OwnedTool) : Bool :=
+  invocationAncestryWith fuel (ownedToolByDocument? world) (invocationLinkValid world)
+    (directAcceptedHeaderMetadataBindsTool world) tool
+
+def invocationRoot? : Nat → World → OwnedTool → Option DocId
+  | 0, _, _ => none
+  | fuel + 1, world, tool => match invocationParent? tool with
+    | none => some tool.document
+    | some parentDoc => do
+        let parent ← ownedToolByDocument? world parentDoc
+        invocationRoot? fuel world parent
 
 def spawnParentIntentValid (world : World) (tool : OwnedTool) (parentDoc : DocId) : Bool :=
   match ownedToolByDocument? world parentDoc with
-  | some parent => parent.provenance == .acceptedIntent &&
-      parent.requestDoc == tool.requestDoc && parent.session == tool.session &&
-      parent.acceptedSequence == tool.acceptedSequence &&
-      directAcceptedHeaderMetadataBindsTool world parent &&
-      world.messages.any (fun message =>
-        message.header.request == some tool.requestDoc &&
-          message.header.session == tool.session &&
-          message.sequence == tool.acceptedSequence &&
-          (toolIntents message).any (fun intent =>
-            intent.call == parentDoc && intent.name == "spawn_process"))
+  | some parent => invocationLinkValid world tool parent &&
+      invocationAncestryValid (world.toolContexts.length + 1) world parent
   | none => false
 
 def pluginParentIntentValid (world : World) (tool : OwnedTool) (parentDoc : DocId) : Bool :=
   match ownedToolByDocument? world parentDoc with
-  | some parent => parent.provenance == .acceptedIntent &&
-      parent.requestDoc == tool.requestDoc && parent.session == tool.session &&
-      parent.acceptedSequence == tool.acceptedSequence &&
-      directAcceptedHeaderMetadataBindsTool world parent
+  | some parent => invocationLinkValid world tool parent &&
+      invocationAncestryValid (world.toolContexts.length + 1) world parent
   | none => false
 
 def acceptedHeaderBindsTool (world : World) (tool : OwnedTool) : Bool :=
-  match tool.provenance with
-  | .acceptedIntent => directAcceptedHeaderMetadataBindsTool world tool
-  | .spawnedBackground parentDoc =>
-      spawnParentIntentValid world tool parentDoc &&
-        tool.document != parentDoc && tool.context.awaitMode == .background
-  | .pluginEffect parentDoc ordinal =>
-      pluginParentIntentValid world tool parentDoc && tool.document != parentDoc &&
-        ordinal > 0 && ordinal ≤ ToolPolicy.PluginCalls.maxEffects && tool.context.awaitMode == .foreground
+  invocationAncestryValid (world.toolContexts.length + 1) world tool
 
 def acceptedHeaderBindsToolGeneration (world : World) (tool : OwnedTool)
     (generation : Generation) : Bool :=
-  let direct (document : DocId) :=
-    tool.requestDoc == world.requestId && world.messages.any fun message =>
-      message.header.request == some tool.requestDoc &&
-        message.header.session == tool.session && message.sequence == tool.acceptedSequence &&
-        message.header.role == .assistant && message.header.outcome == .complete &&
-        message.header.publication == .requestExecution generation &&
-        (toolIntents message).any (fun intent => intent.call == document)
-  match tool.provenance with
-  | .acceptedIntent => direct tool.document
-  | .spawnedBackground parentDoc =>
-      spawnParentIntentValid world tool parentDoc && direct parentDoc
-  | .pluginEffect parentDoc _ =>
-      pluginParentIntentValid world tool parentDoc && direct parentDoc
+  acceptedHeaderBindsTool world tool &&
+    match invocationRoot? (world.toolContexts.length + 1) world tool with
+    | none => false
+    | some root => tool.requestDoc == world.requestId && world.messages.any fun message =>
+        message.header.request == some tool.requestDoc &&
+          message.header.session == tool.session && message.sequence == tool.acceptedSequence &&
+          message.header.role == .assistant && message.header.outcome == .complete &&
+          message.header.publication == .requestExecution generation &&
+          (toolIntents message).any (fun intent => intent.call == root)
+
+def metadataOwnedByGeneration (world : World) (generation : Generation)
+    (tool : OwnedTool) : Bool := acceptedHeaderBindsToolGeneration world tool generation
 
 def messageContainsToolResult (message : MessageEnvelope) (document : DocId) : Bool :=
   message.blocks.any fun block => match block with
@@ -371,6 +383,12 @@ def canonicalToolDelivered (world : World) (tool : OwnedTool) : Bool :=
     | none => false
     | some key => canonicalToolResultBound world tool key
 
+def pluginReceiptPresent (world : World) (tool : OwnedTool) : Bool :=
+  world.segments.any fun record =>
+    record.coordinate.request == tool.requestDoc && record.writer == .tool tool.document &&
+      (match record.coordinate.source with | .authored _ => true | _ => false) &&
+      closedComplete record && validateClosingRecord world.segments record
+
 def admissionsValid (world : World) (message : MessageEnvelope)
     (admissions : List ToolAdmission) : Bool :=
   admissions.map (fun admission => admission.document) ==
@@ -399,15 +417,9 @@ def spawnedAdmissionValid (world : World) (generation : Generation)
     admission.context.state == .pending &&
     admission.context.awaitMode == .background &&
     match ownedToolByDocument? world admission.parentToolDoc with
-    | some parent => parent.provenance == .acceptedIntent &&
-        parent.context.state == .running &&
+    | some parent => parent.context.state == .running &&
         acceptedHeaderBindsToolGeneration world parent generation &&
-        world.messages.any (fun message =>
-          message.header.request == some parent.requestDoc &&
-            message.header.session == parent.session &&
-            message.sequence == parent.acceptedSequence &&
-            (toolIntents message).any (fun intent =>
-              intent.call == admission.parentToolDoc && intent.name == "spawn_process"))
+        invocationName? world parent == some "spawn_process"
     | none => false
 
 def installSpawnedTool (world : World) (admission : SpawnedToolAdmission) :
@@ -475,29 +487,41 @@ def pluginEffectPresent (world : World) (admission : PluginEffectAdmission) : Bo
       (transcriptToolByDocument? world admission.document).isNone
   | none => false
 
+def backgroundInvocationLive : Nat → World → OwnedTool → Bool
+  | 0, _, _ => false
+  | fuel + 1, world, tool =>
+    (tool.context.state == .running && tool.context.awaitMode == .background) ||
+      match invocationParent? tool with
+      | none => false
+      | some parent => (ownedToolByDocument? world parent).any
+          (backgroundInvocationLive fuel world)
+
+def invocationLease? (world : World) (generation : Generation) (tool : OwnedTool) :
+    Option (RequestExecutionLease.World Generation) :=
+  if backgroundInvocationLive (world.toolContexts.length + 1) world tool then some world.lease
+  else RequestExecutionLease.step? world.lease
+      (.authorizeProducerDecision .mutationWriteGate generation .dispatch)
+
 def pluginEffectInvocationValid (world : World) (generation : Generation)
     (admission : PluginEffectAdmission) : Bool :=
-  (RequestExecutionLease.step? world.lease
-      (.authorizeProducerDecision .mutationWriteGate generation .dispatch)).isSome &&
-    match ownedToolByDocument? world admission.parentToolDoc with
-    | some parent => parent.provenance == .acceptedIntent &&
-        parent.context.state == .running &&
-        acceptedHeaderBindsToolGeneration world parent generation
-    | none => false
+  match ownedToolByDocument? world admission.parentToolDoc with
+  | some parent => (match parent.provenance with | .pluginEffect _ _ => false | _ => true) &&
+      parent.context.state == .running &&
+      acceptedHeaderBindsToolGeneration world parent generation &&
+      (invocationLease? world generation parent).isSome
+  | none => false
 
 def pluginEffectAdmissionValid (world : World) (generation : Generation)
     (admission : PluginEffectAdmission) : Bool :=
   admission.ordinal > 0 && admission.ordinal ≤ ToolPolicy.PluginCalls.maxEffects &&
     admission.document != admission.parentToolDoc &&
-    admission.context.state == .pending && admission.context.awaitMode == .foreground &&
+    admission.context.state == .pending &&
     !(world.toolContexts.any (fun tool => tool.document == admission.document ||
       tool.provenance == .pluginEffect admission.parentToolDoc admission.ordinal)) &&
     pluginEffectInputValid world generation admission &&
+    pluginEffectInvocationValid world generation admission &&
     match ownedToolByDocument? world admission.parentToolDoc with
-    | some parent => parent.provenance == .acceptedIntent &&
-        parent.context.state == .running &&
-        admission.context.deadline ≤ parent.context.deadline &&
-        acceptedHeaderBindsToolGeneration world parent generation
+    | some parent => admission.context.deadline ≤ parent.context.deadline
     | none => false
 
 def indexedDeclarations : Streams → Nat → List (Nat × Declaration)

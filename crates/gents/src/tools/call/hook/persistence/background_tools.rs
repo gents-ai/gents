@@ -2,6 +2,7 @@ use super::*;
 use anyhow::Context;
 use futures::FutureExt;
 use std::panic::AssertUnwindSafe;
+use std::sync::Arc;
 
 mod cancel;
 pub(super) mod finish;
@@ -212,6 +213,22 @@ impl DefraSessionHook {
         )?;
         lifecycle.start_running().await?;
 
+        let dispatcher = if let Some(tools) = self.selected_loop_tools.lock().await.clone() {
+            let mut hook = self.clone();
+            let mut parents = rapidhash::RapidHashMap::default();
+            parents.insert(background_tool_call_id.clone(), lifecycle.clone());
+            hook.in_flight_lifecycles = Arc::new(tokio::sync::Mutex::new(parents));
+            hook.effect_tool_calls = Default::default();
+            hook.effect_lifecycles = Default::default();
+            Some(gents_loop::loop_stream::tool_effect_dispatcher(
+                tools,
+                Arc::new(hook),
+                background_tool_call_id.clone(),
+            ))
+        } else {
+            None
+        };
+
         let node = self.node.clone();
         let live_outputs = self.background_live_outputs.clone();
         let execution_call_id = background_tool_call_id.clone();
@@ -288,7 +305,8 @@ impl DefraSessionHook {
                                         },
                                     ).await
                                 } else {
-                                    crate::tools::call::lifecycle::runtime::call_tool_managed(target_tool.as_ref(), target_args).await
+                                    gents_loop::tool_effects::scope(dispatcher,
+                                        crate::tools::call::lifecycle::runtime::call_tool_managed(target_tool.as_ref(), target_args)).await
                                 }
                             },
                         )

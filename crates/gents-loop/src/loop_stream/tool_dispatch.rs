@@ -1,5 +1,21 @@
 use super::*;
 
+pub fn tool_effect_dispatcher<H>(
+    tools: Arc<Vec<Box<dyn ToolDyn>>>,
+    hook: Arc<H>,
+    parent_internal_id: String,
+) -> Arc<dyn crate::tool_effects::ToolEffectDispatcher>
+where
+    H: SessionHook + 'static,
+{
+    Arc::new(EffectDispatcher {
+        tools,
+        hook,
+        parent_internal_id,
+        fatal: Default::default(),
+    })
+}
+
 pub(super) struct EffectDispatcher<H> {
     pub(super) tools: Arc<Vec<Box<dyn ToolDyn>>>,
     pub(super) hook: Arc<H>,

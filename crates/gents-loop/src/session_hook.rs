@@ -50,6 +50,8 @@ pub trait SessionHook: Send + Sync {
     type Error: Into<Box<dyn std::error::Error + Send + Sync>> + Send + Sync + 'static;
     fn observe_provider(&self, _observation: ProviderObservation) {}
 
+    async fn bind_tool_surface(&self, _tools: std::sync::Arc<Vec<Box<dyn crate::tool::ToolDyn>>>) {}
+
     async fn run_foreground_tool(
         &self,
         _name: &str,

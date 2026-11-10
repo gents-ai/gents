@@ -453,8 +453,7 @@ def dispatchCore (world : World) (generation : Generation)
       match ToolExecution.ToolCallContext.step? current .dispatch with
       | none => .error .transcriptRejected
       | some context =>
-          match RequestExecutionLease.step? world.lease
-              (.authorizeProducerDecision .mutationWriteGate generation .dispatch) with
+          match invocationLease? world generation tool with
           | none => .error .leaseRejected
           | some lease =>
               let updated := { tool with context := context }
@@ -478,9 +477,6 @@ def changeToolControlCore (world : World) (generation : Generation) (document : 
       if acceptedHeaderBindsToolGeneration world tool generation = false ||
           tool.stuckSince.isSome then
         .error .transcriptRejected
-      else if action == .background && (match tool.provenance with
-          | .pluginEffect _ _ => true | _ => false) then
-        .error .transcriptRejected
       else if action == .foreground && world.terminalSelection.isSome then
         .error .terminalRejected
       else if action == .foreground && tool.provenance != .acceptedIntent then
@@ -488,8 +484,7 @@ def changeToolControlCore (world : World) (generation : Generation) (document : 
       else match ToolExecution.ToolCallContext.step? tool.context action with
       | none => .error .transcriptRejected
       | some context =>
-          match RequestExecutionLease.step? world.lease
-              (.authorizeProducerDecision .mutationWriteGate generation .dispatch) with
+          match invocationLease? world generation tool with
           | none => .error .leaseRejected
           | some lease =>
               let updated := { tool with context := context }
@@ -651,7 +646,10 @@ def normalCompletionToolsReady (world : World) (generation : Generation) : Bool 
       match tool.provenance, tool.context.state with
       | _, .pending => true
       | .spawnedBackground _, .running => tool.context.awaitMode == .background
-      | .pluginEffect _ _, .running => false
+      | .pluginEffect _ _, .running =>
+          (tool.context.awaitMode == .background && pluginReceiptPresent world tool) ||
+            ((invocationParent? tool).bind (ownedToolByDocument? world)).any
+              (backgroundInvocationLive (world.toolContexts.length + 1) world)
       | .pluginEffect _ _, terminal => decide (isTerminal terminal) &&
           (tool.context.startedAt.isNone || pluginTerminalPayloadValid world tool)
       | .acceptedIntent, .running =>
@@ -668,6 +666,8 @@ def handoffRunningTool (world : World) (tool : OwnedTool) : OwnedTool :=
 def accountOneOwnedTool (world : World) (generation : Generation)
     (interruptRunning : Bool) (tool : OwnedTool) : OwnedTool × Transcript.TranscriptState :=
   if !ownedByGeneration world generation tool then (tool, world.transcript)
+  else if backgroundInvocationLive (world.toolContexts.length + 1) world tool then
+    (tool, world.transcript)
   else match tool.context.state with
   | .pending =>
       match ToolExecution.ToolCallContext.step? tool.context
@@ -866,8 +866,8 @@ def admitSpawnedBackgroundCore (world : World) (generation : Generation)
   else match installSpawnedTool world admission with
   | none => .error .transcriptRejected
   | some spawned =>
-      match RequestExecutionLease.step? world.lease
-          (.authorizeProducerDecision .mutationWriteGate generation .dispatch) with
+      match (ownedToolByDocument? world admission.parentToolDoc).bind
+          (invocationLease? world generation) with
       | none => .error .leaseRejected
       | some lease =>
           let candidate := { world with
@@ -888,8 +888,7 @@ def admitPluginEffectCore (world : World) (generation : Generation)
   else match ownedToolByDocument? world admission.parentToolDoc with
   | none => .error .transcriptRejected
   | some parent =>
-      match RequestExecutionLease.step? world.lease
-          (.authorizeProducerDecision .mutationWriteGate generation .dispatch) with
+      match invocationLease? world generation parent with
       | none => .error .leaseRejected
       | some lease =>
           .ok { world with
