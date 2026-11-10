@@ -5,7 +5,8 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::documents::{
-    references_of, AgentTargetDocument, DatastoreToolSurfaceDocument, EventSource, Tools,
+    references_of, AgentTargetDocument, DatastoreToolSurfaceDocument, EventSource, PageDocument,
+    Tools,
 };
 use crate::Collection;
 
@@ -30,7 +31,9 @@ pub(super) fn pack_part(collection: Collection) -> Option<PackPart> {
         | Collection::Task
         | Collection::Schedule
         | Collection::EventSource
-        | Collection::Trigger => collection.dir_name().map(PackPart::Documents),
+        | Collection::Trigger
+        | Collection::Page
+        | Collection::PluginSource => collection.dir_name().map(PackPart::Documents),
         Collection::Node
         | Collection::InferenceBackend
         | Collection::InferenceProfile
@@ -60,6 +63,8 @@ pub const SELECTABLE_KINDS: &[(&str, Collection)] = &[
     ("trigger", Collection::Trigger),
     ("event-source", Collection::EventSource),
     ("schedule", Collection::Schedule),
+    ("page", Collection::Page),
+    ("plugin-source", Collection::PluginSource),
 ];
 
 pub fn selectable_kind(word: &str) -> Option<Collection> {
@@ -238,6 +243,29 @@ pub(super) fn close(
                     format!("{source} source_collection"),
                     &mut pulled,
                 );
+            }
+            Collection::Page => {
+                let page: PageDocument = serde_json::from_value(document.clone())?;
+                for granted in page.data.iter().flatten() {
+                    let target_key = (Collection::DatastoreToolSurface, granted.surface.clone());
+                    let target = label(target_key.0, &target_key.1);
+                    if !live.contains_key(&target_key) {
+                        refusals.push(format!(
+                            "{source} data grants {target}, which is not on this node or not readable by the exporting actor"
+                        ));
+                        continue;
+                    }
+                    if !selected.contains(&target_key)
+                        && !documents.contains_key(&target_key)
+                        && !queue.contains(&target_key)
+                    {
+                        pulled.push(PulledByReference {
+                            part: target,
+                            via: format!("{source} data"),
+                        });
+                    }
+                    queue.push(target_key);
+                }
             }
             Collection::AgentTarget => {
                 let target: AgentTargetDocument = serde_json::from_value(document.clone())?;

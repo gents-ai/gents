@@ -434,3 +434,75 @@ async fn a_reference_a_pack_cannot_carry_refuses_the_export_by_name() {
     );
     assert!(!dir.exists(), "a refused export writes nothing");
 }
+
+#[tokio::test]
+async fn a_page_and_a_plugin_source_export_with_the_surface_the_page_is_granted() {
+    let (origin, user, access, _worker) =
+        crate::test_support::signed_test_node("pack-export-live-documents").await;
+    let owner = origin.node_identity.did().to_owned();
+    grant_schema(&origin, &user).await;
+    access.add_collection(SDL).await.unwrap();
+    apply(
+        &access,
+        vec![
+            (
+                Collection::DatastoreToolSurface,
+                json!({"node_did":owner,"surface_id":"ticket-notes","display_name":"Ticket notes","entries":[
+                    {"kind":"query","tool_name":"list_notes","collection":"TicketNote","fields":["ticket","body"]}
+                ]}),
+            ),
+            (
+                Collection::Page,
+                json!({"node_did":owner,"page_id":"notes","display_name":"Notes","module":"export default { id: 'notes', name: 'Notes', register() {} };\n","data":[{"surface":"ticket-notes","tools":["list_notes"]}]}),
+            ),
+            (
+                Collection::PluginSource,
+                json!({"node_did":owner,"plugin_id":"double","language":"js","source":"module.exports = (input) => ({ n: input.n * 2 });\n"}),
+            ),
+        ],
+    )
+    .await;
+    let out = tempfile::tempdir().unwrap();
+    let dir = out.path().join("notes_app");
+    let report = export_pack(
+        &access,
+        &owner,
+        &dir,
+        "notes_app",
+        "fixture",
+        &ExportSelection {
+            documents: [
+                (Collection::Page, "notes".to_owned()),
+                (Collection::PluginSource, "double".to_owned()),
+            ]
+            .into(),
+            ..ExportSelection::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        report
+            .by_reference
+            .iter()
+            .map(|pulled| (pulled.part.as_str(), pulled.via.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("DatastoreToolSurface/ticket-notes", "Page/notes data"),
+            (
+                "collection/TicketNote",
+                "DatastoreToolSurface/ticket-notes tool list_notes"
+            ),
+        ],
+    );
+    let config: Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("pack_config.json")).unwrap())
+            .unwrap();
+    assert_eq!(config["pages"][0]["page_id"], "notes");
+    assert_eq!(config["plugin_sources"][0]["plugin_id"], "double");
+    assert_eq!(
+        config["datastore_tool_surfaces"][0]["surface_id"],
+        "ticket-notes"
+    );
+    assert!(report.check.problems.is_empty(), "{:?}", report.check);
+}
