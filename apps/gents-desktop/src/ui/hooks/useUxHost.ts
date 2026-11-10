@@ -186,6 +186,9 @@ export function openUxDoors(app: DesktopApp): void {
   ];
 }
 
+const showsPages = (route: Route): boolean =>
+  route.name === "plugin" || route.name === "packs";
+
 export function useUxHost(
   app: DesktopApp,
   listenToUpdates: DesktopBridge["listenToUpdates"],
@@ -195,6 +198,7 @@ export function useUxHost(
   routeRef.current = route;
   useEffect(() => {
     notifyRouteChanged();
+    if (showsPages(route)) rescanRuntimeUxPluginsSoon();
   }, [route]);
   useEffect(() => {
     installUxHost(buildUxHost(app, () => routeRef.current));
@@ -206,8 +210,10 @@ export function useUxHost(
     void Promise.resolve(
       listenToUpdates((event: DesktopClientUpdatedEvent) => {
         emitClientUpdated(event);
-        /* an agent editing a page document is client activity */
-        rescanRuntimeUxPluginsSoon();
+        /* An agent editing a page document is client activity, and so is
+           every streamed token. Only a screen that shows pages follows it, so
+           a chat turn adds no bridge calls (the mobile performance gate). */
+        if (showsPages(routeRef.current)) rescanRuntimeUxPluginsSoon();
       }),
     ).then((stop: () => void) => {
       if (cancelled) stop();

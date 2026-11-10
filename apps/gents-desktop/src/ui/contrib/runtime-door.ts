@@ -303,9 +303,9 @@ export function scanRuntimeUxPlugins(reloadKnown = false): Promise<void> {
 }
 
 /* A page document changes on its node, not in this window, so nothing here
-   announces the edit. The app asks for a scan when the selected node changes
-   and when the client reports activity; this coalesces those into one scan
-   per interval. A scan that finds the same digests reads no source. */
+   announces the edit. The app asks for a scan when the selected node
+   changes, and on arrival and client activity while a screen shows pages;
+   this coalesces those into one scan per interval. A scan that finds the same digests reads no source. */
 const RESCAN_AFTER_MS = 2000;
 let rescan: ReturnType<typeof setTimeout> | null = null;
 
