@@ -22,7 +22,7 @@ async fn persisted_background_inputs_keep_origin_across_transcript_windows() {
         ("person", "null"),
     ] {
         let query = format!(
-            r#"mutation {{ create_AgentRequest(input: {{purpose:"normal", node_did:"did:test:amy", agent_id:"agent", request_id:"{id}", session_id:"origin", lifecycle_state:"completed", input:{input}, created_at:"2026-10-26T00:00:00Z"}}) {{ _docID }} }}"#
+            r#"mutation {{ create_AgentRequest(input: {{purpose:"normal", node_did:"did:test:amy", agent_did:"did:test:agent", request_id:"{id}", session_id:"origin", lifecycle_state:"completed", input:{input}, created_at:"2026-10-26T00:00:00Z"}}) {{ _docID }} }}"#
         );
         let response = ConfigAccess::write_local(&node, "test.background_origin", &query)
             .await
