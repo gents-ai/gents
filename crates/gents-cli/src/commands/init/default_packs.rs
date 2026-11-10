@@ -4,10 +4,8 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
-use crate::cli::{PackDriftArgs, PackInstallArgs, ScopeArgs};
+use crate::cli::ScopeArgs;
 use crate::commands::pack as command;
-use crate::output_format::OutputFormat;
-use crate::request_helpers::capture_report;
 
 /// The packs a fresh Engineer home starts with. Each is resolved by name,
 /// from the home's pack store first and then the registry, at the newest
@@ -198,39 +196,30 @@ async fn install_one(
     if asks && !grant {
         return Ok(Outcome::Unapproved { requested, wire });
     }
-    let scope = || ScopeArgs {
+    let scope = ScopeArgs {
         home: Some(home.to_owned()),
         graphql: None,
         node_did: None,
     };
-    capture_report(command::install(PackInstallArgs {
-        package: pack.to_owned(),
-        inference_slots: Vec::new(),
-        dependency_variables: Vec::new(),
-        preview: false,
-        scope: scope(),
-        output: OutputFormat::Json,
-        force_rebind_concrete_did: false,
-        registry: registry.map(ToOwned::to_owned),
-        drift: PackDriftArgs {
-            overwrite: false,
-            keep: false,
-        },
-        grant_authority: grant,
-        wire: Vec::new(),
-        expect_digest: Some(source.digest().to_owned()),
-        explicit: true,
-    }))
-    .await?;
     let coordinate = format!(
         "{}/{}",
         source.manifest().metadata.namespace,
         source.manifest().name
     );
-    // One held access wires the plugins and attaches the skills, and its
-    // node is drained before the next pack opens the home.
-    let (access, owner) = command::resolve_scope_owner(&scope()).await?;
+    // One held access installs the pack, wires its plugins and attaches its
+    // skills, and its node is drained before the next pack opens the home.
+    let (access, owner) = command::resolve_scope_owner(&scope).await?;
+    let installed = install_as_engineer(
+        &access,
+        &owner,
+        home,
+        engineer,
+        &format!("{coordinate}@{}", source.manifest().version),
+        source.digest(),
+    )
+    .await;
     let attached = async {
+        installed?;
         let wired = if wire {
             command::wire_pack_plugins_consenting(
                 &access,
@@ -240,7 +229,10 @@ async fn install_one(
                 &[engineer.to_owned()],
                 grant && DYNAMIC_RUN_ON_APPROVAL.contains(&coordinate.as_str()),
             )
-            .await?
+            .await
+            .with_context(|| {
+                format!("{pack} is installed, but it was not wired into the Engineer")
+            })?
         } else {
             Vec::new()
         };
@@ -251,7 +243,10 @@ async fn install_one(
             &coordinate,
             source.digest(),
         )
-        .await?;
+        .await
+        .with_context(|| {
+            format!("{pack} is installed, but its skills were not attached to the Engineer")
+        })?;
         Ok::<_, anyhow::Error>((wired, skills))
     }
     .await;
@@ -261,8 +256,7 @@ async fn install_one(
         }
     }
     drop(access);
-    let (wired, skills) = attached
-        .with_context(|| format!("{pack} is installed, but it was not wired into the Engineer"))?;
+    let (wired, skills) = attached?;
     Ok(Outcome::Installed(json!({
         "pack": coordinate,
         "version": source.manifest().version,
@@ -271,6 +265,85 @@ async fn install_one(
         "wired": wired,
         "skills": skills,
     })))
+}
+
+/// Installs `package` at `digest` as the Engineer `engineer`, so the pack's
+/// documents are the Engineer's: it reads them, references them and removes
+/// the pack again. The user's approval of what the plugins ask for is the
+/// caller's; the Engineer's pack authority is what grants it (Lean
+/// `installerProvenance`), so the install records `operator`.
+async fn install_as_engineer(
+    access: &gents::ConfigAccess,
+    owner: &str,
+    home: &Path,
+    engineer: &str,
+    package: &str,
+    digest: &str,
+) -> Result<Value> {
+    let receipt = engineer_config(access, owner, home, engineer)
+        .await?
+        .call(json!({"argv": ["pack", "install", package, "--digest", digest]}).to_string())
+        .await
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    serde_json::from_str(&receipt).context("the Engineer's install receipt is not JSON")
+}
+
+/// The config tool as the runtime gives it to the Engineer `engineer`, with
+/// the grants its own Tools hold. `access` holds the home's node.
+async fn engineer_config(
+    access: &gents::ConfigAccess,
+    owner: &str,
+    home: &Path,
+    engineer: &str,
+) -> Result<Box<dyn gents::inference::llm::tool::ToolDyn>> {
+    use gents::tools::builtin::self_config;
+    let node = access
+        .local_node()
+        .context("a runtime is serving this home; ask its Engineer to install the pack")?
+        .clone();
+    let stored = crate::home_state::read_init_config(home)?.context("home is not initialized")?;
+    let runtime = crate::home_state::load_initialized_home_identity(home, &stored)?;
+    let binding =
+        crate::commands::inference_binding::load_bound_agent_binding(&node, owner, engineer)
+            .await?;
+    let agent = gents::store::identity::resolve_agent_identity(runtime.as_ref(), &binding)?;
+    let held = access
+        .transact_readonly("cli.init.engineer_grants", |txn| {
+            Box::pin(async move {
+                gents::documents::load_agent_context_and_tools_in_txn(txn, owner, engineer).await
+            })
+        })
+        .await?
+        .1
+        .and_then(|tools| tools.self_config)
+        .context("the Engineer's Tools hold no self_config grant")?;
+    self_config::build_runtime_self_config_tools(
+        std::sync::Arc::default(),
+        node,
+        agent,
+        runtime,
+        &gents::tools::surface::SelfConfigToolConfig {
+            enabled: held.enable_self_config.unwrap_or(false),
+            agent_did: engineer.to_owned(),
+            categories: held
+                .self_config_categories
+                .unwrap_or_default()
+                .into_iter()
+                .collect(),
+            no_lockout: held.self_config_no_lockout.unwrap_or(false),
+            preview: held.self_config_preview.unwrap_or(false),
+            enable_pack_install: held.enable_pack_install.unwrap_or(false),
+            enable_pack_authority: held.enable_pack_authority.unwrap_or(false),
+            ..Default::default()
+        },
+        std::sync::Arc::new(gents::plugin::executor::PluginExecutor::new(Some(
+            home.to_owned(),
+        ))),
+    )
+    .await?
+    .into_iter()
+    .find(|tool| tool.name() == self_config::CONFIG_TOOL_NAME)
+    .context("the Engineer's Tools do not grant the config tool")
 }
 
 #[cfg(test)]
@@ -478,6 +551,167 @@ mod tests {
             documents["plugins"][0]["plugin"], "fixture/fetch",
             "{documents}"
         );
+    }
+
+    /// A default pack is installed as the Engineer, so what it ships is the
+    /// Engineer's to use and to remove (gents-ai/packs#61): the pack's agent
+    /// is in its agent list, it targets and wires that agent, and it removes
+    /// the pack with everything the pack left.
+    #[tokio::test]
+    async fn the_engineer_owns_the_default_packs_it_starts_with() {
+        let home = tempfile::tempdir().unwrap();
+        let cli = crate::cli::Cli::try_parse_from([
+            "gents",
+            "init",
+            "--store-key-custody",
+            "file",
+            "--engineer",
+            "--no-default-packs",
+            "--model-name",
+            "test-model",
+            "--inference-url",
+            "http://127.0.0.1:9/v1",
+            "--home",
+            home.path().to_str().unwrap(),
+        ])
+        .unwrap();
+        let Some(crate::cli::Command::Init(args)) = cli.command else {
+            panic!("expected init")
+        };
+        let initialized = crate::commands::init::init_home(args).await.unwrap();
+        let engineer = initialized["default_agent_did"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let afb = tokio::task::spawn_blocking(|| {
+            crate::commands::plugin::testing::build_plugin_afb(
+                "probe",
+                b"fn main() { println!(\"{{}}\"); }",
+            )
+        })
+        .await
+        .unwrap();
+        let packs = tempfile::tempdir().unwrap();
+        let crew = packs.path().join("crew");
+        write_pack(
+            &crew,
+            json!({
+                "manifest_version": 1, "name": "crew", "namespace": "fixture",
+                "version": "1.0.0", "description": "An agent, its target and a plugin",
+                "authors": ["tests"], "tags": [], "kind": "documents",
+                "assets": ["README.md", "pack_config.json", "plugins/probe.afb"],
+                "dependencies": [], "config": "pack_config.json",
+                "inference_slots": [{"name": "worker", "description": "The worker.",
+                    "agents": ["crew-worker"]}],
+                "plugins": [{
+                    "name": "probe", "description": "test", "artifact": "plugins/probe.afb",
+                    "language": "rust", "input_schema": {"type": "object"},
+                    "manifold": {"fs": "None", "net": "None", "crypto": false,
+                        "child_process": false, "env": {"AllowList": ["SOME_VAR"]},
+                        "allow_exit": false, "http_timeout_ms": null, "listen": "None"},
+                }],
+            }),
+            &[
+                ("plugins/probe.afb", afb),
+                (
+                    "pack_config.json",
+                    serde_json::to_vec(&json!({
+                        "node": {},
+                        "agents": [{"agent_slot": "crew-worker", "context_id": "crew-context",
+                            "display_name": "Crew worker", "description": "Does one task.",
+                            "inference_profile_id": "gents:inference-slot:worker"}],
+                        "contexts": [{"context_id": "crew-context", "system_prompt": "Work.",
+                            "tools_id": "crew-tools"}],
+                        "tools": [{"tools_id": "crew-tools", "display_name": "No tools"}],
+                        "agent_targets": [{"agent_did": "gents:agent-slot:crew-worker",
+                            "name": "crew-worker", "target_id": "crew-worker",
+                            "target_node_did": "${GENTS_PACK_NODE_DID}",
+                            "description": "The crew worker."}],
+                    }))
+                    .unwrap(),
+                ),
+            ],
+        );
+        gents::pack::local::open(&gents::pack::local::LocalName::Path(&crew), home.path()).unwrap();
+
+        let report = install(
+            home.path(),
+            &engineer,
+            &["fixture/crew"],
+            Some("http://127.0.0.1:9"),
+            Approval::Approved,
+        )
+        .await;
+        assert_eq!(report["not_installed"], json!([]), "{report}");
+        assert_eq!(
+            report["installed"][0]["wired"][0]["plugin"], "fixture/probe",
+            "{report}"
+        );
+        assert_eq!(
+            gents::pack::read_home_install(home.path(), "fixture/crew")
+                .unwrap()
+                .unwrap()
+                .installed_via,
+            Some(gents::pack::InstalledVia::Operator),
+            "an install under the Engineer's pack authority records operator"
+        );
+
+        let (access, owner) = command::resolve_scope_owner(&ScopeArgs {
+            home: Some(home.path().to_owned()),
+            graphql: None,
+            node_did: None,
+        })
+        .await
+        .unwrap();
+        let config = engineer_config(&access, &owner, home.path(), &engineer)
+            .await
+            .unwrap();
+        let call = |call: Value| {
+            let config = &config;
+            async move {
+                let answer = config.call(call.to_string()).await;
+                let answer = answer.unwrap_or_else(|error| panic!("{call}: {error}"));
+                serde_json::from_str::<Value>(&answer).unwrap()
+            }
+        };
+        let agents = call(json!({"argv": ["agent", "list"]})).await;
+        let worker = agents["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|agent| agent["display_name"] == "Crew worker")
+            .unwrap_or_else(|| panic!("the Engineer lists the pack's agent: {agents}"))
+            ["agent_did"]
+            .clone();
+        call(
+            json!({"argv": ["agent-target", "create"], "target_id": "crew-helper",
+            "set": {"agent_did": worker, "name": "crew-helper"}}),
+        )
+        .await;
+        call(json!({"argv": ["tools", "update"],
+            "set": {"agents": {"enabled": true, "target_ids": ["engineer", "crew-helper", "crew-worker"]}}}))
+        .await;
+        let tools = call(json!({"argv": ["tools", "get"]})).await;
+        assert_eq!(
+            tools["document"]["agents"]["target_ids"],
+            json!(["engineer", "crew-helper", "crew-worker"]),
+            "{tools}"
+        );
+        let refused = |call: Value| {
+            let config = &config;
+            async move { config.call(call.to_string()).await.unwrap_err().to_string() }
+        };
+        let still_wired = refused(json!({"argv": ["pack", "remove", "fixture/crew"]})).await;
+        assert!(
+            still_wired.contains(
+                "Deletion would leave a broken reference to AgentTarget \\\"crew-worker\\\""
+            ),
+            "{still_wired}"
+        );
+        drop(config);
+        if let Some(node) = access.local_node() {
+            node.shutdown().await.expect("node shutdown");
+        }
     }
 
     /// Only a terminal is asked, and only when the caller may prompt; the

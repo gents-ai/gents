@@ -413,7 +413,9 @@ Agent IDs are DIDs; copy the exact agent_did from a creation receipt or ["agent"
             let argv = args.into_argv()?;
             previewing = argv.iter().any(|word| word == "preview");
             deleting = argv.first().is_some_and(|word| word == "cleanup")
-                || argv.iter().take(3).any(|word| word == "delete");
+                || argv.iter().take(3).any(|word| word == "delete")
+                || argv.first().is_some_and(|word| word == "pack")
+                    && argv.iter().take(3).any(|word| word == "remove");
             help = config_help_resource(&argv).is_some() || ux_preview::is_ux_preview(&argv);
             call.dispatch(&argv).await
         }
