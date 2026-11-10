@@ -837,7 +837,7 @@ mod tests {
         );
         assert_eq!(
             RequestLifecycleState::active_runtime_graphql_list(),
-            r#"["pending", "claimed", "processing"]"#
+            r#"["pending", "claimed", "processing", "waitingForBackend", "resumingBackend"]"#
         );
         assert_eq!(
             ExecutionOrigin::from_persisted(Some("scheduled")).unwrap(),
