@@ -4,8 +4,8 @@
 //!
 //! The browser only ever talks to this module: every request the preview
 //! page makes (the prebuilt page, the plugin's module, each `ctx.data` call)
-//! is intercepted in the DevTools session and fulfilled here, so there is no
-//! listening socket and a page's data goes through
+//! is intercepted in the DevTools session and fulfilled here, so this module
+//! listens on no socket and a page's data goes through
 //! [`super::ux_data`] exactly as the desktop's does. A preview
 //! writes nothing: a page's create tools and `ctx.plugin` are refused at the
 //! door and reported.

@@ -1,5 +1,8 @@
 //! The browser under a preview: a system Chrome, Chromium or Edge, headless,
-//! driven over the DevTools protocol.
+//! driven over the DevTools protocol. The browser itself listens for
+//! DevTools on an ephemeral loopback port (`--remote-debugging-port=0`) for
+//! the life of the preview, so another local process that finds the port can
+//! drive it; `--remote-debugging-pipe` would close that and is not used yet.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
