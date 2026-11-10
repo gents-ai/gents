@@ -5,7 +5,10 @@ import { isLocalNode } from "@/lib/firstRun";
 import { href, navigate, reviewNavigation, type Route } from "@/lib/router";
 import { fleetNodes } from "@/lib/scope";
 import { shownNodes, useHidden } from "@/lib/hidden";
-import { CONNECTION_LABEL, nodeConnection } from "@/lib/nodeConnection";
+import {
+  projectRuntimeConnectionStatus,
+  runtimeConnectionBlocksAdmission,
+} from "@source-inc/gents-desktop-client";
 import { useFleet } from "@/hooks/useFleet";
 import { useHomeDid } from "@/hooks/useClient";
 import { NodeAvatar, nodeAvatarOf } from "@/screens/AgentAvatar";
@@ -44,8 +47,7 @@ export function NavNodes({ route, current }: { route: Route; current: string | n
         {ordered.map((node) => {
           const name = node.node.displayName ?? node.label;
           const here = node.nodeDid === current;
-          const connection = nodeConnection(node);
-          const online = connection === "connected";
+          const online = !runtimeConnectionBlocksAdmission(node.runtimeConnection);
           return (
             <li key={node.nodeDid}>
               <button
@@ -78,7 +80,7 @@ export function NavNodes({ route, current }: { route: Route; current: string | n
                   <NodeActivity nodeDid={node.nodeDid} />
                 ) : (
                   <span className="shrink-0 text-muted-foreground">
-                    {CONNECTION_LABEL[connection]}
+                    {projectRuntimeConnectionStatus(node.runtimeConnection).shortLabel}
                   </span>
                 )}
               </button>

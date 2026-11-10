@@ -44,19 +44,19 @@ describe("checking a node's connection", () => {
     return toast.mock.calls[0]![0];
   };
 
-  it("connects again and says the node is online once it answers", async () => {
-    expect(await check("connected")).toBe("Juno is online");
+  it("asks the observer and says the node is connected once it answers", async () => {
+    expect(await check("connected")).toBe("Juno · Connected");
   });
 
   it("names why it isn't connected", async () => {
-    expect(await check("disconnected")).toBe("Juno is offline");
+    expect(await check("disconnected")).toBe("Can’t reach Juno");
   });
 
   it("says a node refuses this app", async () => {
-    expect(await check("refused")).toBe("Juno doesn't accept this app");
+    expect(await check("refused")).toBe("Juno doesn’t accept this app");
   });
 
-  it("says when the node hasn't answered in time", async () => {
-    expect(await check(null)).toBe("Juno hasn't answered yet");
+  it("says a node that hasn't answered in time is still connecting", async () => {
+    expect(await check(null)).toBe("Connecting to Juno");
   });
 });

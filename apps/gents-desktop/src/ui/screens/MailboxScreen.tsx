@@ -51,7 +51,7 @@ export function MailboxScreen() {
               </h1>
               <p className="mt-0.5 text-sm text-muted-foreground">{summary}</p>
               {connection?.kind === "stale" && (
-                <StaleNotice text={connection.text} className="mt-1" />
+                <StaleNotice state={connection} className="mt-1" />
               )}
             </header>
             <div className="flex items-center gap-2">

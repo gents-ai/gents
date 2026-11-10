@@ -135,7 +135,7 @@ export function AutomationsScreen({ item }: { item?: string }) {
                     Work that runs on its own on {name}.
                   </p>
                   {connection?.kind === "stale" && (
-                    <StaleNotice text={connection.text} className="mt-1" />
+                    <StaleNotice state={connection} className="mt-1" />
                   )}
                 </div>
                 {all.length > 0 && (

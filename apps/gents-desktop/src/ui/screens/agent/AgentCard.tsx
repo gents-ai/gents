@@ -29,7 +29,6 @@ import { agentOf, backendOf } from "@/lib/agents";
 import { RunNodeButton } from "./LocalServer";
 import { errorText } from "../../../lib/errorText";
 import { shortPath } from "@/lib/paths";
-import { nodeConnection } from "@/lib/nodeConnection";
 import { NO_SESSIONS, useFleet } from "@/hooks/useFleet";
 
 function pulse(
@@ -327,7 +326,7 @@ export function AgentCard({
               {name}
             </h2>
             {node.enabled === false && <Badge variant="outline">Disabled</Badge>}
-            <OnlineStatus connection={nodeConnection(deployment)} />
+            <OnlineStatus runtimeConnection={deployment.runtimeConnection} />
             {edit && (
               <Button
                 size="xs"

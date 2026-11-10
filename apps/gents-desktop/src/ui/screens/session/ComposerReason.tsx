@@ -7,7 +7,6 @@ import { useApp } from "@/app/AppContext";
 import type { NodeView } from "../../../hooks/fleetStore";
 import { useHomeDid, useNodeConfigReadOnly } from "@/hooks/useClient";
 import { isLocalNode } from "@/lib/firstRun";
-import { connectionTitle } from "@/lib/nodeConnection";
 import { href } from "@/lib/router";
 import { useLocalServerRun } from "../agent/LocalServer";
 
@@ -115,10 +114,12 @@ export function ComposerReasonBox({
     reason.kind === "inference"
       ? reason.title
       : reason.kind === "offline"
-        ? connectionTitle("disconnected", reason.name)
-        : reason.kind === "refused" || reason.kind === "noEndpoint"
-          ? connectionTitle(reason.kind, reason.name)
-          : reason.text;
+        ? `${reason.name} is offline`
+        : reason.kind === "refused"
+          ? `${reason.name} doesn't accept this app`
+          : reason.kind === "noEndpoint"
+            ? `${reason.name} has no address this app can reach`
+            : reason.text;
   const detail =
     reason.kind === "inference"
       ? "Sessions here need a model to answer."

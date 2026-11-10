@@ -161,7 +161,7 @@ describe("a session link that leads nowhere", () => {
     ]);
     renderIn(app, <Probe />);
     lookedAndFoundNothing(app);
-    expect(screen.getByRole("heading", { name: /^Can't reach/ })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: /^Can’t reach / })).toBeTruthy();
   });
 
   it("says when its node refuses this app, whatever the old dial reported", () => {
@@ -171,8 +171,9 @@ describe("a session link that leads nowhere", () => {
     renderIn(app, <Probe />);
     lookedAndFoundNothing(app);
     expect(
-      screen.getByRole("heading", { name: "Local Agent doesn't accept this app" }),
+      screen.getByRole("heading", { name: "Local Agent doesn’t accept this app" }),
     ).toBeTruthy();
+    expect(screen.getByText(/restore this device's access/)).toBeTruthy();
   });
 
   it("keeps loading while its node connects, and reads a connection as it arrives", () => {
@@ -196,7 +197,7 @@ describe("a session link that leads nowhere", () => {
       lookedAndFoundNothing(app);
       expect(screen.getByText("still loading")).toBeTruthy();
       act(() => void vi.advanceTimersByTime(OPEN_ON_WAIT_MS));
-      expect(screen.getByRole("heading", { name: /^Can't reach/ })).toBeTruthy();
+      expect(screen.getByRole("heading", { name: /^Connecting to / })).toBeTruthy();
     } finally {
       vi.useRealTimers();
     }

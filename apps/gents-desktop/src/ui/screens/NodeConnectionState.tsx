@@ -1,6 +1,6 @@
 import { Spinner } from "@gents/ui/components/spinner";
 import { cn } from "@gents/ui/lib/utils";
-import type { PageConnection } from "@/lib/nodeConnection";
+import { connectionLine, type PageConnection } from "@/lib/nodeConnection";
 
 /** In place of a page's empty state while its node connects or can't be
     reached. */
@@ -8,9 +8,10 @@ export function ConnectionPlaceholder({
   state,
   className,
 }: {
-  state: Extract<PageConnection, { kind: "loading" | "unavailable" }>;
+  state: PageConnection;
   className?: string;
 }) {
+  const line = connectionLine(state.name, state.status);
   return (
     <div
       role="status"
@@ -20,14 +21,12 @@ export function ConnectionPlaceholder({
       {state.kind === "loading" ? (
         <p className="flex items-center gap-2 text-sm text-muted-foreground">
           <Spinner className="text-foreground" />
-          {state.title}
+          {`${line}…`}
         </p>
       ) : (
         <div className="max-w-sm">
-          <p className="font-heading text-base font-medium text-heading">
-            {state.title}
-          </p>
-          <p className="mt-1 text-sm text-muted-foreground">{state.detail}</p>
+          <p className="font-heading text-base font-medium text-heading">{line}</p>
+          <p className="mt-1 text-sm text-muted-foreground">{state.status.detail}</p>
         </div>
       )}
     </div>
@@ -35,14 +34,20 @@ export function ConnectionPlaceholder({
 }
 
 /** One line over data the node can't currently refresh. */
-export function StaleNotice({ text, className }: { text: string; className?: string }) {
+export function StaleNotice({
+  state,
+  className,
+}: {
+  state: PageConnection;
+  className?: string;
+}) {
   return (
     <p
       role="status"
       data-testid="node-connection-stale"
       className={cn("text-xs text-muted-foreground", className)}
     >
-      {text}
+      {`${connectionLine(state.name, state.status)}. This may be out of date.`}
     </p>
   );
 }
