@@ -26,7 +26,7 @@ const request = (id: string, did: string): JoinRequestView => ({
   networkId: "network-1",
   candidateDid: did,
   candidatePeer: "peer-1",
-  ownerAgent: OWN,
+  ownerNodeDid: OWN,
   expiresAt: "2026-11-05T12:00:00Z",
   profile: "client",
   issuedAt: "2026-11-05T11:55:00Z",

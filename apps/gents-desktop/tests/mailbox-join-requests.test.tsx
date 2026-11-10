@@ -19,7 +19,7 @@ const request = (id: string, did: string): JoinRequestView => ({
   networkId: "network-1",
   candidateDid: did,
   candidatePeer: "peer-1",
-  ownerAgent: OWN,
+  ownerNodeDid: OWN,
   expiresAt: new Date(Date.now() + 4 * 60_000).toISOString(),
   profile: "client",
   issuedAt: new Date().toISOString(),
