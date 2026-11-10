@@ -17,6 +17,7 @@ import {
   observeLandedChatSends,
 } from "../../src/hooks/chatDelivery";
 import { writeSession } from "../../src/hooks/sessionStore";
+import { keepSendDeadlineClock } from "../../src/hooks/sendDeadlineClock";
 import { loadChatDrafts } from "../../src/hooks/chatDrafts";
 import {
   deliveryAffordances,
@@ -99,6 +100,7 @@ async function replay(trace: Trace, mailbox: boolean) {
       ),
   } as unknown as DesktopApiAdapter;
   const delivery = createChatDelivery(api, stores);
+  const stopClock = keepSendDeadlineClock(stores.chat);
   const stopObserving = observeLandedChatSends(stores);
   const applied = async () => true;
   let requestId: string | null = null;
@@ -209,6 +211,7 @@ async function replay(trace: Trace, mailbox: boolean) {
       expect(wire.at(-1)?.request.requestId).toBe(requestId);
   }
   stopObserving();
+  stopClock();
   vi.useRealTimers();
 }
 

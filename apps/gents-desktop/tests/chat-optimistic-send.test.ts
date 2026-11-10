@@ -13,6 +13,7 @@ import {
   observeLandedChatSends,
 } from "../src/hooks/chatDelivery";
 import { createChatStore } from "../src/hooks/chatStore";
+import { keepSendDeadlineClock } from "../src/hooks/sendDeadlineClock";
 import {
   loadChatDrafts,
   retainChatDraft,
@@ -232,6 +233,7 @@ it("reads a confirmed draft saved by the earlier client as confirmed and release
 it("clears the composer error about a hung send when its late confirmation arrives", async () => {
   vi.useFakeTimers();
   const f = fixture();
+  const stop = observeLandedChatSends(f.stores);
   const hung = deferred<ChatSendResult>();
   f.send.mockImplementationOnce(() => hung.promise);
   const sent = f.actions().sendMessage("Original message");
@@ -246,6 +248,7 @@ it("clears the composer error about a hung send when its late confirmation arriv
   hung.resolve(acceptedChat(request));
   await vi.waitFor(() => expect(f.stores.chat.getState().submissionError).toBeNull());
   expect(loadChatDrafts().chatDrafts).toEqual([]);
+  stop();
 });
 
 function showing(requestId: string, sessionId = "session") {
@@ -256,7 +259,9 @@ function showing(requestId: string, sessionId = "session") {
     pendingTurn: null,
     queuedTurns: [],
     foldedInputs: [],
-    timelineItems: [{ kind: "userMessage", requestId, inputRequestId: null }],
+    timelineItems: [
+      { kind: "userMessage", requestId, inputRequestId: null, ownsTurn: true },
+    ],
   } as unknown as DesktopSessionSnapshot;
 }
 
@@ -294,6 +299,7 @@ it("retires a send restored after a restart once its deadline passes and the ses
   );
   saveChatDraft(f.stores.chat, { ...draft, pendingUntil: Date.now() + 1_000 });
   f.stores.chat = createChatStore();
+  const stopClock = keepSendDeadlineClock(f.stores.chat);
   const stop = observeLandedChatSends(f.stores);
   writeSession(f.stores.session, showing("restored"));
   await vi.advanceTimersByTimeAsync(0);
@@ -302,6 +308,7 @@ it("retires a send restored after a restart once its deadline passes and the ses
   await vi.advanceTimersByTimeAsync(1_000);
   expect(loadChatDrafts().chatDrafts).toEqual([]);
   stop();
+  stopClock();
 });
 
 it("keeps an observed answer saved as sent until its question closes", async () => {

@@ -29,6 +29,7 @@ import type { ShellStores } from "./shellProjection";
 import { createShellView, type ShellViewStore } from "./shellView";
 import { observeMailboxAnswerRetirement } from "./mailboxAnswerRetirement";
 import { observeLandedChatSends } from "./chatDelivery";
+import { keepSendDeadlineClock } from "./sendDeadlineClock";
 import { seenMarks } from "../ui/app/sessionViews";
 import { mailboxSeen } from "../ui/app/mailboxSeen";
 import { seenMarkOf } from "../ui/lib/seen";
@@ -106,6 +107,7 @@ export function createDesktopApp({
     ...createProvenance({ api, stores }),
   };
   observeMailboxAnswerRetirement({ api, stores });
+  keepSendDeadlineClock(stores.chat);
   observeLandedChatSends(stores);
   const drafts = createDraftStore();
   reconcileSelection(stores, actions.selectNode, drafts);

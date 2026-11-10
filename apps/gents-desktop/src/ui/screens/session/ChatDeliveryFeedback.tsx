@@ -20,7 +20,7 @@ import {
   sendStatus,
   type SendStatus,
 } from "../../../hooks/chatDeliveryView";
-import { useSendDeadlineClock } from "../../../hooks/useSendDeadlineClock";
+import { useSendDeadlineClock } from "../../../hooks/sendDeadlineClock";
 
 function description(draft: ChatDraft) {
   if (draft.mailbox) return draft.mailbox.summary;
@@ -54,7 +54,7 @@ export function ChatDeliveryFeedback({
   const entries = stores.chat.use.chatDrafts();
   const readError = stores.chat.use.chatDraftError();
   const sending = stores.chat.use.sending();
-  const now = useSendDeadlineClock(entries);
+  const now = useSendDeadlineClock(stores.chat);
   useEffect(() => {
     const reload = () => stores.chat.setState(loadChatDrafts());
     window.addEventListener("storage", reload);
