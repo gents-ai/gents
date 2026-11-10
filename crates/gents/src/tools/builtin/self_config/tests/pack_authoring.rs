@@ -240,6 +240,7 @@ async fn a_shell_less_agent_installs_an_assets_pack_with_a_page() {
     );
     let got = config_json(&tools, &["pack", "get", "./board"]).await;
     assert_eq!(got["installed"]["digest"], digest.as_str(), "{got}");
+    assert_eq!(built["out"], "gents.board-0.1.0.pack", "{built}");
 }
 
 #[tokio::test]
@@ -269,7 +270,7 @@ async fn compiling_plugin_source_needs_the_authority_grant() {
         .unwrap_err()
         .to_string();
     assert!(
-        directory.contains(r#"[\"pack\",\"build\",DIR]"#),
+        directory.contains("has plugin source (tool_a)") && directory.contains("build it"),
         "{directory}"
     );
 }

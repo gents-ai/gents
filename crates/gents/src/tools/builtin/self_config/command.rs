@@ -87,9 +87,9 @@ Preview: [RESOURCE,preview,VERB]. Delete needs options.digest from preview. batc
 
 #[derive(Debug, thiserror::Error)]
 #[error("{message}")]
-struct CommandGuidance {
-    message: String,
-    next_call: Value,
+pub(super) struct CommandGuidance {
+    pub(super) message: String,
+    pub(super) next_call: Value,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
