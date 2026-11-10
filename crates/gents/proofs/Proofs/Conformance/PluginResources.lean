@@ -152,6 +152,12 @@ private def toolCallsJson : Json := Json.mkObj [
       ("declared", toJson declared), ("background", toJson background),
       ("remaining", toJson remaining),
       ("expected", toJson (PluginCalls.hostCallLifetime declared background remaining))]),
+  ("compute_allowance", toJson <| [(300, 36000, false), (300, 100, false), (300, 0, false),
+      (300, 36000, true), (0, 10, false)].map
+    fun (declared, remaining, stopped) => Json.mkObj [
+      ("declared", toJson declared), ("remaining", toJson remaining),
+      ("stopped", toJson stopped),
+      ("expected", toJson (PluginCalls.computeAllowance declared remaining stopped))]),
   ("sleep", toJson <| [(0, 0), (1, 0), (0, 1), (30, 30), (31, 30), (1000, 60000)].map
     fun (milliseconds, remaining) => Json.mkObj [
       ("milliseconds", toJson milliseconds), ("remaining", toJson remaining),

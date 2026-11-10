@@ -464,6 +464,14 @@ impl PluginRunner {
     pub fn definition(&self) -> &PackPlugin {
         &self.plugin
     }
+
+    #[cfg(test)]
+    pub(crate) fn artifact_digest(&self) -> String {
+        format!(
+            "sha256:{:x}",
+            <sha2::Sha256 as sha2::Digest>::digest(&self.afb_bytes)
+        )
+    }
 }
 
 fn plugin_run_request(stdin: Vec<u8>, manifold: Manifold, budget: &PluginBudget) -> AfbRunRequest {
@@ -700,6 +708,8 @@ pub fn retry_backoff(attempts: u32) -> std::time::Duration {
 pub mod data;
 pub mod executor;
 mod host_calls;
+#[cfg(test)]
+pub(crate) use host_calls::live as live_guests;
 pub mod host_imports;
 pub mod http_calls;
 pub mod install;

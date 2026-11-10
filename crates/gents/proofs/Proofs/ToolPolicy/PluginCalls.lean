@@ -106,6 +106,23 @@ theorem foreground_host_call_is_bounded (declared : Nat) (remaining : Option Nat
     hostCallLifetime declared false remaining ≤ declared := by
   cases remaining <;> simp [hostCallLifetime, Nat.min_le_left]
 
+/-- The compute a host-call guest may spend before its next host call. The
+sandbox exposes a guest's store only inside a host import, so the host renews
+this allowance at each call rather than preempting on demand: a guest computes
+for at most its declared wall clock between calls, never past the invocation's
+end, and not at all once the invocation stopped. A background guest's admitted
+lifetime (`hostCallLifetime`) therefore bounds its awaits, not its compute. -/
+def computeAllowance (declared remaining : Nat) (stopped : Bool) : Nat :=
+  if stopped then 0 else min declared remaining
+
+theorem stopped_guest_has_no_compute (declared remaining : Nat) :
+    computeAllowance declared remaining true = 0 := rfl
+
+theorem compute_allowance_is_bounded (declared remaining : Nat) (stopped : Bool) :
+    computeAllowance declared remaining stopped ≤ declared ∧
+      computeAllowance declared remaining stopped ≤ remaining := by
+  cases stopped <;> simp [computeAllowance, Nat.min_le_left, Nat.min_le_right]
+
 def chargedCompute (rounds : List (Nat × Nat)) : Nat :=
   (rounds.map Prod.fst).sum
 

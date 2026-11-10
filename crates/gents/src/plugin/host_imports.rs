@@ -24,6 +24,7 @@ use std::time::Instant;
 use afterburner::afb_run::{AfbRunOutcome, AfbRunOutput, AfbRunRequest};
 use afterburner::wasi::embedder_vm::{
     shared_epoch_vm_with, BoundedCommandOutput, CommandOutcome, EmbedderState, WasiCommandOpts,
+    EPOCH_TICK_PERIOD_MS,
 };
 use afterburner_core::manifold::{EnvAccess, FsAccess, Manifold};
 use anyhow::{Context, Result};
@@ -202,7 +203,19 @@ fn host_call(
     else {
         return BAD_INPUT;
     };
-    match host.call(bytes.to_vec()) {
+    let answer = host.call(bytes.to_vec());
+    // The store's epoch deadline is reachable only here. Each host call renews
+    // the guest's compute allowance; a stopped invocation leaves none.
+    if let Some(allowance) = host.compute_allowance() {
+        let ticks = u64::try_from(
+            allowance
+                .as_millis()
+                .div_ceil(u128::from(EPOCH_TICK_PERIOD_MS)),
+        )
+        .unwrap_or(u64::MAX / 2);
+        wasmtime::AsContextMut::as_context_mut(caller).set_epoch_deadline(ticks);
+    }
+    match answer {
         Ok(answer) => {
             let length = i32::try_from(answer.len()).unwrap_or(i32::MAX);
             session.stored = answer;

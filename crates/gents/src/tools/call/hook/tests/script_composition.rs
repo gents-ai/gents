@@ -188,3 +188,153 @@ async fn composed_agent_new_keeps_its_asynchronous_receipt() {
     );
     fixture.db.node.shutdown().await.unwrap();
 }
+
+/// A selected `team/plugin` tool over a `host_call` guest, with its artifact digest.
+fn host_call_tool(wat: &str) -> (tempfile::TempDir, Box<dyn ToolDyn>, String) {
+    use crate::plugin::tests::executor::installed_plugin;
+    let (home, mut record) = installed_plugin(wat, None);
+    record.declaration.host_imports = vec![crate::pack::HostImport::HostCall];
+    crate::plugin::store::write_record(home.path(), &record).unwrap();
+    let executor = Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
+        home.path().to_owned(),
+    )));
+    let selected = crate::documents::PluginToolRef {
+        plugin: "team/plugin".into(),
+        digest: None,
+        tool_calls: true,
+        input_fields: Vec::new(),
+        job: None,
+    };
+    let tool = crate::plugin::tool::PluginTool::resolve(executor, &selected, None).unwrap();
+    (home, Box::new(tool), record.digest)
+}
+
+async fn control(
+    fixture: &super::background_budget::BudgetHookFixture,
+    internal_id: &str,
+    tool: &str,
+    args: serde_json::Value,
+) -> serde_json::Value {
+    let args = args.to_string();
+    accept_hook_tool_call(&fixture.hook, internal_id, tool, &args, None).await;
+    let ToolCallHookAction::Skip { reason } = fixture
+        .hook
+        .on_tool_call(tool, None, internal_id, &args)
+        .await
+    else {
+        panic!("{tool} did not return its result")
+    };
+    serde_json::from_str(&reason).unwrap_or(serde_json::Value::String(reason))
+}
+
+async fn guest_stopped(digest: &str, within: std::time::Duration) {
+    tokio::time::timeout(within, async {
+        while crate::plugin::live_guests::count(digest) != 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the guest still occupies its worker thread");
+}
+
+fn spinning_wat(name: &str, host_calls: bool) -> String {
+    let request = json!({"sleep_ms": 1}).to_string();
+    let escaped = request
+        .bytes()
+        .map(|b| format!("\\{b:02x}"))
+        .collect::<String>();
+    let body = if host_calls {
+        // The inner call is a function entry, where compiled code rereads
+        // the store's deadline; a script interpreter enters functions constantly.
+        format!(
+            "(loop $again (drop (call $call (i32.const 32) (i32.const {}))) (call $enter) (br $again))",
+            request.len()
+        )
+    } else {
+        "(loop $again (br $again))".to_owned()
+    };
+    format!(
+        r#"(module
+      (import "gents" "host_call" (func $call (param i32 i32) (result i32)))
+      (memory (export "memory") 2)
+      (data (i32.const 32) "{escaped}")
+      (data (i32.const 1024) "{name}")
+      (func $enter)
+      (func (export "_start") {body}))"#
+    )
+}
+
+async fn spawn_spinner(
+    name: &str,
+    host_calls: bool,
+) -> (
+    super::background_budget::BudgetHookFixture,
+    BackgroundExecutionRegistry,
+    String,
+    String,
+    tempfile::TempDir,
+) {
+    let (home, tool, digest) = host_call_tool(&spinning_wat(name, host_calls));
+    let registry = BackgroundToolRegistry::from_tools(vec![tool], &["plugin".into()]);
+    let executions = BackgroundExecutionRegistry::default();
+    let fixture =
+        super::background_budget::budget_hook_fixture(name, registry, executions.clone()).await;
+    bind_admitted_deadline(&fixture).await;
+    fixture.hook.bind_tool_surface(Arc::new(Vec::new())).await;
+    let receipt = control(
+        &fixture,
+        "start-script",
+        "spawn_process",
+        json!({"tool_name":"plugin", "args":{}}),
+    )
+    .await;
+    let id = receipt["tool_call_id"].as_str().unwrap().to_owned();
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while crate::plugin::live_guests::count(&digest) == 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the guest started");
+    (fixture, executions, id, digest, home)
+}
+
+#[tokio::test]
+async fn cancelling_a_background_script_stops_a_guest_that_ignores_the_host() {
+    // The guest keeps calling the host and never checks the answer, so only
+    // the store's revoked allowance ends it.
+    let (fixture, executions, id, digest, _home) = spawn_spinner("script-cancel-guest", true).await;
+    let cancelled = control(
+        &fixture,
+        "cancel-script",
+        "cancel_process",
+        json!({"tool_call_id": id}),
+    )
+    .await;
+    assert_eq!(cancelled["ok"], true, "{cancelled}");
+    executions.wait_for_completion(&id).await;
+    guest_stopped(&digest, std::time::Duration::from_secs(2)).await;
+    let row = super::background_budget::tool_row(&fixture.access, &fixture.session_id, &id).await;
+    assert_eq!(row["lifecycle_state"], "cancelled");
+    fixture.db.node.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_computing_background_guest_stops_at_its_declared_allowance() {
+    // No host call ever reaches the store, so the declared wall clock (the
+    // five second default here), not the admitted background lifetime of
+    // hours, is what ends `while (true) {}`.
+    let (fixture, executions, id, digest, _home) = spawn_spinner("script-spin-guest", false).await;
+    let cancelled = control(
+        &fixture,
+        "cancel-script",
+        "cancel_process",
+        json!({"tool_call_id": id}),
+    )
+    .await;
+    assert_eq!(cancelled["ok"], true, "{cancelled}");
+    executions.wait_for_completion(&id).await;
+    guest_stopped(&digest, std::time::Duration::from_secs(20)).await;
+    fixture.db.node.shutdown().await.unwrap();
+}
+

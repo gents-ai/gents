@@ -724,7 +724,7 @@ impl PluginExecutor {
                 calls.tools.is_some(),
             ));
             receipt.verdict = PluginExecutionVerdict::ExecutionError;
-            let outcome = drive_with_calls(&coordinate, admitted.runner.clone(), bound, calls, input, budget)
+            let outcome = drive_with_calls(&coordinate, admitted.runner.clone(), bound, calls, input, budget, admitted.budget.wall_clock)
             .await
             .inspect_err(|error| {
                 if error.downcast_ref::<super::GuestTrap>().is_some() {
@@ -864,7 +864,8 @@ async fn drive(
         data: None,
         jobs: None,
     };
-    drive_with_calls(coordinate, runner, bound, calls, input, budget).await
+    let declared = budget.wall_clock;
+    drive_with_calls(coordinate, runner, bound, calls, input, budget, declared).await
 }
 
 /// The round of an artifact: the compiled `.afb` over its bound directory.
@@ -882,11 +883,19 @@ async fn drive_with_calls(
     calls: HostCalls,
     input: serde_json::Value,
     budget: PluginBudget,
+    declared_wall_clock: std::time::Duration,
 ) -> Result<PluginOutcome> {
     if runner.definition().imports_host_call() {
-        return super::host_calls::run(runner, bound, input, budget, calls.tools)
-            .await
-            .map_err(Into::into);
+        return super::host_calls::run(
+            runner,
+            bound,
+            input,
+            budget,
+            declared_wall_clock,
+            calls.tools,
+        )
+        .await
+        .map_err(Into::into);
     }
     let round = artifact_round(runner, bound);
     if calls.is_empty() {

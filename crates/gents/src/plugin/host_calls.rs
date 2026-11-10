@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -22,18 +23,115 @@ struct Call {
     reply: oneshot::Sender<Vec<u8>>,
 }
 
+/// What the invocation and its detached WASM worker share about stopping.
+struct Stop {
+    stopped: AtomicBool,
+    revoked: AtomicBool,
+    deadline: std::time::Instant,
+    slice: Duration,
+}
+
+/// Held by the async invocation: returning or being dropped (a timeout, a
+/// failed child, cancellation, interrupt, lifetime expiry) stops the guest.
+struct StopOnDrop(Arc<Stop>);
+
+impl Drop for StopOnDrop {
+    fn drop(&mut self) {
+        self.0.stopped.store(true, Ordering::Release);
+    }
+}
+
 /// Only the blocking WASM worker uses this end. The receiver and every reply
 /// are owned by the async invocation, so dropping it releases a suspended guest.
 #[derive(Clone)]
-pub(super) struct Bridge(mpsc::Sender<Call>);
+pub(super) struct Bridge {
+    calls: mpsc::Sender<Call>,
+    stop: Arc<Stop>,
+}
 
 impl Bridge {
     pub(super) fn call(&self, bytes: Vec<u8>) -> Result<Vec<u8>, HostCallError> {
+        if self.stop.stopped.load(Ordering::Acquire) {
+            return Err(HostCallError::Stopped);
+        }
         let (reply, answer) = oneshot::channel();
-        self.0
+        // A closed channel or a dropped reply is the invocation stopping; the
+        // flag is set here because the worker can observe either first.
+        self.calls
             .blocking_send(Call { bytes, reply })
-            .map_err(|_| HostCallError::Stopped)?;
-        answer.blocking_recv().map_err(|_| HostCallError::Stopped)
+            .map_err(|_| self.stopped())?;
+        answer.blocking_recv().map_err(|_| self.stopped())
+    }
+
+    fn stopped(&self) -> HostCallError {
+        self.stop.stopped.store(true, Ordering::Release);
+        HostCallError::Stopped
+    }
+
+    /// The compute the guest may spend before its next host call: nothing
+    /// once the invocation stopped, so a guest that ignores the failed call
+    /// traps at its next epoch check instead of running on. The pinned VM
+    /// exposes a store only inside a host import, so a guest that never calls
+    /// the host again is stopped by this allowance, not at the stop itself.
+    /// Compiled code rereads the deadline at each function entry and, inside
+    /// a loop, only once the deadline it cached has lapsed; a revocation
+    /// therefore lands at the guest's next function entry.
+    ///
+    /// `None` leaves the store's deadline alone: a deadline is relative to
+    /// the engine's current epoch, so revoking it again on every later call
+    /// would keep moving it ahead of a guest that calls in a tight loop.
+    pub(super) fn compute_allowance(&self) -> Option<Duration> {
+        let stopped = self.stop.stopped.load(Ordering::Acquire);
+        if stopped && self.stop.revoked.swap(true, Ordering::AcqRel) {
+            return None;
+        }
+        Some(compute_allowance(
+            self.stop.slice,
+            self.stop
+                .deadline
+                .saturating_duration_since(std::time::Instant::now()),
+            stopped,
+        ))
+    }
+}
+
+fn compute_allowance(declared: Duration, remaining: Duration, stopped: bool) -> Duration {
+    if stopped {
+        Duration::ZERO
+    } else {
+        declared.min(remaining)
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod live {
+    //! Which guests still occupy a worker thread, by artifact digest.
+    static GUESTS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+    pub(super) struct Guard(String);
+
+    impl Guard {
+        pub(super) fn new(digest: String) -> Self {
+            GUESTS.lock().unwrap().push(digest.clone());
+            Self(digest)
+        }
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            let mut guests = GUESTS.lock().unwrap();
+            if let Some(index) = guests.iter().position(|digest| digest == &self.0) {
+                guests.swap_remove(index);
+            }
+        }
+    }
+
+    pub(crate) fn count(digest: &str) -> usize {
+        let guests = GUESTS.lock().unwrap();
+        guests
+            .iter()
+            .filter(|guest| guest.as_str() == digest)
+            .count()
     }
 }
 
@@ -121,18 +219,36 @@ pub(super) async fn run(
     bound: Option<BoundDir>,
     input: Value,
     budget: PluginBudget,
+    declared: Duration,
     mut tools: Option<tool_calls::Session>,
 ) -> Result<PluginOutcome, HostCallError> {
     let input = prepare_input(input, &mut tools)?;
     let (sender, mut receiver) = mpsc::channel::<Call>(1);
     let deadline = tokio::time::Instant::now() + budget.wall_clock;
     let started = std::time::Instant::now();
+    let stop = Arc::new(Stop {
+        stopped: AtomicBool::new(false),
+        revoked: AtomicBool::new(false),
+        deadline: started + budget.wall_clock,
+        slice: declared,
+    });
+    let _stop = StopOnDrop(stop.clone());
+    let guest_budget = PluginBudget {
+        wall_clock: compute_allowance(declared, budget.wall_clock, false),
+        ..budget
+    };
     let mut worker = tokio::task::spawn_blocking(move || {
+        #[cfg(test)]
+        let _live = live::Guard::new(runner.artifact_digest());
         let (input, manifold) = match bound {
             Some(bound) => runner.prepare_bound(&input, &bound)?,
             None => (input, runner.manifold.clone()),
         };
-        runner.call_with_host(&input, &budget, manifold, Some(Bridge(sender)))
+        let bridge = Bridge {
+            calls: sender,
+            stop,
+        };
+        runner.call_with_host(&input, &guest_budget, manifold, Some(bridge))
     });
     let failure = |verdict, diagnostics| PluginOutcome {
         verdict,
@@ -322,6 +438,24 @@ mod tests {
                 Duration::from_secs(case["declared"].as_u64().unwrap()),
                 case["background"].as_bool().unwrap(),
                 case["remaining"].as_u64().map(Duration::from_secs),
+            );
+            assert_eq!(
+                actual.as_secs(),
+                case["expected"].as_u64().unwrap(),
+                "{case}"
+            );
+        }
+    }
+
+    #[test]
+    fn compute_allowances_conform_to_lean() {
+        let cases = &crate::lean_vocab_test::lean_contract_snapshot().plugin_resource_cases
+            ["tool_calls"]["compute_allowance"];
+        for case in cases.as_array().unwrap() {
+            let actual = compute_allowance(
+                Duration::from_secs(case["declared"].as_u64().unwrap()),
+                Duration::from_secs(case["remaining"].as_u64().unwrap()),
+                case["stopped"].as_bool().unwrap(),
             );
             assert_eq!(
                 actual.as_secs(),
