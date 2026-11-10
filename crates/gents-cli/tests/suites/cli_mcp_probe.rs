@@ -15,6 +15,7 @@ async fn mcp_register_upserts_a_host_endpoint() -> Result<()> {
     let fixture = McpFixture::new(tempdir.path(), &node_home, "mcp-register-test").await?;
     let output = fixture
         .run(&[
+            "config",
             "mcp",
             "register",
             "--endpoint",
@@ -57,6 +58,78 @@ async fn mcp_register_upserts_a_host_endpoint() -> Result<()> {
 }
 
 #[tokio::test]
+async fn mcp_register_stores_an_https_endpoint_verbatim_and_refuses_secrets_in_the_url(
+) -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let node_home = tempdir.path().join("node-home");
+    let service_id = format!("remote-mcp-{}", Uuid::new_v4().simple());
+    let fixture = McpFixture::new(tempdir.path(), &node_home, "mcp-register-https").await?;
+    for refused in [
+        "https://user:secret@mcp.example.com/mcp",
+        "https://mcp.example.com/mcp?api_key=secret",
+    ] {
+        let output = fixture
+            .run(&[
+                "config",
+                "mcp",
+                "register",
+                "--endpoint",
+                refused,
+                &service_id,
+            ])
+            .await?;
+        assert!(!output.status.success(), "{refused} must be refused");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("--endpoint"), "{stderr}");
+        assert!(
+            !stderr.contains("secret"),
+            "the refusal must not echo the secret"
+        );
+    }
+    let output = fixture
+        .run(&[
+            "config",
+            "mcp",
+            "register",
+            "--endpoint",
+            "https://mcp.example.com/mcp",
+            &service_id,
+        ])
+        .await?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let query = format!(
+        r#"{{ ToolServiceRegistry(filter: {{ service_id: {{ _eq: "{}" }} }}) {{
+            endpoint_url hostname lan_ip mcp_port mcp_path
+        }} }}"#,
+        escape_graphql_string(&service_id)
+    );
+    let response = fixture.access.execute(&query).await?;
+    let rows = response
+        .get("data")
+        .and_then(|data| data.get("ToolServiceRegistry"))
+        .and_then(Value::as_array)
+        .context("registered rows")?;
+    assert_eq!(rows.len(), 1, "refused registrations must not write");
+    let row = &rows[0];
+    assert_eq!(
+        row.get("endpoint_url").and_then(Value::as_str),
+        Some("https://mcp.example.com/mcp")
+    );
+    for field in ["hostname", "lan_ip", "mcp_port", "mcp_path"] {
+        assert!(
+            row.get(field).is_some_and(Value::is_null),
+            "{field} must be null"
+        );
+    }
+    fixture.node.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn mcp_probe_json_reports_health_snapshot_for_registry_service() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let node_home = tempdir.path().join("node-home");
@@ -68,6 +141,7 @@ async fn mcp_probe_json_reports_health_snapshot_for_registry_service() -> Result
         .await?;
     let result = fixture
         .run(&[
+            "config",
             "mcp",
             "probe",
             "--timeout",
@@ -109,7 +183,9 @@ async fn mcp_probe_json_reports_health_snapshot_for_registry_service() -> Result
         "expected missing mcp_port error in row: {row}"
     );
 
-    let table_output = fixture.run(&["mcp", "probe", &service_id]).await?;
+    let table_output = fixture
+        .run(&["config", "mcp", "probe", &service_id])
+        .await?;
     assert!(
         table_output.status.success(),
         "{}",
@@ -145,6 +221,7 @@ async fn mcp_probe_all_json_lists_each_enabled_service() -> Result<()> {
         .await?;
     let result = fixture
         .run(&[
+            "config",
             "mcp",
             "probe",
             "--all",
@@ -189,7 +266,9 @@ async fn mcp_probe_single_missing_service_fails() -> Result<()> {
     let node_home = tempdir.path().join("node-home");
 
     let fixture = McpFixture::new(tempdir.path(), &node_home, "mcp-probe-missing").await?;
-    let output = fixture.run(&["mcp", "probe", "missing-service"]).await?;
+    let output = fixture
+        .run(&["config", "mcp", "probe", "missing-service"])
+        .await?;
     assert!(!output.status.success());
     let stderr = String::from_utf8(output.stderr)?;
     assert!(
@@ -204,8 +283,10 @@ async fn mcp_probe_single_missing_service_fails() -> Result<()> {
 #[test]
 fn mcp_probe_rejects_zero_timeout() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
-    let stderr =
-        run_cli_failure_stderr(tempdir.path(), &["mcp", "probe", "--all", "--timeout", "0"])?;
+    let stderr = run_cli_failure_stderr(
+        tempdir.path(),
+        &["config", "mcp", "probe", "--all", "--timeout", "0"],
+    )?;
     assert!(
         stderr.contains("--timeout must be greater than zero"),
         "zero timeout failure should explain the constraint:\n{stderr}"
@@ -219,6 +300,7 @@ fn mcp_register_rejects_unsupported_legacy_version() -> Result<()> {
     let stderr = run_cli_failure_stderr(
         tempdir.path(),
         &[
+            "config",
             "mcp",
             "register",
             "service",
@@ -241,6 +323,7 @@ async fn mcp_register_rejects_an_unavailable_explicit_node() -> Result<()> {
     let output = fixture
         .run_for_node(
             &[
+                "config",
                 "mcp",
                 "register",
                 "--endpoint",
@@ -280,6 +363,7 @@ async fn mcp_registration_requires_client_signed_transport_when_offline() -> Res
         run_cli_failure_stderr_with_env(
             &cwd,
             &[
+                "config",
                 "mcp",
                 "register",
                 "--home",
@@ -482,7 +566,15 @@ fn mcp_probe_rejects_service_and_all_together() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let stderr = run_cli_failure_stderr(
         tempdir.path(),
-        &["mcp", "probe", "--all", "some-service", "--timeout", "1s"],
+        &[
+            "config",
+            "mcp",
+            "probe",
+            "--all",
+            "some-service",
+            "--timeout",
+            "1s",
+        ],
     )?;
     assert!(
         stderr.contains("provide either <service> or --all, not both"),
@@ -494,7 +586,7 @@ fn mcp_probe_rejects_service_and_all_together() -> Result<()> {
 #[test]
 fn mcp_probe_rejects_missing_target() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
-    let stderr = run_cli_failure_stderr(tempdir.path(), &["mcp", "probe"])?;
+    let stderr = run_cli_failure_stderr(tempdir.path(), &["config", "mcp", "probe"])?;
     assert!(
         stderr.contains("provide a service id or --all"),
         "missing-target failure should ask for a service id or --all:\n{stderr}"

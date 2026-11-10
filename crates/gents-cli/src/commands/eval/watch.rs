@@ -252,7 +252,7 @@ async fn ending(
     let trials = load_trials(&ctx.access, &ctx.owner, run_id).await?;
     anyhow::ensure!(
         run_finished(&record, &trials, dir),
-        "stopped: {} slots owed (gents eval resume {run_id})",
+        "stopped: {} slots owed (gents utils eval resume {run_id})",
         slots_owed(&record, &trials)
     );
     if !json {

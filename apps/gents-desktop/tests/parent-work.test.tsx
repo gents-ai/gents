@@ -112,6 +112,7 @@ describe("the sessions that sent work into this one", () => {
       sessionId: "session-parent",
       summary: null,
       agentName: null,
+      agentShared: false,
     });
   });
 

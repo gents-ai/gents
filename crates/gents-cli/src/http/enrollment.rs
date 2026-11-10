@@ -113,11 +113,18 @@ impl EnrollmentDecisionService {
                     || !projection.scoped_conflicts.is_empty();
                 let mut history = Vec::new();
                 for entry in projection.active {
+                    /* a lapsed lease is no longer a member (the Members
+                    query's freshness rule): its approval has ended */
+                    let lapsed = !gents_protocol::enrollment::authorization_lease_is_fresh_at(
+                        &entry.revision.authorization_expires_at,
+                        now,
+                    );
                     history.push(serde_json::json!({
                         "request_id": entry.request.request_id, "candidate_did": entry.request.candidate_did,
                         "candidate_peer": entry.request.candidate_peer, "profile": entry.request.profile,
-                        "state": "approved", "decided_at": entry.decision.decided_at,
+                        "state": if lapsed { "expired" } else { "approved" }, "decided_at": entry.decision.decided_at,
                         "decided_by": entry.decision.signer_did, "revoked_at": null, "revoked_by": null,
+                        "expired_at": lapsed.then_some(&entry.revision.authorization_expires_at),
                     }));
                 }
                 for entry in projection.denied {
@@ -141,6 +148,7 @@ impl EnrollmentDecisionService {
                     let latest = |value: &serde_json::Value| {
                         value["revoked_at"]
                             .as_str()
+                            .or_else(|| value["expired_at"].as_str())
                             .or_else(|| value["decided_at"].as_str())
                             .unwrap_or("")
                             .to_owned()

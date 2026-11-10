@@ -74,16 +74,13 @@ async fn submit(access: &ConfigAccess, kind: &str) -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "real inference: GENTS_TRIGGER_DELIVERY_LIVE=1 and workstation endpoints"]
+#[ignore = "real inference: GENTS_TRIGGER_DELIVERY_LIVE=1; GENTS_DELIVERY_ENDPOINT_1/2 and GENTS_DELIVERY_MODEL_1/2"]
 async fn goal_task_waits_for_claim_and_emits_only_after_model_completion() -> Result<()> {
     ensure!(
         std::env::var("GENTS_TRIGGER_DELIVERY_LIVE").as_deref() == Ok("1"),
         "explicit live opt-in required"
     );
-    let endpoints = [
-        std::env::var("GENTS_DELIVERY_ENDPOINT_1")?,
-        std::env::var("GENTS_DELIVERY_ENDPOINT_2")?,
-    ];
+    let lanes = delivery_lanes()?;
     let artifacts = artifact_directory("goal")?;
     let home =
         gents::eval::runner::embedded::EmbeddedHome::create_retained(&artifacts.join("home"))
@@ -91,7 +88,7 @@ async fn goal_task_waits_for_claim_and_emits_only_after_model_completion() -> Re
     let db = support::test_db_from_home(home);
     let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
     let owner = identity.did().to_owned();
-    let (fixture, agents) = configure(&db, &endpoints).await?;
+    let (fixture, agents) = configure(&db, &lanes).await?;
     let access = fixture.access.clone();
     install_schema(&access, GOAL_WORK_SDL).await?;
     support::fixtures::configure_agent_tools(

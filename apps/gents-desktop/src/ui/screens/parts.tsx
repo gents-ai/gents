@@ -1,24 +1,70 @@
-import type { ComponentProps } from "react";
+import type { ComponentProps, CSSProperties } from "react";
 import { cn } from "@gents/ui/lib/utils";
 import type { AgentEnvironmentView } from "@source-inc/gents-desktop-client";
-import { bashAccess, fileAccess, initials, network } from "./behavior";
+import type { NodeView } from "../../hooks/fleetStore";
+import {
+  agentHue,
+  agentName,
+  bashAccess,
+  fileAccess,
+  initials,
+  isUnknownAgent,
+  nameShared,
+  network,
+} from "./behavior";
 
+/** An agent's initials; with `shared`, when another agent beside it goes by
+    the same name, or when it is unknown, tinted by its DID so they differ. */
 export function AgentInitials({
   name,
+  agentDid,
+  shared = false,
   className,
+  style,
   ...props
-}: { name: string; className?: string } & Omit<ComponentProps<"span">, "children">) {
+}: {
+  name: string;
+  agentDid?: string | null;
+  shared?: boolean;
+  className?: string;
+} & Omit<ComponentProps<"span">, "children">) {
+  const unknown = isUnknownAgent(name);
+  /* unknown agents all draw as "?", so they too take their DIDs' tints */
+  const hue = (shared || unknown) && agentDid ? agentHue(agentDid) : null;
   return (
     <span
       {...props}
+      style={hue === null ? style : ({ ...style, "--agent-hue": hue } as CSSProperties)}
       className={cn(
         "grid size-7 shrink-0 place-items-center rounded-full border border-border bg-raised text-[11px] font-medium text-foreground",
+        hue !== null &&
+          "bg-[color-mix(in_oklch,var(--color-raised)_65%,oklch(0.72_0.14_var(--agent-hue)))]",
         className,
       )}
       aria-hidden="true"
     >
-      {initials(name)}
+      {unknown ? "?" : initials(name)}
     </span>
+  );
+}
+
+/** An agent's initials as `deployment` knows it, tinted when another agent
+    there shares its name. */
+export function AgentMark({
+  agentDid,
+  deployment,
+  ...props
+}: { agentDid: string | null; deployment: NodeView | null } & Omit<
+  ComponentProps<typeof AgentInitials>,
+  "name" | "agentDid" | "shared"
+>) {
+  return (
+    <AgentInitials
+      {...props}
+      name={agentName(agentDid, deployment)}
+      agentDid={agentDid}
+      shared={nameShared(agentDid, deployment)}
+    />
   );
 }
 

@@ -37,6 +37,14 @@ export function useBootstrap() {
   return useStore(useApp().stores.client, (state) => state.snapshot?.bootstrap);
 }
 
+/** the DID this app itself uses to reach its nodes */
+export function useThisAppDid() {
+  return useStore(
+    useApp().stores.client,
+    (state) => state.snapshot?.client?.clientDid ?? null,
+  );
+}
+
 export function useHomeDid() {
   return useStore(
     useApp().stores.client,

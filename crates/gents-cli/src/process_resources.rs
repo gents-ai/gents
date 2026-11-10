@@ -76,7 +76,7 @@ mod tests {
             (vec!["gents", "server", "--no-keychain-prompts"], true),
         ] {
             let cli = Cli::try_parse_from(arguments).unwrap();
-            let Command::Server(args) = cli.command else {
+            let Some(Command::Server(args)) = cli.command else {
                 panic!("expected server command");
             };
             assert_eq!(args.no_keychain_prompts, expected);

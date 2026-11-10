@@ -25,6 +25,7 @@ import { MemoryNavProvider } from "@gents/shell";
 import { writeSession } from "../src/hooks/sessionStore";
 import { composerText, typeInComposer, typeText } from "./composer-field";
 import { CHAT_SEND_DEADLINE_MS } from "../src/hooks/chatDelivery";
+import { goalControl, observedGoal } from "./goal-state-fixture";
 
 const navigate = vi.hoisted(() => vi.fn());
 const markdownRender = vi.hoisted(() => vi.fn());
@@ -995,21 +996,18 @@ describe("SessionScreen automated inputs", () => {
 });
 
 describe("SessionScreen goal label", () => {
-  const goal = (status: string, wrapupCompleted: boolean) => ({
-    goalId: "g",
-    status,
-    objective: "Unfinished work",
-    wrapupRequested: true,
-    wrapupCompleted,
-    tokensUsed: 1000,
-    tokenBudget: 1000,
-    consecutiveBlockedAudits: 0,
-    activeTimeSeconds: 12,
-    continuationSequence: 1,
-    lastBlockedReason: null,
-    lastFailure: null,
-    completionEvidence: null,
-  });
+  const goal = (status: string, wrapupCompleted: boolean) =>
+    observedGoal(
+      goalControl(status, {
+        objective: "Unfinished work",
+        wrapupRequested: true,
+        wrapupCompleted,
+        tokensUsed: "1000",
+        tokenBudget: "1000",
+        activeTimeSeconds: "12",
+        continuationSequence: "1",
+      }),
+    );
 
   it("does not report a wrapped-up budget-limited goal as met", () => {
     const { app } = screenApp({

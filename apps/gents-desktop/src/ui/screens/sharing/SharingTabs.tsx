@@ -1,0 +1,148 @@
+import type { ReactNode } from "react";
+import { useStore } from "zustand";
+import { createStore } from "zustand/vanilla";
+import { FieldRows } from "@gents/ui/components/field";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@gents/ui/components/tabs";
+import type {
+  SharingAvailability,
+  SharingDecision,
+  SharingMember,
+} from "../../../hooks/sharing";
+import { useThisAppDid } from "@/hooks/useClient";
+import { EmptyList } from "../agent/ListDetail";
+import { DecisionRow } from "./History";
+import { MemberRow } from "./Members";
+
+export type SharingTab = "access" | "history";
+
+/* this app's own pairing leads; the rest keep the runtime's order */
+const appFirst = (members: SharingMember[], appDid: string | null | undefined) =>
+  appDid
+    ? [
+        ...members.filter((m) => m.party.did === appDid),
+        ...members.filter((m) => m.party.did !== appDid),
+      ]
+    : members;
+
+/* the tab chosen, kept while the app runs */
+const chosen = createStore<{ tab: SharingTab }>(() => ({ tab: "access" }));
+export const chooseSharingTab = (tab: SharingTab) => chosen.setState({ tab });
+export const resetSharingTab = () => chosen.setState({ tab: "access" });
+
+/** The node's sharing one view at a time: who has access, and what was
+    decided. A view the runtime doesn't offer is left out; the
+    line under the tabs names it. */
+export function SharingTabs({
+  nodeDid,
+  name,
+  available,
+  members,
+  history,
+  historyLeftOut,
+  note,
+}: {
+  nodeDid: string;
+  name: string;
+  available: SharingAvailability;
+  members: SharingMember[];
+  history: SharingDecision[];
+  /** what the history leaves out, under its list */
+  historyLeftOut: string | null;
+  /** what the runtime doesn't offer, under the tabs */
+  note: ReactNode;
+}) {
+  const stored = useStore(chosen, (s) => s.tab);
+  const thisApp = useThisAppDid();
+  const tabs: { id: SharingTab; label: string; count?: number }[] = [
+    ...(available.members
+      ? [{ id: "access" as const, label: "Access", count: members.length }]
+      : []),
+    ...(available.history ? [{ id: "history" as const, label: "History" }] : []),
+  ];
+  if (tabs.length === 0) return <>{note}</>;
+  const tab = tabs.some((t) => t.id === stored) ? stored : tabs[0]!.id;
+  return (
+    <Tabs
+      value={tab}
+      onValueChange={(v) => chooseSharingTab(v as SharingTab)}
+      className="gap-4"
+    >
+      <TabsList variant="line" aria-label="Show" className="min-h-9">
+        {tabs.map((t) => (
+          <TabsTrigger key={t.id} value={t.id} className="text-[13px]">
+            {t.label}
+            {t.count !== undefined && t.count > 0 && (
+              <span className="ml-1 text-muted-foreground tabular-nums">{t.count}</span>
+            )}
+          </TabsTrigger>
+        ))}
+      </TabsList>
+      {note}
+      <TabsContent value="access">
+        <List
+          label="Who has access"
+          empty={`Nobody else has access to ${name}.`}
+          count={members.length}
+        >
+          {appFirst(members, thisApp).map((member) => (
+            <MemberRow key={member.requestId} nodeDid={nodeDid} member={member} />
+          ))}
+        </List>
+      </TabsContent>
+      <TabsContent value="history">
+        <List
+          label="Sharing history"
+          empty="Nothing decided yet."
+          count={history.length}
+        >
+          {history.map((decision, i) => (
+            <DecisionRow key={`${decision.at} ${i}`} decision={decision} />
+          ))}
+        </List>
+        {historyLeftOut && (
+          <p className="mt-3 text-xs text-muted-foreground">{historyLeftOut}</p>
+        )}
+      </TabsContent>
+    </Tabs>
+  );
+}
+
+function List({
+  label,
+  empty,
+  count,
+  children,
+}: {
+  label: string;
+  empty: string;
+  count: number;
+  children: ReactNode;
+}) {
+  if (count === 0) return <EmptyList>{empty}</EmptyList>;
+  return (
+    <FieldRows role="list" aria-label={label}>
+      {children}
+    </FieldRows>
+  );
+}
+
+const PARTS: { key: keyof SharingAvailability; name: string; one: boolean }[] = [
+  { key: "requests", name: "Requests to join", one: false },
+  { key: "members", name: "Access", one: true },
+  { key: "history", name: "History", one: true },
+];
+
+/** what the node's runtime doesn't offer yet, in one sentence, or null when
+    it offers everything: "Access and history need a newer runtime on
+    Forge." */
+export function missingText(available: SharingAvailability, name: string) {
+  const missing = PARTS.filter((p) => !available[p.key]);
+  if (missing.length === 0) return null;
+  const names = missing.map((p, i) => (i === 0 ? p.name : p.name.toLowerCase()));
+  const list =
+    names.length === 1
+      ? names[0]
+      : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  const verb = missing.length === 1 && missing[0]!.one ? "needs" : "need";
+  return `${list} ${verb} a newer runtime on ${name}.`;
+}

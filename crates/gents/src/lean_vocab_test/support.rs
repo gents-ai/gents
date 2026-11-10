@@ -383,6 +383,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) goal_client_receipt_cases: Vec<serde_json::Value>,
     pub(crate) goal_observation_cases: Vec<serde_json::Value>,
     pub(crate) goal_session_observation_cases: Vec<serde_json::Value>,
+    pub(crate) goal_session_fold_cases: Vec<serde_json::Value>,
     pub(crate) workspace_command_grant_answers: Vec<serde_json::Value>,
     pub(crate) workspace_command_grant_lookups: Vec<serde_json::Value>,
     pub(crate) workspace_command_grant_revocations: Vec<serde_json::Value>,
@@ -445,6 +446,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) claude_platform_cases: Vec<serde_json::Value>,
     pub(crate) plugin_reference_cases: Vec<serde_json::Value>,
     pub(crate) plugin_pin_cases: Vec<serde_json::Value>,
+    pub(crate) pack_document_ownership_cases: Vec<serde_json::Value>,
     pub(crate) pack_wire_lock_cases: Vec<serde_json::Value>,
     pub(crate) pack_wire_target_cases: Vec<serde_json::Value>,
     pub(crate) pack_finality_cases: Vec<serde_json::Value>,
@@ -540,6 +542,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) codex_shim_compaction_projection_cases: Vec<LeanCodexShimCompactionProjectionCase>,
     pub(crate) codex_shim_turn_lifecycle_cases: Vec<LeanCodexShimTurnLifecycleCase>,
     pub(crate) codex_shim_binding_cases: Vec<LeanCodexShimBindingCase>,
+    pub(crate) codex_shim_connection_admission_cases: Vec<LeanCodexShimConnectionAdmissionCase>,
     pub(crate) r6_backgrounding_cases: Vec<LeanR6BackgroundingCase>,
     pub(crate) composed_invariant_witnesses: Vec<LeanComposedInvariantWitness>,
     pub(crate) r6_background_theorem_witnesses: Vec<LeanBackgroundTheoremWitness>,
@@ -2578,6 +2581,21 @@ pub(crate) struct LeanCausalHopContract {
     pub(crate) deferred_creation_cases: Vec<LeanDeferredCreationCase>,
     pub(crate) write_cases: Vec<LeanSessionMessageWriteCase>,
     pub(crate) session_target_cases: Vec<LeanSessionTargetCase>,
+    pub(crate) session_list_cases: Vec<LeanSessionListCase>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanSessionListCase {
+    pub(crate) same_requester: bool,
+    pub(crate) same_node: bool,
+    pub(crate) caused: bool,
+    pub(crate) allowed_target: bool,
+    pub(crate) verified_starter_receipt: bool,
+    pub(crate) interrupt_allowed: bool,
+    pub(crate) expected_listed: bool,
+    pub(crate) expected_can_message: bool,
+    pub(crate) expected_can_interrupt: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3296,6 +3314,11 @@ pub(crate) fn lean_codex_shim_turn_lifecycle_cases() -> &'static [LeanCodexShimT
 
 pub(crate) fn lean_codex_shim_binding_cases() -> &'static [LeanCodexShimBindingCase] {
     &lean_contract_snapshot().codex_shim_binding_cases
+}
+
+pub(crate) fn lean_codex_shim_connection_admission_cases(
+) -> &'static [LeanCodexShimConnectionAdmissionCase] {
+    &lean_contract_snapshot().codex_shim_connection_admission_cases
 }
 
 pub(crate) fn lean_r6_backgrounding_cases() -> &'static [LeanR6BackgroundingCase] {

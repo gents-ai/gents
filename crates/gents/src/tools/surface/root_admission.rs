@@ -10,6 +10,30 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
+/// Why a folder cannot be a tool root whoever asks: a root is a boundary only if it
+/// leaves something out, and these leave out nothing of the person's.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum TooBroadRoot {
+    #[error("The filesystem root is too broad. Choose your home directory or a folder inside it.")]
+    FilesystemRoot,
+    #[error("{} is broader than your home directory. Choose your home directory or a more specific folder.", .0.display())]
+    AboveUserHome(PathBuf),
+}
+
+/// Both paths must already be canonical.
+pub fn refuse_too_broad_root(
+    root: &Path,
+    user_home: Option<&Path>,
+) -> std::result::Result<(), TooBroadRoot> {
+    if root.parent().is_none() {
+        return Err(TooBroadRoot::FilesystemRoot);
+    }
+    if user_home.is_some_and(|home| home.starts_with(root) && home != root) {
+        return Err(TooBroadRoot::AboveUserHome(root.to_path_buf()));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct WorkspaceRootDocument {
     pub root_path: Option<String>,
@@ -229,6 +253,63 @@ pub(crate) async fn published_root_covering_in_txn(
     Ok(None)
 }
 
+/// The WorkspaceRoot a User grants an Agent reader on so it can run the host
+/// tools its Tools select. Agent creation names the same root in its receipt
+/// ([`reader_grant_step`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToolRootReader {
+    /// The Tools select no filesystem root, or this node publishes no roots.
+    NotNeeded,
+    /// The stored path of the enabled published root covering the tool root.
+    Published(String),
+    /// No published root visible to the reader covers this tool root.
+    Unpublished(String),
+}
+
+pub(crate) async fn tools_root_reader_in_txn(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    node_did: &str,
+    policy: &WorkspaceRootPolicy,
+    tools: &crate::documents::Tools,
+) -> Result<ToolRootReader> {
+    let root = tools.host.as_ref().and_then(|host| host.root.clone());
+    match (
+        policy.configured
+            && crate::tools::surface::ResolvedToolSelection::from_document(tools)?
+                .requires_filesystem_root(),
+        root,
+    ) {
+        (true, Some(root)) => Ok(
+            match published_root_covering_in_txn(txn, node_did, Path::new(&root)).await? {
+                Some(published) => ToolRootReader::Published(published),
+                None => ToolRootReader::Unpublished(root),
+            },
+        ),
+        _ => Ok(ToolRootReader::NotNeeded),
+    }
+}
+
+/// [`ToolRootReader`] for the Tools `agent_did` selects, read as `access`'s actor.
+pub async fn agent_tool_root_reader(
+    access: &crate::store::config_client::ConfigAccess,
+    node_did: &str,
+    agent_did: &str,
+) -> Result<ToolRootReader> {
+    access
+        .transact_readonly("workspace_root.agent_tool_root", |txn| {
+            Box::pin(async move {
+                let Some(tools) =
+                    crate::documents::load_agent_tools_in_txn(txn, node_did, agent_did).await?
+                else {
+                    return Ok(ToolRootReader::NotNeeded);
+                };
+                let policy = load_workspace_root_policy_in_txn(txn, None, node_did).await?;
+                tools_root_reader_in_txn(txn, node_did, &policy, &tools).await
+            })
+        })
+        .await
+}
+
 /// The step a Node administrator takes so `agent_did` may run host tools under
 /// a published root. WorkspaceRoot `reader` is managed only by the Node's owner
 /// and administrators (`workspace_roots.reader_manager`), so an Agent creating
@@ -248,6 +329,7 @@ pub(crate) fn reader_grant_step(
     };
     serde_json::json!({
         "state": if known_missing { "waiting_for_user" } else { "requires_user_grant" },
+        "published_root": published_root,
         "answer": answer,
         "user_command": format!(
             "gents config workspace-root grant-reader --graphql GRAPHQL_URL --path {path} --agent-did {agent_did}"

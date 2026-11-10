@@ -13,7 +13,10 @@ import {
 import { acceptsAsyncResult } from "./observationOrdering";
 import { createContextDetailsCache } from "./sessionContextDetails";
 import { timingConfig } from "./timing";
-import { mergeSessionTipSnapshot } from "@source-inc/gents-desktop-client";
+import {
+  mergeSessionTipSnapshot,
+  sessionGoalReadOf,
+} from "@source-inc/gents-desktop-client";
 import {
   isSessionDeliveryPhase,
   selectionMatches,
@@ -25,6 +28,7 @@ import {
   IDLE_LOAD,
   readSession,
   writeSession,
+  writeSessionGoalRead,
   writeSessionLoad,
   type SessionStore,
 } from "./sessionStore";
@@ -219,6 +223,7 @@ export function createSessionReads({
       }
       waitingRereads = 0;
       setSession((current) => (next ? mergeSessionTipSnapshot(current, next) : null));
+      if (next) writeSessionGoalRead(sessionStore, sessionGoalReadOf(next));
       noteRead(nextSessionId, next ? sessionSignature(next) : "missing", started);
       setSessionLoad({
         phase: "loaded",
@@ -234,7 +239,10 @@ export function createSessionReads({
         settleMovedRead();
       else if (refreshSeq === currentRefresh) {
         const code = error instanceof BridgeInvokeError ? error.code : null;
-        if (code === "permissionDenied") setSession(null);
+        if (code === "permissionDenied") {
+          setSession(null);
+          writeSessionGoalRead(sessionStore, { kind: "refused" });
+        }
         const delivery = code ? sessionDeliveryPhase(code) : null;
         const phase = code === "projectionPending" ? "pending" : (delivery ?? "failed");
         const message =

@@ -31,7 +31,8 @@ fn export(out: &Path, archive: &Path) {
         "--commit",
         COMMIT,
     ];
-    let crate::Command::DocsBundle(args) = Cli::try_parse_from(argv).expect("parse").command else {
+    let Some(crate::Command::DocsBundle(args)) = Cli::try_parse_from(argv).expect("parse").command
+    else {
         panic!("__docs-bundle parsed as another command");
     };
     docs_bundle(args).expect("export the docs bundle");
@@ -190,15 +191,21 @@ fn exporter_writes_a_complete_deterministic_bundle() {
             .any(|name| name.as_str().is_some_and(|name| name.starts_with("__")))),
         "hidden commands leaked into cli.json"
     );
-    let init = exported
+    let config = exported
         .iter()
-        .find(|command| command["path"] == json!(["gents", "init"]))
-        .expect("gents init is exported");
+        .find(|command| command["path"] == json!(["gents", "config"]))
+        .expect("gents config is exported");
     assert!(
-        init["after_help"]
+        config["after_help"]
             .as_str()
-            .is_some_and(|help| help.contains("gents init")),
-        "gents init keeps its examples: {init}"
+            .is_some_and(|help| help.contains("gents config apply")),
+        "gents config keeps its examples: {config}"
+    );
+    assert!(
+        !exported
+            .iter()
+            .any(|command| command["path"] == json!(["gents", "init"])),
+        "the hidden gents init stays out of cli.json"
     );
 
     let index = json_file(&files, "config/index.json");
@@ -282,7 +289,8 @@ fn export_refuses_a_non_empty_output_directory() {
         "--commit",
         COMMIT,
     ];
-    let crate::Command::DocsBundle(args) = Cli::try_parse_from(argv).expect("parse").command else {
+    let Some(crate::Command::DocsBundle(args)) = Cli::try_parse_from(argv).expect("parse").command
+    else {
         panic!("__docs-bundle parsed as another command");
     };
     assert!(docs_bundle(args).is_err());

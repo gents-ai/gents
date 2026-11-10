@@ -369,7 +369,6 @@ export function OpenSession() {
                 toBottom={toBottom}
                 stop={stop}
                 stopping={stopping}
-                goal={session?.goal ?? null}
                 agentDid={session?.agentDid ?? null}
               />
             </div>
@@ -399,7 +398,6 @@ type ScreenFacts = Pick<
   | "agentDid"
   | "title"
   | "context"
-  | "goal"
   | "latestRequestId"
   | "turnState"
   | "latestRequestOutcome"
@@ -413,7 +411,6 @@ function selectScreenFacts(session: DesktopSessionSnapshot | null): ScreenFacts 
     agentDid: session.agentDid,
     title: session.title,
     context: session.context,
-    goal: session.goal,
     latestRequestId: session.latestRequestId,
     turnState: session.turnState,
     latestRequestOutcome: session.latestRequestOutcome,

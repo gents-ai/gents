@@ -16,17 +16,32 @@ fn declared_field(collection: Collection) -> Option<&'static str> {
     }
 }
 
+/// The access policy `document` declares: the field that holds it and the
+/// readers it names, or `None` for a collection that declares none.
+pub fn declared_readers(
+    collection: Collection,
+    document: &serde_json::Value,
+) -> Option<(&'static str, Vec<&str>)> {
+    let field = declared_field(collection)?;
+    let readers = document[field]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|reader| reader["agent_did"].as_str().unwrap_or_default())
+        .collect();
+    Some((field, readers))
+}
+
 pub(super) fn ensure_admissible(
     documents: &[DesiredStateApplyDocument],
     bindings: &super::super::PackAgentBindings,
     installer: Option<&str>,
 ) -> Result<()> {
     for document in documents {
-        let Some(field) = declared_field(document.collection) else {
+        let Some((field, readers)) = declared_readers(document.collection, &document.add) else {
             continue;
         };
-        for reader in document.add[field].as_array().into_iter().flatten() {
-            let did = reader["agent_did"].as_str().unwrap_or_default();
+        for did in readers {
             anyhow::ensure!(
                 bindings.values().any(|binding| binding.agent_did == did) || installer == Some(did),
                 "{} {} declares reader {did:?}, which is not an Agent this pack provisions",

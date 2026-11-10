@@ -216,7 +216,11 @@ struct JobUnobservable {
 
 impl std::fmt::Display for JobUnobservable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}; next: gents job show {}", self.reason, self.address)
+        write!(
+            f,
+            "{}; next: gents automation job show {}",
+            self.reason, self.address
+        )
     }
 }
 

@@ -24,7 +24,7 @@ import {
 } from "@/lib/session-filter";
 import { nodeKeyOf } from "../../hooks/fleetStore";
 import { useFleet } from "@/hooks/useFleet";
-import { agentName } from "./behavior";
+import { agentName, didTail, isShared, sharedNames } from "./behavior";
 import { Button } from "@gents/ui/components/button";
 import {
   DropdownMenu,
@@ -180,6 +180,10 @@ function AgentAxis({
 }) {
   const byId = new Map(agents.map((b) => [b.id, b]));
   const picked = agents.filter((b) => value.includes(b.id));
+  const shared = sharedNames(
+    agents.map((b) => ({ agentDid: b.id, displayName: b.name })),
+  );
+  const sharing = (b: { name: string }) => isShared(shared, b.name);
   const popover = useExclusivePopover();
   const ANY = "*";
   return (
@@ -220,6 +224,8 @@ function AgentAxis({
               <AgentInitials
                 key={b.id}
                 name={b.name}
+                agentDid={b.id}
+                shared={sharing(b)}
                 className="size-5 text-[9px] ring-1 ring-background"
               />
             ))}
@@ -256,8 +262,18 @@ function AgentAxis({
             if (!b) return null;
             return (
               <ComboboxItem key={id} value={id}>
-                <AgentInitials name={b.name} className="size-5 text-[9px]" />
+                <AgentInitials
+                  name={b.name}
+                  agentDid={b.id}
+                  shared={sharing(b)}
+                  className="size-5 text-[9px]"
+                />
                 <span className="min-w-0 flex-1 truncate">{b.name}</span>
+                {sharing(b) && (
+                  <span className="shrink-0 text-xs text-muted-foreground">
+                    {didTail(b.id)}
+                  </span>
+                )}
                 {b.count > 0 && (
                   <span className="text-xs tabular-nums text-muted-foreground">
                     {b.count}

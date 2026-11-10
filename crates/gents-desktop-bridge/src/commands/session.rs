@@ -148,20 +148,13 @@ pub async fn session_snapshot(
             .await
             .map(Some)
     };
-    let goal_read =
-        core.session_goal_observation(node_did.as_deref().unwrap_or_default(), &session_id);
+    let goal_read = crate::commands::session_goal(
+        core.as_ref(),
+        node_did.as_deref().unwrap_or_default(),
+        &session_id,
+    );
     let (context, ownership, goal) = tokio::join!(context_read, ownership_read, goal_read);
-    let goal = match goal {
-        Ok(state) => crate::commands::verified_session_goal(state),
-        Err(error) => {
-            let classified = BridgeError::classify_transport_error(error);
-            if classified.code == BridgeErrorCode::PermissionDenied {
-                return Err(classified);
-            }
-            tracing::warn!(session_id, error = %classified, "session Goal observation unavailable; showing no Goal");
-            None
-        }
-    };
+    let goal = snapshot_goal(&session_id, goal)?;
     let context_store = match context {
         Ok(store) => store,
         Err(error) => {
@@ -532,4 +525,63 @@ pub async fn session_context_details(
     )
     .await
     .map_err(BridgeError::classify_transport_error)
+}
+
+/// The snapshot's Goal state from its Goal read (Lean
+/// `SessionObservation.ReadOutcome`). A refused read fails the whole snapshot,
+/// as every other refused read of it does; any other failed read leaves the
+/// state unread (`None`, `incomplete`), which a reader must not show as a
+/// Goal or as its absence.
+fn snapshot_goal(
+    session_id: &str,
+    read: anyhow::Result<crate::types::SessionGoalState>,
+) -> Result<Option<crate::types::SessionGoalState>, BridgeError> {
+    match read {
+        Ok(state) => Ok(Some(state)),
+        Err(error) => {
+            let classified = BridgeError::classify_transport_error(error);
+            if classified.code == BridgeErrorCode::PermissionDenied {
+                return Err(classified);
+            }
+            tracing::warn!(session_id, error = %classified, "session Goal observation unavailable; the snapshot carries no Goal state");
+            Ok(None)
+        }
+    }
+}
+
+#[cfg(test)]
+mod snapshot_goal_tests {
+    use super::*;
+
+    #[test]
+    fn a_failed_goal_read_leaves_the_state_unread() {
+        let read = snapshot_goal(
+            "chat",
+            Err(anyhow::anyhow!("the runtime's Goal read timed out")),
+        );
+        assert!(matches!(read, Ok(None)), "{read:?}");
+    }
+
+    #[test]
+    fn a_refused_goal_read_fails_the_whole_snapshot() {
+        let refused = BridgeError::new(BridgeErrorCode::PermissionDenied, "denied");
+        let read = snapshot_goal("chat", Err(anyhow::Error::from(refused)));
+        assert_eq!(
+            read.expect_err("a refusal is not an unread state").code,
+            BridgeErrorCode::PermissionDenied
+        );
+    }
+
+    #[test]
+    fn a_completed_goal_read_is_carried() {
+        let state = crate::types::SessionGoalState::NoReadableSession {
+            next: gents::goal::SessionGoalNextAction::Send,
+        };
+        assert!(matches!(
+            snapshot_goal("chat", Ok(state)),
+            Ok(Some(
+                crate::types::SessionGoalState::NoReadableSession { .. }
+            ))
+        ));
+    }
 }
