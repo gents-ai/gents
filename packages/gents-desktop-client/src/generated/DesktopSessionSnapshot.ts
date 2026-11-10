@@ -15,7 +15,8 @@ export type DesktopSessionSnapshot = { liveCursor?: string | null, sessionId: st
  * The session's Goal state from the one owner `desktop_session_goal`
  * also returns (Lean `SessionObservation.State`): only `observed`
  * carries a Goal or its verified absence. `None` means this snapshot's
- * read of it did not complete; that is no state, so a reader keeps the
- * last state it holds for this session rather than showing "no Goal".
+ * read of it did not complete (Lean `ReadOutcome.incomplete`): a reader
+ * folds it as such (`SessionObservation.step`), so it never shows a Goal
+ * or its absence as current.
  */
 goal: SessionGoalState | null, turnState: string | null, inferenceActivity?: string | null, latestRequestId: string | null, retryEligibility: RetryEligibilityView, latestRequestOutcome: RequestOutcomeView | null, pendingTurn: PendingTurnView | null, queuedTurns: Array<PendingTurnView>, pendingQueue?: Array<PendingQueueEntryView> | null, foldedInputs: Array<FoldedInputView>, context: SessionContextView, timelineItems: Array<RenderedTimelineItem>, timelinePage?: SessionTimelinePageView | null, projectionRevision?: SessionProjectionRevisionView | null, };

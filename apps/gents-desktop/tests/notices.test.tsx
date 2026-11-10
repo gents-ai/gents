@@ -123,7 +123,7 @@ describe("where the words are used", () => {
       completionEvidence: null,
     };
     render(<Goal goal={goal} />);
-    screen.getByRole("button", { name: "Show goal detail" }).click();
+    screen.getByRole("button", { name: "Show Goal detail" }).click();
     return screen.findByText("Stopped at the account's usage limit").then(() => {
       expect(screen.queryByText(/usage_limited/)).toBeNull();
       expect(

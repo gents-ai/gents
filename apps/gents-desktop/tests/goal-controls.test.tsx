@@ -12,6 +12,7 @@ import { deployment } from "./config-panel-wiring/fixtures";
 import { MemoryNavProvider } from "@gents/shell";
 import { composerText, typeInComposer } from "./composer-field";
 import { GOAL_REVISION, goalControl, observedGoal } from "./goal-state-fixture";
+import { writeSessionGoalRead } from "../src/hooks/sessionStore";
 
 vi.mock("../src/ui/screens/Markdown", () => ({
   CopyButton: () => null,
@@ -90,7 +91,7 @@ function setup(held: DesktopSessionSnapshot) {
     </MemoryNavProvider>,
     { wrapper: withApp(app as DesktopApp) },
   );
-  return { controlGoal, message: screen.getByLabelText("Message") };
+  return { app, controlGoal, message: screen.getByLabelText("Message") };
 }
 
 const type = typeInComposer;
@@ -104,7 +105,7 @@ describe("the slash menu", () => {
     const { message } = setup(session());
     type(message, "/");
     expect(screen.getByRole("option", { name: /\/goal/ })).toHaveTextContent(
-      "Set a goal the agent works toward until it's met",
+      "Set a Goal the Agent works toward until it's met",
     );
     type(message, "/zz");
     expect(screen.getByText("No commands or skills match /zz")).toBeInTheDocument();
@@ -114,7 +115,7 @@ describe("the slash menu", () => {
     const { message } = setup(session({ goal: goal("active") }));
     type(message, "/");
     expect(screen.getByRole("option", { name: /\/goal/ })).toHaveTextContent(
-      "Edit this session's goal",
+      "Edit this session's Goal",
     );
   });
 
@@ -123,7 +124,7 @@ describe("the slash menu", () => {
     type(message, "/");
     const option = screen.getByRole("option", { name: /\/goal/ });
     expect(option).toHaveAttribute("aria-disabled", "true");
-    expect(option).toHaveTextContent("Resume or remove this session's goal first");
+    expect(option).toHaveTextContent("Resume or remove this session's Goal first");
   });
 
   it("holds /goal until a running turn finishes", async () => {
@@ -131,7 +132,7 @@ describe("the slash menu", () => {
     type(message, "/");
     const option = screen.getByRole("option", { name: /\/goal/ });
     expect(option).toHaveAttribute("aria-disabled", "true");
-    expect(option).toHaveTextContent("Available when the agent finishes");
+    expect(option).toHaveTextContent("Available when the Agent finishes");
     await press(message, "Enter");
     expect(screen.queryByTestId("goal-mode")).toBeNull();
     expect(controlGoal).not.toHaveBeenCalled();
@@ -145,7 +146,7 @@ describe("setting a goal", () => {
     await press(message, "Enter");
     expect(screen.getByTestId("goal-mode")).toHaveTextContent("Goal");
     expect(composerText(message)).toBe("");
-    expect(message).toHaveAttribute("aria-placeholder", "Describe the goal");
+    expect(message).toHaveAttribute("aria-placeholder", "Describe the Goal");
     type(message, "Ship the release");
     await press(message, "Enter");
     await waitFor(() =>
@@ -206,26 +207,26 @@ describe("setting a goal", () => {
 describe("the goal banner", () => {
   it("offers the controls the goal's status allows", () => {
     setup(session({ goal: goal("paused") }));
-    expect(screen.getByRole("button", { name: "Resume goal" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Pause goal" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Edit goal" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Remove goal" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Resume Goal" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Pause Goal" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Edit Goal" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remove Goal" })).toBeInTheDocument();
   });
 
   it("offers none once the goal is met", () => {
     setup(session({ goal: goal("complete") }));
-    expect(screen.queryByRole("button", { name: /goal$/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Goal$/ })).toBeNull();
   });
 
   it("pauses and removes the goal at the revision it saw", async () => {
     const { controlGoal } = setup(session({ goal: goal("active") }));
-    fireEvent.click(screen.getByRole("button", { name: "Pause goal" }));
+    fireEvent.click(screen.getByRole("button", { name: "Pause Goal" }));
     await waitFor(() =>
       expect(controlGoal).toHaveBeenCalledWith(
         expect.objectContaining({ expected: REVISION, action: { kind: "pause" } }),
       ),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Remove goal" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove Goal" }));
     await waitFor(() =>
       expect(controlGoal).toHaveBeenCalledWith(
         expect.objectContaining({ action: { kind: "stop" } }),
@@ -236,8 +237,8 @@ describe("the goal banner", () => {
   it("edits the objective in the composer and gives back the draft", async () => {
     const { message, controlGoal } = setup(session({ goal: goal("active") }));
     type(message, "half-written message");
-    fireEvent.click(screen.getByRole("button", { name: "Edit goal" }));
-    expect(screen.getByTestId("goal-mode")).toHaveTextContent("Editing goal");
+    fireEvent.click(screen.getByRole("button", { name: "Edit Goal" }));
+    expect(screen.getByTestId("goal-mode")).toHaveTextContent("Editing Goal");
     expect(composerText(message)).toBe("Ship the release");
     type(message, "Ship the release notes");
     await press(message, "Enter");
@@ -272,12 +273,12 @@ describe("a Goal state that is not a verified fact", () => {
     expect(screen.getByTestId("goal-unavailable")).toHaveTextContent(
       `Goal unknown${unknown.reason}`,
     );
-    expect(screen.queryByRole("button", { name: /goal$/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Goal$/ })).toBeNull();
     type(message, "/");
     const option = screen.getByRole("option", { name: /\/goal/ });
     expect(option).toHaveAttribute("aria-disabled", "true");
     expect(option).toHaveTextContent(
-      "Available once the agent publishes this chat's goal",
+      "Available once the Agent publishes this chat's Goal",
     );
     await press(message, "Enter");
     expect(screen.queryByTestId("goal-mode")).toBeNull();
@@ -300,7 +301,7 @@ describe("a Goal state that is not a verified fact", () => {
   it("does not show a Goal read that did not complete as no Goal", () => {
     const { message } = setup(session({ goal: null }));
     expect(screen.getByTestId("goal-unavailable")).toHaveTextContent(
-      "This chat's Goal state could not be read from its runtime.",
+      "This chat's Goal could not be read from its runtime.",
     );
     type(message, "/");
     expect(screen.getByRole("option", { name: /\/goal/ })).toHaveAttribute(
@@ -312,6 +313,43 @@ describe("a Goal state that is not a verified fact", () => {
   it("shows nothing for verified absence", () => {
     setup(session());
     expect(screen.queryByTestId("goal-unavailable")).toBeNull();
-    expect(screen.queryByRole("button", { name: /goal$/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Goal$/ })).toBeNull();
+  });
+});
+
+describe("a Goal whose refresh did not complete", () => {
+  it("stays shown, marked not current, with no Goal action", () => {
+    const { app, message, controlGoal } = setup(session({ goal: goal("active") }));
+    act(() =>
+      writeSessionGoalRead(app.stores.session, {
+        kind: "incomplete",
+        sessionId: "session",
+        nodeDid: NODE,
+      }),
+    );
+    expect(screen.getByTestId("goal-not-current")).toHaveTextContent(
+      "Not current · couldn't refresh",
+    );
+    expect(screen.getByText("Ship the release")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Goal$/ })).toBeNull();
+    type(message, "/");
+    const option = screen.getByRole("option", { name: /\/goal/ });
+    expect(option).toHaveAttribute("aria-disabled", "true");
+    expect(option).toHaveTextContent("Available once this chat's Goal is refreshed");
+    expect(controlGoal).not.toHaveBeenCalled();
+  });
+
+  it("says absence is not current rather than showing no Goal", () => {
+    const { app } = setup(session());
+    act(() =>
+      writeSessionGoalRead(app.stores.session, {
+        kind: "incomplete",
+        sessionId: "session",
+        nodeDid: NODE,
+      }),
+    );
+    expect(screen.getByTestId("goal-unavailable")).toHaveTextContent(
+      "Goal not currentThis chat's Goal could not be refreshed from its runtime. When last read, it had no Goal.",
+    );
   });
 });

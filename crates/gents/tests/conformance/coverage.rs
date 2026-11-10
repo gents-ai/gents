@@ -2287,6 +2287,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "GoalSessionObservationCases",
         ),
         (
+            &snapshot.goal_session_fold_cases,
+            "goal_session_fold_cases",
+            "GoalSessionFoldCases",
+        ),
+        (
             &snapshot.plugin_approval_cases,
             "plugin_approval_cases",
             "PluginApprovalCases",

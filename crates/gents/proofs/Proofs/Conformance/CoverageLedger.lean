@@ -2090,9 +2090,9 @@ def caseCoverage : List CoverageEntry :=
       "apps/gents-desktop/tests/lean-conformance/session-goal-view.test.ts::session Goal view shows each modeled Goal state as its view and offers only its next action")
       "durable-goals" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "goal_session_observation_cases"
-      "GoalSessionObservationCases"
-      "apps/gents-desktop/tests/lean-conformance/session-goal-view.test.ts::session Goal view keeps the last read Goal state until another read classifies one")
+      "goal_session_fold_cases"
+      "GoalSessionFoldCases"
+      "apps/gents-desktop/tests/lean-conformance/session-goal-view.test.ts::session Goal view shows and offers what the modeled fold of reads does")
       "durable-goals" [Surface.operatorUi]
   , tagged (consumerCoverage
       "plugin_approval_cases"

@@ -3,7 +3,10 @@ import { MorphProvider, useMorphCard } from "@/lib/morph";
 import { COMPOSER_FIELD } from "./composerField";
 import { AskedChip } from "./AskedChip";
 import { useUnansweredQuestions } from "../../hooks/useSessionQuestions";
-import { useSelectedSessionFields } from "../../hooks/useSelectedSession";
+import {
+  useSelectedSessionFields,
+  useSelectedSessionGoal,
+} from "../../hooks/useSelectedSession";
 import { AttachmentTray, SentAttachments, useAttachmentDraft } from "./attachments";
 import {
   useCallback,
@@ -16,7 +19,6 @@ import {
 } from "react";
 import { useStore } from "zustand";
 import { ArrowDown, Check, Pencil, X } from "lucide-react";
-import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import { ComposerReasonBox, composerReason } from "./ComposerReason";
 import { RichComposer } from "@gents/ui/conversation";
@@ -59,7 +61,6 @@ export function OpenSessionComposer({
   toBottom,
   stop,
   stopping,
-  goal,
   agentDid,
 }: {
   roomRef: RefCallback<HTMLDivElement>;
@@ -67,12 +68,10 @@ export function OpenSessionComposer({
   toBottom: () => void;
   stop: () => void;
   stopping: boolean;
-  /* undefined until the chat's snapshot arrives */
-  goal: DesktopSessionSnapshot["goal"] | undefined;
   agentDid: string | null;
 }) {
-  const shown = goalShown(goal);
-  const current = shown.kind === "goal" ? shown.goal : null;
+  const shown = goalShown(useSelectedSessionGoal());
+  const current = shown.kind === "goal" && shown.current ? shown.goal : null;
   const { drafts, stores, actions } = useApp();
   const activityStatus = useView((view) => view.shellProjection.activityStatus);
   const sendStatus = useView((view) => view.shellProjection.nonEmptyContentSendStatus);
@@ -288,7 +287,10 @@ export function OpenSessionComposer({
 
   return (
     <div ref={roomRef} className="sticky bottom-0 z-20 mt-auto bg-background pt-6 pb-6">
-      {shown.kind === "unavailable" && <GoalUnavailable text={shown.text} />}
+      {shown.kind === "unavailable" && (
+        <GoalUnavailable label={shown.label} text={shown.text} />
+      )}
+      {shown.kind === "goal" && !shown.current && <Goal goal={shown.goal} stale />}
       {current && (
         <Goal
           goal={current}
@@ -508,9 +510,9 @@ export function OpenSessionComposer({
                   ? "Send as a new message"
                   : "Save"
                 : goalMode.mode === "edit"
-                  ? "Save goal"
+                  ? "Save Goal"
                   : goalMode.mode
-                    ? "Set goal"
+                    ? "Set Goal"
                     : "Send"
             }
             submitIcon={editing && !editing.reached ? <Check /> : undefined}
@@ -520,7 +522,7 @@ export function OpenSessionComposer({
               editing
                 ? "Edit the message"
                 : goalMode.mode
-                  ? "Describe the goal"
+                  ? "Describe the Goal"
                   : inFlight
                     ? "Ask anything"
                     : readOnly
