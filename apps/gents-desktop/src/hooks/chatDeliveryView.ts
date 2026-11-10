@@ -40,10 +40,17 @@ export function nextSendDeadline(
   return next;
 }
 
+/** Whether resending the draft under its identity meets the same refusal
+ * (Lean `view` `refused`): the runtime denied this client the operation. */
+export function resendRefused(draft: ChatDraft): boolean {
+  return draft.failure?.error?.code === "permissionDenied";
+}
+
 /** The view and actions for one message, bound to Lean `view`. */
 export function deliveryAffordances(
   status: SendStatus,
   mailbox: boolean,
+  refused: boolean,
 ): DeliveryAffordances {
   switch (status) {
     case "pending":
@@ -56,7 +63,12 @@ export function deliveryAffordances(
         blocksComposer: mailbox,
       };
     case "failed":
-      return { view: "failed", retry: true, discard: true, blocksComposer: mailbox };
+      return {
+        view: "failed",
+        retry: !refused,
+        discard: true,
+        blocksComposer: mailbox,
+      };
     case "discarded":
       return { view: "hidden", retry: false, discard: false, blocksComposer: false };
   }
