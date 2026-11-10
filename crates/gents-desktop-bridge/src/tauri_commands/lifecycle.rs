@@ -259,9 +259,10 @@ where
 const NODE_RECONNECT_ANSWER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Reconnects `node_did`'s runtime now, or every runtime when it is `None`,
-/// instead of after the reconnect backoff. For one node, returns its runtime
-/// connection once it answered (`DeploymentView.runtimeConnection`), or `None`
-/// when it has not answered in time or is not observed.
+/// instead of after the reconnect backoff; a connected runtime is left alone.
+/// For one node, returns its runtime connection once it answered
+/// (`DeploymentView.runtimeConnection`), or `None` when it has not answered in
+/// time or is not observed.
 #[tauri::command]
 pub async fn desktop_node_reconnect(
     state: State<'_, DesktopAppState>,
@@ -277,7 +278,7 @@ pub async fn desktop_node_reconnect(
         .map(|did| did.trim().to_owned())
         .filter(|did| !did.is_empty())
     else {
-        core.reconnect_all_runtimes_now().await;
+        core.request_runtime_reconnect(None).await;
         return Ok(None);
     };
     Ok(tokio::time::timeout(

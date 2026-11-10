@@ -150,11 +150,14 @@ describe("following the client while it runs", () => {
       expect(api.fetchSessionLiveDelta).not.toHaveBeenCalled();
       expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(1);
       expect(api.fetchDesktopSnapshot).toHaveBeenCalledTimes(indexReads);
+      expect(api.reconnectNode).not.toHaveBeenCalled();
 
       showWindow(true);
       await vi.advanceTimersByTimeAsync(0);
       expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(2);
       expect(api.fetchDesktopSnapshot).toHaveBeenCalledTimes(indexReads + 1);
+      /* the observer reconnects every node that isn't connected */
+      expect(api.reconnectNode.mock.calls).toEqual([[null]]);
 
       await vi.advanceTimersByTimeAsync(60_000);
       expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(2);

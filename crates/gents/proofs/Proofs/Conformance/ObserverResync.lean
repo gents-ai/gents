@@ -121,7 +121,9 @@ def step (m : Machine) (op : Op) : Machine × Option Json :=
                   [{ key := sharedKey, owner := none }] }, none)
   | "timer" => (withSlot m n (timer slot), none)
   | "retry_now" =>
-      (dropRead (withSlot { m with pub := requestEvent m.pub } n (retryNow slot)) n, none)
+      if retryNowRestarts slot then
+        (dropRead (withSlot { m with pub := requestEvent m.pub } n (retryNow slot)) n, none)
+      else (m, none)
   | "finish" =>
       match slot.loading, m.reads n with
       | true, some read =>

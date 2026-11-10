@@ -105,27 +105,23 @@ describe("the composer's reason box", () => {
       const startManagedServer = vi
         .fn()
         .mockResolvedValue({ state: "running", nodeName: "Forge", nodeDid: NODE });
-      const reconnectNode = vi.fn().mockResolvedValue("connected");
       const app = show({ runtimeConnection: "disconnected" }, null, {
         managedServerStatus: vi
           .fn()
           .mockResolvedValue({ state, nodeName: "Forge", nodeDid: NODE }),
         startManagedServer,
-        reconnectNode,
       });
-      return { app, startManagedServer, reconnectNode };
+      return { app, startManagedServer };
     };
 
-    it("offers to start it, and connects to it once it runs", async () => {
-      const { startManagedServer, reconnectNode } = server("stopped");
+    it("offers to start it", async () => {
+      const { startManagedServer } = server("stopped");
       const start = await screen.findByRole("button", { name: "Start node" });
       expect(box()).toContainElement(start);
       expect(box()).toHaveTextContent(/isn't running on this computer/);
       expect(screen.getByRole("link", { name: "Switch node" })).toBeInTheDocument();
       await userEvent.click(start);
       expect(startManagedServer).toHaveBeenCalledWith("Forge", undefined);
-      /* its connection waited out a backoff while it was down */
-      await waitFor(() => expect(reconnectNode).toHaveBeenCalledWith(NODE));
     });
 
     it("offers no start while it runs", async () => {

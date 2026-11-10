@@ -17,10 +17,6 @@ const RELISTEN_MAX_MS = 8_000;
     without one. A registration that keeps failing, or never settles, must not
     leave the selection unread (TLA `DesktopUpdateListener` `StartupRead`). */
 export const UNREGISTERED_READ_MS = 250;
-/** A window hidden this long may have slept with the computer or lost its
-    network, so showing it again reconnects every node at once instead of
-    after each one's wait, which grows the longer a node is unreachable. */
-export const LONG_HIDDEN_MS = 60_000;
 
 export function startClientObservation(
   { api, stores, view, actions, lifecycle, trackedRequestId }: DesktopApp,
@@ -147,16 +143,17 @@ export function startClientObservation(
       void controller.request("session");
     });
 
-    /* showing the window reads it in full */
-    let hiddenSince = hidden() ? Date.now() : null;
+    /* showing the window reads it in full; showing it again also asks the
+       observer to reconnect now, since the computer may have slept or changed
+       networks meanwhile (it leaves connected nodes alone) */
+    let wasHidden = hidden();
     const refreshForegroundState = () => {
       if (hidden()) {
-        hiddenSince ??= Date.now();
+        wasHidden = true;
         return;
       }
-      if (hiddenSince !== null && Date.now() - hiddenSince >= LONG_HIDDEN_MS)
-        void actions.reconnectNode(null).catch(() => {});
-      hiddenSince = null;
+      if (wasHidden) void actions.reconnectNode(null).catch(() => {});
+      wasHidden = false;
       void controller.request("full");
     };
     document.addEventListener("visibilitychange", refreshForegroundState);

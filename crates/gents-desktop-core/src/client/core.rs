@@ -600,10 +600,11 @@ impl ClientCore {
         self.send_p2p_command(P2PSupervisorCommand::RepairNow).await
     }
 
-    /// Reconnects `node_did`'s runtime now instead of after its backoff, and
-    /// returns its connection status once the restarted connection has read
-    /// the runtime or failed to. `None` when the node is not observed or the
-    /// client is shutting down.
+    /// Reconnects `node_did`'s runtime now instead of after its backoff,
+    /// unless it is connected, and returns its connection status once the
+    /// restarted connection has read the runtime or failed to (at once for a
+    /// connected runtime). `None` when the node is not observed or the client
+    /// is shutting down.
     pub async fn reconnect_runtime_now(
         &self,
         node_did: &str,
@@ -612,10 +613,15 @@ impl ClientCore {
         settled.await
     }
 
-    /// [`Self::reconnect_runtime_now`] for every runtime, without waiting.
-    pub async fn reconnect_all_runtimes_now(&self) {
+    /// [`Self::reconnect_runtime_now`] for `node_did`, or for every runtime
+    /// when it is `None`, without waiting for an answer.
+    pub async fn request_runtime_reconnect(&self, node_did: Option<&str>) {
         if let Some(observer) = self.observer.lock().await.as_ref() {
-            observer.retry_all_now();
+            match node_did {
+                // The request is sent before the answer is awaited.
+                Some(node_did) => drop(observer.retry_now(node_did)),
+                None => observer.retry_all_now(),
+            }
         }
     }
 

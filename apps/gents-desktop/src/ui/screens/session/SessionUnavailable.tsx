@@ -96,12 +96,10 @@ export function SessionUnavailable() {
   const load = useSessionLoad();
   const { title, detail } = missingSessionText(fleet, nodeDid);
   const [busy, setBusy] = useState(false);
-  const node = nodeOf(fleet, nodeDid);
   const retry = async () => {
     setBusy(true);
     try {
-      if (node && nodeConnection(node) !== "connected")
-        await reconnectNode(node.nodeDid);
+      if (nodeDid) await reconnectNode(nodeDid);
       await Promise.all([refreshSnapshot(), refreshSession(sessionId)]);
     } catch (e) {
       toastFailure("load the session", e);

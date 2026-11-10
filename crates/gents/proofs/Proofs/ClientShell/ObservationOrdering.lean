@@ -1325,13 +1325,15 @@ theorem answered_read_restarts_the_retry_schedule (failures : Nat) :
   show reconnectDelayMs 0 = reconnectBaseMs
   decide
 
-/-- The reconnect count and the failed-read count a node has after the user
-asks to reconnect it now (try again, a status check, the window shown again
-after a long hide). Its source restarts at once at the same endpoint, as a due
-reconnect restarts it, and its read retry timer is cleared
-(`ObserverResync.retryNow`). The counts start over: the request is the user's
-evidence that the runtime may be back, which is what the backoff waits for, and
-a runtime still down is redialed after `reconnectBaseMs` and backs off again. -/
+/-- The reconnect count and the failed-read count a node that is not
+connected has after the user asks to reconnect it now (try again, a status
+check, the window shown again, a runtime this desktop just started). Its source
+restarts at once at the same endpoint, as a due reconnect restarts it, and its
+read retry timer is cleared (`ObserverResync.retryNow`). The counts start over:
+the request is the user's evidence that the runtime may be back, which is what
+the backoff waits for, and a runtime still down is redialed after
+`reconnectBaseMs` and backs off again. A connected node keeps its source and
+counts. -/
 def retryNowCount : Nat := 0
 
 theorem retry_now_starts_the_schedules_over :
@@ -1603,14 +1605,23 @@ def settle (n : Slot) : Settlement → Slot
 /-- A refusal the stream reports settles the slot as a refused load does. -/
 def streamRefused (n : Slot) : Slot := settle n .refused
 
+/-- Whether a reconnect the user asked for restarts the node's source: only
+while the node is not connected. Callers ask without checking the status
+themselves (the window shown again asks for every node); a connected source
+is the runtime answering, and restarting it would only drop its subscriptions
+and its running load. -/
+def retryNowRestarts (n : Slot) : Bool := n.status != .connected
+
 /-- The user asked to reconnect the node now
-(`RuntimeConnectionObservation.retryNowCount`). Its source restarts at the
-same endpoint as a due reconnect restarts it: the running load is aborted and
-the slot is unarmed until the new source arms, and the shown status is kept (an
-outage stays `disconnected` until the runtime answers; a connected view is
-resnapshotted by the re-arm). The retry timer is cleared, so the re-arm's load
-starts at once. -/
-def retryNow (n : Slot) : Slot := { n with waiting := false, loading := false, armed := false }
+(`RuntimeConnectionObservation.retryNowCount`). A node that is not connected
+has its source restarted at the same endpoint as a due reconnect restarts it:
+the running load is aborted and the slot is unarmed until the new source arms,
+and the shown status is kept (an outage stays `disconnected` until the runtime
+answers). The retry timer is cleared, so the re-arm's load starts at once. A
+connected node is left as it is (`retryNowRestarts`). -/
+def retryNow (n : Slot) : Slot :=
+  if retryNowRestarts n then { n with waiting := false, loading := false, armed := false }
+  else n
 
 /-- What the user sees for a node, and why it is not stuck. -/
 inductive Presentation where
@@ -1703,13 +1714,22 @@ theorem timer_owned (n : Slot) (h : Owned n) : Owned (timer n) := by
   cases n; simp_all [Owned, timer]
 
 theorem retry_now_owned (n : Slot) (h : Owned n) : Owned (retryNow n) := by
-  cases n; simp_all [Owned, retryNow]
+  unfold retryNow
+  split
+  · cases n; simp_all [Owned]
+  · exact h
 
 /-- A reconnect the user asked for never waits out a retry timer: the new
 source's arm starts its load at once, and the status shown meanwhile is kept. -/
-theorem retry_now_loads_on_arm (n : Slot) :
+theorem retry_now_loads_on_arm (n : Slot) (h : n.status ≠ .connected) :
     startable (armed (retryNow n)) = true ∧ (retryNow n).status = n.status := by
-  simp [startable, armed, retryNow]
+  simp [retryNow, retryNowRestarts, h, startable, armed]
+
+/-- Asking to reconnect a connected node changes nothing: its source, its
+running load and its retry state stay as they are. -/
+theorem retry_now_leaves_connected (n : Slot) (h : n.status = .connected) :
+    retryNow n = n := by
+  simp [retryNow, retryNowRestarts, h]
 
 /-- A dropped stream keeps a queued load from starting until the source
 re-arms; the re-arm queues it and it starts unless the retry timer is due. -/

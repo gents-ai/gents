@@ -6,9 +6,6 @@ import { navigate } from "@/lib/router";
 import { toastFailure } from "@/lib/failure";
 import { useApp, useView } from "@/app/AppContext";
 import { useSelectedNodeDid } from "@/hooks/useClient";
-import { useFleet } from "@/hooks/useFleet";
-import { nodeConnection } from "@/lib/nodeConnection";
-import { nodeOf } from "../../hooks/fleetStore";
 
 const LABEL = {
   retryLocal: "Try again",
@@ -28,10 +25,6 @@ export function LoadingStatus({ overlay = false }: { overlay?: boolean }) {
     actions: { reconnectNode, refreshSession, refreshSnapshot, reloadSession },
   } = useApp();
   const nodeDid = useSelectedNodeDid();
-  const unconnected = useFleet((fleet) => {
-    const node = nodeOf(fleet, nodeDid);
-    return node !== null && nodeConnection(node) !== "connected";
-  });
   const selectedSessionId = stores.selection.use.sessionId();
   const [busy, setBusy] = useState(false);
   if (!status) return null;
@@ -46,7 +39,7 @@ export function LoadingStatus({ overlay = false }: { overlay?: boolean }) {
     }
     setBusy(true);
     try {
-      if (unconnected && nodeDid) await reconnectNode(nodeDid);
+      if (nodeDid) await reconnectNode(nodeDid);
       if (action === "reloadSession") await reloadSession(selectedSessionId);
       else await Promise.all([refreshSnapshot(), refreshSession(selectedSessionId)]);
     } catch (e) {

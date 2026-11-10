@@ -262,8 +262,10 @@ impl RetryWaiters {
 }
 
 /// The loop's handling of a retry of `node`: `ObserverResync.retryNow` of
-/// the slot and the source. The restarted source no longer delivers changes
-/// until it arms, as after a stream end. Returns whether `node` has a source.
+/// the slot and the source. A connected node is left alone
+/// (`ObserverResync.retryNowRestarts`), so callers ask without checking. The
+/// restarted source no longer delivers changes until it arms, as after a
+/// stream end. Returns whether `node`'s source restarted.
 fn apply_retry_now(
     queue: &mut Queue,
     sources: &mut remote::Sources,
@@ -271,7 +273,9 @@ fn apply_retry_now(
     node: &str,
     now: Instant,
 ) -> bool {
-    if !sources.retry_now(node, now) {
+    if store.runtime_connection(node) == Some(RuntimeConnectionStatus::Connected)
+        || !sources.retry_now(node, now)
+    {
         return false;
     }
     queue.retry_now(node);
@@ -292,10 +296,12 @@ impl ObserverHandle {
         let _ = self.task.await;
     }
 
-    /// Restarts `node`'s source now, skipping its backoff and any read retry
-    /// timer. The future resolves with the node's connection status once the
+    /// Restarts `node`'s source now unless it is connected, skipping its
+    /// backoff and any read retry timer. The request is sent at once; the
+    /// future only carries the answer: the node's connection status once the
     /// restarted source has read the runtime or failed to, at once when the
-    /// node has no source, and with `None` when the observer stopped.
+    /// node has no source or is connected, and `None` when the observer
+    /// stopped.
     pub fn retry_now(
         &self,
         node: &str,
@@ -308,7 +314,8 @@ impl ObserverHandle {
         async move { answer.await.ok().flatten() }
     }
 
-    /// [`Self::retry_now`] for every node, without waiting for answers.
+    /// [`Self::retry_now`] for every node that is not connected, without
+    /// waiting for answers.
     pub fn retry_all_now(&self) {
         let _ = self.retries.send(RetryNow {
             node: None,
@@ -478,13 +485,15 @@ pub fn spawn_observer(
                         Some(node) => vec![node.clone()],
                         None => sources.entries.keys().cloned().collect(),
                     };
+                    let mut restarted = false;
                     for node in &nodes {
                         if apply_retry_now(&mut queue, &mut sources, &store, node, now) {
                             loads.cancel(node);
+                            restarted = true;
                         }
                     }
                     if let (Some(node), Some(settled)) = (node, settled) {
-                        if sources.entries.contains_key(&node) {
+                        if restarted {
                             waiters.0.entry(node).or_default().push(settled);
                         } else {
                             let _ = settled.send(store.runtime_connection(&node));

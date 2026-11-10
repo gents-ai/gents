@@ -864,6 +864,97 @@ async fn retry_now_reconnects_at_once_and_starts_the_backoff_over() {
     ));
 }
 
+/// `ObserverResync.retry_now_leaves_connected`: asking to reconnect a
+/// connected node keeps its source, its armed slot and its schedules, so
+/// callers ask without checking the status first.
+#[tokio::test]
+async fn retry_now_leaves_a_connected_node_alone() {
+    let (store, _) = ObservedStore::new(ClientStore::default());
+    let metrics = ObserverMetrics::default();
+    let mut sources = remote::Sources::default();
+    let mut queue = Queue::default();
+    let node = "did:test:connected";
+    let at = Instant::now();
+    let generation = sources.start_inert(node);
+    apply_source_notice(
+        &mut queue,
+        &mut sources,
+        &store,
+        node,
+        generation,
+        RuntimeConnectionEvent::SubscriptionsReady,
+        &metrics,
+    );
+    queue.pending.remove(node);
+    apply_settlement(
+        &mut queue,
+        &mut sources,
+        &store,
+        node,
+        Settlement::Published,
+        at,
+        &metrics,
+    );
+    assert_eq!(
+        store.runtime_connection(node),
+        Some(RuntimeConnectionStatus::Connected)
+    );
+
+    assert!(!apply_retry_now(&mut queue, &mut sources, &store, node, at));
+    assert!(!sources.entries[node].ended(), "the source keeps running");
+    assert_eq!(sources.next_reconnect(), None);
+    assert_eq!(queue.armed.get(node), Some(&generation));
+    assert_eq!(
+        store.runtime_connection(node),
+        Some(RuntimeConnectionStatus::Connected)
+    );
+}
+
+/// The observer answers a retry of a connected runtime at once and restarts
+/// no source, for one node or for every node: a restarted source would show
+/// `connecting` while it re-arms.
+#[tokio::test]
+async fn retry_now_answers_a_connected_runtime_without_reconnecting() {
+    let fixture = ObservedRuntime::start().await;
+    let configured =
+        ClientSyncStateOwner::new(Default::default(), fixture.peers.clone(), Vec::new());
+    let (store, _) = ObservedStore::new(ClientStore::default());
+    let handle = spawn_observer(
+        store.clone(),
+        configured,
+        fixture.client.client_signing_capability().unwrap(),
+    );
+    wait_for_connection(
+        &store,
+        &fixture.runtime_did,
+        RuntimeConnectionStatus::Connected,
+    )
+    .await;
+    let mut changes = store.subscribe_changes();
+
+    handle.retry_all_now();
+    let answer = tokio::time::timeout(
+        Duration::from_secs(1),
+        handle.retry_now(&fixture.runtime_did),
+    )
+    .await
+    .expect("a connected runtime is answered at once");
+    assert_eq!(answer, Some(RuntimeConnectionStatus::Connected));
+    let _ = tokio::time::timeout(Duration::from_millis(500), async {
+        loop {
+            assert_eq!(
+                store.runtime_connection(&fixture.runtime_did),
+                Some(RuntimeConnectionStatus::Connected),
+                "no source restarted"
+            );
+            changes.changed().await.unwrap();
+        }
+    })
+    .await;
+    handle.shutdown().await;
+    fixture.stop().await;
+}
+
 /// The snapshot owner's failures map to `RuntimeConnectionObservation.SnapshotOutcome`:
 /// only the access owner's classification is a refusal.
 #[test]
@@ -1730,6 +1821,7 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
 
     let metrics = ObserverMetrics::default();
     let mut settlements = BTreeSet::new();
+    let mut retries = BTreeSet::new();
     for (trace, expected) in traces.iter().zip(&modeled) {
         let (store, _) = ObservedStore::new(ClientStore::default());
         let mut queue = Queue::default();
@@ -1855,14 +1947,12 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
                 // What the loop's retry arm does; the due reconnect restarts
                 // the source on the next `armed`.
                 "retry_now" => {
-                    assert!(apply_retry_now(
-                        &mut queue,
-                        &mut sources,
-                        &store,
-                        &node_did,
-                        now
-                    ));
-                    in_flight.remove(&node_did);
+                    let restarted =
+                        apply_retry_now(&mut queue, &mut sources, &store, &node_did, now);
+                    if restarted {
+                        in_flight.remove(&node_did);
+                    }
+                    retries.insert(restarted);
                 }
                 "finish" => {
                     if let Some(captured) = in_flight.remove(&node_did) {
@@ -1941,6 +2031,11 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
         assert_eq!(stored, rows, "{trace}");
     }
     assert_eq!(settlements.len(), 4, "every settlement is exercised");
+    assert_eq!(
+        retries.len(),
+        2,
+        "a retry of a connected and of an unconnected node is exercised"
+    );
 }
 
 fn desktop_snapshot(body: &str) -> bool {
