@@ -27,6 +27,15 @@ pub(crate) fn fresh_healthy(
     observed.is_some_and(|time| time >= wait_started && time <= now)
 }
 
+/// Mirrors `RequestBackendWake.resumedTurn`: the turn after every provider
+/// turn the request completed before it parked.
+pub(crate) fn resumed_turn_index(completed: impl IntoIterator<Item = u32>) -> usize {
+    completed
+        .into_iter()
+        .max()
+        .map_or(0, |last| last as usize + 1)
+}
+
 #[derive(Debug, serde::Deserialize)]
 struct BackendWaitMetadata {
     #[serde(rename = "_docID")]
@@ -131,6 +140,44 @@ impl super::RequestLifecycle {
                 && row.execution_generation == self.request.execution_generation
         }))
     }
+    /// The turn a resumed request continues from, read from its closed
+    /// inference sources: history may be compacted, and a rendered capture is
+    /// optional, so neither counts the turns already spent.
+    pub(crate) async fn resumed_turn_index(&self) -> anyhow::Result<usize> {
+        use gents_protocol::output::{OutputOutcome, OutputSource, SourceClose};
+        use gents_protocol::rendered_request::CaptureScopeKind;
+        let request = &self.request;
+        let records = self
+            .access()?
+            .transact_readonly("lifecycle.resumed_turn_index", move |txn| {
+                Box::pin(async move {
+                    super::recovery::request_segments(
+                        txn,
+                        &request.doc_id,
+                        &request.node_did,
+                        &request.session_id,
+                        request.requester_did.as_deref(),
+                    )
+                    .await
+                })
+            })
+            .await?;
+        Ok(resumed_turn_index(records.iter().filter_map(|record| {
+            match (&record.segment.source, &record.segment.close) {
+                (
+                    OutputSource::ProviderTurn {
+                        scope, turn_index, ..
+                    },
+                    Some(SourceClose::Closed {
+                        outcome: OutputOutcome::Complete,
+                        ..
+                    }),
+                ) if scope.kind == CaptureScopeKind::Inference => Some(*turn_index),
+                _ => None,
+            }
+        })))
+    }
+
     /// Release local ownership only after the durable parking transaction wins.
     pub(crate) async fn park_for_backend(&mut self) -> anyhow::Result<bool> {
         self.ensure_state(&[super::LocalLifecycleState::Streaming], "park_for_backend")?;
@@ -585,6 +632,19 @@ mod tests {
         for wake in [BackendWake::NotDue, rebound, BackendWake::Lost] {
             assert!(!wake.resumed());
             assert!(!wake.unclaimed_reason().contains("same-session"));
+        }
+    }
+
+    #[test]
+    fn resumed_turn_matches_the_generated_model() {
+        let cases = &crate::lean_vocab_test::lean_contract_snapshot().backend_resumed_turn_cases;
+        assert!(cases.iter().any(|case| case.next > 1));
+        for case in cases {
+            assert_eq!(
+                super::resumed_turn_index(case.completed.iter().copied()),
+                case.next,
+                "{case:?}"
+            );
         }
     }
 

@@ -602,6 +602,11 @@ where
                         }
                         entry
                     };
+                    if lifecycle.resumed_from_backend() {
+                        loop_config.initial_turn_index = loop_config
+                            .initial_turn_index
+                            .max(lifecycle.resumed_turn_index().await?);
+                    }
                     loop_config.replay = replay;
                     Ok::<_, anyhow::Error>((
                         hook,

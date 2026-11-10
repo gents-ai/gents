@@ -39,4 +39,26 @@ theorem expired_has_no_wake (now deadline attempt : Nat) (h : deadline ≤ now) 
     fallback now deadline attempt = none := by
   simp [fallback, Nat.not_lt.mpr h]
 
+/-- A resumed request continues its turn budget rather than restarting it: its
+next turn follows every provider turn it durably completed before parking, so
+repeated outages cannot buy turns beyond the configured maximum. -/
+def resumedTurn : List Nat → Nat
+  | [] => 0
+  | turn :: rest => max (turn + 1) (resumedTurn rest)
+
+theorem completed_turn_precedes_resumed (completed : List Nat) (turn : Nat)
+    (h : turn ∈ completed) : turn < resumedTurn completed := by
+  induction completed with
+  | nil => simp at h
+  | cons first rest ih =>
+      simp only [List.mem_cons] at h
+      simp only [resumedTurn]
+      cases h with
+      | inl heq => subst turn; omega
+      | inr hrest =>
+          have bound := ih hrest
+          omega
+
+theorem unstarted_request_resumes_at_first_turn : resumedTurn [] = 0 := rfl
+
 end RequestBackendWake

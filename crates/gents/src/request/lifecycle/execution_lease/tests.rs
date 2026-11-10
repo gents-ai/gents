@@ -2510,6 +2510,39 @@ async fn latest_only_supersession_settles_parked_and_resuming_fires() {
 }
 
 #[tokio::test]
+async fn backend_resume_continues_from_the_turns_already_completed() {
+    let (node, _db, identity, agent, _access, mut lifecycle) = parked_fixture().await;
+    assert_eq!(lifecycle.resumed_turn_index().await.unwrap(), 0);
+    let writer = crate::request::streaming::DefraStreamWriter::new_managed(
+        node.clone(),
+        agent_identity(&identity, &agent).as_ref(),
+        Duration::ZERO,
+    )
+    .unwrap();
+    let doc_id = lifecycle.request().doc_id.clone();
+    for turn in 0..2 {
+        writer
+            .start_provider_attempt(&doc_id, turn, 0, "inference.1".parse().unwrap())
+            .await;
+        writer
+            .publish_native_turn(
+                &lifecycle,
+                turn,
+                0,
+                &gents_protocol::message::Message::assistant(format!("turn {turn}")),
+            )
+            .await
+            .unwrap();
+    }
+    assert!(lifecycle.park_for_backend().await.unwrap());
+    assert_eq!(
+        lifecycle.resumed_turn_index().await.unwrap(),
+        2,
+        "a resumed request must not get its turn allowance back"
+    );
+}
+
+#[tokio::test]
 async fn parked_head_keeps_its_session_closed_to_later_work() {
     let (_node, _db, identity, _agent, access, mut lifecycle) = parked_fixture().await;
     let request = lifecycle.request().clone();

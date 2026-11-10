@@ -504,6 +504,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) backend_resume_admission_cases: Vec<LeanBackendResumeAdmissionCase>,
     pub(crate) backend_repark_cases: Vec<LeanBackendReparkCase>,
     pub(crate) backend_parked_finalize_cases: Vec<LeanBackendParkedFinalizeCase>,
+    pub(crate) backend_resumed_turn_cases: Vec<LeanBackendResumedTurnCase>,
     pub(crate) account_rotation_select_cases: Vec<LeanAccountRotationSelectCase>,
     pub(crate) account_rotation_attempt_cases: Vec<LeanAccountRotationAttemptCase>,
     pub(crate) account_rotation_observe_cases: Vec<LeanAccountRotationObserveCase>,
@@ -4851,6 +4852,12 @@ pub(crate) struct LeanBackendParkedFinalizeCase {
     pub(crate) request: gents_protocol::request_lifecycle::RequestLifecycleState,
     pub(crate) outcome: gents_protocol::request_lifecycle::RequestLifecycleState,
     pub(crate) allowed: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanBackendResumedTurnCase {
+    pub(crate) completed: Vec<u32>,
+    pub(crate) next: usize,
 }
 
 #[derive(Debug, Deserialize)]

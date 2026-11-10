@@ -123,4 +123,13 @@ def parkedFinalizeCaseJson (input : RequestState × RequestExecutionLease.Outcom
 
 def parkedFinalizeCasesJson : String := jsonArray (parkedFinalizeInputs.map parkedFinalizeCaseJson)
 
+def resumedTurnCases : List (List Nat) :=
+  [[], [0], [0, 1, 2], [2, 0, 1], [4], [3, 3]]
+
+def resumedTurnCaseJson (completed : List Nat) : String :=
+  "{\"completed\":" ++ jsonArray (completed.map toString) ++
+    ",\"next\":" ++ toString (RequestBackendWake.resumedTurn completed) ++ "}"
+
+def resumedTurnCasesJson : String := jsonArray (resumedTurnCases.map resumedTurnCaseJson)
+
 end Conformance.BackendWake
