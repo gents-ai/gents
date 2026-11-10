@@ -226,7 +226,11 @@ where
     }
     let port = match state.policy.node_home.as_deref() {
         Some(node_home) => {
-            observe_port_readiness(node_home, user_status_signer(state).await.as_ref()).await?
+            observe_port_readiness(
+                node_home,
+                user_status_signer(state, node_home).await.as_ref(),
+            )
+            .await?
         }
         None => PortReadiness::NotListening,
     };
@@ -374,8 +378,11 @@ where
         }
     }
     ensure_launchable_here(&app, &state)?;
-    let port =
-        observe_port_readiness(&node_home, user_status_signer(&state).await.as_ref()).await?;
+    let port = observe_port_readiness(
+        &node_home,
+        user_status_signer(&state, &node_home).await.as_ref(),
+    )
+    .await?;
     ensure_selected_restart_compatible(managed_selection, &port)?;
     let previous_did = match &port {
         PortReadiness::Ready(status) | PortReadiness::StatusUnreadable { public: status, .. } => {
@@ -462,12 +469,15 @@ where
         if managed_selection {
             return Ok(());
         }
-        ensure_default_port_identity(&node_home, user_status_signer(&state).await.as_ref())
-            .await
-            .map_err(|mut error| {
-                error.message = format!("Your node was stopped; {}", error.message);
-                error
-            })?;
+        ensure_default_port_identity(
+            &node_home,
+            user_status_signer(&state, &node_home).await.as_ref(),
+        )
+        .await
+        .map_err(|mut error| {
+            error.message = format!("Your node was stopped; {}", error.message);
+            error
+        })?;
         run_native(launchable_native_service(&app, &state)?, |service| {
             service.install()
         })
@@ -502,11 +512,13 @@ where
         start_running_managed_pairing(&state, core).await;
     }
     let native = run_native(native_service(&app, &state)?, |service| service.status()).await?;
-    let mut status =
-        matching_external_server(&node_home, user_status_signer(&state).await.as_ref())
-            .await?
-            .map(|external| project_external_status(external, &native))
-            .ok_or_else(|| BridgeError::untyped("native service did not become ready"))?;
+    let mut status = matching_external_server(
+        &node_home,
+        user_status_signer(&state, &node_home).await.as_ref(),
+    )
+    .await?
+    .map(|external| project_external_status(external, &native))
+    .ok_or_else(|| BridgeError::untyped("native service did not become ready"))?;
     status.pairing_ready = pairing_is_ready(&state, status.node_did.as_deref()).await;
     Ok(status)
 }

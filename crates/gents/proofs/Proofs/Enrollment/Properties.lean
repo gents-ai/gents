@@ -123,6 +123,14 @@ theorem canonical_fields_exclude_ticket_peer (r : Request) (value : String) :
     canonicalRequestFields { r with candidateTicketPeer := value } =
       canonicalRequestFields r := by rfl
 
+theorem removing_candidate_name_changes_signed_fields (r : Request) (name : String) :
+    canonicalRequestFields { r with candidateName := some name } ≠
+      canonicalRequestFields { r with candidateName := none } := by
+  intro h
+  have hlen := congrArg List.length h
+  simp [canonicalRequestFields, canonicalRequestTextFields, candidateNameFields,
+    textFieldsToBytes] at hlen
+
 theorem canonical_fields_exclude_signature_observation (r : Request) (value : Bool) :
     canonicalRequestFields { r with candidateSigned := value } =
       canonicalRequestFields r := by rfl
@@ -450,6 +458,12 @@ theorem revocation_retracts_exact_member_routes
     clientToServerRoute r d ∉ (revoke s r revision).appliedRoutes ∧
     serverToClientRoute r d ∉ (revoke s r revision).appliedRoutes := by
   simp [revoke, hrevoke, routeOwnedBy, clientToServerRoute, serverToClientRoute]
+
+theorem revocation_preserves_all_replicated_copies
+    (s : State) (r : Request) (revision : AuthorizationRevision) :
+    (revoke s r revision).replicatedCopies = s.replicatedCopies := by
+  unfold revoke
+  split <;> rfl
 
 theorem revocation_preserves_unrelated_operations
     {s : State} {r : Request} {revision : AuthorizationRevision}

@@ -53,6 +53,7 @@ structure Request where
   serverPeer : PeerId
   candidateDid : Did
   candidatePeer : PeerId
+  candidateName : Option String := none
   observedCandidatePeer : PeerId
   resolvedCandidateDid : Did
   candidateTicketPeer : PeerId
@@ -69,10 +70,14 @@ def enrollmentDigestDomain : String := "gents-enrollment-request-v1"
 
 def stringBytes (value : String) : WireBytes := value.toUTF8.data.toList
 
+def candidateNameFields : Option String → List String
+  | none => []
+  | some name => ["candidate-name-v1", name]
+
 def canonicalRequestTextFields (r : Request) : List String :=
   [r.requestId, r.offerId, r.challenge, r.networkId, r.adminDid,
    r.serverPeer, r.candidateDid, r.candidatePeer, r.ownerNode, r.profile,
-   r.clientNonce, r.issuedAt, r.expiresAt]
+   r.clientNonce, r.issuedAt, r.expiresAt] ++ candidateNameFields r.candidateName
 
 def textFieldsToBytes (fields : List String) : CanonicalFields := fields.map stringBytes
 
@@ -265,6 +270,14 @@ structure RouteReceipt where
   applied : Bool
   deriving DecidableEq, Repr
 
+/-- A local copy already delivered to a node. Revoking a grant cannot erase
+copies held by that node or outside Gents. -/
+structure ReplicatedCopy where
+  holder : Did
+  collection : String
+  documentId : String
+  deriving DecidableEq, Repr
+
 structure State where
   observedOffers : Finset Offer := ∅
   adminPins : Finset NetworkAdminPin := ∅
@@ -276,6 +289,7 @@ structure State where
   memberships : Finset Membership := ∅
   routeReceipts : Finset RouteReceipt := ∅
   appliedRoutes : Finset AppliedRoute := ∅
+  replicatedCopies : Finset ReplicatedCopy := ∅
   deriving DecidableEq
 
 def challengeBindingFor (r : Request) : ChallengeBinding :=

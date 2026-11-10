@@ -12,6 +12,7 @@ type NetworkEnrollmentRequest @policy(id: "202ce2df1b18d27183b29b653e2c06654178b
     server_peer: String @immutable
     candidate_did: String @index @immutable
     candidate_peer: String @index @immutable
+    candidate_name: String @immutable
     candidate_ticket: String @immutable
     owner_node_did: String @index @immutable
     profile: String @immutable
