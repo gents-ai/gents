@@ -12,7 +12,8 @@ import { createDesktopApp, type DesktopApp } from "../src/hooks/desktopApp";
 import type { SharingAdapter } from "../src/hooks/sharing";
 import { applyFleetSnapshot } from "../src/hooks/fleetStore";
 import type { SelectionState } from "../src/hooks/selectionStore";
-import { writeSession } from "../src/hooks/sessionStore";
+import { sessionGoalReadOf } from "@source-inc/gents-desktop-client";
+import { writeSession, writeSessionGoalRead } from "../src/hooks/sessionStore";
 import { AppProvider } from "../src/ui/app/AppContext";
 import type { FlagId } from "../src/ui/lib/flags";
 import { bindNav, type Route } from "../src/ui/lib/router";
@@ -68,7 +69,10 @@ export function testApp({
       : {}),
     ...selection,
   });
-  if (session) writeSession(app.stores.session, session);
+  if (session) {
+    writeSession(app.stores.session, session);
+    writeSessionGoalRead(app.stores.session, sessionGoalReadOf(session));
+  }
   return app;
 }
 

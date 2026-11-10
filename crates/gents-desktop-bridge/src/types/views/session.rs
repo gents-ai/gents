@@ -760,8 +760,9 @@ pub struct DesktopSessionSnapshot {
     /// The session's Goal state from the one owner `desktop_session_goal`
     /// also returns (Lean `SessionObservation.State`): only `observed`
     /// carries a Goal or its verified absence. `None` means this snapshot's
-    /// read of it did not complete; that is no state, so a reader keeps the
-    /// last state it holds for this session rather than showing "no Goal".
+    /// read of it did not complete (Lean `ReadOutcome.incomplete`): a reader
+    /// folds it as such (`SessionObservation.step`), so it never shows a Goal
+    /// or its absence as current.
     pub goal: Option<crate::types::SessionGoalState>,
     pub turn_state: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]

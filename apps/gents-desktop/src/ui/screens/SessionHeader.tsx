@@ -198,16 +198,16 @@ const GOAL_CONTROLS: Record<string, readonly ("pause" | "resume" | "edit" | "sto
     usage_limited: ["resume", "stop"],
   };
 
-/** A chat whose Goal state is not a verified fact: it names the cause and
-    offers no Goal action (Lean `SessionObservation.view` = `unavailable`). */
-export function GoalUnavailable({ text }: { text: string }) {
+/** A chat whose Goal is not a current verified fact: it names why and offers
+    no Goal action (Lean `SessionObservation.shown`). */
+export function GoalUnavailable({ label, text }: { label: string; text: string }) {
   return (
     <div
       className="mb-2 flex items-start gap-2 rounded-xl border border-border bg-raised px-3 py-2 text-sm"
       data-testid="goal-unavailable"
     >
       <Target className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-      <span className="shrink-0 font-medium text-muted-foreground">Goal unknown</span>
+      <span className="shrink-0 font-medium text-muted-foreground">{label}</span>
       <span className="min-w-0 text-muted-foreground">{text}</span>
     </div>
   );
@@ -219,15 +219,19 @@ const count = (value: string | null) => (value ? Number(value) : 0);
 
 export function Goal({
   goal,
+  stale = false,
   onEdit,
   onControl,
 }: {
   goal: GoalControlView;
+  /** The last read Goal, shown while a refresh has not completed: marked as
+      not current and offering no Goal action. */
+  stale?: boolean;
   onEdit?: () => void;
   onControl?: (action: Exclude<GoalControlAction, { kind: "create" | "edit" }>) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const controls = onControl ? (GOAL_CONTROLS[goal.status] ?? []) : [];
+  const controls = onControl && !stale ? (GOAL_CONTROLS[goal.status] ?? []) : [];
   const tokenBudget = count(goal.tokenBudget);
   const activeTimeSeconds = count(goal.activeTimeSeconds);
   const continuationSequence = count(goal.continuationSequence);
@@ -278,6 +282,14 @@ export function Goal({
             {goal.objective}
           </span>
         )}
+        {stale && (
+          <span
+            className="shrink-0 text-xs text-muted-foreground"
+            data-testid="goal-not-current"
+          >
+            Not current · couldn't refresh
+          </span>
+        )}
         {activeTimeSeconds > 0 && (
           <span className="ml-auto shrink-0 font-mono text-xs text-muted-foreground tabular-nums">
             {duration(activeTimeSeconds * 1000)}
@@ -291,11 +303,11 @@ export function Goal({
             )}
           >
             {controls.includes("pause") && (
-              <Hint label="Pause goal">
+              <Hint label="Pause Goal">
                 <Button
                   variant="quiet"
                   size="icon-xs"
-                  aria-label="Pause goal"
+                  aria-label="Pause Goal"
                   onClick={() => onControl?.({ kind: "pause" })}
                 >
                   <Pause />
@@ -303,11 +315,11 @@ export function Goal({
               </Hint>
             )}
             {controls.includes("resume") && (
-              <Hint label="Resume goal">
+              <Hint label="Resume Goal">
                 <Button
                   variant="quiet"
                   size="icon-xs"
-                  aria-label="Resume goal"
+                  aria-label="Resume Goal"
                   onClick={() => onControl?.({ kind: "resume" })}
                 >
                   <Play />
@@ -315,11 +327,11 @@ export function Goal({
               </Hint>
             )}
             {controls.includes("edit") && onEdit && (
-              <Hint label="Edit goal">
+              <Hint label="Edit Goal">
                 <Button
                   variant="quiet"
                   size="icon-xs"
-                  aria-label="Edit goal"
+                  aria-label="Edit Goal"
                   onClick={onEdit}
                 >
                   <Pencil />
@@ -327,11 +339,11 @@ export function Goal({
               </Hint>
             )}
             {controls.includes("stop") && (
-              <Hint label="Remove goal">
+              <Hint label="Remove Goal">
                 <Button
                   variant="quiet"
                   size="icon-xs"
-                  aria-label="Remove goal"
+                  aria-label="Remove Goal"
                   onClick={() => onControl?.({ kind: "stop" })}
                 >
                   <X />
@@ -342,7 +354,7 @@ export function Goal({
         )}
         <CollapsibleTrigger
           render={<Button variant="quiet" size="icon-xs" />}
-          aria-label={open ? "Hide goal detail" : "Show goal detail"}
+          aria-label={open ? "Hide Goal detail" : "Show Goal detail"}
           className={cn(
             "shrink-0",
             activeTimeSeconds > 0 || controls.length > 0 ? "" : "ml-auto",
