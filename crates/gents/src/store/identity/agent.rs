@@ -145,15 +145,13 @@ pub async fn provision_agent_identity_for_agent(
 /// serves the node with that key. Store owners use it to prove which Agent
 /// identities the runtime controls (`Identity.OwnerStaged.derivedAgents`); a
 /// node with no bound key proves none.
-fn runtime_identities() -> &'static std::sync::Mutex<
+type BoundRuntimes = std::sync::Mutex<
     rapidhash::RapidHashMap<usize, (std::sync::Weak<defra_node::Node>, Arc<dyn NodeIdentity>)>,
-> {
+>;
+
+fn runtime_identities() -> &'static BoundRuntimes {
     use rapidhash::{HashMapExt, RapidHashMap};
-    static BOUND: std::sync::OnceLock<
-        std::sync::Mutex<
-            RapidHashMap<usize, (std::sync::Weak<defra_node::Node>, Arc<dyn NodeIdentity>)>,
-        >,
-    > = std::sync::OnceLock::new();
+    static BOUND: std::sync::OnceLock<BoundRuntimes> = std::sync::OnceLock::new();
     BOUND.get_or_init(|| std::sync::Mutex::new(RapidHashMap::new()))
 }
 
