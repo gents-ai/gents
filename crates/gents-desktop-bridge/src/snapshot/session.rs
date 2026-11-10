@@ -17,8 +17,8 @@ use gents_protocol::transcript::present_message;
 use super::super::cause_derivation::{derive_tool_call_cause, RequestEvidence, ToolCallEvidence};
 use super::super::types::{
     is_live_turn_state, normalize_optional, turn_state_label, CommandDenialView,
-    DerivedCancelCauseView, DesktopSessionSnapshot, GoalView, MessageReconstructionView,
-    MessageView, PendingTurnView, QuestionReplyView, ReconstructionState, RenderedTimelineItem,
+    DerivedCancelCauseView, DesktopSessionSnapshot, MessageReconstructionView, MessageView,
+    PendingTurnView, QuestionReplyView, ReconstructionState, RenderedTimelineItem,
     RequestOriginView, RequestOutcomeView, RetryEligibilityView, SessionCompactionView,
     SessionContextView, SessionLiveDeltaView, SessionLiveTextPatchView,
     SessionProjectionRevisionView, SessionTimelinePageView, ToolCallView,

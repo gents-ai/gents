@@ -991,6 +991,25 @@ async fn block_payload_bytes(
 /// retains the native message list, as it does once context is reduced.
 const RETAINED_FROM: usize = 40;
 
+/// The most RenderedRequestBlock rows one appended tool round of
+/// `agent_loop_turn` may add, and their most bytes: the measured peaks over
+/// the checked turns, 18 rows and 23,984 bytes, identical on every run. A
+/// round adds 4-8 content blocks (its tool result and the rewritten tail
+/// blocks of both payloads) and the rewritten tail nodes of each payload's
+/// manifest levels: 2-6 nodes of 1.6-4.9 KB before the trace retains native
+/// messages, 8-11 nodes of 5.8-9.3 KB after.
+///
+/// The former bound of 14 rows held with groups closing after eight entries
+/// at every sixteenth key, whose open tail group grew by an entry per append
+/// until it closed, so manifest bytes per round rose with the rounds since
+/// (1.4-9.5 KB before retention, 5.8-14.4 KB after). Four-entry groups keep
+/// them flat at a few more rows per round. Grouping by node bytes, which carry
+/// the session's document IDs, also let rows vary from run to run (19-20
+/// rows, up to 25,277 bytes in 7 of 8 runs) until boundary keys followed
+/// content only (#3605).
+const APPENDED_TURN_MAX_NEW_BLOCKS: usize = 18;
+const APPENDED_TURN_MAX_NEW_BYTES: usize = 23_984;
+
 fn agent_loop_turn(fixture: &CaptureFixture, turn: usize) -> RenderedCompletionRequest {
     let mut messages = vec![json!({"role": "user", "content": capture_text(1, 8 * 1024)})];
     let mut native =
@@ -1095,11 +1114,11 @@ async fn a_repeated_agent_loop_request_stores_only_its_appended_turn() {
                 "turn {turn}: per-call accounting re-cut the stable provenance prefix"
             );
             assert!(
-                new_blocks <= 14,
+                new_blocks <= APPENDED_TURN_MAX_NEW_BLOCKS,
                 "turn {turn}: {new_blocks} new blocks for one appended tool round"
             );
             assert!(
-                new_bytes <= 32 * 1024,
+                new_bytes <= APPENDED_TURN_MAX_NEW_BYTES,
                 "turn {turn}: {new_bytes} new block bytes for one appended tool round"
             );
         }

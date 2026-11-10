@@ -29,7 +29,110 @@ use super::enrollment_store::RequestRow;
 /// cannot keep the request or its replicator cleanup waiting indefinitely.
 pub const ENROLLMENT_P2P_TIMEOUT: Duration = Duration::from_secs(10);
 
-const REQUEST_FIELDS: &str = "_docID protocol_version request_id request_digest offer_id offer_token challenge network_id admin_did server_peer candidate_did candidate_peer candidate_ticket owner_node_did profile client_nonce issued_at expires_at candidate_sig";
+/// Request a fresh offer only from an already pinned, authenticated owner.
+pub async fn request_renewal_offer(
+    node: &Arc<EmbeddedNode>,
+    identity: &dyn NodeIdentity,
+    network_id: &str,
+    admin_did: &str,
+    server_peer: &str,
+    server_ticket: &str,
+    predecessor_sequence: u64,
+) -> Result<gents_protocol::enrollment::RenewalIntent> {
+    anyhow::ensure!(
+        node.node_identity_did() == Some(identity.did()),
+        "renewal requires the local node identity"
+    );
+    let network = escape_graphql_string(network_id);
+    let query = format!(
+        r#"{{ NetworkAdminPin(filter: {{ network_id: {{ _eq: "{network}" }} }}) {{ admin_did }} }}"#
+    );
+    let pins = graphql_with_transaction_retry(node, &query, "read renewal admin pin").await?;
+    anyhow::ensure!(
+        matches!(rows::<AdminPinRow>(&pins, "NetworkAdminPin")?.as_slice(), [pin] if pin.admin_did == admin_did),
+        "renewal owner is not pinned"
+    );
+    let p2p = crate::store::identity::node_p2p(node).context("this node has no P2P transport")?;
+    let (ticket_peer, _) = parse_public_peer_addr(server_ticket)?;
+    anyhow::ensure!(
+        ticket_peer.to_string() == server_peer,
+        "renewal server ticket does not match its peer"
+    );
+    timeout(ENROLLMENT_P2P_TIMEOUT, p2p.connect_peer(server_ticket))
+        .await?
+        .map_err(anyhow::Error::msg)?;
+    let peer = TransportPeerId::new(server_peer.to_owned()).map_err(anyhow::Error::msg)?;
+    let resolved = timeout(ENROLLMENT_P2P_TIMEOUT, p2p.resolve_peer_identity(&peer))
+        .await?
+        .map_err(anyhow::Error::msg)?
+        .context("renewal server has no authenticated identity")?;
+    validate_authenticated_server_did(admin_did, resolved.as_ref())?;
+    let member_peer = timeout(ENROLLMENT_P2P_TIMEOUT, p2p.local_peer_id())
+        .await?
+        .map_err(anyhow::Error::msg)?;
+    let now = Utc::now();
+    let mut intent = gents_protocol::enrollment::RenewalIntent {
+        network_id: network_id.to_owned(),
+        admin_did: admin_did.to_owned(),
+        server_peer: server_peer.to_owned(),
+        member_did: identity.did().to_owned(),
+        member_peer,
+        predecessor_sequence,
+        issued_at: now.to_rfc3339_opts(SecondsFormat::Secs, true),
+        expires_at: (now
+            + chrono::Duration::seconds(
+                gents_protocol::enrollment::RENEWAL_INTENT_VALIDITY_SECONDS,
+            ))
+        .to_rfc3339_opts(SecondsFormat::Secs, true),
+        nonce: Uuid::new_v4().simple().to_string(),
+        member_sig: Vec::new(),
+    };
+    intent.member_sig = identity.sign(&intent.signing_payload()).await?;
+    intent.validate_at(Utc::now())?;
+    let f = |value: &str| escape_graphql_string(value);
+    let intent_id = intent.intent_id();
+    let signature = bs58::encode(&intent.member_sig).into_string();
+    let mutation = format!(
+        r#"mutation {{ create_EnrollmentRenewalIntent(input: {{
+        intent_id: "{}", network_id: "{}", admin_did: "{}", server_peer: "{}",
+        member_did: "{}", member_peer: "{}", predecessor_sequence: {},
+        issued_at: "{}", expires_at: "{}", nonce: "{}", member_sig: "{}"
+    }}) {{ _docID }} }}"#,
+        f(&intent_id),
+        f(&intent.network_id),
+        f(&intent.admin_did),
+        f(&intent.server_peer),
+        f(&intent.member_did),
+        f(&intent.member_peer),
+        intent.predecessor_sequence,
+        f(&intent.issued_at),
+        f(&intent.expires_at),
+        f(&intent.nonce),
+        f(&signature)
+    );
+    let doc_id = publish_candidate_document(
+        node,
+        &intent.member_did,
+        &intent.admin_did,
+        "EnrollmentRenewalIntent",
+        "enrollment.create_renewal_intent",
+        &mutation,
+    )
+    .await?;
+    push_enrollment_document(
+        &p2p,
+        server_ticket,
+        server_peer,
+        admin_did,
+        "EnrollmentRenewalIntent",
+        ("intent_id", &intent_id),
+        &doc_id,
+    )
+    .await?;
+    Ok(intent)
+}
+
+const REQUEST_FIELDS: &str = "_docID protocol_version request_id request_digest offer_id offer_token challenge network_id admin_did server_peer candidate_did candidate_peer candidate_name candidate_ticket owner_node_did profile client_nonce issued_at expires_at candidate_sig";
 
 /// Author (or reuse) this node's request for `offer_token` and deliver it to
 /// the offering server, whose operator then decides it.
@@ -186,6 +289,25 @@ pub async fn sign_enrollment_request(
     candidate_peer: String,
     candidate_ticket: String,
 ) -> Result<EnrollmentRequestRecord> {
+    sign_enrollment_request_with_name(
+        identity,
+        offer,
+        offer_token,
+        candidate_peer,
+        candidate_ticket,
+        None,
+    )
+    .await
+}
+
+pub async fn sign_enrollment_request_with_name(
+    identity: &dyn NodeIdentity,
+    offer: &EnrollmentOfferRecord,
+    offer_token: &str,
+    candidate_peer: String,
+    candidate_ticket: String,
+    candidate_name: Option<String>,
+) -> Result<EnrollmentRequestRecord> {
     let client_nonce = Uuid::new_v4().simple().to_string();
     let request_id = format!(
         "enroll-{}",
@@ -211,6 +333,7 @@ pub async fn sign_enrollment_request(
         server_peer: offer.server_peer.clone(),
         candidate_did: identity.did().to_string(),
         candidate_peer,
+        candidate_name,
         candidate_ticket,
         owner_node_did: offer.owner_node_did.clone(),
         profile: offer.profile.clone(),
@@ -400,21 +523,42 @@ pub async fn write_enrollment_request(
     node: &Arc<EmbeddedNode>,
     request: &EnrollmentRequestRecord,
 ) -> Result<String> {
-    anyhow::ensure!(
-        node.node_identity_did() == Some(request.candidate_did.as_str()),
-        "enrollment request author must be the local peer identity"
-    );
-    let runtime = identity::Did::new(&request.candidate_did)?;
-    let admin = identity::Did::new(&request.admin_did)?;
-    let access = ConfigAccess::local_as(node.clone(), runtime.clone());
     let input = enrollment_request_input(request);
     let mutation =
         format!("mutation {{ create_NetworkEnrollmentRequest(input: {input}) {{ _docID }} }}");
+    publish_candidate_document(
+        node,
+        &request.candidate_did,
+        &request.admin_did,
+        "NetworkEnrollmentRequest",
+        "enrollment.create_request",
+        &mutation,
+    )
+    .await
+}
+
+/// Create one candidate-authored enrollment protocol document as the local
+/// runtime, link it to the local Node when one is visible and grant the
+/// counterpart `reader`, which authenticated document delivery requires.
+pub(super) async fn publish_candidate_document(
+    node: &Arc<EmbeddedNode>,
+    author_did: &str,
+    reader_did: &str,
+    collection: &'static str,
+    operation: &'static str,
+    mutation: &str,
+) -> Result<String> {
+    anyhow::ensure!(
+        node.node_identity_did() == Some(author_did),
+        "enrollment document author must be the local peer identity"
+    );
+    let runtime = identity::Did::new(author_did)?;
+    let reader = identity::Did::new(reader_did)?;
+    let access = ConfigAccess::local_as(node.clone(), runtime.clone());
     access
-        .transact_write("enrollment.create_request", |txn| {
+        .transact_write(operation, |txn| {
             let runtime = &runtime;
-            let admin = &admin;
-            let mutation = &mutation;
+            let reader = &reader;
             Box::pin(async move {
                 txn.validate_runtime_actor(runtime)?;
                 let query = format!(
@@ -429,32 +573,23 @@ pub async fn write_enrollment_request(
                         let parent = node["_docID"]
                             .as_str()
                             .filter(|id| !id.is_empty())
-                            .context("enrollment request Node has no document ID")?;
+                            .context("enrollment document Node has no document ID")?;
                         let owners = txn.document_owners("Node", &[parent.to_owned()]).await?;
                         anyhow::ensure!(
                             owners.len() == 1 && owners[0].visible && owners[0].owner.is_some(),
-                            "enrollment request Node has no visible native owner"
+                            "enrollment document Node has no visible native owner"
                         );
                         Some(parent)
                     }
-                    _ => anyhow::bail!("enrollment request has multiple visible local Nodes"),
+                    _ => anyhow::bail!("enrollment document has multiple visible local Nodes"),
                 };
                 let response = txn.execute(mutation).await?;
-                let doc = gents_protocol::graphql::extract_mutation_doc_id(
-                    &response,
-                    "NetworkEnrollmentRequest",
-                )?;
+                let doc = gents_protocol::graphql::extract_mutation_doc_id(&response, collection)?;
                 if let Some(parent) = parent {
-                    txn.add_resource_relationship(
-                        "NetworkEnrollmentRequest",
-                        &doc,
-                        "parent",
-                        "nodes",
-                        parent,
-                    )
-                    .await?;
+                    txn.add_resource_relationship(collection, &doc, "parent", "nodes", parent)
+                        .await?;
                 }
-                txn.add_actor_relationship("NetworkEnrollmentRequest", &doc, "reader", admin)
+                txn.add_actor_relationship(collection, &doc, "reader", reader)
                     .await?;
                 Ok::<_, anyhow::Error>(doc)
             })
@@ -465,6 +600,11 @@ pub async fn write_enrollment_request(
 pub fn enrollment_request_input(request: &EnrollmentRequestRecord) -> String {
     let field = |value: &str| escape_graphql_string(value);
     let candidate_sig = bs58::encode(&request.candidate_sig).into_string();
+    let candidate_name = request
+        .candidate_name
+        .as_deref()
+        .map(|name| format!("\"{}\"", field(name)))
+        .unwrap_or_else(|| "null".to_owned());
     format!(
         r#"{{
             protocol_version: {},
@@ -478,6 +618,7 @@ pub fn enrollment_request_input(request: &EnrollmentRequestRecord) -> String {
             server_peer: "{}",
             candidate_did: "{}",
             candidate_peer: "{}",
+            candidate_name: {},
             candidate_ticket: "{}",
             owner_node_did: "{}",
             profile: "{}",
@@ -497,6 +638,7 @@ pub fn enrollment_request_input(request: &EnrollmentRequestRecord) -> String {
         field(&request.server_peer),
         field(&request.candidate_did),
         field(&request.candidate_peer),
+        candidate_name,
         field(&request.candidate_ticket),
         field(&request.owner_node_did),
         field(&request.profile),
@@ -513,28 +655,47 @@ pub async fn push_enrollment_request(
     request_id: &str,
     document_id: &str,
 ) -> Result<()> {
-    const COLLECTION: &str = "NetworkEnrollmentRequest";
+    push_enrollment_document(
+        p2p,
+        &offer.server_ticket,
+        &offer.server_peer,
+        &offer.admin_did,
+        "NetworkEnrollmentRequest",
+        ("request_id", request_id),
+        document_id,
+    )
+    .await
+}
 
+pub(super) async fn push_enrollment_document(
+    p2p: &Arc<dyn P2POperations>,
+    server_ticket: &str,
+    server_peer: &str,
+    admin_did: &str,
+    collection: &str,
+    filter: (&str, &str),
+    document_id: &str,
+) -> Result<()> {
     // Before approval there is no authority-backed data route, so install the
     // smallest possible bootstrap route (one authenticated server, one
     // immutable enrollment request) and remove it before this operation
     // returns; the signed enrollment reconciler owns every durable route
     // after approval.
     let mut conditions = Map::new();
-    conditions.insert("request_id".to_string(), json!({ "_eq": request_id }));
+    conditions.insert(filter.0.to_string(), json!({ "_eq": filter.1 }));
     let filters = BTreeMap::from([(
-        COLLECTION.to_string(),
+        collection.to_string(),
         ReplicationFilter::predicate(conditions),
     )]);
-    let collections = vec![COLLECTION.to_string()];
+    let collections = vec![collection.to_string()];
     let install = timeout(
         ENROLLMENT_P2P_TIMEOUT,
         p2p.add_replicator(
             collections.clone(),
-            Some(&offer.server_ticket),
+            Some(server_ticket),
             filters,
             Vec::new(),
-            Some(&offer.admin_did),
+            Some(admin_did),
         ),
     )
     .await;
@@ -553,9 +714,9 @@ pub async fn push_enrollment_request(
         match timeout(
             ENROLLMENT_P2P_TIMEOUT,
             p2p.push_documents_to_peer(
-                &offer.server_peer,
+                server_peer,
                 vec![P2pDocumentRequest {
-                    collection: COLLECTION.to_string(),
+                    collection: collection.to_string(),
                     doc_id: document_id.to_string(),
                 }],
             ),
@@ -576,7 +737,7 @@ pub async fn push_enrollment_request(
 
     let cleanup_error = match timeout(
         ENROLLMENT_P2P_TIMEOUT,
-        p2p.remove_replicator(collections, Some(&offer.server_ticket)),
+        p2p.remove_replicator(collections, Some(server_ticket)),
     )
     .await
     {

@@ -43,8 +43,6 @@ pub enum ConfigClientError {
         node_did: String,
         id: String,
     },
-    #[error("resolving the trusted canonical schema lineage")]
-    ClientCanonicalSchema(#[source] gents_migration::Error),
     #[error("building the client-signed configuration update graph")]
     ClientConfigurationGraph(#[source] db::block::builder::ClientUpdateError),
     #[error("decoding the client-signed mutation history response")]

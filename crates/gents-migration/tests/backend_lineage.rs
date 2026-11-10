@@ -57,14 +57,9 @@ async fn a_pre_identity_backend_lineage_is_refused_without_conversion() {
 }
 
 /// A fresh store registers the current backend SDL directly; that version is canonical, so
-/// it is never reported as off its own lineage to a peer or to the store itself.
+/// the store never reports it as off its own lineage.
 #[tokio::test]
 async fn a_fresh_store_registers_the_current_backend_sdl_on_the_canonical_lineage() {
-    assert!(
-        gents_migration::canonical_schema_plan(schemas::INFERENCE_BACKEND_NAME)
-            .unwrap()
-            .is_none()
-    );
     let canonical =
         gents_migration::canonical_versions().unwrap()[schemas::INFERENCE_BACKEND_NAME].clone();
     let baseline = gents_migration::DEFAULT_BASELINE
@@ -100,10 +95,6 @@ async fn a_fresh_store_registers_the_current_backend_sdl_on_the_canonical_lineag
         .unwrap()
         .unwrap();
     assert_eq!(direct_version.version_id, canonical);
-    assert!(!gents_migration::is_known_off_lineage(
-        schemas::INFERENCE_BACKEND_NAME,
-        &canonical
-    ));
     let versions = fresh.get_all_collection_versions().await.unwrap();
     assert!(gents_migration::non_canonical_store_lineages(&versions)
         .unwrap()

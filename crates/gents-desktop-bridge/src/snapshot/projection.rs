@@ -285,6 +285,8 @@ mod tests {
                     chat_safe: true,
                     chat_refusal: None,
                     pairing_ready: Some(true),
+                    lease_expires_at: None,
+                    operator_access: true,
                     last_error: None,
                     node: NodeView {
                         node_did: "did:test:local".into(),
@@ -374,6 +376,7 @@ mod tests {
                         latest_request_id: None,
                         task_id: None,
                         task_name: None,
+            task_origin: None,
                         trigger_id: None,
                         trigger_kind: None,
                         created_at: None,
@@ -407,6 +410,7 @@ mod tests {
                         created_at: "2026-08-25T12:00:00Z".into(),
                     }],
                 }],
+                ended_access: Vec::new(),
             }),
         }
     }

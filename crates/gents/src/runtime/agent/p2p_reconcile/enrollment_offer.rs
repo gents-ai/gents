@@ -4,8 +4,8 @@ use anyhow::{Context, Result};
 use chrono::{Duration, SecondsFormat, Utc};
 use defra_p2p_adapter::P2POperations;
 use gents_protocol::enrollment::{
-    derive_enrollment_id, encode_offer, enrollment_schema_fingerprint, EnrollmentOfferRecord,
-    ENROLLMENT_PROTOCOL_VERSION,
+    derive_enrollment_id, encode_offer, enrollment_schema_fingerprint, renewal_challenge,
+    EnrollmentOfferRecord, ENROLLMENT_PROTOCOL_VERSION,
 };
 use p2p::iroh::parse_public_peer_addr;
 use serde::Serialize;
@@ -58,6 +58,36 @@ impl EnrollmentOfferIssuer {
     }
 
     pub async fn mint_valid_for(&self, validity: Duration) -> Result<EnrollmentOfferStatus> {
+        self.mint_with_challenge(validity, Uuid::new_v4().simple().to_string())
+            .await
+    }
+
+    /// The caller must authenticate the current enrollment before issuing an
+    /// offer. The approval owner checks the binding again under its decision lock.
+    pub async fn mint_renewal(
+        &self,
+        member_did: &str,
+        member_peer: &str,
+        predecessor_sequence: u64,
+    ) -> Result<EnrollmentOfferStatus> {
+        let nonce = Uuid::new_v4().simple().to_string();
+        let challenge = renewal_challenge(
+            &self.network_id,
+            member_did,
+            member_peer,
+            predecessor_sequence,
+            &nonce,
+        )
+        .context("invalid renewal generation")?;
+        self.mint_with_challenge(DEFAULT_OFFER_VALIDITY, challenge)
+            .await
+    }
+
+    async fn mint_with_challenge(
+        &self,
+        validity: Duration,
+        challenge: String,
+    ) -> Result<EnrollmentOfferStatus> {
         anyhow::ensure!(
             validity > Duration::zero() && validity <= MAX_OFFER_VALIDITY,
             "enrollment offer validity must be between 1 and {} seconds",
@@ -85,7 +115,6 @@ impl EnrollmentOfferIssuer {
         let issued = Utc::now();
         let issued_at = issued.to_rfc3339_opts(SecondsFormat::Secs, true);
         let expires_at = (issued + validity).to_rfc3339_opts(SecondsFormat::Secs, true);
-        let challenge = Uuid::new_v4().simple().to_string();
         let offer_id = format!(
             "offer-{}",
             derive_enrollment_id(

@@ -88,6 +88,32 @@ fn manager(
 }
 
 #[test]
+fn linux_status_preserves_runtime_enabled_service() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let config = config(temp.path(), "gents");
+    fs::create_dir_all(&config.service_config_dir)?;
+    fs::write(
+        config.definition_path(NativeServicePlatform::Linux),
+        "[Service]\n",
+    )?;
+    for (success, unit_state, expected) in [
+        (true, "enabled", true),
+        (true, "enabled-runtime", true),
+        (false, "disabled", false),
+        (false, "masked-runtime", false),
+    ] {
+        let runner = ScriptedRunner::with_outputs([
+            output(true, "active", ""),
+            output(success, unit_state, ""),
+        ]);
+        let status = manager(config.clone(), NativeServicePlatform::Linux, runner).status()?;
+        assert_eq!(status.enabled, expected, "{unit_state}");
+        assert!(status.running, "{unit_state}");
+    }
+    Ok(())
+}
+
+#[test]
 fn mac_restarts_clean_exits_with_bounded_throttle() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let config = config(temp.path(), "gents");

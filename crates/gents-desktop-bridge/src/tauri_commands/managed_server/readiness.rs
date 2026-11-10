@@ -98,7 +98,11 @@ where
         MANAGED_SERVER_READY_TIMEOUT,
         MANAGED_SERVER_POLL_INTERVAL,
         || async {
-            observe_port_readiness(node_home, user_status_signer(state).await.as_ref()).await
+            observe_port_readiness(
+                node_home,
+                user_status_signer(state, node_home).await.as_ref(),
+            )
+            .await
         },
         || observe_native_progress(app, state),
     )

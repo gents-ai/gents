@@ -19,6 +19,8 @@ def proofRoots : Array Lean.Name := #[
   `Proofs.Conformance.RuntimeConnectionObservation,
   `Proofs.Conformance.RuntimeConnectionBackoff,
   `Proofs.Conformance.EnrollmentActivation,
+  `Proofs.Conformance.RenewalCleanup,
+  `Proofs.Conformance.RenewalRetry,
   `Proofs.Conformance.DocumentPackUx,
   `Proofs.Conformance.PageDocument,
   `Proofs.Conformance.PluginDelete,

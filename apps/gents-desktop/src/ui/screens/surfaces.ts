@@ -1,7 +1,10 @@
-import { FileDiff, SquareStack, Terminal } from "lucide-react";
+import { FileDiff, Globe, SquareStack, Terminal } from "lucide-react";
 import { registerSurface } from "@/app/surfaces";
+import { flag } from "@/preferences";
+import { isMacTauriShell } from "../../lib/shellPlatform";
 import { startedUnderId } from "@/hooks/useFleet";
 import { BackgroundSurface } from "./BackgroundCalls";
+import { BrowserSurface, resetBrowser } from "./browser/BrowserSurface";
 import { ChangesSurface } from "./ChangesSurface";
 import { startedCount } from "./StartedCount";
 import { WorkersSurface } from "./WorkersSurface";
@@ -43,3 +46,16 @@ registerSurface({
   routes: ["session"],
   render: ChangesSurface,
 });
+
+/* the page is a native view only the macOS app has; the flag applies at
+   launch, so the panel is there for this run or not at all */
+if (flag("browser") && isMacTauriShell()) {
+  resetBrowser();
+  registerSurface({
+    id: "browser",
+    title: "Browser",
+    icon: Globe,
+    placements: ["dock"],
+    render: BrowserSurface,
+  });
+}

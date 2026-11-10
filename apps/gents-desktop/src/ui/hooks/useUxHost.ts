@@ -17,6 +17,7 @@ import {
 import { discoverBundledUxPlugins } from "@/contrib/bundled";
 import { emitClientUpdated } from "@/contrib/events";
 import { installUxHost, type UxHost } from "@/contrib/plugin";
+import { createPluginNotifier } from "@/lib/notify/plugins";
 import { followOtherWindowsDecisions } from "@/contrib/plugins-store";
 import {
   configureUxDoors,
@@ -43,6 +44,9 @@ const routeListeners = new Set<() => void>();
 function notifyRouteChanged() {
   routeListeners.forEach((listener) => listener());
 }
+
+/* one per window, so a plugin's rate holds across the host's rebuilds */
+let pluginNotifier: ReturnType<typeof createPluginNotifier> | null = null;
 
 export function buildUxHost(app: DesktopApp, route: () => Route): UxHost {
   let confirmingMessage = false;
@@ -139,6 +143,8 @@ export function buildUxHost(app: DesktopApp, route: () => Route): UxHost {
       },
       pickDirectory: (options) => pickDirectory(options ?? {}).catch(() => null),
     },
+    notify: (caller, request) =>
+      (pluginNotifier ??= createPluginNotifier())(caller, request),
   };
 }
 

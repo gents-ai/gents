@@ -9,6 +9,7 @@ import { deriveDisplayState } from "@source-inc/gents-desktop-operations";
 import type {
   AllowedFolder,
   DesktopApiAdapter,
+  EndedAccessView,
 } from "@source-inc/gents-desktop-client";
 import type {
   DesktopClientUpdatedHandler,
@@ -513,9 +514,13 @@ function harnessAssistantItem(
   };
 }
 
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+
 export type DesktopUiHarnessScenario =
   | "default"
   | "active-nodes"
+  | "joined-access"
   | "empty-fleet"
   | "loading"
   | "bridge-unavailable"
@@ -934,6 +939,18 @@ export function createDesktopUiHarness(
     };
   }
   let removed = false;
+  let endedAccess: EndedAccessView[] =
+    scenario === "joined-access"
+      ? [
+          {
+            nodeDid: "did:key:harness-harbor",
+            label: "Harbor",
+            reason: "revoked",
+            endedAt: new Date(Date.now() - HOUR_MS).toISOString(),
+            leaseExpiresAt: new Date(Date.now() + 6 * DAY_MS).toISOString(),
+          },
+        ]
+      : [];
   let provisioned = scenario !== "empty-fleet";
   let pairingStatusReads = 0;
   let pairingAuthorized = scenario === "storage-recovery";
@@ -1702,7 +1719,10 @@ export function createDesktopUiHarness(
       chatSafe: p2pStatus === "healthy",
     };
     const deployments = !provisioned || removed ? [] : [visibleDeployment];
-    if (scenario === "active-nodes" && deployments.length) {
+    if (
+      (scenario === "active-nodes" || scenario === "joined-access") &&
+      deployments.length
+    ) {
       const remoteDid = "did:key:harness-remote";
       deployments.push({
         ...visibleDeployment,
@@ -1711,6 +1731,11 @@ export function createDesktopUiHarness(
         source: "enrollment",
         label: "studio-1",
         graphql: null,
+        operatorAccess: false,
+        leaseExpiresAt:
+          scenario === "joined-access"
+            ? new Date(Date.now() + 2 * DAY_MS + HOUR_MS).toISOString()
+            : null,
         node: {
           ...visibleDeployment.node,
           nodeDid: remoteDid,
@@ -1792,6 +1817,7 @@ export function createDesktopUiHarness(
         approxSerializedBytes: rowCount * 512,
         operatorConfigAuthoritativeNodeDids: freshHome ? [] : [NODE_DID],
         deployments,
+        endedAccess,
       },
     };
     return clone(next);
@@ -2194,6 +2220,11 @@ export function createDesktopUiHarness(
         throw new Error(`peer ${peerId} not found`);
       }
       removed = true;
+      notify("peers");
+      return snapshot();
+    },
+    async dismissEndedAccess(nodeDid) {
+      endedAccess = endedAccess.filter((ended) => ended.nodeDid !== nodeDid);
       notify("peers");
       return snapshot();
     },
@@ -4284,6 +4315,8 @@ function createDeployment(): DeploymentView {
     runtimeConnection: "connected",
     chatSafe: true,
     chatRefusal: null,
+    leaseExpiresAt: null,
+    operatorAccess: true,
     nodeReadiness: {
       source: { state: "current" },
       activeGeneration: 1,
@@ -4618,6 +4651,7 @@ function clone<T>(value: T): T {
 function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
   switch (value) {
     case "active-nodes":
+    case "joined-access":
     case "empty-fleet":
     case "loading":
     case "bridge-unavailable":

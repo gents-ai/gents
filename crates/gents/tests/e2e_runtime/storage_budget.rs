@@ -68,7 +68,7 @@ const COLLECTIONS: [&str; 9] = [
 ///
 /// | Measure                                 | main           | budget  |
 /// |-----------------------------------------|----------------|---------|
-/// | turn 5 / turn 1 fresh block bytes       | 2.22x - 2.39x  | 1.50x   |
+/// | turn 5 / turn 1 fresh block bytes       | 2.22x - 2.39x  | 1.40x   |
 /// | AgentOutputSegment per request          | 8              | 8       |
 /// | segments, 240 vs 24 chunks              | 3 vs 3         | equal   |
 /// | flushed store bytes per AgentRequest    | ~155 KB        | 256 KiB |
@@ -78,12 +78,23 @@ const COLLECTIONS: [&str; 9] = [
 /// turn 4 ~33-47 KB, turn 5 ~58-66 KB once the window strips its own tool
 /// result and the replayed prefix is captured again).
 mod budget {
-    /// EXPECTED TO FAIL ON MAIN `2a1362fe3` (2.22x - 2.39x). Fresh
-    /// RenderedRequestBlock bytes a late turn may add, relative to the first
-    /// follow-up turn of its session. Shared manifests make a turn pay for
-    /// its new messages only, so the ratio stays near 1 however long the
+    /// Fresh RenderedRequestBlock bytes a late turn may add, relative to the
+    /// first follow-up turn of its session. Shared manifests make a turn pay
+    /// for its new messages only, so the ratio stays near 1 however long the
     /// replayed history is.
-    pub const LATE_TURN_BLOCK_BYTES_GROWTH: f64 = 1.5;
+    ///
+    /// Measured 1.33x-1.39x (turn 1 ~15.2 KB, ~3.9 KB of it manifest nodes;
+    /// turn 5 ~20.3-21.3 KB, ~7.2-8.1 KB manifest, where the window reduces
+    /// provider input and strips the turn's own tool result),
+    /// identical for every Agent DID. The former 1.50x was calibrated against
+    /// a turn 1 that stored the ~5.5 KB block holding the tool schemas and the
+    /// system prompt again whenever the rolling hash found no cut between
+    /// them, which depended on the Agent DID in the prompt: such runs measured
+    /// 1.08x-1.22x, the rest 1.59x. With the stable fields cut apart, the
+    /// eight-entry manifest groups measured 1.39x-1.58x, their tail group
+    /// growing from 3.5 KB to 10.9 KB per turn; four-entry groups keep it
+    /// flat (#3605).
+    pub const LATE_TURN_BLOCK_BYTES_GROWTH: f64 = 1.40;
     /// AgentOutputSegment rows per request when only structural boundaries
     /// flush (first visible output, the tool call, each provider close, the
     /// authored input and the tool output). A per-delta writer would add ~360.
@@ -408,9 +419,11 @@ fn json_fragment(text: &str) -> String {
 #[derive(Clone, Debug, Default)]
 struct Snapshot {
     counts: BTreeMap<&'static str, usize>,
-    /// RenderedRequestBlock rows by id. `byte_len` is deliberately unset in
-    /// the schema, so block bytes are measured from the payloads themselves.
-    blocks: BTreeMap<String, u64>,
+    /// RenderedRequestBlock rows by id: payload bytes, and whether the row is
+    /// a shared manifest node rather than request content. `byte_len` is
+    /// deliberately unset in the schema, so block bytes are measured from the
+    /// payloads themselves.
+    blocks: BTreeMap<String, (u64, bool)>,
     disk: u64,
 }
 
@@ -442,6 +455,10 @@ struct Sample {
     turn: usize,
     added: BTreeMap<&'static str, usize>,
     block_bytes: u64,
+    /// The share of `block_bytes`, and of the added RenderedRequestBlock rows,
+    /// that are manifest nodes.
+    manifest_bytes: u64,
+    manifest_rows: usize,
     /// Unflushed: memtable logs included, so this tracks bytes written.
     disk_written: u64,
     /// The request's last provider body: the history it replays.
@@ -450,6 +467,13 @@ struct Sample {
 
 impl Sample {
     fn between(session: usize, turn: usize, before: &Snapshot, after: &Snapshot) -> Self {
+        let fresh = || {
+            after
+                .blocks
+                .iter()
+                .filter(|(id, _)| !before.blocks.contains_key(*id))
+                .map(|(_, block)| *block)
+        };
         Self {
             session,
             turn,
@@ -457,12 +481,12 @@ impl Sample {
                 .iter()
                 .map(|name| (*name, after.counts[name] - before.counts[name]))
                 .collect(),
-            block_bytes: after
-                .blocks
-                .iter()
-                .filter(|(id, _)| !before.blocks.contains_key(*id))
-                .map(|(_, bytes)| bytes)
+            block_bytes: fresh().map(|(bytes, _)| bytes).sum(),
+            manifest_bytes: fresh()
+                .filter(|(_, manifest)| *manifest)
+                .map(|(bytes, _)| bytes)
                 .sum(),
+            manifest_rows: fresh().filter(|(_, manifest)| *manifest).count(),
             disk_written: after.disk.saturating_sub(before.disk),
             history_bytes: 0,
         }
@@ -506,8 +530,6 @@ impl Report {
     fn assert_budgets(&self) {
         let mut failures = Vec::new();
 
-        // EXPECTED TO FAIL ON MAIN 2a1362fe3 (2.22x - 2.39x): a late turn
-        // re-stores the history it replays.
         for (session, growth) in self.late_turn_block_growth() {
             if growth > budget::LATE_TURN_BLOCK_BYTES_GROWTH {
                 failures.push(format!(
@@ -561,7 +583,7 @@ impl std::fmt::Display for Report {
         writeln!(f, "storage budget report ({:.1?})", self.elapsed)?;
         writeln!(
             f,
-            "{:>6} {:>5} {:>5} {:>5} {:>5} {:>5} {:>5} {:>6} {:>9} {:>9} {:>9} {:>8}",
+            "{:>6} {:>5} {:>5} {:>5} {:>5} {:>5} {:>5} {:>5} {:>6} {:>9} {:>9} {:>9} {:>9} {:>8}",
             "req",
             "msg",
             "tool",
@@ -569,9 +591,11 @@ impl std::fmt::Display for Report {
             "call",
             "rr",
             "rrb",
+            "mfst",
             "reduce",
             "history",
             "rrb_bytes",
+            "mfst_byte",
             "disk_wr",
             "seg/call"
         )?;
@@ -579,7 +603,7 @@ impl std::fmt::Display for Report {
             let added = &sample.added;
             writeln!(
                 f,
-                "{:>6} {:>5} {:>5} {:>5} {:>5} {:>5} {:>5} {:>6} {:>9} {:>9} {:>9} {:>8.1}",
+                "{:>6} {:>5} {:>5} {:>5} {:>5} {:>5} {:>5} {:>5} {:>6} {:>9} {:>9} {:>9} {:>9} {:>8.1}",
                 format!("s{}t{}", sample.session, sample.turn),
                 added["AgentMessage"],
                 added["AgentToolCall"],
@@ -587,9 +611,11 @@ impl std::fmt::Display for Report {
                 added["InferenceCall"],
                 added["RenderedRequest"],
                 added["RenderedRequestBlock"],
+                sample.manifest_rows,
                 added["ProviderContextReduction"],
                 sample.history_bytes,
                 sample.block_bytes,
+                sample.manifest_bytes,
                 sample.disk_written,
                 added["AgentOutputSegment"] as f64 / sample.inference_calls() as f64,
             )?;
@@ -629,14 +655,16 @@ async fn count(reader: &ConfigAccess, collection: &str) -> usize {
     rows(reader, collection, "_docID").await.len()
 }
 
-async fn blocks(reader: &ConfigAccess) -> BTreeMap<String, u64> {
+async fn blocks(reader: &ConfigAccess) -> BTreeMap<String, (u64, bool)> {
     rows(reader, "RenderedRequestBlock", "_docID payload")
         .await
         .iter()
         .filter_map(|row| {
             let id = row["_docID"].as_str()?.to_owned();
-            let bytes = row["payload"].as_str().map_or(0, str::len) as u64;
-            Some((id, bytes))
+            let payload = row["payload"].as_str().unwrap_or_default();
+            // A manifest node is the JSON array of its children's entries.
+            let manifest = payload.starts_with(r#"[{"doc_id":"#);
+            Some((id, (payload.len() as u64, manifest)))
         })
         .collect()
 }

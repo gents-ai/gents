@@ -37,6 +37,7 @@ import Proofs.Identity.NodeFileRequests
 import Proofs.Identity.MailboxAccess
 import Proofs.Identity.WorkspaceAndFileRequests
 import Proofs.Identity.PackPlacementReaders
+import Proofs.Identity.AgentTargetAccess
 import Proofs.Triggers.NativeRoute
 import Proofs.Identity.SessionInputEdit
 import Proofs.EventDelivery.WatcherConformance
@@ -50,6 +51,7 @@ import Proofs.Conformance.CountCarrier
 import Proofs.Conformance.ConfigurationScope
 import Proofs.Conformance.Initialization
 import Proofs.Conformance.EnrollmentPendingRequests
+import Proofs.Conformance.EnrollmentCandidateName
 import Proofs.Conformance.OperatorBaseFreeze
 import Proofs.Conformance.LogicalOutputObligation
 import Proofs.Conformance.InvalidToolProgress
@@ -534,6 +536,8 @@ def snapshotSessionCasesJson : String :=
   ""
     ++ "\"file_inventory_closure_cases\":"
       ++ fileInventoryClosureCasesJson ++ ","
+    ++ "\"enrollment_auto_renewal_cases\":" ++ autoRenewalCasesJson ++ ","
+    ++ "\"enrollment_renewal_intent_cases\":" ++ renewalIntentCasesJson ++ ","
     ++ "\"enrollment_cases\":"
       ++ enrollmentCasesJson ++ ","
     ++ "\"enrollment_durable_projection_cases\":"
@@ -554,6 +558,8 @@ def snapshotSessionCasesJson : String :=
       ++ Conformance.EnrollmentPendingRequests.routeCasesJson ++ ","
     ++ "\"enrollment_startup_cases\":"
       ++ Conformance.EnrollmentPendingRequests.startupCasesJson ++ ","
+    ++ "\"enrollment_candidate_name_cases\":"
+      ++ Conformance.EnrollmentCandidateName.casesJson ++ ","
     ++ "\"enrollment_encoding_cases\":"
       ++ enrollmentEncodingCasesJson ++ ","
     ++ "\"enrollment_digest_cases\":"
@@ -645,6 +651,7 @@ def snapshotIdentityCasesJson : String :=
     ++ "\"workspace_quickstart_selection_cases\":" ++ Identity.WorkspaceAndFileRequests.quickstartSelectedAgentCasesJson ++ ","
     ++ "\"workspace_callback_selection_cases\":" ++ Identity.WorkspaceAndFileRequests.callbackSelectedAgentCasesJson ++ ","
     ++ "\"pack_placement_reader_cases\":" ++ Identity.PackPlacementReaders.casesJson ++ ","
+    ++ "\"agent_target_access_cases\":" ++ Identity.AgentTargetAccess.casesJson ++ ","
     ++ "\"native_route_cases\":" ++ Triggers.NativeRoute.casesJson ++ ","
     ++ "\"workspace_datastore_write_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceDatastoreWriteCasesJson ++ ","
     ++ "\"workspace_root_access_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceRootAccessCasesJson ++ ","
@@ -775,6 +782,7 @@ def snapshotClientCasesJson : String :=
     ++ "\"readiness_publication_cases\":"
       ++ readinessPublicationCasesJson ++ ","
     ++ "\"runtime_session_selection_cases\":" ++ sessionSelectionCasesJson ++ ","
+    ++ "\"runtime_configuration_admission_cases\":" ++ configurationAdmissionCasesJson ++ ","
     ++ "\"runtime_reconcile_cases\":"
       ++ jsonArray (runtimeReconcileCases.map runtimeReconcileCaseJson) ++ ","
     ++ "\"client_agent_readiness_cases\":"

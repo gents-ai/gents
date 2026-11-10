@@ -1,3 +1,4 @@
+mod agent_target_access;
 mod declared_readers;
 pub(crate) mod plan;
 pub(crate) mod projection;
@@ -131,6 +132,7 @@ pub(crate) async fn apply_desired_state_plan_with_semantics(
     let event_grants = semantics.capture_event_grants(txn, plan).await?;
     let workspace_selection = workspace_selection::capture(txn, plan).await?;
     let declared_readers = declared_readers::capture(txn, plan).await?;
+    let agent_target_access = agent_target_access::capture(txn, plan).await?;
     let mut introspected = IntrospectedFields::new();
     prefetch_declared_fields(txn, plan, &mut introspected).await?;
     let document_identities = plan
@@ -343,6 +345,7 @@ pub(crate) async fn apply_desired_state_plan_with_semantics(
         txn.add_actor_relationship("Callback", &callback_doc, "reader", &agent)
             .await?;
     }
+    let mut queued_agents = BTreeSet::new();
     for (node_did, agent_did, agent_doc) in created_agents {
         let node_doc = configuration_node_doc(txn, &node_did, binding).await?;
         super::publish_node_managers_in_txn(txn, "Agent", &agent_doc, "administrator", &node_doc)
@@ -358,6 +361,7 @@ pub(crate) async fn apply_desired_state_plan_with_semantics(
             )
             .await?;
         } else {
+            queued_agents.insert(agent_doc.clone());
             txn.queue_relationship_grant(ConfigRelationshipGrant::Resource {
                 collection: "Agent".to_owned(),
                 doc_id: agent_doc.clone(),
@@ -451,6 +455,7 @@ pub(crate) async fn apply_desired_state_plan_with_semantics(
     event_grants.grant_changes(txn).await?;
     workspace_selection::apply(txn, workspace_selection).await?;
     declared_readers::apply(txn, declared_readers).await?;
+    agent_target_access::apply(txn, agent_target_access, &queued_agents).await?;
     semantics.seed_event_consumers(txn, plan, binding).await?;
     let mut owners: BTreeSet<_> = plan
         .documents()

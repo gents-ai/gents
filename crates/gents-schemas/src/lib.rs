@@ -175,6 +175,15 @@ pub const NETWORK_ENROLLMENT_GRANT: &str =
 pub const ENROLLMENT_OPERATOR_NONCE_NAME: &str = "EnrollmentOperatorNonce";
 pub const ENROLLMENT_OPERATOR_NONCE: &str =
     include_str!("../schemas/agent/enrollment_operator_nonce.graphql");
+pub const ENROLLMENT_RENEWAL_POLICY_NAME: &str = "EnrollmentRenewalPolicy";
+pub const ENROLLMENT_RENEWAL_POLICY: &str =
+    include_str!("../schemas/agent/enrollment_renewal_policy.graphql");
+pub const ENROLLMENT_RENEWAL_INTENT_NAME: &str = "EnrollmentRenewalIntent";
+pub const ENROLLMENT_RENEWAL_INTENT: &str =
+    include_str!("../schemas/agent/enrollment_renewal_intent.graphql");
+pub const ENROLLMENT_RENEWAL_OFFER_NAME: &str = "EnrollmentRenewalOffer";
+pub const ENROLLMENT_RENEWAL_OFFER: &str =
+    include_str!("../schemas/agent/enrollment_renewal_offer.graphql");
 pub const FILE_INVENTORY_REQUEST_NAME: &str = "FileInventoryRequest";
 pub const FILE_INVENTORY_REQUEST: &str =
     include_str!("../schemas/agent/file_inventory_request.graphql");
@@ -261,6 +270,9 @@ pub const ALL: &[&str] = &[
     NETWORK_ENROLLMENT_ROUTE_RECEIPT,
     ENROLLMENT_OPERATOR_NONCE,
     NETWORK_ENROLLMENT_GRANT,
+    ENROLLMENT_RENEWAL_POLICY,
+    ENROLLMENT_RENEWAL_INTENT,
+    ENROLLMENT_RENEWAL_OFFER,
     FILE_INVENTORY_REQUEST,
     FILE_INVENTORY_REPLY,
     FILE_INVENTORY_PROGRESS,
@@ -341,6 +353,9 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     NETWORK_ENROLLMENT_ROUTE_RECEIPT_NAME,
     ENROLLMENT_OPERATOR_NONCE_NAME,
     NETWORK_ENROLLMENT_GRANT_NAME,
+    ENROLLMENT_RENEWAL_POLICY_NAME,
+    ENROLLMENT_RENEWAL_INTENT_NAME,
+    ENROLLMENT_RENEWAL_OFFER_NAME,
     FILE_INVENTORY_REQUEST_NAME,
     FILE_INVENTORY_REPLY_NAME,
     FILE_INVENTORY_PROGRESS_NAME,
@@ -367,6 +382,8 @@ pub const REPLICATED_PROTOCOL_COLLECTION_NAMES: &[&str] = &[
     NETWORK_ENROLLMENT_DECISION_NAME,
     NETWORK_AUTHORIZATION_REVISION_NAME,
     NETWORK_ENROLLMENT_ROUTE_RECEIPT_NAME,
+    ENROLLMENT_RENEWAL_INTENT_NAME,
+    ENROLLMENT_RENEWAL_OFFER_NAME,
 ];
 
 pub fn is_replicated_protocol_collection(name: &str) -> bool {
@@ -395,6 +412,7 @@ pub const LOCAL_ONLY_COLLECTION_NAMES: &[&str] = &[
     NETWORK_ADMIN_PIN_NAME,
     ENROLLMENT_OPERATOR_NONCE_NAME,
     NETWORK_ENROLLMENT_GRANT_NAME,
+    ENROLLMENT_RENEWAL_POLICY_NAME,
     FILE_INVENTORY_REPLY_NAME,
     FILE_INVENTORY_PROGRESS_NAME,
     PENDING_CHAT_SUBMISSION_NAME,

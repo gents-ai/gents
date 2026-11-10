@@ -123,6 +123,14 @@ theorem canonical_fields_exclude_ticket_peer (r : Request) (value : String) :
     canonicalRequestFields { r with candidateTicketPeer := value } =
       canonicalRequestFields r := by rfl
 
+theorem removing_candidate_name_changes_signed_fields (r : Request) (name : String) :
+    canonicalRequestFields { r with candidateName := some name } ≠
+      canonicalRequestFields { r with candidateName := none } := by
+  intro h
+  have hlen := congrArg List.length h
+  simp [canonicalRequestFields, canonicalRequestTextFields, candidateNameFields,
+    textFieldsToBytes] at hlen
+
 theorem canonical_fields_exclude_signature_observation (r : Request) (value : Bool) :
     canonicalRequestFields { r with candidateSigned := value } =
       canonicalRequestFields r := by rfl

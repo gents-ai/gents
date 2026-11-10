@@ -280,4 +280,18 @@ def sessionSelectionCasesJson : String :=
      ("visible", Lean.toJson visible),
      ("expected", Lean.toJson (result (RuntimeState.sessionSelection requested visible)))] )).compress
 
+def configurationAdmissionCasesJson : String :=
+  let cases : List (String × Bool × Nat × Nat) :=
+    [("visible", true, 3, 3), ("invisible_same_generation", false, 3, 3),
+     ("invisible_newer_generation", false, 3, 4), ("invisible_older_generation", false, 4, 3)]
+  let result (admission : RuntimeState.ConfigurationAdmission) : String :=
+    match admission with
+    | .claim => "claim"
+    | .awaitNewerGeneration => "await_newer_generation"
+  (Lean.toJson (cases.map fun (name, visible, deferredAt, active) => Lean.Json.mkObj
+    [("name", Lean.toJson name), ("visible", Lean.toJson visible),
+     ("deferred_at", Lean.toJson deferredAt), ("active", Lean.toJson active),
+     ("expected", Lean.toJson (result (RuntimeState.configurationAdmission visible))),
+     ("retries", Lean.toJson (RuntimeState.retriesDeferred deferredAt active))] )).compress
+
 end Conformance.ContractCases
