@@ -54,20 +54,6 @@ fn chat_patch_signature(patch: &ClientStore) -> (usize, usize, u64) {
     }
 }
 
-fn strip_cli_operator_hints(message: &str) -> String {
-    message
-        .lines()
-        .filter(|line| {
-            !line.contains("gents init")
-                && !line.contains("gents runtime server")
-                && !line.contains("--graphql")
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-        .trim()
-        .to_string()
-}
-
 impl ClientCore {
     /// Terminal reads refresh operator configuration omitted by the client P2P route.
     /// Catalog replacement must precede the final request publication to retain page rows.
@@ -275,14 +261,7 @@ impl ClientCore {
             gents::observe::run_timeline_fetch::load_run_timeline(&access, request_id),
         )
         .await
-        .map_err(|_| anyhow::anyhow!("timed out loading timeline for {request_id}"))?
-        .map_err(|error| {
-            if gents::store::config_client::TransactionFailure::permission_denied(&error) {
-                error
-            } else {
-                anyhow::anyhow!("{}", strip_cli_operator_hints(&format!("{error:#}")))
-            }
-        })?;
+        .map_err(|_| anyhow::anyhow!("timed out loading timeline for {request_id}"))??;
         Ok(timeline)
     }
 }

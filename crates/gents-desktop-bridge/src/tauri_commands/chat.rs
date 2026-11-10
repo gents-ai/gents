@@ -278,11 +278,34 @@ pub async fn desktop_request_timeline(
     let timeline = core
         .request_timeline(&node_did, &request_id)
         .await
-        .map_err(BridgeError::classify_transport_error)?;
-    let value = serde_json::to_value(&timeline)
-        .map_err(|error| BridgeError::classify_transport_error(error.into()))?;
-    serde_json::from_value(value)
-        .map_err(|error| BridgeError::classify_transport_error(error.into()))
+        .map_err(|error| {
+            let mut presented = BridgeError::classify_transport_error(error);
+            presented.message = strip_cli_operator_hints(&presented.message);
+            presented
+        })?;
+    let encoding = |error: serde_json::Error| {
+        BridgeError::untyped(format!(
+            "the request timeline could not be encoded: {error}"
+        ))
+    };
+    let value = serde_json::to_value(&timeline).map_err(encoding)?;
+    serde_json::from_value(value).map_err(encoding)
+}
+
+/// HTTP GraphQL errors end with CLI next steps (`graphql_diagnostic_hint`)
+/// that a desktop window cannot follow.
+fn strip_cli_operator_hints(message: &str) -> String {
+    message
+        .lines()
+        .filter(|line| {
+            !line.contains("gents init")
+                && !line.contains("gents runtime server")
+                && !line.contains("--graphql")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
 }
 
 #[tauri::command]
