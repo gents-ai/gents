@@ -38,9 +38,8 @@
 \*
 \* Direct refresh. A user mutation refreshes its node once: capture, read,
 \* publish through the fence. A rejected refresh queues the observer; with
-\* `FallbackOnReject` it instead reads again for the same mutation, as
-\* `refresh_config_source` and the session commands fell back to
-\* `refresh_store` when `refresh_node` was rejected.
+\* `FallbackOnReject` it instead reads again for the same mutation: a
+\* fallback to `refresh_store` when `refresh_node` is rejected.
 \*
 \* Each remaining constant breaks one guard of the fixed design.
 EXTENDS Naturals
