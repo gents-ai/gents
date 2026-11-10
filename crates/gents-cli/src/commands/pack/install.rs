@@ -501,6 +501,7 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                 args.grant_authority,
                 slot_owner.as_deref(),
                 &requested,
+                gents::pack::InstalledVia::Operator,
                 move |identity, changes| {
                     let home = notify_home;
                     async move {

@@ -2,9 +2,9 @@ use std::path::PathBuf;
 
 use super::*;
 use crate::pack::authoring::{
-    check_dir, pack_built, pack_name, plugins_with_source, read_manifest, scaffold,
-    source as source_pack, verify_pack_file, CheckReport, Kind, PackAddition, PackEdit,
-    ScaffoldInput, Template,
+    check_dir, export_pack, pack_built, pack_name, plugins_with_source, read_manifest, scaffold,
+    selectable_kind, source as source_pack, verify_pack_file, CheckReport, ExportSelection, Kind,
+    PackAddition, PackEdit, ScaffoldInput, Template, SELECTABLE_KINDS,
 };
 
 mod plugin_source;
@@ -32,6 +32,11 @@ enum AuthoringCall {
     Test {
         dir: Option<String>,
         case: Option<String>,
+    },
+    Export {
+        name: String,
+        namespace: String,
+        selection: ExportSelection,
     },
 }
 
@@ -188,9 +193,39 @@ fn parse_authoring_args(verb: &str, argv: &[String]) -> Result<AuthoringCall> {
                 AuthoringCall::Test { dir, case }
             })
         }
+        "export" => {
+            anyhow::ensure!(parsed.switches.is_empty(), "pack export takes no switches");
+            let [name] = parsed.positionals.as_slice() else {
+                bail!("pack export requires exactly one snake_case NAME; the pack is written to <NAME> inside the effective tool root");
+            };
+            let mut selection = ExportSelection::default();
+            for (option, values) in &parsed.options {
+                match (option.as_str(), selectable_kind(option)) {
+                    ("namespace", _) => {}
+                    ("tag", _) => selection.tags.extend(values.iter().cloned()),
+                    ("collection", _) => selection.collections.extend(values.iter().cloned()),
+                    (_, Some(kind)) => selection
+                        .documents
+                        .extend(values.iter().map(|id| (kind, id.clone()))),
+                    _ => bail!(
+                        "unknown pack export option --{option}; it takes --namespace, --tag, --collection and IDs per kind: {}",
+                        SELECTABLE_KINDS
+                            .iter()
+                            .map(|(word, _)| format!("--{word}"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                }
+            }
+            Ok(AuthoringCall::Export {
+                name: name.clone(),
+                namespace: parsed.one("namespace")?.unwrap_or("gents").to_owned(),
+                selection,
+            })
+        }
         other => Err(CommandGuidance {
             message: format!(
-                "unknown pack authoring command {other:?}; authoring verbs are scaffold, add, check, build, test and verify"
+                "unknown pack authoring command {other:?}; authoring verbs are scaffold, add, export, check, build, test and verify"
             ),
             next_call: json!({"argv":["help","pack"]}),
         }
@@ -240,6 +275,11 @@ impl ConfigCommandTool {
             AuthoringCall::Add { dir, addition } => self.add_part(dir.as_deref(), addition).await,
             AuthoringCall::Build { dir } => self.build(dir.as_deref()).await,
             AuthoringCall::Test { dir, case } => self.test(dir.as_deref(), case.as_deref()).await,
+            AuthoringCall::Export {
+                name,
+                namespace,
+                selection,
+            } => self.export(&name, &namespace, &selection).await,
         }
     }
 
@@ -292,18 +332,60 @@ impl ConfigCommandTool {
         .pretty()
     }
 
+    /// Reads as the invoking agent, so the pack holds only what that agent
+    /// can read; nothing on the node changes.
+    async fn export(
+        &self,
+        name: &str,
+        namespace: &str,
+        selection: &ExportSelection,
+    ) -> Result<String> {
+        let context = self.authoring_paths("export", true).await?;
+        let dir = admit_scaffold_dir(&context, &pack_name(name))?;
+        let report = export_pack(
+            &self.core.access()?,
+            self.core.node_did(),
+            &dir,
+            name,
+            namespace,
+            selection,
+        )
+        .await?;
+        let relative = context.display_path(&report.dir);
+        let (validated, note) = check_outcome_fields(&report.check);
+        ordered! {
+            "completed": true,
+            "pack": report.pack,
+            "dir": relative,
+            "selected": report.selected,
+            "by_reference": report.by_reference,
+            "agents": report.agents,
+            "inference_slots": report.inference_slots,
+            "schemas": report.schemas,
+            "files": report.files,
+            "problems": report.check.problems,
+            "unverified": report.check.unverified,
+            "validated": validated,
+            "next_call": json!({"argv":["pack","build",relative]}),
+            "note": format!("Exported from the live documents; the node is unchanged and the pack is not installed. {note}"),
+        }
+        .pretty()
+    }
+
     async fn check(&self, dir: Option<&str>) -> Result<String> {
         let context = self.authoring_paths("check", false).await?;
         let dir = context.resolve_existing_dir(dir)?;
         let report = check_dir(&dir).await;
         let (validated, note) = check_outcome_fields(&report);
+        let relative = context.display_path(&report.dir);
         ordered! {
             "pack": report.pack,
-            "dir": context.display_path(&report.dir),
+            "dir": relative,
             "digest": report.digest,
             "problems": report.problems,
             "unverified": report.unverified,
             "validated": validated,
+            "next_call": (!report.unbuilt.is_empty()).then(|| json!({"argv":["pack","build",relative]})),
             "note": note,
         }
         .pretty()
@@ -654,6 +736,7 @@ mod tests {
             digest: Some("sha256:x".into()),
             problems,
             unverified,
+            unbuilt: Vec::new(),
         };
         let (validated, note) = check_outcome_fields(&report(Vec::new(), Vec::new()));
         assert!(validated);

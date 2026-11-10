@@ -29,6 +29,15 @@ pub fn agent_slot_reference(slot: &str) -> String {
     format!("{AGENT_SLOT_REFERENCE_PREFIX}{slot}")
 }
 
+/// The variable prefix naming an agent slot's DID inside a string, for an ID
+/// derived from the Agent it belongs to (`${GENTS_PACK_AGENT_DID.worker}:context`).
+/// A whole agent DID field takes an agent slot reference instead.
+pub const AGENT_DID_VARIABLE_PREFIX: &str = "GENTS_PACK_AGENT_DID.";
+
+pub fn agent_did_variable(slot: &str) -> String {
+    format!("${{{AGENT_DID_VARIABLE_PREFIX}{slot}}}")
+}
+
 #[derive(Debug, Clone)]
 pub struct BoundPackConfig {
     pub installation_doc_id: Option<String>,
@@ -284,11 +293,31 @@ pub(super) async fn load_pack_install_config_with_dependencies(
     let (installation_doc_id, recorded) =
         super::installation::read_agent_bindings(access, &options.node_did, &coordinate).await?;
     let mut provisioned = PackAgentBindings::new();
-    for slot in &slots {
+    for (index, slot) in slots.iter().enumerate() {
         if recorded.contains_key(slot) {
             continue;
         }
-        let binding = if let Some(hosted) = hosted {
+        let original = match hosted {
+            Some(_) => None,
+            None => live_original(
+                access,
+                &options.node_did,
+                &manifest.name,
+                slot,
+                &value["agents"][index],
+                environment,
+            )
+            .await?
+            .filter(|original| {
+                recorded
+                    .values()
+                    .chain(provisioned.values())
+                    .all(|bound| bound.agent_did != original.agent_did)
+            }),
+        };
+        let binding = if let Some(original) = original {
+            original
+        } else if let Some(hosted) = hosted {
             hosted
                 .get(slot)
                 .with_context(|| format!("hosted pack is missing agent slot {slot:?}"))?
@@ -368,12 +397,85 @@ pub(super) async fn load_pack_install_config_with_dependencies(
         options,
         value,
         read_asset,
-        environment,
+        &|name| match name.strip_prefix(AGENT_DID_VARIABLE_PREFIX) {
+            Some(slot) => references.get(slot).map(|bound| bound.agent_did.clone()),
+            None => environment(name),
+        },
     )?;
     Ok(BoundPackConfig {
         installation_doc_id,
         config,
         agent_bindings: plan.recorded,
+    })
+}
+
+/// The live Agent an unbound slot stands for: the one Agent of this node whose
+/// name and Context are the template's once the slot is bound to it.
+/// Installing a pack on the node it was exported from binds the slot to that
+/// Agent instead of provisioning a second one; the document install then
+/// adopts it only if its content matches. An Agent another pack installed is
+/// never taken.
+async fn live_original(
+    access: &ConfigAccess,
+    owner: &str,
+    pack: &str,
+    slot: &str,
+    template: &Value,
+    environment: &(dyn Fn(&str) -> Option<String> + Sync),
+) -> Result<Option<AgentIdentityBinding>> {
+    let Some(display_name) = template.get("display_name").and_then(Value::as_str) else {
+        return Ok(None);
+    };
+    let response = access
+        .execute(&format!(
+            r#"{{ Agent(filter: {{node_did: {{_eq: "{}"}}, display_name: {{_eq: "{}"}}}}) {{ agent_did creation_nonce context_id tags }} }}"#,
+            crate::store::graphql::escape_graphql_string(owner),
+            crate::store::graphql::escape_graphql_string(display_name),
+        ))
+        .await?;
+    let mut originals = Vec::new();
+    for agent in response["data"]["Agent"].as_array().into_iter().flatten() {
+        let Some(agent_did) = agent["agent_did"].as_str() else {
+            continue;
+        };
+        let tags: Vec<String> = agent["tags"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|tag| tag.as_str().map(str::to_owned))
+            .collect();
+        if super::pack_origin_from_tags(&tags)?.is_some_and(|origin| origin != pack) {
+            continue;
+        }
+        let context = match template.get("context_id").and_then(Value::as_str) {
+            Some(context) => {
+                let bound = super::interpolate::interpolate_with(context, &|name| match name
+                    .strip_prefix(AGENT_DID_VARIABLE_PREFIX)
+                {
+                    Some(named) => (named == slot).then(|| agent_did.to_owned()),
+                    None if name == "GENTS_PACK_NODE_DID" => Some(owner.to_owned()),
+                    None => environment(name),
+                });
+                match bound {
+                    Ok(context) => Some(context),
+                    Err(_) => continue,
+                }
+            }
+            None => None,
+        };
+        if context.as_deref() == agent["context_id"].as_str() {
+            originals.push(AgentIdentityBinding {
+                agent_did: agent_did.to_owned(),
+                creation_nonce: agent["creation_nonce"]
+                    .as_str()
+                    .context("live agent has no creation nonce")?
+                    .to_owned(),
+            });
+        }
+    }
+    Ok(match originals.len() {
+        1 => originals.pop(),
+        _ => None,
     })
 }
 
@@ -433,6 +535,15 @@ pub fn load_pack_authoring_config(
         None => anyhow::bail!("pack has no configuration"),
     };
     let original = value.clone();
+    // No Agent exists offline, so a slot's DID variable reads as a stand-in.
+    let authored = authored_slots(&value)?;
+    let environment = &|name: &str| match name.strip_prefix(AGENT_DID_VARIABLE_PREFIX) {
+        Some(slot) => authored
+            .iter()
+            .any(|authored| authored == slot)
+            .then(|| format!("did:pack:slot:{slot}")),
+        None => environment(name),
+    };
     super::loader::interpolate_values(&mut value, &|name| {
         if name == "GENTS_PACK_NODE_DID" {
             Some(options.node_did.clone())

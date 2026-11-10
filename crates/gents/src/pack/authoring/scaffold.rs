@@ -829,7 +829,7 @@ mod tests {
         let check = super::super::check::check_dir(&dir).await;
         assert_eq!(
             check.problems,
-            ["build the plugins (demo_flow) with gents pack build before checking its configuration"],
+            ["build the plugins (demo_flow) with pack build before checking its configuration"],
             "the only problem is the unbuilt artifact"
         );
     }
@@ -867,7 +867,7 @@ mod tests {
         let check = super::super::check::check_dir(&dir).await;
         assert_eq!(
             check.problems,
-            ["build the plugins (demo_flow) with gents pack build before checking its configuration"],
+            ["build the plugins (demo_flow) with pack build before checking its configuration"],
         );
     }
 

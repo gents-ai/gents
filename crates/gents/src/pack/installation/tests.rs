@@ -188,10 +188,51 @@ async fn installed_pack_documents_lists_what_the_record_holds() {
         .is_empty());
 }
 
+/// An existing document the pack did not install is adopted only as the pack
+/// ships it; the drift policy decides one that differs.
+#[tokio::test]
+async fn a_differing_existing_document_is_refused_kept_or_overwritten() {
+    let access = access().await;
+    edit_tools(&access, "shared", "Shared before the pack").await;
+    let pack = config(&[("shared", "Shared")]);
+
+    let refused = install(&access, "1", &pack, DriftPolicy::Refuse)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        refused.contains("Tools/shared") && refused.contains("different content"),
+        "{refused}"
+    );
+    let record = access
+        .execute("{ PackInstallation { _docID } }")
+        .await
+        .unwrap();
+    assert_eq!(record["data"]["PackInstallation"], json!([]));
+
+    let kept = install(&access, "1", &pack, DriftPolicy::Keep)
+        .await
+        .unwrap();
+    assert_eq!(kept.kept, vec!["Tools/shared"]);
+    assert!(kept.adopted.is_empty());
+    let live = access.execute("{ Tools { display_name } }").await.unwrap();
+    assert_eq!(
+        live["data"]["Tools"][0]["display_name"],
+        "Shared before the pack"
+    );
+
+    let overwritten = install(&access, "1", &pack, DriftPolicy::Overwrite)
+        .await
+        .unwrap();
+    assert_eq!(overwritten.adopted, vec!["Tools/shared"]);
+    let live = access.execute("{ Tools { display_name } }").await.unwrap();
+    assert_eq!(live["data"]["Tools"][0]["display_name"], "Shared");
+}
+
 #[tokio::test]
 async fn install_then_remove_leaves_no_pack_documents_and_keeps_adopted_ones() {
     let access = access().await;
-    edit_tools(&access, "shared", "Shared before the pack").await;
+    edit_tools(&access, "shared", "Shared").await;
 
     let report = install(
         &access,
@@ -3422,6 +3463,7 @@ async fn installed_plugin_pin_is_rechecked_at_graph_commit() {
         false,
         None,
         &BTreeMap::new(),
+        crate::pack::InstalledVia::Operator,
         |_, _| async { Ok(()) },
     )
     .await
@@ -3443,6 +3485,7 @@ async fn installed_plugin_pin_is_rechecked_at_graph_commit() {
         false,
         None,
         &BTreeMap::new(),
+        crate::pack::InstalledVia::Operator,
         |_, _| async { Ok(()) },
     )
     .await
@@ -3508,6 +3551,7 @@ async fn installed_plugin_pin_stays_locked_through_document_commit() {
         false,
         None,
         &BTreeMap::new(),
+        crate::pack::InstalledVia::Operator,
         |_, _| async { Ok(()) },
     )
     .await
@@ -3572,6 +3616,7 @@ async fn installed_plugin_pin_stays_locked_through_document_commit() {
         false,
         None,
         &BTreeMap::new(),
+        crate::pack::InstalledVia::Operator,
         move |identity, _| async move {
             super::record_plugin_store_change(
                 &notify_access,
@@ -3603,6 +3648,7 @@ async fn installed_plugin_pin_stays_locked_through_document_commit() {
         false,
         None,
         &BTreeMap::new(),
+        crate::pack::InstalledVia::Operator,
         move |identity, _| async move {
             super::record_plugin_store_change(
                 &notify_access,
@@ -3639,6 +3685,7 @@ async fn standalone_plugin_update_restores_store_and_home_on_pin_conflict() {
         false,
         None,
         &BTreeMap::new(),
+        crate::pack::InstalledVia::Operator,
         |_, _| async { Ok(()) },
     )
     .await
@@ -3673,6 +3720,7 @@ async fn standalone_plugin_update_restores_store_and_home_on_pin_conflict() {
         false,
         None,
         &BTreeMap::new(),
+        crate::pack::InstalledVia::Operator,
         move |identity, _| async move {
             super::record_plugin_store_change(
                 &notify_access,

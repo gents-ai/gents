@@ -4,6 +4,7 @@ mod cache;
 mod check;
 pub(crate) mod cli_process;
 mod edit;
+mod export;
 mod import;
 mod inspect;
 mod install;
@@ -71,6 +72,7 @@ pub(crate) async fn dispatch(command: PackCommand) -> Result<()> {
         PackCommand::Add(args) => edit::add(args),
         PackCommand::RemovePart(args) => edit::remove_part(args),
         PackCommand::Fmt(args) => edit::fmt(args),
+        PackCommand::Export(args) => export::export(args).await,
         PackCommand::Diff(args) => inspect::diff(args).await,
         PackCommand::Test(args) => test::test(args).await,
         PackCommand::Check(args) => check::check(args).await,

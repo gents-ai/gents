@@ -427,6 +427,7 @@ pub(crate) async fn install_in_txn(
     };
     let mut recorded = BTreeMap::new();
     let mut edited = Vec::new();
+    let mut differing = Vec::new();
     let mut keep = Vec::new();
 
     let document_ids: Vec<(Collection, &str)> = documents
@@ -472,7 +473,20 @@ pub(crate) async fn install_in_txn(
                 report.replaced.push(name.clone());
                 previous.created
             }
-            (Some(_), None) => {
+            (Some(live), None) => {
+                // A document the pack did not install is taken over only as
+                // the pack ships it; any other content is the node's own.
+                if *live != super::pack_artifact_document_digest(&document.add)? {
+                    match policy {
+                        DriftPolicy::Refuse => differing.push(name.clone()),
+                        DriftPolicy::Overwrite => {}
+                        DriftPolicy::Keep => {
+                            report.kept.push(name.clone());
+                            keep.push(name.clone());
+                            continue;
+                        }
+                    }
+                }
                 report.adopted.push(name.clone());
                 false
             }
@@ -530,6 +544,15 @@ pub(crate) async fn install_in_txn(
     if !edited.is_empty() {
         return Err(edited_error(&pack.coordinate, &edited));
     }
+    anyhow::ensure!(
+        differing.is_empty(),
+        "{} of {}'s documents already exist on this node with different content: {}; \
+         the pack adopts an existing document only when it matches. Rename or remove them, or use the operator CLI \
+         `gents pack install` with --overwrite or --keep; the agent pack command does not accept these flags",
+        differing.len(),
+        pack.coordinate,
+        differing.join(", ")
+    );
 
     let applied: Vec<_> = documents
         .into_iter()

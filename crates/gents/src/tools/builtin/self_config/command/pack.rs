@@ -109,7 +109,7 @@ impl ConfigCommandTool {
             .context("pack command is required; see [\"help\",\"pack\"]")?;
         if matches!(
             verb,
-            "scaffold" | "add" | "check" | "verify" | "build" | "test"
+            "scaffold" | "add" | "export" | "check" | "verify" | "build" | "test"
         ) {
             return self.authoring(verb, &argv[1..]).await;
         }

@@ -4,7 +4,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use super::{HomePackInstall, InstalledPackPlugin, PackIdentity, PackKind};
+use super::{HomePackInstall, InstalledPackPlugin, InstalledVia, PackIdentity, PackKind};
 use crate::plugin::{install, store};
 
 /// Reviewed plugin records held by the staging owner until notification finishes.
@@ -23,6 +23,7 @@ pub async fn install<F>(
     consent: bool,
     owner: Option<&str>,
     bindings: &BTreeMap<String, String>,
+    installed_via: InstalledVia,
     notify: impl FnOnce(PackIdentity, PluginStageChanges) -> F + Send + 'static,
 ) -> Result<(HomePackInstall, Vec<store::InstalledPlugin>)>
 where
@@ -35,7 +36,16 @@ where
         ),
         "expected a plugins or assets pack"
     );
-    install_owned(home, archive, consent, owner, bindings, false, notify).await
+    install_owned(
+        home,
+        archive,
+        consent,
+        owner,
+        bindings,
+        installed_via,
+        notify,
+    )
+    .await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -52,7 +62,16 @@ where
         !archive.manifest().metadata.plugins.is_empty(),
         "pack carries no plugins"
     );
-    install_owned(home, archive, consent, None, &BTreeMap::new(), true, notify).await
+    install_owned(
+        home,
+        archive,
+        consent,
+        None,
+        &BTreeMap::new(),
+        InstalledVia::Operator,
+        notify,
+    )
+    .await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -62,7 +81,7 @@ async fn install_owned<F>(
     consent: bool,
     owner: Option<&str>,
     bindings: &BTreeMap<String, String>,
-    operator: bool,
+    installed_via: InstalledVia,
     notify: impl FnOnce(PackIdentity, PluginStageChanges) -> F + Send + 'static,
 ) -> Result<(HomePackInstall, Vec<store::InstalledPlugin>)>
 where
@@ -96,15 +115,13 @@ where
             kind: manifest.metadata.kind.clone(), assets: relative_root, dependency_assets: Vec::new(),
             plugins: plugins.iter().map(|plugin| InstalledPackPlugin { name: plugin.name.clone(), digest: plugin.digest.clone() }).collect(),
             installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            ux: manifest.metadata.ux.clone(), installed_via: operator.then_some(super::InstalledVia::Operator),
+            ux: manifest.metadata.ux.clone(), installed_via: Some(installed_via),
         };
         let publish_home = home.clone();
         let publish_record = record.clone();
         let previous = tokio::task::spawn_blocking(move || -> Result<_> {
             let previous = super::read_home_install(&publish_home, &publish_record.coordinate)?;
-            let result = if operator {
-                super::record_after_install(&publish_home, publish_record.clone(), super::InstalledVia::Operator, true)
-            } else { super::write_home_install(&publish_home, &publish_record) };
+            let result = super::record_after_install(&publish_home, publish_record.clone(), installed_via, true);
             if let Err(error) = result {
                 match &previous {
                     Some(previous) => super::write_home_install(&publish_home, previous)?,
@@ -251,6 +268,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::from([("model".into(), "profile".into())]),
+            InstalledVia::Operator,
             |_, _| async { panic!("refused install must not notify") },
         )
         .await
@@ -324,6 +342,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
+            InstalledVia::Operator,
             |_, _| async {
                 Err(super::super::PluginStoreChangeError::Unconfirmed(
                     anyhow::anyhow!("notification failed"),
@@ -346,6 +365,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
+            InstalledVia::Operator,
             |_, _| async { Ok(()) },
         )
         .await
@@ -370,6 +390,7 @@ pub(crate) mod tests {
                     false,
                     None,
                     &BTreeMap::new(),
+                    InstalledVia::Operator,
                     move |_, _| async move {
                         reached.notify_one();
                         release.notified().await;
@@ -410,6 +431,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
+            InstalledVia::Operator,
             |_, _| async { Ok(()) }
         )
         .await
@@ -422,6 +444,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
+            InstalledVia::Operator,
             |_, _| async { Ok(()) },
         )
         .await
@@ -435,6 +458,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
+            InstalledVia::Operator,
             |_, _| async { Ok(()) }
         )
         .await

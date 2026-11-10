@@ -1,5 +1,5 @@
 use super::*;
-use crate::pack::PackKind;
+use crate::pack::{authoring, PackKind};
 use crate::plugin::authority;
 
 /// Install document and plugins-only packs from the home's pack store or the registry through the
@@ -140,9 +140,34 @@ impl PackInstaller {
                     let requested = path.to_str().context("pack path is not UTF-8")?;
                     let path = context.resolve_path(requested)?;
                     if path.is_dir() {
-                        crate::pack::authoring::ensure_no_compile_step(
-                            &crate::pack::authoring::read_manifest(&path)?,
-                        )?;
+                        // A directory install packs what is on disk, and a
+                        // present artifact may predate its source, so plugin
+                        // source installs as the pack a build wrote.
+                        let manifest = authoring::read_manifest(&path)?;
+                        let sources = authoring::plugins_with_source(&manifest);
+                        if !sources.is_empty() {
+                            let built = authoring::built_pack_path(&path, &manifest);
+                            let (step, next_call) = if built.is_file() {
+                                let built = context.display_path(&built);
+                                (
+                                    format!("install the pack it was built into, {built}; build again first if the source changed since"),
+                                    json!({"argv":["pack","preview","install",built]}),
+                                )
+                            } else {
+                                (
+                                    "build it, then preview the .pack the build names".to_owned(),
+                                    json!({"argv":["pack","build",context.display_path(&path)]}),
+                                )
+                            };
+                            return Err(command::CommandGuidance {
+                                message: format!(
+                                    "{requested} has plugin source ({}), which a directory install does not compile: {step}",
+                                    sources.join(", ")
+                                ),
+                                next_call,
+                            }
+                            .into());
+                        }
                     } else {
                         anyhow::ensure!(
                             path.is_file()

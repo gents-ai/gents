@@ -94,16 +94,14 @@ pub fn plugins_with_source(manifest: &PackManifest) -> Vec<&str> {
         .collect()
 }
 
-/// A directory install packs what is on disk, and a present artifact may
-/// predate its source, so plugin source has to go through a build first.
-pub fn ensure_no_compile_step(manifest: &PackManifest) -> Result<()> {
-    let source_plugins = plugins_with_source(manifest);
-    anyhow::ensure!(
-        source_plugins.is_empty(),
-        "plugin {} has source that must be built first; call [\"pack\",\"build\",DIR], then preview the built .pack",
-        source_plugins.join(", ")
-    );
-    Ok(())
+/// Where `pack_built` writes the pack of `dir` when given no output path.
+pub fn built_pack_path(dir: &Path, manifest: &PackManifest) -> PathBuf {
+    dir.parent().unwrap_or_else(|| Path::new(".")).join(
+        crate::pack::archive::format::pack_file_name(
+            &format!("{}/{}", manifest.metadata.namespace, manifest.name),
+            &manifest.version,
+        ),
+    )
 }
 
 fn pack_directory(dir: &Path, manifest: &PackManifest, out: Option<&Path>) -> Result<BuildReport> {
