@@ -362,6 +362,7 @@ impl ConfigCommandTool {
             "agents": report.agents,
             "inference_slots": report.inference_slots,
             "schemas": report.schemas,
+            "plugins": (!report.plugins.is_empty()).then_some(&report.plugins),
             "files": report.files,
             "problems": report.check.problems,
             "unverified": report.check.unverified,

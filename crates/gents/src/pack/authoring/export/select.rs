@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use crate::documents::{
     references_of, AgentTargetDocument, DatastoreToolSurfaceDocument, EventSource, PageDocument,
-    PluginSourceDocument, Tools,
+    PluginSourceDocument, Tools, PLUGIN_SOURCE_NAMESPACE,
 };
 use crate::Collection;
 
@@ -95,6 +95,16 @@ pub(super) struct Closure {
     pub pulled: Vec<PulledByReference>,
     /// Application collections whose schema the pack ships.
     pub collections: BTreeSet<String>,
+    /// The plugin sources an exported Tools selects as `node/NAME`: the pack
+    /// ships each as its own plugin, built from that source.
+    pub plugins: BTreeSet<String>,
+}
+
+/// The plugin source a `node/NAME` selection was built from.
+pub(super) fn built_here(plugin: &str) -> Option<&str> {
+    plugin
+        .strip_prefix(PLUGIN_SOURCE_NAMESPACE)?
+        .strip_prefix('/')
 }
 
 fn label(collection: Collection, id: &str) -> String {
@@ -172,6 +182,7 @@ pub(super) fn close(
     let mut documents = BTreeMap::new();
     let mut pulled = Vec::new();
     let mut collections = selection.collections.clone();
+    let mut plugins = BTreeSet::new();
     let mut pull_collection = |name: &str, via: String, pulled: &mut Vec<PulledByReference>| {
         let managed = crate::store::schema::migration::DEFAULT_REGISTRY
             .managed_names()
@@ -295,10 +306,33 @@ pub(super) fn close(
                     .and_then(|integrations| integrations.plugins.as_deref())
                     .unwrap_or_default()
                 {
-                    refusals.push(format!(
-                        "{source} selects plugin {}, which pack export does not carry yet",
-                        plugin.plugin
-                    ));
+                    let Some(name) = built_here(&plugin.plugin) else {
+                        refusals.push(format!(
+                            "{source} selects plugin {}, which an installed pack ships; pack export carries only the node/NAME plugins built from a PluginSource on this node",
+                            plugin.plugin
+                        ));
+                        continue;
+                    };
+                    let target_key = (Collection::PluginSource, name.to_owned());
+                    let target = label(target_key.0, &target_key.1);
+                    if !live.contains_key(&target_key) {
+                        refusals.push(format!(
+                            "{source} selects plugin {}, and {target}, the source a pack would build it from, is not on this node or not readable by the exporting actor",
+                            plugin.plugin
+                        ));
+                        continue;
+                    }
+                    if !selected.contains(&target_key)
+                        && !documents.contains_key(&target_key)
+                        && !queue.contains(&target_key)
+                    {
+                        pulled.push(PulledByReference {
+                            part: target,
+                            via: format!("{source} integrations.plugins"),
+                        });
+                    }
+                    plugins.insert(name.to_owned());
+                    queue.push(target_key);
                 }
             }
             _ => {}
@@ -333,5 +367,6 @@ pub(super) fn close(
             .collect(),
         pulled,
         collections,
+        plugins,
     })
 }

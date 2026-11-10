@@ -25,8 +25,8 @@ pub use inspect::{preview_config, verify_pack_file};
 pub use names::{pack_name, to_snake_case, Names};
 pub use scaffold::{scaffold, tool_markdown, write_plugin_source, ScaffoldInput, ScaffoldReport};
 pub use source::{
-    manifest_entry, materialize_plugin_source, open_built_plugin_source, plugin_source_build_root,
-    prepare_plugin_source, PreparedPluginSource,
+    add_plugin_source, manifest_entry, materialize_plugin_source, open_built_plugin_source,
+    plugin_source_build_root, prepare_plugin_source, PreparedPluginSource,
 };
 pub use template::{Kind, Template};
 pub use test::{run_plugin_cases, PluginCase, PluginCases};

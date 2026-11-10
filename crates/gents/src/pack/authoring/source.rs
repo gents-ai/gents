@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
+use super::edit::{PackAddition, PackEdit};
 use super::scaffold::{scaffold, ScaffoldInput};
 use super::template::Template;
 use crate::documents::{PluginSourceDocument, PLUGIN_SOURCE_NAMESPACE};
@@ -107,6 +108,65 @@ pub fn open_built_plugin_source(
     })
 }
 
+/// Replaces what the scaffold wrote for `plugin` in the pack at `dir` with
+/// `document`'s entry file, cases and description.
+fn write_scaffolded_plugin(
+    dir: &Path,
+    plugin: &PackPlugin,
+    document: &PluginSourceDocument,
+) -> Result<()> {
+    let source_dir = dir.join(plugin.source.as_deref().context("plugin source path")?);
+    let entry = super::build::plugin_entry(&plugin.language)
+        .with_context(|| format!("gents cannot build {:?} plugins", plugin.language))?;
+    std::fs::write(source_dir.join(entry), &document.source)
+        .with_context(|| format!("writing {entry}"))?;
+    let cases_dir = source_dir.join("tests");
+    std::fs::remove_dir_all(&cases_dir).context("clearing the scaffolded cases")?;
+    std::fs::create_dir_all(&cases_dir).context("creating the cases directory")?;
+    for (index, case) in document.cases().iter().enumerate() {
+        let label = case
+            .name
+            .as_deref()
+            .map(super::names::to_snake_case)
+            .filter(|label| !label.is_empty())
+            .unwrap_or_else(|| "case".to_owned());
+        let mut body = json!({ "input": case.input });
+        if let Some(expect) = &case.expect {
+            body["expect"] = expect.clone();
+        }
+        std::fs::write(
+            cases_dir.join(format!("{:02}_{label}.json", index + 1)),
+            serde_json::to_vec_pretty(&body)?,
+        )
+        .with_context(|| format!("writing case {}", index + 1))?;
+    }
+    let (instructions, _) = super::scaffold::tool_markdown(&plugin.name);
+    std::fs::write(
+        dir.join(&instructions),
+        format!("# {}\n\n{}\n", plugin.name, plugin.description),
+    )
+    .with_context(|| format!("writing {instructions}"))
+}
+
+/// Adds `document` to the pack being edited as a plugin the pack ships: the
+/// same manifest entry, entry file and cases a live build of it compiles.
+pub fn add_plugin_source(pack: &mut PackEdit, document: &PluginSourceDocument) -> Result<()> {
+    document.validate()?;
+    let plugin = manifest_entry(document);
+    plugin.validate()?;
+    pack.add(PackAddition::Plugin {
+        name: plugin.name.clone(),
+        language: Some(plugin.language.clone()),
+        prebuilt: None,
+    })?;
+    let entries = pack.manifest_list("plugins")?;
+    let scaffolded = entries.pop().context("the added plugin's manifest entry")?;
+    let mut entry = serde_json::to_value(&plugin)?;
+    entry["instructions"] = scaffolded["instructions"].clone();
+    entries.push(entry);
+    write_scaffolded_plugin(&pack.dir, &plugin, document)
+}
+
 /// Writes `document` as a one-plugin pack at `dir`, replacing what an earlier
 /// build left except the compiler's `target` cache. `version` is the pack's
 /// version; the caller raises it per installed build.
@@ -156,31 +216,7 @@ pub fn materialize_plugin_source(
         std::fs::write(&artifact_path, built)
             .with_context(|| format!("keeping {}", artifact_path.display()))?;
     }
-    let source_dir = dir.join(plugin.source.as_deref().context("plugin source path")?);
-    let entry = super::build::plugin_entry(&plugin.language)
-        .with_context(|| format!("gents cannot build {:?} plugins", plugin.language))?;
-    std::fs::write(source_dir.join(entry), &document.source)
-        .with_context(|| format!("writing {entry}"))?;
-    let cases_dir = source_dir.join("tests");
-    std::fs::remove_dir_all(&cases_dir).context("clearing the scaffolded cases")?;
-    std::fs::create_dir_all(&cases_dir).context("creating the cases directory")?;
-    for (index, case) in document.cases().iter().enumerate() {
-        let label = case
-            .name
-            .as_deref()
-            .map(super::names::to_snake_case)
-            .filter(|label| !label.is_empty())
-            .unwrap_or_else(|| "case".to_owned());
-        let mut body = json!({ "input": case.input });
-        if let Some(expect) = &case.expect {
-            body["expect"] = expect.clone();
-        }
-        std::fs::write(
-            cases_dir.join(format!("{:02}_{label}.json", index + 1)),
-            serde_json::to_vec_pretty(&body)?,
-        )
-        .with_context(|| format!("writing case {}", index + 1))?;
-    }
+    write_scaffolded_plugin(dir, &plugin, document)?;
     let manifest_path = dir.join("manifest.json");
     let mut manifest: Value = serde_json::from_slice(
         &std::fs::read(&manifest_path).context("reading the scaffolded manifest")?,
@@ -220,13 +256,6 @@ pub fn materialize_plugin_source(
         assets.push(json!(path));
     }
     manifest["assets"] = json!(assets);
-    if let Some(instructions) = scaffolded["instructions"].as_str() {
-        std::fs::write(
-            dir.join(instructions),
-            format!("# {name}\n\n{}\n", plugin.description),
-        )
-        .with_context(|| format!("writing {instructions}"))?;
-    }
     std::fs::write(
         &manifest_path,
         serde_json::to_string_pretty(&manifest)? + "\n",

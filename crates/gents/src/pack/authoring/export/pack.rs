@@ -7,10 +7,10 @@ use serde_json::{json, Map, Value};
 
 use super::root::extract_sidecars;
 pub use super::select::PulledByReference;
-use super::select::{close, pack_part, Closure, ExportSelection, PackPart};
+use super::select::{built_here, close, pack_part, Closure, ExportSelection, PackPart};
 use crate::pack::authoring::{
-    check_dir, pack_name, scaffold, to_snake_case, CheckReport, Names, PackEdit, ScaffoldInput,
-    Template,
+    add_plugin_source, check_dir, pack_name, scaffold, to_snake_case, CheckReport, Names, PackEdit,
+    ScaffoldInput, Template,
 };
 use crate::pack::{
     agent_did_variable, agent_slot_reference, inference_slot_reference, is_valid_pack_name,
@@ -43,6 +43,9 @@ pub struct ExportReport {
     /// Each inference slot, the live profile it stands for and its agents.
     pub inference_slots: Vec<Value>,
     pub schemas: Vec<String>,
+    /// The plugins the pack ships, each built by `pack build` from the source
+    /// of the `node/NAME` plugin an exported Tools selected.
+    pub plugins: Vec<String>,
     pub files: Vec<String>,
     pub check: CheckReport,
 }
@@ -115,6 +118,7 @@ pub async fn export_pack(
         agents: written.agents,
         inference_slots: written.inference_slots,
         schemas: written.schemas,
+        plugins: written.plugins,
         files: written.files,
         check,
     })
@@ -129,6 +133,7 @@ struct Written {
     agents: BTreeMap<String, String>,
     inference_slots: Vec<Value>,
     schemas: Vec<String>,
+    plugins: Vec<String>,
     files: Vec<String>,
 }
 
@@ -233,6 +238,11 @@ fn write(dir: &Path, node_did: &str, plan: Plan) -> Result<Written> {
 
     let mut config = Map::new();
     for ((collection, id), document) in &closure.documents {
+        if *collection == Collection::PluginSource && closure.plugins.contains(id) {
+            // Shipped as the pack's plugin, whose source directory is the
+            // one copy of this document.
+            continue;
+        }
         let Some(PackPart::Documents(list)) = pack_part(*collection) else {
             anyhow::bail!(
                 "{} {id} is not a kind a pack carries",
@@ -266,6 +276,28 @@ fn write(dir: &Path, node_did: &str, plan: Plan) -> Result<Written> {
         if *collection == Collection::Skill {
             // A host directory, not portable to the installing node.
             row.remove("source_directory");
+        }
+        if *collection == Collection::Tools {
+            // The pack ships the plugin under its own namespace, and a pin
+            // names an artifact only this node built.
+            for entry in row
+                .get_mut("integrations")
+                .and_then(|integrations| integrations.get_mut("plugins"))
+                .and_then(Value::as_array_mut)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_object_mut)
+            {
+                let shipped = entry["plugin"]
+                    .as_str()
+                    .and_then(built_here)
+                    .filter(|name| closure.plugins.contains(*name))
+                    .map(|name| format!("{namespace}/{name}"));
+                if let Some(shipped) = shipped {
+                    entry.insert("plugin".into(), json!(shipped));
+                    entry.remove("digest");
+                }
+            }
         }
         if *collection == Collection::Agent {
             let slot = &agent_slots[id];
@@ -362,6 +394,12 @@ fn write(dir: &Path, node_did: &str, plan: Plan) -> Result<Written> {
         pack.manifest_list("schemas")?.push(json!(path));
         schema_paths.push(path);
     }
+    let mut plugins = Vec::new();
+    for id in &closure.plugins {
+        let document = &closure.documents[&(Collection::PluginSource, id.clone())];
+        add_plugin_source(&mut pack, &serde_json::from_value(document.clone())?)?;
+        plugins.push(format!("{namespace}/{id}"));
+    }
     let inference_slots: Vec<Value> = inference
         .values()
         .map(|(slot, agents)| {
@@ -396,6 +434,7 @@ fn write(dir: &Path, node_did: &str, plan: Plan) -> Result<Written> {
             .collect(),
         inference_slots,
         schemas: schema_paths,
+        plugins,
         files: pack.manifest["assets"]
             .as_array()
             .into_iter()
