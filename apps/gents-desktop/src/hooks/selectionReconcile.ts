@@ -1,7 +1,10 @@
-import { selectedAgentDidForDeployment } from "@source-inc/gents-desktop-client";
+import {
+  projectRuntimeConnectionStatus,
+  runtimeConnectionBlocksAdmission,
+  selectedAgentDidForDeployment,
+} from "@source-inc/gents-desktop-client";
 
 import { toast } from "sonner";
-import { nodeConnection } from "../ui/lib/nodeConnection";
 import { routeMoves } from "../ui/lib/router";
 import { openOnNode } from "../ui/preferences";
 import { noteActiveNode, rememberedNode, rememberNode } from "./activeNode";
@@ -20,14 +23,12 @@ import type { ShellStores } from "./shellProjection";
     reachability isn't known yet, may still arrive and be opened on. */
 export const OPEN_ON_WAIT_MS = 5000;
 
-export const reachOf = (node: NodeView) => {
-  const connection = nodeConnection(node);
-  return connection === "connected"
+export const reachOf = (node: NodeView) =>
+  !runtimeConnectionBlocksAdmission(node.runtimeConnection)
     ? "reachable"
-    : connection === "connecting"
+    : projectRuntimeConnectionStatus(node.runtimeConnection).reason === "connecting"
       ? "unknown"
       : "failed";
-};
 
 export const nameOf = (node: NodeView) => node.node.displayName ?? node.label;
 

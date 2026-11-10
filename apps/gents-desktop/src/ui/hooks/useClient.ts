@@ -4,7 +4,11 @@ import { useShallow } from "zustand/react/shallow";
 
 import { interruptVisible } from "../screens/activity-status";
 
-import type { MailboxItemView } from "@source-inc/gents-desktop-client";
+import {
+  projectRuntimeConnectionStatus,
+  runtimeConnectionBlocksAdmission,
+  type MailboxItemView,
+} from "@source-inc/gents-desktop-client";
 
 import {
   firstNode,
@@ -21,7 +25,7 @@ import { recentFolders, sessionFolder } from "../../hooks/chatFolders";
 import { useIncompatibleHome } from "../../hooks/useIncompatibleHome";
 import { useApp, useView } from "../app/AppContext";
 import { configIsRead, isLocalNode } from "../lib/firstRun";
-import { connectionTitle, nodeConnection } from "../lib/nodeConnection";
+import { connectionLine } from "../lib/nodeConnection";
 import { isWorkingNode, workingNode } from "../lib/nodes";
 import {
   defaultScope,
@@ -76,10 +80,8 @@ export function useNodeConfigReadOnly(node: NodeView): string | null {
   );
   if (isLocalNode(node, homeDid) || read) return null;
   const name = node.node.displayName ?? node.label;
-  const connection = nodeConnection(node);
-  if (connection === "connecting") return `Read-only here while connecting to ${name}.`;
-  if (connection !== "connected")
-    return `Read-only here: ${connectionTitle(connection, name)}.`;
+  if (runtimeConnectionBlocksAdmission(node.runtimeConnection))
+    return `Read-only here: ${connectionLine(name, projectRuntimeConnectionStatus(node.runtimeConnection))}.`;
   return `Read-only here: change ${name}'s settings on that machine.`;
 }
 

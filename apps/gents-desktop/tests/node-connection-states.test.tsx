@@ -6,7 +6,7 @@ import { TooltipProvider } from "@gents/ui/components/tooltip";
 import { NavNodes } from "../src/ui/app/NavNodes";
 import { resetListViews } from "../src/ui/app/listViews";
 import { useNodeConfigReadOnly } from "../src/ui/hooks/useClient";
-import { isOnline, nodeConnection, pageConnection } from "../src/ui/lib/nodeConnection";
+import { pageConnection } from "../src/ui/lib/nodeConnection";
 import { AutomationsScreen } from "../src/ui/screens/AutomationsScreen";
 import { MailboxScreen } from "../src/ui/screens/MailboxScreen";
 import { SessionsScreen } from "../src/ui/screens/SessionsScreen";
@@ -102,49 +102,39 @@ afterEach(() => {
 });
 
 describe("a node's connection", () => {
-  it("is the runtime connection, not the dial", () => {
-    expect(isOnline({ runtimeConnection: "connected" })).toBe(true);
-    expect(isOnline(forge("refused", false) as NodeView)).toBe(false);
-    expect(isOnline(forge("disconnected", true) as NodeView)).toBe(false);
-  });
-
-  it("is still connecting before the observer reports one", () => {
-    expect(nodeConnection({})).toBe("connecting");
-    expect(nodeConnection({ runtimeConnection: "noEndpoint" })).toBe("noEndpoint");
-  });
-
   it("decides what a page of the node's data shows", () => {
-    const at = (connection: string, withData: boolean) =>
-      pageConnection(forge(connection, withData) as NodeView, withData);
+    const at = (connection: string, withData: boolean) => {
+      const shown = pageConnection(forge(connection, withData) as NodeView, withData);
+      return shown && { kind: shown.kind, reason: shown.status.reason };
+    };
     expect(at("connected", false)).toBeNull();
     expect(at("connecting", true)).toBeNull();
-    expect(at("connecting", false)).toEqual({
-      kind: "loading",
-      title: "Connecting to Forge…",
-    });
-    expect(at("refused", false)).toMatchObject({
+    expect(at("connecting", false)).toEqual({ kind: "loading", reason: "connecting" });
+    expect(at("refused", false)).toEqual({ kind: "unavailable", reason: "refused" });
+    expect(at("noEndpoint", false)).toEqual({
       kind: "unavailable",
-      title: "Forge doesn't accept this app",
+      reason: "no_endpoint",
     });
-    expect(at("disconnected", false)).toMatchObject({
+    expect(at("disconnected", false)).toEqual({
       kind: "unavailable",
-      title: "Forge is offline",
+      reason: "disconnected",
     });
-    expect(at("disconnected", true)).toEqual({
-      kind: "stale",
-      text: "Forge is offline. This may be out of date.",
-    });
+    expect(at("disconnected", true)).toEqual({ kind: "stale", reason: "disconnected" });
   });
 
-  it("names itself beside the node in the Sidebar", () => {
+  it.each([
+    ["connecting", "Connecting"],
+    /* the old dial succeeded; the runtime connection is what counts */
+    ["refused", "Refused"],
+  ])("names itself beside the node in the Sidebar: %s", (connection, label) => {
     renderIn(
-      appOn([node(), forge("connecting", false)]),
+      appOn([node(), forge(connection, false)]),
       <TooltipProvider>
         <NavNodes route={{ name: "mailbox" }} current={deployment.nodeDid} />
       </TooltipProvider>,
     );
     expect(
-      within(screen.getByRole("button", { name: /Forge/ })).getByText("Connecting"),
+      within(screen.getByRole("button", { name: /Forge/ })).getByText(label),
     ).toBeVisible();
   });
 
@@ -154,7 +144,7 @@ describe("a node's connection", () => {
       () => useNodeConfigReadOnly(forge("disconnected", true) as NodeView),
       { wrapper: withApp(app) },
     );
-    expect(result.current).toBe("Read-only here: Forge is offline.");
+    expect(result.current).toBe("Read-only here: Forge · Reconnecting.");
   });
 });
 
@@ -170,13 +160,14 @@ const states = (
 
   it("loads while its node connects, without saying it's empty", () => {
     show("connecting", false);
-    expect(screen.getByText("Connecting to Forge…")).toBeVisible();
+    expect(screen.getByText("Forge · Connecting…")).toBeVisible();
     expect(screen.queryByText(empty, { exact: false })).toBeNull();
   });
 
   it("says its node refuses this app, without saying it's empty", () => {
     show("refused", false);
-    expect(screen.getByText("Forge doesn't accept this app")).toBeVisible();
+    expect(screen.getByText("Forge · Refused")).toBeVisible();
+    expect(screen.getByText(/restore this device's access/)).toBeVisible();
     expect(screen.queryByText(empty, { exact: false })).toBeNull();
   });
 
@@ -184,7 +175,7 @@ const states = (
     show("disconnected", true);
     expect(screen.getByText(shown)).toBeVisible();
     expect(screen.getByTestId("node-connection-stale")).toHaveTextContent(
-      "Forge is offline. This may be out of date.",
+      "Forge · Reconnecting. This may be out of date.",
     );
   });
 };

@@ -10,6 +10,8 @@ import {
 import { toast } from "sonner";
 import {
   enrollmentActivationMessage,
+  projectRuntimeConnectionStatus,
+  runtimeConnectionBlocksAdmission,
   type EndedAccessView,
   type EnrollmentRequestView,
 } from "@source-inc/gents-desktop-client";
@@ -46,10 +48,10 @@ import { Spinner } from "@gents/ui/components/spinner";
 import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { configIsRead, inferenceIsConfigured, isLocalNode } from "@/lib/firstRun";
-import { CONNECTION_LABEL, isOnline, nodeConnection } from "@/lib/nodeConnection";
 import { href } from "@/lib/router";
 import { NodeAvatar, nodeAvatarOf } from "./AgentAvatar";
 import { NodeHoverCard } from "./HoverCards";
+import { StateDot, statusTone } from "./NodeFacts";
 import { isWorkingNode } from "@/lib/nodes";
 import { toastFailure } from "@/lib/failure";
 import { useApp } from "@/app/AppContext";
@@ -150,7 +152,11 @@ export function AgentsScreen() {
       label: "Remote nodes",
       nodes: shown
         .filter((d) => !isWorkingNode(d, homeDid))
-        .sort((a, b) => Number(isOnline(b)) - Number(isOnline(a))),
+        .sort(
+          (a, b) =>
+            Number(runtimeConnectionBlocksAdmission(a.runtimeConnection)) -
+            Number(runtimeConnectionBlocksAdmission(b.runtimeConnection)),
+        ),
       count: true,
     },
     /* out of the menus on this device, and only here when there are any */
@@ -515,7 +521,7 @@ const AgentRow = memo(function AgentRow({
     useShallow((s) => activityOf(s, d.nodeDid)),
   );
   const name = d.node.displayName ?? d.label;
-  const connection = nodeConnection(d);
+  const connection = projectRuntimeConnectionStatus(d.runtimeConnection);
   const lease = isLocalNode(d, homeDid) ? null : leaseLeft(d.leaseExpiresAt);
   /* the node the app is working with, ringed as the rail's avatar is */
   const active = useSelectedNode()?.nodeDid === d.nodeDid;
@@ -559,17 +565,10 @@ const AgentRow = memo(function AgentRow({
             <NodeAvatar name={name} {...nodeAvatarOf(d)} className="size-8" />
           </span>
         </NodeHoverCard>
-        <span
-          className={cn(
-            "size-2 shrink-0 rounded-full",
-            connection === "connected"
-              ? "bg-brand"
-              : connection === "connecting"
-                ? "bg-border"
-                : "bg-destructive",
-          )}
-          aria-label={CONNECTION_LABEL[connection].toLowerCase()}
-          role="img"
+        <StateDot
+          tone={statusTone(connection.kind)}
+          label={connection.shortLabel}
+          className="size-2"
         />
         <span className="grid min-w-0 flex-1 auto-cols-[minmax(0,max-content)] grid-flow-col items-baseline justify-start gap-3">
           <span className="truncate font-heading text-base font-medium text-heading">

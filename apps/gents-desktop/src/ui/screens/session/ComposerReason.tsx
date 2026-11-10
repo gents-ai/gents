@@ -4,7 +4,6 @@ import { selectedNodeReadinessDecision } from "@source-inc/gents-desktop-client"
 import { buttonVariants } from "@gents/ui/components/button";
 import type { NodeView } from "../../../hooks/fleetStore";
 import { useNodeConfigReadOnly } from "@/hooks/useClient";
-import { connectionTitle } from "@/lib/nodeConnection";
 import { href } from "@/lib/router";
 
 /** Why nothing typed here could be sent, for as long as that holds: the
@@ -95,10 +94,12 @@ export function ComposerReasonBox({
     reason.kind === "inference"
       ? reason.title
       : reason.kind === "offline"
-        ? connectionTitle("disconnected", reason.name)
-        : reason.kind === "refused" || reason.kind === "noEndpoint"
-          ? connectionTitle(reason.kind, reason.name)
-          : reason.text;
+        ? `${reason.name} is offline`
+        : reason.kind === "refused"
+          ? `${reason.name} doesn't accept this app`
+          : reason.kind === "noEndpoint"
+            ? `${reason.name} has no address this app can reach`
+            : reason.text;
   const detail =
     reason.kind === "inference"
       ? "Sessions here need a model to answer."

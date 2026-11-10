@@ -241,7 +241,7 @@ export function AgentsPanel({
         </p>
       )}
       {!agentDid && connection?.kind === "stale" && (
-        <StaleNotice text={connection.text} className="mb-3" />
+        <StaleNotice state={connection} className="mb-3" />
       )}
       <ListDetail
         base={base}

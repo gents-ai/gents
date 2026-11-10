@@ -3,7 +3,10 @@
 import { cn } from "@gents/ui/lib/utils";
 import type { NodeView } from "../../hooks/fleetStore";
 import { providerLogo } from "@/lib/provider";
-import { CONNECTION_LABEL, type NodeConnection } from "@/lib/nodeConnection";
+import {
+  projectRuntimeConnectionStatus,
+  type OperationalStatusKind,
+} from "@source-inc/gents-desktop-client";
 import { ProviderLogo } from "./ProviderLogo";
 import { healthy } from "./agent/inferenceKinds";
 
@@ -15,31 +18,43 @@ export const counted = (n: number, one: string, many = `${one}s`) =>
 
 export type Tone = "good" | "busy" | "bad" | "idle";
 
-export function StateDot({ tone }: { tone: Tone }) {
+/** A status's dot: settled, waiting, or held up until someone acts. */
+export const statusTone = (kind: OperationalStatusKind): Tone =>
+  kind === "ready" ? "good" : kind === "blocked" ? "bad" : "idle";
+
+/** With a label it stands alone as an image; without one it decorates the
+    text beside it. */
+export function StateDot({
+  tone,
+  label,
+  className,
+}: {
+  tone: Tone;
+  label?: string;
+  className?: string;
+}) {
   return (
     <span
-      aria-hidden
+      {...(label ? { role: "img", "aria-label": label } : { "aria-hidden": true })}
       className={cn(
         "size-1.5 shrink-0 rounded-full",
         tone === "bad" ? "bg-destructive" : tone === "idle" ? "bg-border" : "bg-brand",
+        className,
       )}
     />
   );
 }
 
-export function OnlineStatus({ connection }: { connection: NodeConnection }) {
+export function OnlineStatus({
+  runtimeConnection,
+}: {
+  runtimeConnection: NodeView["runtimeConnection"];
+}) {
+  const status = projectRuntimeConnectionStatus(runtimeConnection);
   return (
     <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
-      <StateDot
-        tone={
-          connection === "connected"
-            ? "good"
-            : connection === "connecting"
-              ? "idle"
-              : "bad"
-        }
-      />
-      {CONNECTION_LABEL[connection]}
+      <StateDot tone={statusTone(status.kind)} />
+      {status.shortLabel}
     </span>
   );
 }

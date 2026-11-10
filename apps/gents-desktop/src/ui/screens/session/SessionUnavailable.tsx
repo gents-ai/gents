@@ -1,11 +1,15 @@
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { ArrowLeft, ChevronRight } from "lucide-react";
+import {
+  projectRuntimeConnectionStatus,
+  runtimeConnectionBlocksAdmission,
+} from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import { cn } from "@gents/ui/lib/utils";
 import { useApp, useView } from "@/app/AppContext";
 import { useSelectedNodeDid, useSessionLoad } from "@/hooks/useClient";
 import { toastFailure } from "@/lib/failure";
-import { connectionTitle, nodeConnection } from "@/lib/nodeConnection";
+import { connectionLine } from "@/lib/nodeConnection";
 import { href } from "@/lib/router";
 import { type FleetState, nodeOf } from "../../../hooks/fleetStore";
 import { nameOf, OPEN_ON_WAIT_MS, reachOf } from "../../../hooks/selectionReconcile";
@@ -64,18 +68,11 @@ export function missingSessionText(
   nodeDid: string | null,
 ): { title: string; detail: string } {
   const node = nodeOf(fleet, nodeDid);
-  const connection = node ? nodeConnection(node) : "connected";
-  if (node && connection === "refused") {
+  if (node && runtimeConnectionBlocksAdmission(node.runtimeConnection)) {
+    const status = projectRuntimeConnectionStatus(node.runtimeConnection);
     return {
-      title: connectionTitle(connection, nameOf(node)),
-      detail:
-        "This session may be there. Ask its owner to restore this device's access.",
-    };
-  }
-  if (node && connection !== "connected") {
-    return {
-      title: `Can't reach ${nameOf(node)}`,
-      detail: "This session may be there. Try again once the node is back.",
+      title: connectionLine(nameOf(node), status),
+      detail: `This session may be there. ${status.detail}`,
     };
   }
   const where = node ? `${nameOf(node)} or your other nodes` : "your nodes";

@@ -317,7 +317,7 @@ export function SessionsScreen({
             )}
           </div>
           {connection?.kind === "stale" && (
-            <StaleNotice text={connection.text} className="mt-2" />
+            <StaleNotice state={connection} className="mt-2" />
           )}
           <SessionList
             rows={rows}

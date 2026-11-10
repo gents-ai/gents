@@ -1,4 +1,5 @@
 import { History } from "lucide-react";
+import { runtimeConnectionBlocksAdmission } from "@source-inc/gents-desktop-client";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@gents/ui/components/button";
 import {
@@ -19,7 +20,6 @@ import { useFleet } from "@/hooks/useFleet";
 import type { NodeView } from "../../../hooks/fleetStore";
 import { isLocalNode } from "@/lib/firstRun";
 import { fleetNodes } from "@/lib/scope";
-import { isOnline } from "@/lib/nodeConnection";
 import { SEARCH_FIELD } from "@/lib/textAssist";
 import { preferences, useHiddenAgents, useHiddenNodes, useOpenOn } from "@/preferences";
 import { Group, Row, StackedRow } from "../agent/rows";
@@ -84,7 +84,9 @@ function StartupNodeRow({
             aria-hidden
             className={cn(
               "absolute -right-0.5 -bottom-0.5 size-2 rounded-full border-2 border-popover",
-              isOnline(node) ? "bg-brand" : "bg-border",
+              runtimeConnectionBlocksAdmission(node.runtimeConnection)
+                ? "bg-border"
+                : "bg-brand",
             )}
           />
         )}

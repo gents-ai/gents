@@ -22,7 +22,10 @@ import { useAriaKeys, useKeysHint } from "@/commands/commands";
 import { Hint } from "@/screens/Hint";
 import { fleetNodes } from "@/lib/scope";
 import { shownNodes, useHidden } from "@/lib/hidden";
-import { CONNECTION_LABEL, nodeConnection } from "@/lib/nodeConnection";
+import {
+  projectRuntimeConnectionStatus,
+  runtimeConnectionBlocksAdmission,
+} from "@source-inc/gents-desktop-client";
 import { NodeAvatar, nodeAvatarOf } from "@/screens/AgentAvatar";
 import { NodeActivity } from "./NodeActivity";
 
@@ -119,8 +122,9 @@ export function NodeSwitcher({
               <DropdownMenuLabel>{group.label}</DropdownMenuLabel>
               {group.nodes.map((node) => {
                 const name = node.node.displayName ?? node.label;
-                const connection = nodeConnection(node);
-                const online = connection === "connected";
+                const online = !runtimeConnectionBlocksAdmission(
+                  node.runtimeConnection,
+                );
                 return (
                   <DropdownMenuRadioItem
                     key={node.nodeDid}
@@ -148,7 +152,10 @@ export function NodeSwitcher({
                       ) : (
                         // the item lights every child while highlighted; this stays quiet
                         <span className="ml-auto shrink-0 text-xs text-muted-foreground!">
-                          {CONNECTION_LABEL[connection]}
+                          {
+                            projectRuntimeConnectionStatus(node.runtimeConnection)
+                              .shortLabel
+                          }
                         </span>
                       )}
                     </span>

@@ -33,7 +33,6 @@ import { isLocalNode } from "@/lib/firstRun";
 import { useLocalServerRun } from "./agent/LocalServer";
 import { useHomeFolder } from "@/hooks/useHomeFolder";
 import { shortPath } from "@/lib/paths";
-import { nodeConnection } from "@/lib/nodeConnection";
 
 /* the card looks the same at rest; what leads somewhere underlines only
    while pointed at or focused */
@@ -317,7 +316,7 @@ export function NodeHoverCard({
             />
           }
         >
-          <OnlineStatus connection={nodeConnection(deployment)} />
+          <OnlineStatus runtimeConnection={deployment.runtimeConnection} />
         </CardTitle>
         <Facts>
           <NodeReach deployment={deployment} />
