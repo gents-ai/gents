@@ -2594,7 +2594,7 @@ async fn parked_head_keeps_its_session_closed_to_later_work() {
     let resume = access
         .transact_write("test.resume_over_parked_head", move |txn| {
             Box::pin(async move {
-                crate::goal::stage_session_resume_in_txn(txn, identity, node_did, session_id).await
+                crate::session::stage_session_resume_in_txn(txn, identity, node_did, session_id).await
             })
         })
         .await;

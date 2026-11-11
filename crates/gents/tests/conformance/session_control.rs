@@ -233,7 +233,7 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
     )
     .await
     .unwrap();
-    let receipt = gents_automation::session_control::stop_session_with_access(
+    let receipt = gents_session::session::stop_session_with_access(
         &db.node,
         &access,
         node_did,
@@ -302,14 +302,17 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
             None,
         ),
     );
-    gents_automation::session_control::resume_session_with_access(
+    gents_session::session::resume_session_with_access(
         &db.node,
         &access,
         node_did,
         &stopped_session,
         Some(fixture.agent.did()),
-        gents_toolcalls::call::hook::BackgroundExecutionRegistry::default(),
-        job_driver,
+        std::sync::Arc::new(gents_toolcalls::call::hook::RuntimeExecutionWitness {
+            background_executions:
+                gents_toolcalls::call::hook::BackgroundExecutionRegistry::default(),
+            job_driver,
+        }),
     )
     .await
     .unwrap();
@@ -366,7 +369,7 @@ async fn generated_resume_after_settlement_stages_the_paused_goal_continuation()
     )
     .await
     .unwrap();
-    let receipt = gents_automation::session_control::stop_session_with_access(
+    let receipt = gents_session::session::stop_session_with_access(
         &db.node,
         &access,
         node_did,
@@ -390,14 +393,17 @@ async fn generated_resume_after_settlement_stages_the_paused_goal_continuation()
         ),
     );
     let resume = || {
-        gents_automation::session_control::resume_session_with_access(
+        gents_session::session::resume_session_with_access(
             &db.node,
             &access,
             node_did,
             &session_id,
             Some(fixture.agent.did()),
-            gents_toolcalls::call::hook::BackgroundExecutionRegistry::default(),
-            job_driver.clone(),
+            std::sync::Arc::new(gents_toolcalls::call::hook::RuntimeExecutionWitness {
+                background_executions:
+                    gents_toolcalls::call::hook::BackgroundExecutionRegistry::default(),
+                job_driver: job_driver.clone(),
+            }),
         )
     };
     assert_eq!(
