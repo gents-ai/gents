@@ -1,4 +1,5 @@
 use super::*;
+use crate::tools::rendering::tool_completion_presentation;
 use gents_protocol::background_completion::{
     background_completion_notification_message_key, BACKGROUND_COMPLETION_WAKE_PROMPT,
 };
@@ -129,7 +130,7 @@ async fn append_with_parent(
             tool_name,
         )
         .await
-        .min(super::rendering::NOTIFICATION_SUMMARY_BYTES),
+        .min(crate::tools::rendering::NOTIFICATION_SUMMARY_BYTES),
     };
     let (notification, presentation) = render(output_budget);
     let key = background_completion_notification_message_key(tool_call_doc_id, "tool");
@@ -200,7 +201,7 @@ fn published_notification_budget(
     candidates
         .into_iter()
         .flatten()
-        .filter(|budget| *budget <= super::rendering::NOTIFICATION_SUMMARY_BYTES)
+        .filter(|budget| *budget <= crate::tools::rendering::NOTIFICATION_SUMMARY_BYTES)
         .find(|budget| render(*budget).0 == stored)
 }
 

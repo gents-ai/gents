@@ -5,5 +5,6 @@ pub mod exec;
 pub mod mcp;
 pub mod native;
 pub(crate) mod output;
+mod rendering;
 pub mod surface;
 pub mod workspace;

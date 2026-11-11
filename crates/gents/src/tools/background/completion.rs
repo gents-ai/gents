@@ -34,7 +34,6 @@ pub(crate) fn notification_receipt_keys(encoded: &str) -> Result<Vec<String>> {
 mod datetime_fields;
 mod notification_delivery;
 mod observer;
-mod rendering;
 mod session_message;
 #[cfg(test)]
 pub(crate) use session_message::turn_assignment_handoff;
@@ -49,6 +48,4 @@ pub(crate) use session_message::{
 };
 
 use datetime_fields::agent_tool_call_datetime_update_fragment;
-pub(crate) use rendering::is_tool_completion_text;
-pub(crate) use rendering::tool_completion_presentation;
 use side_effects::existing_tool_completion_notification;

@@ -140,6 +140,14 @@ macro_rules! ordered {
 }
 pub(crate) use ordered;
 
+pub(crate) fn terminal_output_tail(source: &str, budget: usize) -> &str {
+    let mut start = source.len().saturating_sub(budget);
+    while !source.is_char_boundary(start) {
+        start += 1;
+    }
+    &source[start..]
+}
+
 pub(crate) fn render(value: &impl serde::Serialize, first: &[&'static str]) -> Result<String> {
     let original = serde_json::to_string_pretty(value)?;
     let value = serde_json::to_value(value)?;

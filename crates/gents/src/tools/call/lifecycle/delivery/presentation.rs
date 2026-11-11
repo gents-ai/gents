@@ -1,5 +1,6 @@
 use super::TerminalFields;
 use crate::tools::call::lifecycle::{CancelCause, FailureClass, ToolCallState};
+use crate::tools::output::terminal_output_tail;
 use anyhow::{Context, Result};
 use gents_protocol::output::PayloadPresentation;
 
@@ -36,14 +37,6 @@ pub(crate) fn render_presentation(
             Ok(rendered)
         }
     }
-}
-
-pub(crate) fn terminal_output_tail(source: &str, budget: usize) -> &str {
-    let mut start = source.len().saturating_sub(budget);
-    while !source.is_char_boundary(start) {
-        start += 1;
-    }
-    &source[start..]
 }
 
 pub(crate) fn terminal_diagnostic_presentation(

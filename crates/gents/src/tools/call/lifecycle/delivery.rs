@@ -19,7 +19,7 @@ pub(crate) use output_append::ToolOutputBinding;
 pub(crate) use output_append::{
     append_tool_output, append_tool_output_at, ToolOutputAppendRejection,
 };
-pub(crate) use presentation::{render_presentation, terminal_output_tail};
+pub(crate) use presentation::render_presentation;
 
 #[cfg(test)]
 mod plugin_writes_failed_tests;

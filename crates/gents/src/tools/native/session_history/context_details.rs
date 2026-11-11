@@ -166,7 +166,7 @@ fn chat_details(body: &Value, message_tokens: u64) -> Result<SessionContextDetai
             Some("system" | "developer") => category_bytes[0] += bytes,
             Some("user")
                 if message_text(message)
-                    .is_some_and(crate::tools::background::completion::is_tool_completion_text) =>
+                    .is_some_and(crate::tools::rendering::is_tool_completion_text) =>
             {
                 category_bytes[4] += bytes
             }
@@ -254,7 +254,7 @@ mod tests {
 
     #[test]
     fn context_details_classify_background_completions_as_tool_results() {
-        let (notification, _) = crate::tools::background::completion::tool_completion_presentation(
+        let (notification, _) = crate::tools::rendering::tool_completion_presentation(
             "call",
             "shell",
             "complete",
