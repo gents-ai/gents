@@ -125,5 +125,3 @@ theorem capacity_trace_keeps_sixty_fifth_waiting :
   decide
 
 end Conformance.StorageWriteGateAdmission
-
-def main : IO Unit := IO.println Conformance.StorageWriteGateAdmission.casesJson

@@ -149,7 +149,10 @@ pub struct LeanLifecycleHookRef {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LeanLifecycleHookSubjectKind {
     Actor,
-    Document { resource: String, collection: String },
+    Document {
+        resource: String,
+        collection: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

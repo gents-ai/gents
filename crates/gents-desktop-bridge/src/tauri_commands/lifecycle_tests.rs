@@ -129,8 +129,14 @@ fn test_state() -> (tempfile::TempDir, DesktopAppState) {
 
 #[tokio::test]
 async fn cancelled_exclusion_waiter_keeps_lifecycle_guard_until_shutdown_owner_returns() {
-    let fixture: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../gents/tests/fixtures/native_claim_lifetime.json"
+    let fixture: serde_json::Value = serde_json::from_value(serde_json::Value::from(
+        tokio::task::spawn_blocking(|| {
+            gents_lean_vocab::lean_contract_snapshot()
+                .native_claim_lifetime_cases
+                .clone()
+        })
+        .await
+        .expect("Lean snapshot load"),
     ))
     .expect("generated native claim lifetime fixture");
     let case = fixture

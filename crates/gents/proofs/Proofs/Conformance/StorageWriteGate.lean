@@ -48,5 +48,3 @@ def caseJson (c : Case) : String :=
 def casesJson : String := jsonArray (cases.map caseJson)
 
 end Conformance.StorageWriteGateContracts
-
-def main : IO Unit := IO.println Conformance.StorageWriteGateContracts.casesJson

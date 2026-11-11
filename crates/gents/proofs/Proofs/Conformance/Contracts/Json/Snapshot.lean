@@ -1,3 +1,8 @@
+import Proofs.Conformance.StorageWriteGate
+import Proofs.Conformance.StorageWriteGateAdmission
+import Proofs.Conformance.StorageWriteGateStreamWaiter
+import Proofs.Conformance.NativeCompletion
+import Proofs.Conformance.NativeClaimLifetime
 import Proofs.Conformance.UpdateHandoff
 import Proofs.Runtime.CanonicalOutput.Execution.AdmissionHandoffCases
 import Proofs.Conformance.Contracts.Json.TerminalSelection
@@ -284,6 +289,11 @@ def snapshotCaptureTailJson : String :=
       ++ aggregateTokenBudgetCasesJson ++ ","
     ++ "\"task_hook_admission_cases\":"
       ++ Conformance.TaskHooksContracts.admissionCasesJson ++ ","
+    ++ "\"storage_write_gate_cases\":" ++ Conformance.StorageWriteGateContracts.casesJson ++ ","
+    ++ "\"storage_write_gate_admission_cases\":" ++ Conformance.StorageWriteGateAdmission.casesJson ++ ","
+    ++ "\"storage_write_gate_stream_waiter_cases\":" ++ Conformance.StorageWriteGateStreamWaiter.casesJson ++ ","
+    ++ "\"native_completion_cases\":" ++ Conformance.NativeCompletion.casesJson ++ ","
+    ++ "\"native_claim_lifetime_cases\":" ++ Conformance.NativeClaimLifetime.casesJson ++ ","
     ++ "\"families\":" ++ (conformance_families%).compress ++ ","
     ++ "\"family_vocabularies\":" ++ (conformance_vocabularies%).compress ++ ","
     ++ "\"task_hook_run_cases\":"

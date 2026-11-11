@@ -2106,8 +2106,14 @@ struct NativeCompletionRenewalObservation {
 
 #[tokio::test]
 async fn lean_periodic_renewal_waits_for_abandoned_native_operation_before_next_attempt() {
-    let cases: Vec<NativeCompletionRenewalCase> = serde_json::from_str(include_str!(
-        "../../../../../gents/tests/fixtures/native_completion.json"
+    let cases: Vec<NativeCompletionRenewalCase> = serde_json::from_value(serde_json::Value::from(
+        tokio::task::spawn_blocking(|| {
+            gents_lean_vocab::lean_contract_snapshot()
+                .native_completion_cases
+                .clone()
+        })
+        .await
+        .expect("Lean snapshot load"),
     ))
     .unwrap();
     let cases: Vec<_> = cases

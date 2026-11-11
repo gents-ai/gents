@@ -43,17 +43,12 @@ def proofRoots : Array Lean.Name := #[
   `Proofs.Conformance.DesktopShellSecurity,
   `Proofs.Conformance.ClientPackWatch,
   `Proofs.Conformance.ClientAuthorityRestart,
-  `Proofs.Conformance.StorageWriteGate,
-  `Proofs.Conformance.StorageWriteGateAdmission,
-  `Proofs.Conformance.NativeCompletion,
-  `Proofs.Conformance.NativeClaimLifetime,
   `Proofs.Conformance.EvalRequestOutcome,
   `Proofs.Conformance.ToolArgumentFailure,
   `Proofs.Conformance.ParallelToolBatch,
   `Proofs.Conformance.ConfigurationAffected,
   `Proofs.Conformance.ResponsesTermination,
-  `Proofs.Conformance.NativeSpawn,
-  `Proofs.Conformance.StorageWriteGateStreamWaiter]
+  `Proofs.Conformance.NativeSpawn]
 
 @[default_target]
 target importClosure pkg : Unit := Job.async do

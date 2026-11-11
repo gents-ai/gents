@@ -38,8 +38,14 @@ impl StreamGuardLifecycle for Finalizer {
 
 #[tokio::test]
 async fn lean_storage_gate_scenarios_drive_stream_finalization() {
-    let cases: Vec<Case> = serde_json::from_str(include_str!(
-        "../../../../gents/tests/fixtures/storage_write_gate.json"
+    let cases: Vec<Case> = serde_json::from_value(serde_json::Value::from(
+        tokio::task::spawn_blocking(|| {
+            gents_lean_vocab::lean_contract_snapshot()
+                .storage_write_gate_cases
+                .clone()
+        })
+        .await
+        .expect("Lean snapshot load"),
     ))
     .expect("Lean storage write-gate fixtures");
     assert_eq!(cases.len(), 4);
@@ -126,8 +132,14 @@ impl StreamGuardLifecycle for NativeFinalizer {
 
 #[tokio::test]
 async fn lean_independent_completion_releases_native_canonical_gate() {
-    let cases: Vec<Case> = serde_json::from_str(include_str!(
-        "../../../../gents/tests/fixtures/storage_write_gate.json"
+    let cases: Vec<Case> = serde_json::from_value(serde_json::Value::from(
+        tokio::task::spawn_blocking(|| {
+            gents_lean_vocab::lean_contract_snapshot()
+                .storage_write_gate_cases
+                .clone()
+        })
+        .await
+        .expect("Lean snapshot load"),
     ))
     .unwrap();
     let scenario = cases
