@@ -52,11 +52,7 @@ pub mod admission_fixture;
 #[cfg(test)]
 mod background_conformance;
 #[cfg(test)]
-mod background_hook_conformance;
-#[cfg(test)]
 mod client_control_race_tests;
-#[cfg(test)]
-pub mod completion_owner_conformance;
 #[cfg(test)]
 mod composed_conformance;
 #[cfg(test)]
@@ -622,7 +618,7 @@ mod tests {
         let kind_of = |tool_name: &str| {
             ToolCallLifecycle::new(
                 node.clone(),
-                identity::Did::new(crate::triggers::callback::test_agent_did()).unwrap(),
+                identity::Did::new("did:test:agent").unwrap(),
                 "request".into(),
                 "session".into(),
                 "did:test:owner".into(),

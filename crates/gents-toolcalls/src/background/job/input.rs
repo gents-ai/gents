@@ -1584,35 +1584,6 @@ pub(crate) mod tests {
         managed_agent().did()
     }
 
-    fn agent_snapshot() -> Arc<crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot> {
-        let mut unavailable_agents = rapidhash::RapidHashMap::default();
-        unavailable_agents.insert(
-            agent_did().to_owned(),
-            crate::triggers::runtime_snapshot::UnavailableAgent::new(
-                gents_protocol::node_readiness::AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
-                "fixture agent",
-            ).with_watcher_identity(managed_agent().clone()),
-        );
-        Arc::new(crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
-            generation: 1,
-            node: None,
-            local_did: node_did().to_owned(),
-            default_agent_did: agent_did().to_owned(),
-            agents: Default::default(),
-            tool_surfaces: Default::default(),
-            backend_admission_configs: Default::default(),
-            unavailable_agents,
-            active_schedules: Default::default(),
-            unavailable_schedules: Default::default(),
-            active_event_triggers: Default::default(),
-            unavailable_event_triggers: Default::default(),
-            active_tasks: Default::default(),
-            dispatchers: Default::default(),
-            agent_executor_capacities: Default::default(),
-            agent_executor_queue_capacities: Default::default(),
-        })
-    }
-
     pub(crate) fn agent_actor() -> identity::Did {
         identity::Did::new(agent_did()).unwrap()
     }
@@ -1788,13 +1759,10 @@ pub(crate) mod tests {
             tool_root: Some(cwd.path().to_path_buf()),
             agent_snapshots: Default::default(),
         };
-        let (_snapshot_tx, snapshot_rx) = tokio::sync::watch::channel(agent_snapshot());
         runtime
-            .bind_snapshot(
-                crate::triggers::runtime_snapshot::ActiveSnapshotAgentIdentities::boxed(
-                    snapshot_rx,
-                ),
-            )
+            .bind_snapshot(crate::test_support::FixedAgentIdentities::boxed(vec![
+                managed_agent().clone(),
+            ]))
             .unwrap();
         Job {
             node,

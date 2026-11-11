@@ -252,7 +252,7 @@ fn a_plugin_that_is_not_installed_is_refused() {
 
 #[tokio::test]
 async fn changed_resource_declaration_invalidates_admission_without_new_artifact() {
-    let (home, mut record) = installed_plugin(&super::large_json_output_wat(1536 * 1024), None);
+    let (home, mut record) = installed_plugin(&gents_pack::plugin::tests::large_json_output_wat(1536 * 1024), None);
     record.granted = Some(gents_pack::plugin::Manifold::sealed());
     record.declaration.limits = Some(gents_pack::pack::PluginLimits {
         max_output_mib: Some(2),
@@ -1966,7 +1966,12 @@ mod job_calls {
             .transact_write("test.job_calls.wrong_pin", |txn| {
                 let (cause, plan) = (&cause, &wrong_plan);
                 Box::pin(async move {
-                    gents_session::session::message::stage_planned_write_in_txn(txn, cause, plan)
+                    gents_session::session::message::stage_planned_write_in_txn(
+                        txn,
+                        &gents_session::session::message::NoSessionMessageGoals,
+                        cause,
+                        plan,
+                    )
                         .await?;
                     Ok::<_, anyhow::Error>(())
                 })
@@ -1992,7 +1997,12 @@ mod job_calls {
             .transact_write("test.job_calls.rollback", |txn| {
                 let (cause, plan, staged) = (&cause, &plan, &staged_before_abort);
                 Box::pin(async move {
-                    gents_session::session::message::stage_planned_write_in_txn(txn, cause, plan)
+                    gents_session::session::message::stage_planned_write_in_txn(
+                        txn,
+                        &gents_session::session::message::NoSessionMessageGoals,
+                        cause,
+                        plan,
+                    )
                         .await?;
                     staged.store(true, std::sync::atomic::Ordering::SeqCst);
                     anyhow::bail!("abort the opening transaction")
@@ -2019,7 +2029,12 @@ mod job_calls {
             .transact_write("test.job_calls.child", |txn| {
                 let (cause, plan) = (&cause, &plan);
                 Box::pin(async move {
-                    gents_session::session::message::stage_planned_write_in_txn(txn, cause, plan)
+                    gents_session::session::message::stage_planned_write_in_txn(
+                        txn,
+                        &gents_session::session::message::NoSessionMessageGoals,
+                        cause,
+                        plan,
+                    )
                         .await?;
                     Ok::<_, anyhow::Error>(())
                 })

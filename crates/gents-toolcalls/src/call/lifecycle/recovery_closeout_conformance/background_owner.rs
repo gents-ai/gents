@@ -6,7 +6,7 @@ use gents_protocol::tool_call::AwaitMode;
 use gents_store::identity::NodeIdentity;
 use std::sync::Arc;
 
-use super::fixtures::{completion_obligations, update_request};
+use crate::call::lifecycle::admission_fixture::{completion_obligations, update_request};
 
 #[cfg(unix)]
 #[tokio::test]
