@@ -20,9 +20,10 @@ use crate::goal::{
     update_goal_fields_if_status_from_access, GoalAction, GoalClaimedDecision,
     GoalContinuationAction, GoalContinuationFacts, GoalContinuationPhase, GoalDecision,
     GoalDocument, GoalFailureCause, GoalGatedDecision, GoalRequestTerminal, GoalStatus,
-    ObservedGoalAgent, GOAL_READINESS_WAIT_PREFIX, GOAL_TRIGGER_KIND, MAX_INFRASTRUCTURE_RETRIES,
+    ObservedGoalAgent, GOAL_READINESS_WAIT_PREFIX, MAX_INFRASTRUCTURE_RETRIES,
 };
 use crate::goal::{publish_claimed_continuation_with_identity, resume_at_reset};
+use gents_protocol::goal_names::GOAL_TRIGGER_KIND;
 use crate::runtime::snapshot::ActiveRuntimeSnapshot;
 use crate::store::config_client::ConfigAccess;
 use crate::store::graphql::escape_graphql_string;
@@ -1021,7 +1022,7 @@ impl GoalSource {
 }
 
 fn request_is_goal_wrapup(request: &AgentRequestRow, goal_id: &str) -> bool {
-    request.caused_by_trigger_kind.as_deref() == Some(crate::goal::GOAL_TRIGGER_KIND)
+    request.caused_by_trigger_kind.as_deref() == Some(gents_protocol::goal_names::GOAL_TRIGGER_KIND)
         && request.caused_by_trigger_id.as_deref() == Some(goal_id)
         && request
             .input

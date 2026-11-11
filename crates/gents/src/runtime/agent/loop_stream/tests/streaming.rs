@@ -158,7 +158,7 @@ async fn unavailable_goal_attribution_stops_the_provider_before_another_turn() {
         vec![
             RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
                 "goal-call".into(),
-                crate::goal::GET_GOAL_TOOL_NAME.into(),
+                gents_protocol::goal_names::GET_GOAL_TOOL_NAME.into(),
                 serde_json::json!({}),
             )),
             RawStreamingChoice::FinalResponse(()),
@@ -174,7 +174,7 @@ async fn unavailable_goal_attribution_stops_the_provider_before_another_turn() {
         TaggedMessage::unassociated(Message::user("check the Goal")),
         Vec::new(),
         Arc::new(vec![Box::new(FixedTool {
-            name: crate::goal::GET_GOAL_TOOL_NAME.into(),
+            name: gents_protocol::goal_names::GET_GOAL_TOOL_NAME.into(),
             output: "must be intercepted".into(),
         }) as Box<dyn ToolDyn>]),
         owned_config(4),

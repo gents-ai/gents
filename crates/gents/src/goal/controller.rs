@@ -1,4 +1,5 @@
 use super::*;
+use gents_protocol::goal_names::GOAL_TRIGGER_KIND;
 use gents_protocol::goal::GoalClaimFence;
 
 pub async fn update_goal_fields_if_status_from_access(

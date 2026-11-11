@@ -1,6 +1,7 @@
 mod wait_observation;
 
 use super::*;
+use gents_protocol::goal_names::GOAL_TRIGGER_KIND;
 use crate::request::lifecycle::materialize::{sign_request, RequestSigner};
 use crate::request::lifecycle::queue::{
     goal_continuation_agent, goal_continuation_identity, prepare_goal_continuation,

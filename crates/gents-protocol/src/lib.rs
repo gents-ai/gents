@@ -13,6 +13,7 @@ pub mod file_changes;
 pub mod file_inventory;
 pub mod goal;
 pub mod goal_control;
+pub mod goal_names;
 pub mod graphql;
 pub mod job;
 pub mod mailbox_question;

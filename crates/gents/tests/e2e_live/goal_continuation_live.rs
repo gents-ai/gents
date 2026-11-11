@@ -1,6 +1,7 @@
 use std::time::Duration;
 
-use gents::goal::{load_canonical_goal_in_txn, set_goal, GoalStatus, UPDATE_GOAL_TOOL_NAME};
+use gents::goal::{load_canonical_goal_in_txn, set_goal, GoalStatus};
+use gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME;
 use gents::store::graphql::escape_graphql_string;
 use serde::Deserialize;
 

@@ -319,10 +319,10 @@ impl ToolSurface {
             names.push(crate::tools::native::lsp::LSP_TOOL_NAME.to_string());
         }
         if self.include_goal_tools {
-            names.push(crate::goal::GET_GOAL_TOOL_NAME.to_string());
-            names.push(crate::goal::UPDATE_GOAL_TOOL_NAME.to_string());
+            names.push(gents_protocol::goal_names::GET_GOAL_TOOL_NAME.to_string());
+            names.push(gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME.to_string());
             if self.include_goal_creation {
-                names.push(crate::goal::CREATE_GOAL_TOOL_NAME.to_string());
+                names.push(gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME.to_string());
             }
         }
         names.extend(crate::tools::builtin::self_config::self_config_tool_names(

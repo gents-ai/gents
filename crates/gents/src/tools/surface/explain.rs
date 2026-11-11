@@ -301,8 +301,8 @@ fn explain_goals(
     builder: &mut ExplanationBuilder,
 ) {
     for name in [
-        crate::goal::GET_GOAL_TOOL_NAME,
-        crate::goal::UPDATE_GOAL_TOOL_NAME,
+        gents_protocol::goal_names::GET_GOAL_TOOL_NAME,
+        gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME,
     ] {
         if surface.includes_goal_tools() {
             builder.include_many("goal", [name.to_string()]);
@@ -313,11 +313,11 @@ fn explain_goals(
         }
     }
     if surface.includes_goal_creation() {
-        builder.include_many("goal", [crate::goal::CREATE_GOAL_TOOL_NAME.to_string()]);
+        builder.include_many("goal", [gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME.to_string()]);
     } else if config.goal_creation_requested() {
-        builder.unavailable("goal", crate::goal::CREATE_GOAL_TOOL_NAME);
+        builder.unavailable("goal", gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME);
     } else {
-        builder.exclude("goal", crate::goal::CREATE_GOAL_TOOL_NAME);
+        builder.exclude("goal", gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME);
     }
 }
 

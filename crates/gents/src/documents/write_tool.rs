@@ -443,9 +443,9 @@ pub fn is_reserved_builtin_tool_name(name: &str) -> bool {
         CONTEXT_BUDGET_TOOL_NAME,
         SESSION_HISTORY_TOOL_NAME,
         crate::tools::builtin::schema_help::SCHEMA_TOOL_NAME,
-        crate::goal::CREATE_GOAL_TOOL_NAME,
-        crate::goal::GET_GOAL_TOOL_NAME,
-        crate::goal::UPDATE_GOAL_TOOL_NAME,
+        gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME,
+        gents_protocol::goal_names::GET_GOAL_TOOL_NAME,
+        gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME,
     ];
 
     crate::tools::native::NativeTool::ALL_NAMES.contains(&name)

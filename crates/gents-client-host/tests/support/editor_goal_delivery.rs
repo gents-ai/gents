@@ -51,7 +51,7 @@ impl Provider {
             && !request["tools"].as_array().is_some_and(|tools| {
                 tools
                     .iter()
-                    .any(|tool| tool["function"]["name"] == gents::goal::UPDATE_GOAL_TOOL_NAME)
+                    .any(|tool| tool["function"]["name"] == gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME)
             })
         {
             return None;
@@ -77,7 +77,7 @@ impl Provider {
         } else {
             fake_llm::tool_call_sse_with_id(
                 COMPLETE_CALL,
-                gents::goal::UPDATE_GOAL_TOOL_NAME,
+                gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME,
                 &json!({"status":"complete","reason":"Installed Goal delivery recovered."})
                     .to_string(),
             )

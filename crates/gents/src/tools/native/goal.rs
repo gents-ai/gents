@@ -2,7 +2,9 @@ use crate::inference::llm::tool::{Tool, ToolDefinition, ToolDyn};
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::goal::{CREATE_GOAL_TOOL_NAME, GET_GOAL_TOOL_NAME, UPDATE_GOAL_TOOL_NAME};
+use gents_protocol::goal_names::{
+    CREATE_GOAL_TOOL_NAME, GET_GOAL_TOOL_NAME, UPDATE_GOAL_TOOL_NAME,
+};
 
 use super::shared::ToolError;
 

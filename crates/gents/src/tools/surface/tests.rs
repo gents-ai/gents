@@ -1635,8 +1635,8 @@ async fn explicitly_disabling_goal_tools_removes_them_from_names_and_runtime() {
     .unwrap();
 
     let names = surface.tool_names();
-    assert!(!names.contains(&crate::goal::GET_GOAL_TOOL_NAME.to_string()));
-    assert!(!names.contains(&crate::goal::UPDATE_GOAL_TOOL_NAME.to_string()));
+    assert!(!names.contains(&gents_protocol::goal_names::GET_GOAL_TOOL_NAME.to_string()));
+    assert!(!names.contains(&gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME.to_string()));
 
     let built_names = surface
         .build_tools(&runtime)
@@ -1645,8 +1645,8 @@ async fn explicitly_disabling_goal_tools_removes_them_from_names_and_runtime() {
         .into_iter()
         .map(|tool| tool.name())
         .collect::<Vec<_>>();
-    assert!(!built_names.contains(&crate::goal::GET_GOAL_TOOL_NAME.to_string()));
-    assert!(!built_names.contains(&crate::goal::UPDATE_GOAL_TOOL_NAME.to_string()));
+    assert!(!built_names.contains(&gents_protocol::goal_names::GET_GOAL_TOOL_NAME.to_string()));
+    assert!(!built_names.contains(&gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME.to_string()));
 }
 
 #[tokio::test]
@@ -1676,9 +1676,9 @@ async fn goal_tools_are_independent_from_generic_meta_tools() {
 
     let names = surface.tool_names();
     assert!(!names.iter().any(|name| name == "discover_tools"));
-    assert!(names.contains(&crate::goal::GET_GOAL_TOOL_NAME.to_string()));
-    assert!(names.contains(&crate::goal::UPDATE_GOAL_TOOL_NAME.to_string()));
-    assert!(!names.contains(&crate::goal::CREATE_GOAL_TOOL_NAME.to_string()));
+    assert!(names.contains(&gents_protocol::goal_names::GET_GOAL_TOOL_NAME.to_string()));
+    assert!(names.contains(&gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME.to_string()));
+    assert!(!names.contains(&gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME.to_string()));
 }
 
 #[tokio::test]
@@ -1705,7 +1705,7 @@ async fn goal_creation_requires_its_separate_capability() {
     .unwrap();
     assert!(!without_create
         .tool_names()
-        .contains(&crate::goal::CREATE_GOAL_TOOL_NAME.to_string()));
+        .contains(&gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME.to_string()));
 
     let with_create = AgentToolSurfaceConfig::from_selection(
         "durable",
@@ -1727,7 +1727,7 @@ async fn goal_creation_requires_its_separate_capability() {
     .unwrap();
     assert!(with_create
         .tool_names()
-        .contains(&crate::goal::CREATE_GOAL_TOOL_NAME.to_string()));
+        .contains(&gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME.to_string()));
     let built_names = with_create
         .build_tools(&runtime)
         .await
@@ -1735,7 +1735,7 @@ async fn goal_creation_requires_its_separate_capability() {
         .into_iter()
         .map(|tool| tool.name())
         .collect::<Vec<_>>();
-    assert!(built_names.contains(&crate::goal::CREATE_GOAL_TOOL_NAME.to_string()));
+    assert!(built_names.contains(&gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME.to_string()));
 }
 
 #[tokio::test]
@@ -1768,7 +1768,7 @@ async fn operator_ceiling_can_deny_goal_creation_only() {
     assert!(!surface.includes_goal_creation());
     assert!(!surface
         .tool_names()
-        .contains(&crate::goal::CREATE_GOAL_TOOL_NAME.to_string()));
+        .contains(&gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME.to_string()));
 }
 
 #[tokio::test]
@@ -1799,9 +1799,9 @@ async fn operator_ceiling_denies_all_goal_mutation_when_base_capability_is_off()
 
     assert!(!surface.includes_goal_tools());
     for denied in [
-        crate::goal::CREATE_GOAL_TOOL_NAME,
-        crate::goal::GET_GOAL_TOOL_NAME,
-        crate::goal::UPDATE_GOAL_TOOL_NAME,
+        gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME,
+        gents_protocol::goal_names::GET_GOAL_TOOL_NAME,
+        gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME,
     ] {
         assert!(!surface.tool_names().contains(&denied.to_string()));
     }

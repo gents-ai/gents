@@ -190,9 +190,9 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
     assert_eq!(cases.len(), 11);
     for case in cases {
         for tool in [
-            crate::goal::GET_GOAL_TOOL_NAME,
-            crate::goal::UPDATE_GOAL_TOOL_NAME,
-            crate::goal::CREATE_GOAL_TOOL_NAME,
+            gents_protocol::goal_names::GET_GOAL_TOOL_NAME,
+            gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME,
+            gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME,
         ] {
             let name = case["name"].as_str().unwrap();
             let directory = tempfile::tempdir().unwrap();
@@ -370,13 +370,13 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
             )
             .await;
             let args = match tool {
-                crate::goal::GET_GOAL_TOOL_NAME => "{}",
-                crate::goal::UPDATE_GOAL_TOOL_NAME => r#"{"objective":"Changed caller goal"}"#,
+                gents_protocol::goal_names::GET_GOAL_TOOL_NAME => "{}",
+                gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME => r#"{"objective":"Changed caller goal"}"#,
                 _ => r#"{"objective":"Original caller goal"}"#,
             };
             accept_hook_tool_call(&hook, "goal-context-call", tool, args, None).await;
             let before = versions(&access).await;
-            if tool == crate::goal::GET_GOAL_TOOL_NAME && case["read_only"] == true {
+            if tool == gents_protocol::goal_names::GET_GOAL_TOOL_NAME && case["read_only"] == true {
                 let context = crate::goal::load_goal_tool_context(
                     &access,
                     identity.did(),
@@ -457,7 +457,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                 assert_eq!(rows[0]["lifecycle_state"], "failed");
                 assert_eq!(rows[0]["tool_failure_class"], "serviceUnavailable");
             }
-            if tool == crate::goal::GET_GOAL_TOOL_NAME {
+            if tool == gents_protocol::goal_names::GET_GOAL_TOOL_NAME {
                 match case["observation"]["kind"].as_str().unwrap() {
                     "unknown" => {
                         assert!(result["error"].is_string(), "{name}/{tool}: {result}");
@@ -502,7 +502,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                     );
                 }
             } else {
-                let allowed = case[if tool == crate::goal::CREATE_GOAL_TOOL_NAME {
+                let allowed = case[if tool == gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME {
                     "can_create"
                 } else {
                     "can_update"
@@ -521,7 +521,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                         "{name}/{tool}: refused control wrote Goal history"
                     );
                 }
-                if allowed && tool == crate::goal::CREATE_GOAL_TOOL_NAME {
+                if allowed && tool == gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME {
                     let goal = crate::goal::load_canonical_goal(&node, identity.did(), &session)
                         .await
                         .unwrap()

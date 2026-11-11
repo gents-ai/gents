@@ -18,9 +18,9 @@ pub(crate) enum HookOwnedTool {
 
 impl HookOwnedTool {
     pub(crate) const ROUTES: [(&'static str, Self); 14] = [
-        (crate::goal::GET_GOAL_TOOL_NAME, Self::GetGoal),
-        (crate::goal::UPDATE_GOAL_TOOL_NAME, Self::UpdateGoal),
-        (crate::goal::CREATE_GOAL_TOOL_NAME, Self::CreateGoal),
+        (gents_protocol::goal_names::GET_GOAL_TOOL_NAME, Self::GetGoal),
+        (gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME, Self::UpdateGoal),
+        (gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME, Self::CreateGoal),
         (
             crate::tools::native::AGENT_INTERRUPT_TOOL_NAME,
             Self::AgentControl,

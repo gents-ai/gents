@@ -247,7 +247,7 @@ async fn goal_tool_interception_defaults_deny_and_create_depends_on_base_capabil
         DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     let denied_update = denied
         .on_tool_call(
-            crate::goal::UPDATE_GOAL_TOOL_NAME,
+            gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME,
             None,
             "unadvertised-update",
             r#"{"status":"complete"}"#,
@@ -263,7 +263,7 @@ async fn goal_tool_interception_defaults_deny_and_create_depends_on_base_capabil
             .with_goal_tool_authority(false, true);
     let denied_create = create_without_base
         .on_tool_call(
-            crate::goal::CREATE_GOAL_TOOL_NAME,
+            gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME,
             None,
             "unadvertised-create",
             r#"{"objective":"unauthorized"}"#,
@@ -312,14 +312,14 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
     accept_hook_tool_call(
         &hook,
         "goal-create-forged",
-        crate::goal::CREATE_GOAL_TOOL_NAME,
+        gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME,
         r#"{"objective":"ship","node_did":"did:test:other","session_id":"other"}"#,
         None,
     )
     .await;
     let forged = hook
         .on_tool_call(
-            crate::goal::CREATE_GOAL_TOOL_NAME,
+            gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME,
             None,
             "goal-create-forged",
             r#"{"objective":"ship","node_did":"did:test:other","session_id":"other"}"#,
@@ -344,14 +344,14 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
     accept_hook_tool_call(
         &hook,
         "goal-create-valid",
-        crate::goal::CREATE_GOAL_TOOL_NAME,
+        gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME,
         r#"{"objective":"ship","token_budget":1000}"#,
         None,
     )
     .await;
     let created = hook
         .on_tool_call(
-            crate::goal::CREATE_GOAL_TOOL_NAME,
+            gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME,
             None,
             "goal-create-valid",
             r#"{"objective":"ship","token_budget":1000}"#,
@@ -377,14 +377,14 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
     accept_hook_tool_call(
         &hook,
         "goal-update-forged",
-        crate::goal::UPDATE_GOAL_TOOL_NAME,
+        gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME,
         r#"{"status":"complete","session_id":"other"}"#,
         None,
     )
     .await;
     let forged_update = hook
         .on_tool_call(
-            crate::goal::UPDATE_GOAL_TOOL_NAME,
+            gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME,
             None,
             "goal-update-forged",
             r#"{"status":"complete","session_id":"other"}"#,
@@ -426,9 +426,9 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
             r#"{"status":"complete","objective":"other"}"#,
         ),
     ] {
-        accept_hook_tool_call(&hook, id, crate::goal::UPDATE_GOAL_TOOL_NAME, args, None).await;
+        accept_hook_tool_call(&hook, id, gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME, args, None).await;
         assert!(matches!(
-            hook.on_tool_call(crate::goal::UPDATE_GOAL_TOOL_NAME, None, id, args)
+            hook.on_tool_call(gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME, None, id, args)
                 .await,
             ToolCallHookAction::Skip { .. }
         ));
@@ -456,14 +456,14 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
     accept_hook_tool_call(
         &hook,
         "goal-get-valid",
-        crate::goal::GET_GOAL_TOOL_NAME,
+        gents_protocol::goal_names::GET_GOAL_TOOL_NAME,
         "{}",
         None,
     )
     .await;
     assert!(matches!(
         hook.on_tool_call(
-            crate::goal::GET_GOAL_TOOL_NAME,
+            gents_protocol::goal_names::GET_GOAL_TOOL_NAME,
             None,
             "goal-get-valid",
             "{}",
@@ -474,14 +474,14 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
     accept_hook_tool_call(
         &hook,
         "goal-update-valid",
-        crate::goal::UPDATE_GOAL_TOOL_NAME,
+        gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME,
         r#"{"status":"complete","reason":"done"}"#,
         None,
     )
     .await;
     assert!(matches!(
         hook.on_tool_call(
-            crate::goal::UPDATE_GOAL_TOOL_NAME,
+            gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME,
             None,
             "goal-update-valid",
             r#"{"status":"complete","reason":"done"}"#,
@@ -2051,14 +2051,14 @@ async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
     accept_hook_tool_call(
         &hook,
         "blocked-during-wrapup",
-        crate::goal::UPDATE_GOAL_TOOL_NAME,
+        gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME,
         r#"{"status":"blocked","reason":"needs approval"}"#,
         None,
     )
     .await;
     let action = hook
         .on_tool_call(
-            crate::goal::UPDATE_GOAL_TOOL_NAME,
+            gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME,
             None,
             "blocked-during-wrapup",
             r#"{"status":"blocked","reason":"needs approval"}"#,
@@ -2200,7 +2200,7 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
         accept_hook_tool_call(
             &hook,
             call_id,
-            crate::goal::UPDATE_GOAL_TOOL_NAME,
+            gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME,
             args,
             None,
         )
@@ -2208,7 +2208,7 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
         let ToolCallHookAction::Skip {
             reason: tool_result,
         } = hook
-            .on_tool_call(crate::goal::UPDATE_GOAL_TOOL_NAME, None, call_id, args)
+            .on_tool_call(gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME, None, call_id, args)
             .await
         else {
             panic!("expected hook-managed skip for {call_id}");
@@ -2294,7 +2294,7 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
             accept_hook_tool_call(
                 &hook,
                 &call_id,
-                crate::goal::UPDATE_GOAL_TOOL_NAME,
+                gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME,
                 args,
                 None,
             )
@@ -2302,7 +2302,7 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
             let ToolCallHookAction::Skip {
                 reason: tool_result,
             } = hook
-                .on_tool_call(crate::goal::UPDATE_GOAL_TOOL_NAME, None, &call_id, args)
+                .on_tool_call(gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME, None, &call_id, args)
                 .await
             else {
                 panic!("expected hook-managed skip for {call_id}");
@@ -4226,7 +4226,7 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
     accept_hook_tool_call(
         &persistence_hook,
         "premature-goal-complete",
-        crate::goal::UPDATE_GOAL_TOOL_NAME,
+        gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME,
         r#"{"status":"complete","reason":"text alone is not output"}"#,
         None,
     )
@@ -4234,7 +4234,7 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
     assert!(matches!(
         persistence_hook
             .on_tool_call(
-                crate::goal::UPDATE_GOAL_TOOL_NAME,
+                gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME,
                 None,
                 "premature-goal-complete",
                 r#"{"status":"complete","reason":"text alone is not output"}"#,
@@ -4288,7 +4288,7 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
     accept_hook_tool_call(
         &persistence_hook,
         "acknowledged-goal-complete",
-        crate::goal::UPDATE_GOAL_TOOL_NAME,
+        gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME,
         r#"{"status":"complete","reason":"required scan output is durable"}"#,
         None,
     )
@@ -4296,7 +4296,7 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
     assert!(matches!(
         persistence_hook
             .on_tool_call(
-                crate::goal::UPDATE_GOAL_TOOL_NAME,
+                gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME,
                 None,
                 "acknowledged-goal-complete",
                 r#"{"status":"complete","reason":"required scan output is durable"}"#,

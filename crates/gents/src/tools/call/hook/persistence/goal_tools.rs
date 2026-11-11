@@ -5,7 +5,10 @@ use crate::goal::{
     create_goal_for_request_from_access, edit_active_goal_from_access, load_goal_tool_context,
     next_blocked_audit, refresh_goal_usage_from_access, update_goal_fields_if_status_from_access,
     CreateGoalForSessionError, GoalAction, GoalEdit, GoalStatus, RequestAssignmentObservation,
-    BLOCKED_AUDIT_THRESHOLD, CREATE_GOAL_TOOL_NAME, GET_GOAL_TOOL_NAME, UPDATE_GOAL_TOOL_NAME,
+    BLOCKED_AUDIT_THRESHOLD,
+};
+use gents_protocol::goal_names::{
+    CREATE_GOAL_TOOL_NAME, GET_GOAL_TOOL_NAME, UPDATE_GOAL_TOOL_NAME,
 };
 use crate::inference::llm::ToolCallHookAction;
 use crate::store::graphql::escape_graphql_string;

@@ -422,9 +422,9 @@ fn reserved_names_cover_native_and_meta_tools() {
         );
     }
     for goal in [
-        crate::goal::CREATE_GOAL_TOOL_NAME,
-        crate::goal::GET_GOAL_TOOL_NAME,
-        crate::goal::UPDATE_GOAL_TOOL_NAME,
+        gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME,
+        gents_protocol::goal_names::GET_GOAL_TOOL_NAME,
+        gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME,
     ] {
         assert!(
             is_reserved_builtin_tool_name(goal),

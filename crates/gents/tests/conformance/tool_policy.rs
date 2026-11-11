@@ -233,7 +233,7 @@ fn generated_plugin_calls_route_cases_drive_supported() {
     assert_eq!(cases.len(), 16, "Lean child-route rows drifted");
     for (index, row) in cases.iter().enumerate() {
         let name = if row.static_hook_owned {
-            gents::goal::GET_GOAL_TOOL_NAME
+            gents_protocol::goal_names::GET_GOAL_TOOL_NAME
         } else {
             "workflow_run"
         };

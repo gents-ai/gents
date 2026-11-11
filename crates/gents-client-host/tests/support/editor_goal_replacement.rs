@@ -103,7 +103,7 @@ impl Provider {
             } else {
                 fake_llm::tool_call_sse_with_id(
                     COMPLETE_CALL,
-                    gents::goal::UPDATE_GOAL_TOOL_NAME,
+                    gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME,
                     &json!({"status":"complete","reason":COMPLETION_EVIDENCE}).to_string(),
                 )
             }));
@@ -375,7 +375,7 @@ pub async fn verify(
         .collect();
     ensure!(
         completed.len() == 1
-            && completed[0].tool_name == gents::goal::UPDATE_GOAL_TOOL_NAME
+            && completed[0].tool_name == gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME
             && completed[0].request_doc_id == followup.doc_id
             && completed[0].lifecycle_state.as_deref() == Some("completed"),
         "Goal completion bypassed the exact signed follow-up tool owner"
