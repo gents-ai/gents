@@ -107,7 +107,7 @@ impl ToolCallLifecycle {
         .await
     }
 
-    pub(crate) async fn load_by_doc_id_as(
+    pub async fn load_by_doc_id_as(
         node: Arc<EmbeddedNode>,
         actor: identity::Did,
         doc_id: &str,

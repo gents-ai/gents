@@ -30,6 +30,9 @@ use defra_node::Node as EmbeddedNode;
 
 pub mod delivery;
 pub(crate) use delivery::publish_background_receipt_in_txn;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod file_inventory;
+#[cfg(not(any(test, feature = "test-fixtures")))]
 pub(crate) mod file_inventory;
 pub mod query;
 pub use gents_session::tool_call::query::result::{
@@ -182,7 +185,7 @@ pub struct SpawnedBackgroundToolAdmission {
 }
 
 impl ToolCallLifecycle {
-    pub(crate) fn access(&self) -> anyhow::Result<gents_store::config_client::ConfigAccess> {
+    pub fn access(&self) -> anyhow::Result<gents_store::config_client::ConfigAccess> {
         Ok(
             gents_store::config_client::ConfigAccess::local_with_optional_agent_signer(
                 self.node.clone(),
@@ -201,7 +204,7 @@ impl ToolCallLifecycle {
         Ok(())
     }
 
-    pub(crate) fn bind_agent_signer(
+    pub fn bind_agent_signer(
         &mut self,
         signer: Option<gents_store::identity::ManagedAgentSigner>,
     ) -> anyhow::Result<()> {
@@ -273,7 +276,7 @@ impl ToolCallLifecycle {
         }
     }
 
-    pub(crate) fn stage_deferred_writes(
+    pub fn stage_deferred_writes(
         &mut self,
         writes: Option<gents_loop::live_output::DeferredToolWrites>,
     ) {
@@ -459,7 +462,7 @@ impl ToolCallLifecycle {
         }
     }
 
-    pub(crate) fn actor(&self) -> &identity::Did {
+    pub fn actor(&self) -> &identity::Did {
         &self.actor
     }
 
@@ -479,7 +482,7 @@ impl ToolCallLifecycle {
         self.state
     }
 
-    pub(crate) fn request_doc_id(&self) -> Option<&str> {
+    pub fn request_doc_id(&self) -> Option<&str> {
         self.request_doc_id.as_deref()
     }
 
@@ -511,15 +514,15 @@ impl ToolCallLifecycle {
         Ok(request.request_id)
     }
 
-    pub(crate) fn session_id(&self) -> &str {
+    pub fn session_id(&self) -> &str {
         &self.session_id
     }
 
-    pub(crate) fn node_did(&self) -> &str {
+    pub fn node_did(&self) -> &str {
         &self.node_did
     }
 
-    pub(crate) fn requester_did(&self) -> Option<&str> {
+    pub fn requester_did(&self) -> Option<&str> {
         self.requester_did.as_deref()
     }
 

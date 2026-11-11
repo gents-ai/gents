@@ -65,7 +65,7 @@ impl ToolCallLifecycle {
         Ok(())
     }
 
-    pub(crate) async fn complete_with_presentation(
+    pub async fn complete_with_presentation(
         &mut self,
         result: &str,
         presentation: Option<gents_protocol::output::PayloadPresentation>,
@@ -74,7 +74,7 @@ impl ToolCallLifecycle {
         Ok(())
     }
 
-    pub(crate) async fn complete_raw_with_presentation(
+    pub async fn complete_raw_with_presentation(
         &mut self,
         raw: &str,
         rendered: &str,
@@ -175,7 +175,7 @@ impl ToolCallLifecycle {
         Ok(())
     }
 
-    pub(crate) async fn fail_with_presentation(
+    pub async fn fail_with_presentation(
         &mut self,
         result: &str,
         failure: super::FailureClass,
