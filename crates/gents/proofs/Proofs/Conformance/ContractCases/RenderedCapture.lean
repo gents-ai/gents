@@ -1,3 +1,4 @@
+import Proofs.Conformance.Family
 import Proofs.Conformance.ContractCases.Types
 import Proofs.Shared.RenderedCapture
 
@@ -53,12 +54,36 @@ structure RenderedCaptureKeyCase where
   deriving Repr
 
 structure RenderedCaptureManifestBlock where
-  ref : ArtifactRef
+  artifact : ArtifactRef
   pinnedWitness : FieldCommitWitness
   storedWitness : Option FieldCommitWitness
-  deriving Repr
+  deriving Lean.ToJson
 
-structure RenderedCaptureStorageCase where
+inductive RenderedCaptureStoredKind where
+  | legacyFull
+  | full
+  | delta
+  | manifest
+  deriving Lean.ToJson
+
+structure RenderedCaptureBlockRef where
+  artifact : ArtifactRef
+  witness : FieldCommitWitness
+  deriving Lean.ToJson
+
+structure RenderedCaptureStoreEntry where
+  artifact : ArtifactRef
+  commit : FieldCommitWitness
+  kind : RenderedCaptureStoredKind
+  bytes : List Nat
+  baseRef : ArtifactRef
+  baseWitness : FieldCommitWitness
+  prefixLen : Nat
+  suffixLen : Nat
+  blocks : List RenderedCaptureBlockRef
+  deriving Lean.ToJson
+
+structure RenderedCaptureStorageInput where
   name : String
   encoding : String
   request : Nat
@@ -70,99 +95,134 @@ structure RenderedCaptureStorageCase where
   names, read out of the row's store; empty for the other encodings. -/
   manifestBlocks : List RenderedCaptureManifestBlock
   manifestRoot : Option RenderedCaptureManifestBlock
+  store : List RenderedCaptureStoreEntry
+  deriving Lean.ToJson
+
+structure RenderedCaptureStorageOutput where
   decodedRequest : Option Nat
   sendPermitted : Bool
-  deriving Repr
+  deriving Lean.ToJson
+
+private def storedEntry (artifact commit : Nat) (kind : RenderedCaptureStoredKind)
+    (bytes : List Nat) : RenderedCaptureStoreEntry :=
+  { artifact, commit, kind, bytes, baseRef := 0, baseWitness := 0, prefixLen := 0
+  , suffixLen := 0, blocks := [] }
+
+private def legacyEntry (artifact commit : Nat) (bytes : List Nat) :
+    RenderedCaptureStoreEntry :=
+  storedEntry artifact commit .legacyFull bytes
+
+private def fullEntry (artifact commit : Nat) (bytes : List Nat) :
+    RenderedCaptureStoreEntry :=
+  storedEntry artifact commit .full bytes
+
+private def deltaEntry (artifact commit baseRef baseWitness prefixLen suffixLen : Nat)
+    (middle : List Nat) : RenderedCaptureStoreEntry :=
+  { storedEntry artifact commit .delta middle with
+    baseRef, baseWitness, prefixLen, suffixLen }
+
+private def manifestEntry (artifact commit : Nat) (blocks : List (Nat × Nat)) :
+    RenderedCaptureStoreEntry :=
+  { storedEntry artifact commit .manifest [] with
+    blocks := blocks.map fun (artifact, witness) => { artifact, witness } }
+
+private def storedVersion (entry : RenderedCaptureStoreEntry) : StoredVersion :=
+  { commit := entry.commit
+  , encoded :=
+      match entry.kind with
+      | .legacyFull => .legacyFull entry.bytes
+      | .full => .full entry.bytes
+      | .delta =>
+          .delta entry.baseRef entry.baseWitness entry.prefixLen entry.suffixLen entry.bytes
+      | .manifest => .manifest (entry.blocks.map fun block => (block.artifact, block.witness))
+  }
+
+private def storeOf (entries : List RenderedCaptureStoreEntry) : ArtifactStore :=
+  fun artifact =>
+    (entries.find? fun entry => entry.artifact == artifact).map storedVersion
 
 private def manifestBlocks (store : ArtifactStore) : List RenderedCaptureManifestBlock :=
   match store 1 with
   | some { encoded := .manifest blocks, .. } =>
-      blocks.map fun (ref, pinnedWitness) =>
-        { ref, pinnedWitness, storedWitness := (store ref).map (·.commit) }
+      blocks.map fun (artifact, pinnedWitness) =>
+        { artifact, pinnedWitness, storedWitness := (store artifact).map (·.commit) }
   | _ => []
 
-private def storageCase (name encoding : String) (store : ArtifactStore)
+private def storageInput (name encoding : String) (entries : List RenderedCaptureStoreEntry)
     (request : Nat) (baseWitness : Option Nat) (baseDepth maxDepth : Nat)
-    (baseVerified : Bool) : RenderedCaptureStorageCase :=
-  let decoded := resolveRequest store (maxDepth + 1) 1 10
+    (baseVerified : Bool) : RenderedCaptureStorageInput :=
+  let store := storeOf entries
   let root := if encoding == "manifest_tree" then
     match manifestBlocks store with
     | [root] => some root
     | _ => none
     else none
   let children := match root with
-    | some block => manifestBlocks (fun ref => if ref = 1 then store block.ref else store ref)
+    | some block => manifestBlocks (fun ref => if ref = 1 then store block.artifact else store ref)
     | none => manifestBlocks store
   { name, encoding, request, baseWitness, baseDepth, maxDepth, baseVerified
   , manifestBlocks := children
   , manifestRoot := root
-  , decodedRequest := decoded.map CanonicalRequest.value
-  , sendPermitted := decoded == some { value := request }
+  , store := entries
   }
 
-def renderedCaptureStorageCases : List RenderedCaptureStorageCase :=
-  [ storageCase "legacy_full_remains_readable" "legacy_full"
-      (fun ref => if ref = 1 then some ⟨10, .legacyFull [100]⟩ else none)
-      100 none 0 8 false
-  , storageCase "versioned_full_is_lossless" "full"
-      (fun ref => if ref = 1 then some ⟨10, .full [101]⟩ else none)
-      101 none 0 8 false
-  , storageCase "verified_delta_is_lossless" "delta"
-      (fun ref => if ref = 1 then some ⟨10, .delta 2 41 0 0 [102]⟩
-        else if ref = 2 then some ⟨41, .full [99]⟩ else none)
-      102 (some 41) 0 8 true
-  , storageCase "missing_or_changed_base_blocks_send" "delta"
-      (fun ref => if ref = 1 then some ⟨10, .delta 2 42 0 0 [103]⟩
-        else if ref = 2 then some ⟨999, .full [99]⟩ else none)
-      103 (some 42) 0 8 false
-  , storageCase "over_depth_delta_blocks_send" "delta"
-      (fun ref => if ref = 1 then some ⟨10, .delta 2 43 0 0 [104]⟩
-        else if ref = 2 then some ⟨43, .full [99]⟩ else none)
-      104 (some 43) 0 0 true
-  , storageCase "manifest_of_full_blocks_is_lossless" "manifest"
-      (fun ref => if ref = 1 then some ⟨10, .manifest [(2, 41), (3, 42)]⟩
-        else if ref = 2 then some ⟨41, .full [105]⟩
-        else if ref = 3 then some ⟨42, .full []⟩ else none)
-      105 none 0 3 false
-  , storageCase "manifest_missing_block_blocks_send" "manifest"
-      (fun ref => if ref = 1 then some ⟨10, .manifest [(2, 41), (3, 42)]⟩
-        else if ref = 2 then some ⟨41, .full [106]⟩ else none)
-      106 none 0 3 false
-  , storageCase "manifest_block_witness_mismatch_blocks_send" "manifest"
-      (fun ref => if ref = 1 then some ⟨10, .manifest [(2, 41), (3, 42)]⟩
-        else if ref = 2 then some ⟨41, .full [107]⟩
-        else if ref = 3 then some ⟨999, .full []⟩ else none)
-      107 none 0 3 false
-  , storageCase "empty_manifest_decode_fails_blocks_send" "manifest"
-      (fun ref => if ref = 1 then some ⟨10, .manifest []⟩ else none)
-      108 none 0 3 false
-  , storageCase "manifest_over_fuel_blocks_send" "manifest"
-      (fun ref => if ref = 1 then some ⟨10, .manifest [(2, 43), (3, 44)]⟩
-        else if ref = 2 then some ⟨43, .full [109]⟩
-        else if ref = 3 then some ⟨44, .full []⟩ else none)
-      109 none 0 2 false
-  , storageCase "shared_manifest_tree_is_lossless" "manifest_tree"
-      (fun ref => if ref = 1 then some ⟨10, .manifest [(4, 44)]⟩
-        else if ref = 4 then some ⟨44, .manifest [(2, 41), (3, 42)]⟩
-        else if ref = 2 then some ⟨41, .full [110]⟩
-        else if ref = 3 then some ⟨42, .full []⟩ else none)
-      110 none 0 8 false
-  , storageCase "shared_manifest_changed_node_blocks_send" "manifest_tree"
-      (fun ref => if ref = 1 then some ⟨10, .manifest [(4, 44)]⟩
-        else if ref = 4 then some ⟨999, .manifest [(2, 41), (3, 42)]⟩
-        else if ref = 2 then some ⟨41, .full [111]⟩
-        else if ref = 3 then some ⟨42, .full []⟩ else none)
-      111 none 0 8 false
-  , storageCase "shared_manifest_missing_leaf_blocks_send" "manifest_tree"
-      (fun ref => if ref = 1 then some ⟨10, .manifest [(4, 44)]⟩
-        else if ref = 4 then some ⟨44, .manifest [(2, 41), (3, 42)]⟩
-        else if ref = 2 then some ⟨41, .full [112]⟩ else none)
-      112 none 0 8 false
-  ]
+@[conformance_family]
+def renderedCaptureStorageResolution :
+    Conformance.Family RenderedCaptureStorageInput RenderedCaptureStorageOutput where
+  inputs :=
+    [ storageInput "legacy_full_remains_readable" "legacy_full"
+        [legacyEntry 1 10 [100]]
+        100 none 0 8 false
+    , storageInput "versioned_full_is_lossless" "full"
+        [fullEntry 1 10 [101]]
+        101 none 0 8 false
+    , storageInput "verified_delta_is_lossless" "delta"
+        [deltaEntry 1 10 2 41 0 0 [102], fullEntry 2 41 [99]]
+        102 (some 41) 0 8 true
+    , storageInput "missing_or_changed_base_blocks_send" "delta"
+        [deltaEntry 1 10 2 42 0 0 [103], fullEntry 2 999 [99]]
+        103 (some 42) 0 8 false
+    , storageInput "over_depth_delta_blocks_send" "delta"
+        [deltaEntry 1 10 2 43 0 0 [104], fullEntry 2 43 [99]]
+        104 (some 43) 0 0 true
+    , storageInput "manifest_of_full_blocks_is_lossless" "manifest"
+        [manifestEntry 1 10 [(2, 41), (3, 42)], fullEntry 2 41 [105], fullEntry 3 42 []]
+        105 none 0 3 false
+    , storageInput "manifest_missing_block_blocks_send" "manifest"
+        [manifestEntry 1 10 [(2, 41), (3, 42)], fullEntry 2 41 [106]]
+        106 none 0 3 false
+    , storageInput "manifest_block_witness_mismatch_blocks_send" "manifest"
+        [manifestEntry 1 10 [(2, 41), (3, 42)], fullEntry 2 41 [107], fullEntry 3 999 []]
+        107 none 0 3 false
+    , storageInput "empty_manifest_decode_fails_blocks_send" "manifest"
+        [manifestEntry 1 10 []]
+        108 none 0 3 false
+    , storageInput "manifest_over_fuel_blocks_send" "manifest"
+        [manifestEntry 1 10 [(2, 43), (3, 44)], fullEntry 2 43 [109], fullEntry 3 44 []]
+        109 none 0 2 false
+    , storageInput "shared_manifest_tree_is_lossless" "manifest_tree"
+        [ manifestEntry 1 10 [(4, 44)], manifestEntry 4 44 [(2, 41), (3, 42)]
+        , fullEntry 2 41 [110], fullEntry 3 42 [] ]
+        110 none 0 8 false
+    , storageInput "shared_manifest_changed_node_blocks_send" "manifest_tree"
+        [ manifestEntry 1 10 [(4, 44)], manifestEntry 4 999 [(2, 41), (3, 42)]
+        , fullEntry 2 41 [111], fullEntry 3 42 [] ]
+        111 none 0 8 false
+    , storageInput "shared_manifest_missing_leaf_blocks_send" "manifest_tree"
+        [ manifestEntry 1 10 [(4, 44)], manifestEntry 4 44 [(2, 41), (3, 42)]
+        , fullEntry 2 41 [112] ]
+        112 none 0 8 false
+    ]
+  model := fun i =>
+    let decoded := resolveRequest (storeOf i.store) (i.maxDepth + 1) 1 10
+    { decodedRequest := decoded.map CanonicalRequest.value
+    , sendPermitted := decoded == some { value := i.request }
+    }
 
-theorem renderedCaptureStorageCases_pinned :
-    renderedCaptureStorageCases.map
-      (fun row => (row.name, row.decodedRequest, row.sendPermitted)) =
+theorem renderedCaptureStorageResolution_pinned :
+    renderedCaptureStorageResolution.inputs.map
+      (fun i => (i.name, (renderedCaptureStorageResolution.model i).decodedRequest,
+        (renderedCaptureStorageResolution.model i).sendPermitted)) =
       [ ("legacy_full_remains_readable", some 100, true)
       , ("versioned_full_is_lossless", some 101, true)
       , ("verified_delta_is_lossless", some 102, true)
@@ -179,9 +239,12 @@ theorem renderedCaptureStorageCases_pinned :
       ] := by
   rfl
 
-theorem renderedCaptureStorageCases_no_fail_open :
-    renderedCaptureStorageCases.all
-      (fun row => !row.sendPermitted || row.decodedRequest == some row.request) = true := by
+theorem renderedCaptureStorageResolution_no_fail_open :
+    renderedCaptureStorageResolution.inputs.all
+      (fun i =>
+        !(renderedCaptureStorageResolution.model i).sendPermitted
+          || (renderedCaptureStorageResolution.model i).decodedRequest == some i.request)
+      = true := by
   rfl
 
 private def contractNodeDid : Nat := 7
