@@ -3,23 +3,11 @@ use serde_json::Value;
 
 #[test]
 fn checkpoint_wire_fallback_matches_executed_model() {
-    let contract: Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let cases = contract["checkpoint_fallback_cases"].as_array().unwrap();
-    assert_eq!(cases.len(), 24);
-    for case in cases {
-        let parsed = parse_fallback_checkpoint(case["raw"].as_str().unwrap());
-        if case["expected"].is_null() {
-            assert!(parsed.is_err(), "{} accepted invalid input", case["name"]);
-        } else {
-            let checkpoint = parsed.unwrap_or_else(|error| panic!("{}: {error}", case["name"]));
-            assert_eq!(
-                serde_json::to_value(checkpoint).unwrap(),
-                case["expected"],
-                "{}",
-                case["name"]
-            );
-        }
-    }
+    gents_lean_vocab::families::compaction_checkpoint_fallback_checkpoint::replay(|i| {
+        parse_fallback_checkpoint(&i.raw)
+            .ok()
+            .map(|checkpoint| gents_lean_vocab::family::recode(&checkpoint))
+    });
 }
 
 #[test]
