@@ -37,10 +37,14 @@ pub mod title_text;
 pub use title_text::display_session_title;
 #[cfg(test)]
 mod tests;
+#[cfg(any(test, feature = "test-fixtures"))]
+mod history_fixture;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use history_fixture::import_history_observation_as;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use history_fixture::import_history_observation;
 #[cfg(test)]
-pub(crate) use tests::import_history_observation_as;
-#[cfg(test)]
-pub use tests::{import_history_observation, publish_signed_history};
+pub use tests::publish_signed_history;
 
 pub use crate::tool_call::query::result::{
     load_tool_call_arguments, load_tool_call_presentation, load_tool_call_result,

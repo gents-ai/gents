@@ -52,7 +52,7 @@ impl FileChanges {
         self.0.tool_call_doc_id == tool_call_doc_id
     }
 
-    pub(crate) fn decode(
+    pub fn decode(
         tool_call_doc_id: &str,
         value: serde_json::Value,
     ) -> anyhow::Result<ChangeBatch> {
