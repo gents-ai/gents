@@ -13,7 +13,7 @@ use gents_store::config_client::ConfigAccess;
 use gents_tools::builtin::self_config::ConfigureAgentParams;
 use gents_tools::surface::SelfConfigProcessCeiling;
 
-pub use gents_protocol::operations::agent::{AgentOutcome, AgentRefusal, NextCall};
+pub use gents_protocol::operations::agent::{AgentOutcome, AgentRefusal};
 pub use gents_tools::builtin::self_config::agent::{
     decide_agent_operation, materialize_agent, AgentActor, AgentCandidate, AgentCatalogView,
     AgentCreateRequest, AgentOperation, MaterializedAgentSession, AGENT_EDIT_FIELDS,

@@ -122,6 +122,10 @@ pub async fn set_account_label(
     credential_id: &str,
     label: &str,
 ) -> Result<()> {
+    crate::operations::admit_account_operation_on(
+        access,
+        gents_protocol::operations::inference::AccountOperation::Label,
+    )?;
     let label = validate_account_label(label)?;
     access
         .transact_write("oauth_credential.label", |txn| {
@@ -170,6 +174,10 @@ pub async fn set_account_enabled(
     credential_id: &str,
     enabled: bool,
 ) -> Result<()> {
+    crate::operations::admit_account_operation_on(
+        access,
+        gents_protocol::operations::inference::AccountOperation::Disable,
+    )?;
     access
         .transact_write("oauth_credential.enabled", |txn| {
             Box::pin(async move {

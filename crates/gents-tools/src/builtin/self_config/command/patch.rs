@@ -34,18 +34,53 @@ impl ConfigCommandTool {
         verb: &str,
         request: ApplyRequest<'static>,
     ) -> Result<String> {
+        let help_verb = if request.require_create {
+            "create"
+        } else {
+            "update"
+        };
         let outcome = match verb {
             "preview" => {
                 anyhow::ensure!(self.preview, "preview is not granted for this agent");
-                core.preview(request).await?
+                core.preview(request).await
             }
             "edit" => {
                 self.execution.enter_mutation();
-                core.apply(request).await?
+                core.apply(request).await
             }
             _ => unreachable!("patch verb"),
         };
-        outcome_text(&outcome)
+        match outcome {
+            Ok(outcome) => outcome_text(&outcome),
+            Err(ops::ApplyFailure::Other(error)) => Err(error),
+            Err(ops::ApplyFailure::Inference { document, error }) => inference_refusal(
+                verb == "preview",
+                &error,
+                error.recovery(document, help_verb),
+            ),
+        }
+    }
+}
+
+/// A refused inference operation answers with what happened and the call its
+/// error names. A refused preview is a successful answer carrying both.
+pub(super) fn inference_refusal(
+    preview: bool,
+    error: &gents_protocol::operations::inference::InferenceOperationError,
+    next: gents_protocol::operations::NextCall,
+) -> Result<String> {
+    let message = gents_protocol::error_chain::ErrorChain(error).to_string();
+    let next_call = guidance::next_call(next);
+    match error.refusal().filter(|_| preview) {
+        Some(refusal) => gents_session::session::output_render::ordered! {
+            "admitted": false,
+            "committed": false,
+            "refusal": refusal.as_str(),
+            "message": message,
+            "next_call": next_call,
+        }
+        .pretty(),
+        None => Err(CommandGuidance { message, next_call }.into()),
     }
 }
 

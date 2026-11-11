@@ -1,10 +1,9 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use serde_json::{Map, Value};
 
 use super::{decode_merged, read_owned_doc, AgentAnchor};
 use gents_documents::patch::SelfConfigTarget;
-use gents_documents::{BackendAuth, Tools};
-use gents_inference::backends::provider::BackendProviderOauthExt;
+use gents_documents::Tools;
 use gents_store::config_client::ConfigApplyTxn;
 
 /// Lean `SelfConfig.keepsReach`.
@@ -63,101 +62,6 @@ pub fn guard_tools_keep_control(
     Ok(())
 }
 
-pub fn guard_backend_auth(
-    stored: &Map<String, Value>,
-    candidate: &Map<String, Value>,
-) -> Result<()> {
-    let auth = |doc: &Map<String, Value>| {
-        serde_json::from_value::<BackendAuth>(doc.get("auth").cloned().unwrap_or(Value::Null))
-            .map_err(|error| anyhow!("backend auth is not valid: {error}"))
-    };
-    let (stored, candidate) = (auth(stored)?, auth(candidate)?);
-    if candidate.is_stored_secret() || matches!(candidate, BackendAuth::Credential { .. }) {
-        anyhow::ensure!(
-            candidate == stored,
-            "raw credentials are operator-managed; select an environment or OAuth reference"
-        );
-    }
-    if let BackendAuth::NodeOAuth { account_ref } = &candidate {
-        let stored_ref = match &stored {
-            BackendAuth::NodeOAuth { account_ref } => account_ref.as_ref(),
-            _ => None,
-        };
-        anyhow::ensure!(
-            account_ref.as_ref() == stored_ref,
-            "OAuth account references are operator-managed; keep the backend's account_ref as stored"
-        );
-    }
-    if matches!(candidate, BackendAuth::NodeOAuthPool { .. }) {
-        anyhow::ensure!(
-            candidate == stored,
-            "OAuth account pools are operator-managed; keep the backend's auth as stored"
-        );
-    }
-    Ok(())
-}
-/// Lean `SelfConfig.backendChoiceAllowed`; `default_account` is `next`'s
-/// provider default account (Lean `dflt`).
-pub fn guard_backend_choice(
-    current: Option<&gents_documents::InferenceBackend>,
-    next: &gents_documents::InferenceBackend,
-    default_account: Option<&str>,
-) -> Result<()> {
-    match &next.auth {
-        BackendAuth::NodeOAuth { account_ref } => {
-            let allowed = match current {
-                Some(current) if current.provider_kind == next.provider_kind => {
-                    current.auth == next.auth
-                }
-                _ => account_ref.as_deref() == default_account,
-            };
-            anyhow::ensure!(
-                allowed,
-                "backend {} selects another {} account; keep the current account, or pick an account-free backend or another provider's default account",
-                next.backend_id,
-                next.provider_kind
-            );
-        }
-        BackendAuth::NodeOAuthPool { .. } => anyhow::ensure!(
-            current.is_some_and(|current| {
-                current.provider_kind == next.provider_kind && current.auth == next.auth
-            }),
-            "backend {} rotates a {} account pool the profile does not use; keep the current backend",
-            next.backend_id,
-            next.provider_kind
-        ),
-        _ => {}
-    }
-    Ok(())
-}
-pub async fn guard_backend_choice_in_txn(
-    txn: &ConfigApplyTxn<'_>,
-    owner: &str,
-    current_backend_id: Option<&str>,
-    next_backend_id: &str,
-) -> Result<()> {
-    let backend = |id: String| async move {
-        read_owned_doc(txn, SelfConfigTarget::InferenceBackend, owner, &id)
-            .await?
-            .map(|(_, doc)| gents_documents::InferenceBackend::from_value(&Value::Object(doc)))
-            .transpose()
-    };
-    let current = match current_backend_id {
-        Some(id) => backend(id.to_owned()).await?,
-        None => None,
-    };
-    let next = backend(next_backend_id.to_owned())
-        .await?
-        .with_context(|| format!("InferenceBackend {next_backend_id:?} not found"))?;
-    let default_account = match (&next.auth, next.provider_kind.oauth_provider()) {
-        (BackendAuth::NodeOAuth { .. }, Some(provider)) => {
-            gents_inference::auth::credential::provider_default_account_ref(txn, owner, provider)
-                .await?
-        }
-        _ => None,
-    };
-    guard_backend_choice(current.as_ref(), &next, default_account.as_deref())
-}
 pub async fn guard_compaction_choice_in_txn(
     txn: &ConfigApplyTxn<'_>,
     target: SelfConfigTarget,
@@ -224,7 +128,9 @@ pub async fn guard_compaction_choice_in_txn(
         profile_backend_id(txn, &owner, &profile).await
     };
     let (current, next) = (backend(current).await?, backend(next).await?);
-    guard_backend_choice_in_txn(txn, &owner, Some(&current), &next).await
+    gents_inference::operations::admit_backend_choice_in_txn(txn, &owner, Some(&current), &next)
+        .await?;
+    Ok(())
 }
 pub async fn profile_backend_id(
     txn: &ConfigApplyTxn<'_>,
@@ -236,6 +142,3 @@ pub async fn profile_backend_id(
         .and_then(|(_, doc)| doc.get("backend_id")?.as_str().map(ToOwned::to_owned))
         .with_context(|| format!("InferenceProfile {profile_id:?} not found"))
 }
-
-#[cfg(test)]
-mod cloud_credentials_tests;

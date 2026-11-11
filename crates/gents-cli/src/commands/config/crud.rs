@@ -1,8 +1,10 @@
 use anyhow::{Context, Result};
+use gents_protocol::operations::inference::InferenceDocument;
 use gents_store::collection::Collection;
 use gents_store::graphql::escape_graphql_string;
 use serde_json::{json, Value};
 
+use super::inference_failure::InferenceFailure;
 use crate::cli::output_format::OutputFormat;
 use crate::cli::{ConfigListArgs, ConfigShowArgs};
 use crate::config_import::apply_delete_collection;
@@ -187,6 +189,32 @@ pub(super) async fn config_rm(spec: ConfigDocumentSpec, args: ConfigShowArgs) ->
             "collection": spec.collection.graphql_type(),
             "id": id,
             "deleted": deleted,
+        })),
+        _ => unreachable!("ensure_supported restricts config rm output formats"),
+    }
+}
+
+pub(super) async fn inference_rm(document: InferenceDocument, args: ConfigShowArgs) -> Result<()> {
+    let noun = document.resource();
+    let id = resolve_dual_id(noun, "--id", args.id.as_deref(), args.id_flag.as_deref())?;
+    let output = args
+        .output
+        .ensure_supported(&format!("config {noun} rm"), &[OutputFormat::Json])?;
+    let (access, node_did) =
+        super::profile::target(args.home.as_deref(), args.graphql.as_deref()).await?;
+    let receipt = gents_inference::operations::remove(&access, &node_did, document, &id)
+        .await
+        .map_err(|error| InferenceFailure::new(error, document, "rm"))?;
+    anyhow::ensure!(
+        receipt.removed,
+        "not found: {} {node_did}/{id}",
+        receipt.collection
+    );
+    match output {
+        OutputFormat::Json => print_json(&json!({
+            "collection": receipt.collection,
+            "id": id,
+            "deleted": 1,
         })),
         _ => unreachable!("ensure_supported restricts config rm output formats"),
     }

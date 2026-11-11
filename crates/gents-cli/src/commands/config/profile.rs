@@ -1,3 +1,4 @@
+use super::inference_failure::InferenceFailure;
 use crate::cli::output_format::OutputFormat;
 use crate::cli::{
     ConfigListArgs, ConfigShowArgs, InferenceProfileSetAccountArgs, InferenceProfileSetArgs,
@@ -9,14 +10,8 @@ use gents_documents::InferenceProfile;
 use gents_inference::auth::credential::{
     backend_account, serving_account, AccountState, AccountSummary, ServingAccount,
 };
+use gents_protocol::operations::inference::{DocumentWrite, InferenceDocument, WriteMode};
 use serde_json::{json, Value};
-
-fn decode_profile(contents: &[u8]) -> Result<InferenceProfile> {
-    let profile: InferenceProfile =
-        serde_json::from_slice(contents).context("decoding canonical InferenceProfile document")?;
-    profile.validate()?;
-    Ok(profile)
-}
 
 pub(super) async fn inference_profile_set(args: InferenceProfileSetArgs) -> Result<()> {
     let contents =
@@ -116,43 +111,100 @@ async fn set_profile(
     account: Option<&str>,
     provider: Option<&str>,
 ) -> Result<Value> {
-    if account.is_none() && provider.is_none() {
-        let profile = decode_profile(contents)?;
-        let snapshot = snapshot(access, &profile.node_did).await?;
-        return write_checked(access, &snapshot, &profile, false).await;
-    }
+    let fail = |error| InferenceFailure::new(error, InferenceDocument::Profile, "update");
     let mut value: Value =
         serde_json::from_slice(contents).context("decoding canonical InferenceProfile document")?;
-    let node_did = value["node_did"]
-        .as_str()
-        .context("the profile document names no node_did")?
-        .to_owned();
-    let snapshot = snapshot(access, &node_did).await?;
-    let summary = match (account, provider) {
-        (Some(account), provider) => snapshot.pick(account, provider)?,
-        (None, Some(provider)) => snapshot
-            .accounts
-            .iter()
-            .find(|account| account.provider == provider && account.default)
-            .with_context(|| {
-                gents_inference::auth::credential::enabled_accounts_note(
-                    provider,
-                    &snapshot.accounts,
-                )
-            })?,
-        (None, None) => unreachable!("handled above"),
-    };
-    let backend_id = account_backend(&snapshot, summary)?;
-    match value["backend_id"].as_str() {
-        Some(named) if named != backend_id => anyhow::bail!(
-            "the file names backend {named:?}, but account {:?} runs on {backend_id:?}; \
-             drop backend_id from the file or the account flags",
-            summary.label
-        ),
-        _ => value["backend_id"] = json!(backend_id),
+    let (node_did, _) =
+        DocumentWrite::from_document(InferenceDocument::Profile, &value, WriteMode::Put)
+            .map_err(fail)?;
+    let before = snapshot(access, &node_did).await?;
+    if account.is_some() || provider.is_some() {
+        let summary = match (account, provider) {
+            (Some(account), provider) => before.pick(account, provider)?,
+            (None, Some(provider)) => before
+                .accounts
+                .iter()
+                .find(|account| account.provider == provider && account.default)
+                .with_context(|| {
+                    gents_inference::auth::credential::enabled_accounts_note(
+                        provider,
+                        &before.accounts,
+                    )
+                })?,
+            (None, None) => unreachable!("guarded above"),
+        };
+        let backend_id = account_backend(&before, summary)?;
+        match value["backend_id"].as_str() {
+            Some(named) if named != backend_id => anyhow::bail!(
+                "the file names backend {named:?}, but account {:?} runs on {backend_id:?}; \
+                 drop backend_id from the file or the account flags",
+                summary.label
+            ),
+            _ => value["backend_id"] = json!(backend_id),
+        }
     }
-    let profile = decode_profile(&serde_json::to_vec(&value)?)?;
-    write_checked(access, &snapshot, &profile, account.is_none()).await
+    let (_, write) =
+        DocumentWrite::from_document(InferenceDocument::Profile, &value, WriteMode::Put)
+            .map_err(fail)?;
+    let effective_backend = value
+        .get("backend_id")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .or_else(|| {
+            before
+                .profiles
+                .iter()
+                .find(|stored| stored.profile_id == write.id)
+                .map(|stored| stored.backend_id.clone())
+        });
+    if let Some(backend_id) = effective_backend.as_deref() {
+        let moved = !before
+            .profiles
+            .iter()
+            .any(|stored| stored.profile_id == write.id && stored.backend_id == backend_id);
+        if let Some(ServingAccount {
+            label,
+            state,
+            provider: Some(provider),
+        }) = before
+            .backends
+            .iter()
+            .find(|backend| backend.backend_id == backend_id)
+            .map(|backend| serving_account(backend, &before.accounts))
+        {
+            anyhow::ensure!(
+                !moved || state == AccountState::Enabled,
+                "account {label:?} is {}; {}",
+                state.as_str(),
+                gents_inference::auth::credential::enabled_accounts_note(
+                    &provider,
+                    &before.accounts
+                )
+            );
+        }
+    }
+    let receipt = gents_inference::operations::write(access, &node_did, &write)
+        .await
+        .map_err(fail)?;
+    let after = snapshot(access, &node_did).await?;
+    let profile = after
+        .profiles
+        .iter()
+        .find(|stored| stored.profile_id == write.id)
+        .context("written profile missing")?;
+    let serving = after
+        .backends
+        .iter()
+        .find(|backend| backend.backend_id == profile.backend_id)
+        .map(|backend| serving_account(backend, &after.accounts));
+    let mut output = json!({"doc_id":receipt.doc_id,"node_did":profile.node_did,"profile_id":profile.profile_id,"backend_id":profile.backend_id,"model_name":profile.model_name,"created":receipt.created,"changed":receipt.changed});
+    if let Some(serving) = serving {
+        output["account"] = serde_json::to_value(serving)?;
+    }
+    if account.is_none() && provider.is_some() {
+        output["picked"] = json!("default");
+    }
+    Ok(output)
 }
 
 async fn set_account(
@@ -227,49 +279,6 @@ fn account_backend(snapshot: &Snapshot, account: &AccountSummary) -> Result<Stri
             many.join(", ")
         ),
     }
-}
-
-async fn write_checked(
-    access: &ConfigAccess,
-    snapshot: &Snapshot,
-    profile: &InferenceProfile,
-    picked_default: bool,
-) -> Result<Value> {
-    let account = snapshot
-        .backends
-        .iter()
-        .find(|backend| backend.backend_id == profile.backend_id)
-        .map(|backend| serving_account(backend, &snapshot.accounts));
-    let moved = !snapshot.profiles.iter().any(|stored| {
-        stored.profile_id == profile.profile_id && stored.backend_id == profile.backend_id
-    });
-    if let Some(ServingAccount {
-        label,
-        state,
-        provider: Some(provider),
-    }) = &account
-    {
-        anyhow::ensure!(
-            !moved || *state == AccountState::Enabled,
-            "account {label:?} is {}; {}",
-            state.as_str(),
-            gents_inference::auth::credential::enabled_accounts_note(provider, &snapshot.accounts)
-        );
-    }
-    let doc_id = gents_documents::write_inference_profile_document(
-        access,
-        profile,
-        &gents_inference::resolved::ProviderProfilePolicy,
-    )
-    .await?;
-    let mut output = json!({"doc_id":doc_id,"node_did":profile.node_did,"profile_id":profile.profile_id,"backend_id":profile.backend_id,"model_name":profile.model_name});
-    if let Some(account) = account {
-        output["account"] = serde_json::to_value(account)?;
-    }
-    if picked_default {
-        output["picked"] = json!("default");
-    }
-    Ok(output)
 }
 
 pub(super) async fn target(

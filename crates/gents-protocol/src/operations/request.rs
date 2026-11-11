@@ -3,7 +3,7 @@ use std::error::Error;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::agent::NextCall;
+use super::NextCall;
 use crate::request_input::{QueueDelivery, RequestInput};
 use crate::request_lifecycle::RequestLifecycleState;
 

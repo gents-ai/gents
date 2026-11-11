@@ -7,6 +7,7 @@ pub mod compaction;
 pub mod connection_fingerprint;
 pub mod inference_observation;
 pub mod llm;
+pub mod operations;
 pub mod profile_switch;
 pub mod rendered_request;
 pub mod resolved;

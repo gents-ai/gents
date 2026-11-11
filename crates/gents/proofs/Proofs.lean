@@ -7,6 +7,7 @@ import Proofs.Store.StorageObservation
 import Proofs.Store.StorageWriteGate
 import Proofs.Store.NativeCompletion
 import Proofs.Store.NativeClaimLifetime
+import Proofs.Inference.Operations
 import Proofs.Inference.Scheduling
 import Proofs.Session.Request
 import Proofs.Session.RequestExecutionLease

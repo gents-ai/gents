@@ -9,6 +9,7 @@ export type BridgeErrorPayload = Omit<GeneratedBridgeError, OperationFields> &
   Partial<Pick<GeneratedBridgeError, OperationFields>>;
 
 const NEXT_CALL_KINDS: Record<BridgeNextCallKind, true> = {
+  verb: true,
   verbHelp: true,
   resourceHelp: true,
   inspect: true,
