@@ -317,6 +317,7 @@ pub(crate) async fn watch_queue(
     }
 }
 
+#[cfg(feature = "tauri-host")]
 pub fn spawn_plugin_approvals_watch<R>(
     app: tauri::AppHandle<R>,
     home: PathBuf,
