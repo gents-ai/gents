@@ -4,7 +4,7 @@ use gents_toolcalls::call::lifecycle::admission_fixture::{
 use gents_session::session::message::plan::PlannedWrite;
 use gents_session::session::message::*;
 use gents_protocol::tool_call::AwaitMode;
-use gents_protocol::request_lifecycle::{SessionMessageCause, SessionMessageTarget};
+use gents_protocol::request_lifecycle::SessionMessageTarget;
 use gents_session::session::message::Delivery;
 use gents_store::graphql::escape_graphql_string;
 

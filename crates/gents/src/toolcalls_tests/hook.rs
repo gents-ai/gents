@@ -1,17 +1,14 @@
 use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::sync::OnceLock;
 
 use gents_inference::llm::message::{
-    AssistantContent, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResultContent,
+    AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResultContent,
     UserContent,
 };
 use gents_inference::llm::{HookAction, ToolCallHookAction};
-use gents_loop::provider_input::ProviderInputProfile;
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 use serde_json::json;
-use chrono::Utc;
 
 use gents_store::schema::ensure_runtime_schemas;
 use gents_toolcalls::call::hook::fixtures::*;

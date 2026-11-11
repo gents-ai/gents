@@ -7,7 +7,6 @@ use gents_session::session::message::{
 };
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
-use gents_store::identity::NodeIdentity as _;
 use gents_toolcalls::call::lifecycle::admission_fixture::{
     cause, owner, set_state, signer, PublishedAdmissionOptions, PublishedSessionMessage,
 };
