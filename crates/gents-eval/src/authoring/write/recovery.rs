@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use super::{is_generated_eval_pack, replaceable_out, resolve_through_existing_ancestor};
+use super::{
+    is_generated_eval_pack, replaceable_out, resolve_through_existing_ancestor, WriteHost,
+};
 
 pub(super) fn sibling_name(out: &Path, suffix: &str) -> Result<OsString> {
     let name = out
@@ -51,7 +53,7 @@ pub(super) fn lock_output(out: &Path) -> Result<File> {
     Ok(file)
 }
 
-pub(crate) fn recover_output(out: &Path, gents_home: &Path) -> Result<()> {
+pub fn recover_output(out: &Path, gents_home: &Path, host: &dyn WriteHost) -> Result<()> {
     if out.symlink_metadata().is_ok() {
         return Ok(());
     }
@@ -63,13 +65,13 @@ pub(crate) fn recover_output(out: &Path, gents_home: &Path) -> Result<()> {
         return Ok(());
     }
     let _lock = lock_output(out)?;
-    recover_locked(out, gents_home)
+    recover_locked(out, gents_home, host)
 }
 
 /// Recovery only renames one validated generated pack. Staged packs and
 /// unrecognized siblings remain untouched; several backups require an
 /// operator choice instead of guessing which generation to restore.
-pub(super) fn recover_locked(out: &Path, gents_home: &Path) -> Result<()> {
+pub(super) fn recover_locked(out: &Path, gents_home: &Path, host: &dyn WriteHost) -> Result<()> {
     match out.symlink_metadata() {
         Ok(_) => return Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -107,7 +109,7 @@ pub(super) fn recover_locked(out: &Path, gents_home: &Path) -> Result<()> {
         {
             continue;
         }
-        replaceable_out(&pack, Some(&user_home), gents_home, &cwd)?;
+        replaceable_out(&pack, Some(&user_home), gents_home, &cwd, host)?;
         backups.push(pack);
     }
     anyhow::ensure!(

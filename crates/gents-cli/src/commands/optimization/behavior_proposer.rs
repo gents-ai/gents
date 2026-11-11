@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use gents_eval::optimization::{Proposal, ProposalInput, Proposer};
 use tokio::sync::Mutex;
 
-use crate::commands::eval::init::draft::json_blocks;
+use gents_eval::authoring::draft::json_blocks;
 use crate::commands::eval::init::turn::Turn;
 use crate::commands::eval::render::percent;
 

@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use gents_documents::EvalCase;
 use gents_eval::checks::CheckRegistry;
 
-use super::init::validate::case_catalog_conformance;
+use gents_eval::authoring::validate::case_catalog_conformance;
 use crate::cli::EvalChecksArgs;
 
 pub(super) fn checks(

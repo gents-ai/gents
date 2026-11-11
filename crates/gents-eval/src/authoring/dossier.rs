@@ -11,21 +11,21 @@ use gents_pack::pack::{
 };
 use serde_json::Value;
 
-pub(crate) struct Dossier {
-    pub(crate) pack_name: String,
-    pub(crate) pack_version: String,
-    pub(crate) pack_digest: String,
-    pub(crate) agent_slot: String,
-    pub(crate) slot: String,
-    pub(crate) collections: BTreeMap<String, BTreeSet<String>>,
-    pub(crate) text: String,
+pub struct Dossier {
+    pub pack_name: String,
+    pub pack_version: String,
+    pub pack_digest: String,
+    pub agent_slot: String,
+    pub slot: String,
+    pub collections: BTreeMap<String, BTreeSet<String>>,
+    pub text: String,
 }
 
-pub(crate) const DOSSIER_LIMIT_BYTES: usize = 64 * 1024;
+pub const DOSSIER_LIMIT_BYTES: usize = 64 * 1024;
 
 /// Captures become retained evidence, so credential collections cannot be
 /// offered as runtime capture sources.
-pub(super) fn runtime_collections() -> &'static BTreeMap<String, BTreeSet<String>> {
+pub fn runtime_collections() -> &'static BTreeMap<String, BTreeSet<String>> {
     static COLLECTIONS: OnceLock<BTreeMap<String, BTreeSet<String>>> = OnceLock::new();
     COLLECTIONS.get_or_init(|| {
         query::parse_sdl(&gents_protocol::schemas::ALL.join("\n"))
@@ -51,7 +51,7 @@ pub(super) fn runtime_collections() -> &'static BTreeMap<String, BTreeSet<String
     })
 }
 
-pub(crate) fn render(pack_dir: &Path, agent: Option<&str>) -> Result<Dossier> {
+pub fn render(pack_dir: &Path, agent: Option<&str>) -> Result<Dossier> {
     let (manifest, assets) = read_pack(pack_dir)?;
     let asset = |path: &str| {
         assets
@@ -282,7 +282,7 @@ pub(crate) fn render(pack_dir: &Path, agent: Option<&str>) -> Result<Dossier> {
     })
 }
 
-pub(super) fn read_pack(pack_dir: &Path) -> Result<(PackManifest, BTreeMap<String, Vec<u8>>)> {
+pub fn read_pack(pack_dir: &Path) -> Result<(PackManifest, BTreeMap<String, Vec<u8>>)> {
     let manifest_path = pack_dir.join("manifest.json");
     let manifest: PackManifest = serde_json::from_slice(
         &std::fs::read(&manifest_path)

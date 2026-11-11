@@ -9,6 +9,7 @@ use gents_documents::pack_spec::is_valid_pack_name;
 use gents_documents::{read_desired_state_record_in_txn, DesiredStateApplyPlan};
 use gents_documents::{EvalDefinition, EvalSplit};
 use gents_pack::pack::{interpolate, load_pack_config, PackInstallOptions, PackManifest};
+use gents_store::identity::NodeIdentity;
 use gents_store::{collection::Collection, config_client::ConfigAccess};
 use serde_json::json;
 use tempfile::TempDir;
@@ -17,33 +18,49 @@ use super::dossier::{read_pack, Dossier};
 use super::validate::Assembled;
 
 mod recovery;
-pub(crate) use recovery::recover_output;
+pub use recovery::recover_output;
+
+/// What eval output writing needs from the process that hosts it: the
+/// user-home path-safety check, whether a directory is a Gents home, and the
+/// client identity that installs into the scratch home.
+#[async_trait::async_trait]
+pub trait WriteHost: Sync {
+    /// `Ok(None)` when `home_dir` does not exist; otherwise its resolved path,
+    /// refused when it is not safe to overwrite.
+    fn overwritable_home(&self, home_dir: &Path, user_home: Option<&Path>)
+        -> Result<Option<PathBuf>>;
+
+    fn is_gents_home(&self, dir: &Path) -> Result<bool>;
+
+    async fn caller_identity(&self) -> Result<std::sync::Arc<dyn NodeIdentity>>;
+}
 
 const CONFIG: &str = "pack_config.json";
 const README: &str = "README.md";
 const GENERATED_BY: &str = "gents utils eval init";
 
-pub(crate) struct PilotNote {
-    pub(crate) run_ids: Vec<String>,
-    pub(crate) revised: bool,
+pub struct PilotNote {
+    pub run_ids: Vec<String>,
+    pub revised: bool,
 }
 
 #[derive(Debug)]
-pub(crate) struct Written {
-    pub(crate) out: PathBuf,
-    pub(crate) pack_name: String,
+pub struct Written {
+    pub out: PathBuf,
+    pub pack_name: String,
 }
 
-pub(crate) struct Staged {
+pub struct Staged {
     dir: TempDir,
     pack_name: String,
 }
 
-pub(crate) async fn stage(
+pub async fn stage(
     assembled: &Assembled,
     interview_summary: &str,
     subject: &Dossier,
     pilot: Option<&PilotNote>,
+    host: &dyn WriteHost,
 ) -> Result<Staged, Vec<String>> {
     let definition = &assembled.definition;
     let pack_name = pack_name(&definition.definition_id).map_err(|message| vec![message])?;
@@ -60,7 +77,7 @@ pub(crate) async fn stage(
         pilot,
     )
     .map_err(|error| vec![format!("writing the definition pack: {error:#}")])?;
-    round_trip(dir.path(), definition).await.map_err(|error| {
+    round_trip(dir.path(), definition, host).await.map_err(|error| {
         vec![format!(
             "the definition pack does not load and install: {error:#}"
         )]
@@ -68,16 +85,17 @@ pub(crate) async fn stage(
     Ok(Staged { dir, pack_name })
 }
 
-pub(crate) fn commit(
+pub fn commit(
     staged: Staged,
     out: &Path,
     force: bool,
     gents_home: &Path,
+    host: &dyn WriteHost,
 ) -> Result<Written> {
-    replaceable_destination(out, force, gents_home)?;
+    replaceable_destination(out, force, gents_home, host)?;
     let _output_lock = recovery::lock_output(out)?;
-    recovery::recover_locked(out, gents_home)?;
-    let replaced = replaceable_destination(out, force, gents_home)?;
+    recovery::recover_locked(out, gents_home, host)?;
+    let replaced = replaceable_destination(out, force, gents_home, host)?;
     if let Some(parent) = out.parent().filter(|parent| !parent.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating {}", parent.display()))?;
@@ -164,7 +182,12 @@ pub(crate) fn commit(
     })
 }
 
-fn replaceable_destination(out: &Path, force: bool, gents_home: &Path) -> Result<Option<PathBuf>> {
+fn replaceable_destination(
+    out: &Path,
+    force: bool,
+    gents_home: &Path,
+    host: &dyn WriteHost,
+) -> Result<Option<PathBuf>> {
     match out.symlink_metadata() {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error).context("inspecting eval output"),
@@ -177,7 +200,7 @@ fn replaceable_destination(out: &Path, force: bool, gents_home: &Path) -> Result
     );
     let user_home = std::env::home_dir();
     let cwd = std::env::current_dir().context("resolving the working directory")?;
-    replaceable_out(out, user_home.as_deref(), gents_home, &cwd).map(Some)
+    replaceable_out(out, user_home.as_deref(), gents_home, &cwd, host).map(Some)
 }
 
 fn restore(existing: &Path, holder: TempDir, old_pack: &Path, why: &str) -> Result<()> {
@@ -208,19 +231,20 @@ fn replaceable_out(
     user_home: Option<&Path>,
     gents_home: &Path,
     cwd: &Path,
+    host: &dyn WriteHost,
 ) -> Result<PathBuf> {
     anyhow::ensure!(
         !out.symlink_metadata()?.file_type().is_symlink(),
         "refusing to replace --out {}: it is a symbolic link",
         out.display()
     );
-    let resolved = crate::overwritable_home(out, user_home)
+    let resolved = host.overwritable_home(out, user_home)
         .map_err(|error| anyhow::anyhow!("refusing to replace --out: {error:#}"))?
         .with_context(|| format!("{} does not exist", out.display()))?;
     let contains =
         |path: &Path| std::fs::canonicalize(path).is_ok_and(|path| path.starts_with(&resolved));
     anyhow::ensure!(
-        !contains(gents_home) && gents_service::home_state::read_init_config(&resolved)?.is_none(),
+        !contains(gents_home) && !host.is_gents_home(&resolved)?,
         "refusing to replace --out {}: it is or contains a Gents home",
         out.display()
     );
@@ -297,7 +321,7 @@ fn is_generated_eval_pack(dir: &Path) -> bool {
         .is_ok_and(|config| !config.eval_definitions.is_empty())
 }
 
-pub(crate) fn refuse_subject_overlap(out: &Path, subject_dir: &Path) -> Result<()> {
+pub fn refuse_subject_overlap(out: &Path, subject_dir: &Path) -> Result<()> {
     let subject = subject_dir
         .canonicalize()
         .with_context(|| format!("resolving the subject directory {}", subject_dir.display()))?;
@@ -345,7 +369,7 @@ fn resolve_through_existing_ancestor(path: &Path) -> std::io::Result<PathBuf> {
     Ok(resolved)
 }
 
-pub(crate) fn readme(
+pub fn readme(
     assembled: &Assembled,
     interview_summary: &str,
     subject: &Dossier,
@@ -403,7 +427,7 @@ pub(crate) fn readme(
     text
 }
 
-pub(crate) fn case_table(definition: &EvalDefinition) -> String {
+pub fn case_table(definition: &EvalDefinition) -> String {
     let mut text = String::from("| case | split | stages | checks |\n|---|---|---|---|\n");
     for case in &definition.cases {
         let mut checks: Vec<&str> = case
@@ -425,7 +449,7 @@ pub(crate) fn case_table(definition: &EvalDefinition) -> String {
     text
 }
 
-pub(crate) fn rewrite_readme(
+pub fn rewrite_readme(
     out: &Path,
     assembled: &Assembled,
     interview_summary: &str,
@@ -455,7 +479,7 @@ fn case_asset(case_id: &str) -> String {
     format!("cases/{}.json", case_id.replace('-', "_"))
 }
 
-pub(crate) fn split_name(split: EvalSplit) -> String {
+pub fn split_name(split: EvalSplit) -> String {
     serde_json::to_value(split)
         .ok()
         .and_then(|value| value.as_str().map(str::to_owned))
@@ -540,10 +564,14 @@ fn write_files(
     Ok(())
 }
 
-async fn round_trip(dir: &Path, expected: &EvalDefinition) -> Result<EvalDefinition> {
+async fn round_trip(
+    dir: &Path,
+    expected: &EvalDefinition,
+    host: &dyn WriteHost,
+) -> Result<EvalDefinition> {
     let (manifest, assets) = read_pack(dir)?;
     let mut home = EmbeddedHome::create_temp("eval-init-roundtrip").await?;
-    let result = install_and_read_back(&mut home, &manifest, &assets, expected).await;
+    let result = install_and_read_back(&mut home, &manifest, &assets, expected, host).await;
     if let Err(error) = home.node.shutdown().await {
         tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down trial node");
     }
@@ -555,6 +583,7 @@ async fn install_and_read_back(
     manifest: &PackManifest,
     assets: &BTreeMap<String, Vec<u8>>,
     expected: &EvalDefinition,
+    host: &dyn WriteHost,
 ) -> Result<EvalDefinition> {
     let owner = home.did().to_owned();
     let config = load_pack_config(
@@ -586,10 +615,8 @@ async fn install_and_read_back(
     // The scratch home's runtime admits the operator's client as an operator;
     // the client then installs through the home's client-signed endpoint, as
     // every User write does.
-    let caller = std::sync::Arc::new(gents_service::home_state::load_client_identity().await?);
-    let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
-        caller.private_key_bytes(),
-    )?;
+    let caller = host.caller_identity().await?;
+    let capability = caller.client_signing_capability()?;
     home.set_evaluator(caller.clone(), capability);
     gents_store::identity::GrantSet::OperatorUser
         .grant(

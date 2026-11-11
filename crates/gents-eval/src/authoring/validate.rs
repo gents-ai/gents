@@ -1,22 +1,22 @@
 use std::collections::BTreeSet;
 
 use gents_documents::{EvalCapture, EvalCase, EvalDefinition, EvalSplit};
-use gents_eval::checks::CheckRegistry;
+use crate::checks::CheckRegistry;
 use serde_json::{json, Value};
 
 use super::dossier::{runtime_collections, Dossier};
 use super::draft::Draft;
 
 #[derive(Clone, Debug)]
-pub(crate) struct Assembled {
-    pub(crate) definition: EvalDefinition,
+pub struct Assembled {
+    pub definition: EvalDefinition,
 }
 
-pub(crate) struct Floors {
-    pub(crate) validation_min: usize,
+pub struct Floors {
+    pub validation_min: usize,
 }
 
-pub(crate) fn assemble(
+pub fn assemble(
     draft: &Draft,
     definition_id_flag: Option<&str>,
     owner: &str,
@@ -43,7 +43,7 @@ pub(crate) fn assemble(
         .map_err(|error| vec![format!("the draft is not an eval definition: {error}")])
 }
 
-pub(crate) fn validate(
+pub fn validate(
     assembled: &Assembled,
     registry: &CheckRegistry,
     dossier: &Dossier,
@@ -73,7 +73,7 @@ fn catalog_conformance(definition: &EvalDefinition, registry: &CheckRegistry) ->
         .collect()
 }
 
-pub(crate) fn case_catalog_conformance(
+pub fn case_catalog_conformance(
     case: &EvalCase,
     registry: &CheckRegistry,
 ) -> BTreeSet<String> {
@@ -267,65 +267,12 @@ fn split_shape(definition: &EvalDefinition, floors: &Floors) -> BTreeSet<String>
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
-    use std::collections::{BTreeMap, BTreeSet};
-
+mod tests {
     use serde_json::{json, Value};
 
+    use super::super::draft::parse_reply;
+    use super::super::fixtures::{dossier, good, OWNER, SLOT};
     use super::*;
-
-    pub(crate) const OWNER: &str = "did:key:owner";
-    pub(crate) const SLOT: &str = "primary";
-
-    pub(crate) fn dossier() -> Dossier {
-        Dossier {
-            pack_name: "eval_canary".into(),
-            pack_version: "1.0.0".into(),
-            pack_digest: "sha256:canary".into(),
-            agent_slot: "canary".into(),
-            slot: SLOT.into(),
-            collections: BTreeMap::from([(
-                "CanaryItem".to_owned(),
-                BTreeSet::from(["item_id".to_owned(), "label".to_owned()]),
-            )]),
-            text: String::new(),
-        }
-    }
-
-    pub(crate) fn case(case_id: &str, split: &str) -> Value {
-        json!({
-            "case_id": case_id,
-            "split": split,
-            "stages": [{
-                "stage_id": "answer",
-                "prompt": "Record one item.",
-                "capture": [{
-                    "kind": "documents",
-                    "name": "items",
-                    "collection": "CanaryItem",
-                    "filter": {},
-                    "fields": ["item_id", "label"],
-                }],
-                "checks": [{
-                    "check": "captured_rows_count",
-                    "params": {"name": "items", "min": 1},
-                    "tier": "acceptance",
-                }],
-            }],
-        })
-    }
-
-    pub(crate) fn good() -> Draft {
-        Draft {
-            definition_id: Some("canary-quality".into()),
-            title: Some("Canary quality".into()),
-            cases: vec![
-                case("train-a", "train"),
-                case("val-a", "validation"),
-                case("ho-a", "held_out"),
-            ],
-        }
-    }
 
     const FLOOR_ONE: Floors = Floors { validation_min: 1 };
 
@@ -360,7 +307,7 @@ pub(crate) mod tests {
                 "cases": good().cases,
             })
         );
-        let draft = crate::commands::eval::init::draft::parse_reply(&reply)
+        let draft = parse_reply(&reply)
             .unwrap()
             .unwrap();
         let assembled = assemble(&draft, Some("from-flag"), OWNER, SLOT).unwrap();

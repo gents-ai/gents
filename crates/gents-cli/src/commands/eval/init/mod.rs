@@ -4,24 +4,21 @@ use std::path::PathBuf;
 use anyhow::{Context as _, Result};
 use gents_eval::checks::CheckRegistry;
 
-use self::contract::{first_turn, MAX_VALIDATION_ROUNDS, VALIDATION_PREFIX};
-use self::dossier::Dossier;
-use self::draft::parse_reply;
+use self::host::CliWriteHost;
 use self::turn::Turn;
-use self::validate::{assemble, validate, Assembled, Floors};
-use self::write::{case_table, commit, stage, Staged, Written};
+use gents_eval::authoring::contract::{first_turn, MAX_VALIDATION_ROUNDS, VALIDATION_PREFIX};
+use gents_eval::authoring::dossier::{self, Dossier};
+use gents_eval::authoring::draft::{self, parse_reply};
+use gents_eval::authoring::validate::{assemble, validate, Assembled, Floors};
+use gents_eval::authoring::write::{self, case_table, commit, stage, Staged, Written};
 use super::{Deps, EvalContext};
 use crate::cli::EvalInitArgs;
 use crate::commands::pack::{resolve_pack_source, single_slot_agent, PackSource};
 
-mod contract;
-pub(crate) mod dossier;
-pub(crate) mod draft;
+mod host;
 mod pilot;
 mod readiness;
 pub(crate) mod turn;
-pub(super) mod validate;
-mod write;
 
 pub(crate) struct InitContext<'a> {
     pub(crate) dossier: Dossier,
@@ -86,6 +83,7 @@ pub(crate) async fn interview(
                     &ctx.out,
                     ctx.force,
                     &gents_service::home_state::resolve_home_dir(ctx.scope.home.as_deref()),
+                    &CliWriteHost,
                 )?;
                 print_written(ctx, &assembled, &written, out)?;
                 return Ok(InitOutcome {
@@ -154,7 +152,7 @@ async fn checked(
     };
     let assembled = assemble(&draft, definition_id, &ctx.owner, &ctx.dossier.slot)?;
     validate(&assembled, ctx.registry, &ctx.dossier, &ctx.floors)?;
-    let staged = stage(&assembled, summary, &ctx.dossier, pilot).await?;
+    let staged = stage(&assembled, summary, &ctx.dossier, pilot, &CliWriteHost).await?;
     Ok((assembled, staged))
 }
 
@@ -227,7 +225,7 @@ pub(crate) async fn preflight(args: &EvalInitArgs) -> Result<()> {
         served,
         "start `gents runtime server` for this home and retry: the author runs on a served home"
     );
-    write::recover_output(&args.out, &home_dir)?;
+    write::recover_output(&args.out, &home_dir, &CliWriteHost)?;
     anyhow::ensure!(
         args.force || args.out.symlink_metadata().is_err(),
         "{} already exists; pass --force to replace it",
@@ -426,8 +424,9 @@ pub(crate) fn pack_config(
 mod tests {
     use serde_json::json;
 
+    use gents_eval::authoring::fixtures::{dossier, good, OWNER};
+
     use super::turn::ScriptedTurn;
-    use super::validate::tests::{dossier, good, OWNER};
     use super::*;
 
     pub(crate) fn draft_block(cases: &[serde_json::Value]) -> String {

@@ -1,16 +1,16 @@
 use std::fmt::Write as _;
 
-use gents_eval::checks::CheckDescription;
+use crate::checks::CheckDescription;
 
 use super::dossier::Dossier;
 use super::validate::Floors;
 
-pub(crate) const VALIDATION_PREFIX: &str =
+pub const VALIDATION_PREFIX: &str =
     "The draft did not validate; revise and reply with a new draft.";
 
-pub(crate) const MAX_VALIDATION_ROUNDS: usize = 3;
+pub const MAX_VALIDATION_ROUNDS: usize = 3;
 
-pub(crate) fn first_turn(
+pub fn first_turn(
     dossier: &Dossier,
     catalog: &[CheckDescription],
     floors: &Floors,
@@ -43,10 +43,10 @@ pub(crate) fn first_turn(
 
 #[cfg(test)]
 mod tests {
-    use gents_eval::checks::CheckRegistry;
-
+    use super::super::fixtures::dossier;
+    use super::super::validate::case_catalog_conformance;
     use super::*;
-    use crate::commands::eval::init::validate::{case_catalog_conformance, tests::dossier};
+    use crate::checks::CheckRegistry;
 
     #[test]
     fn the_first_turn_is_the_dossier_the_catalog_and_the_floors() {

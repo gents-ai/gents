@@ -1,13 +1,13 @@
 use serde_json::Value;
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct Draft {
-    pub(crate) definition_id: Option<String>,
-    pub(crate) title: Option<String>,
-    pub(crate) cases: Vec<Value>,
+pub struct Draft {
+    pub definition_id: Option<String>,
+    pub title: Option<String>,
+    pub cases: Vec<Value>,
 }
 
-pub(crate) fn parse_reply(reply: &str) -> Result<Option<Draft>, String> {
+pub fn parse_reply(reply: &str) -> Result<Option<Draft>, String> {
     let blocks = json_blocks(reply);
     let block = match blocks.as_slice() {
         [] => return Ok(None),
@@ -47,7 +47,7 @@ pub(crate) fn parse_reply(reply: &str) -> Result<Option<Draft>, String> {
     }))
 }
 
-pub(crate) fn json_blocks(reply: &str) -> Vec<String> {
+pub fn json_blocks(reply: &str) -> Vec<String> {
     let mut blocks = Vec::new();
     let mut current: Option<Vec<&str>> = None;
     for line in reply.lines() {

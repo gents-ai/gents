@@ -210,7 +210,7 @@ fn ensure_tool_less(
 }
 
 fn subject_preamble(subject_dir: &Path, agent_did: &str, target: &JobTarget) -> Result<String> {
-    let dossier = crate::commands::eval::init::dossier::render(subject_dir, Some(agent_did))?;
+    let dossier = gents_eval::authoring::dossier::render(subject_dir, Some(agent_did))?;
     let instruction = match target {
         JobTarget::Context => "this agent's system prompt".to_owned(),
         JobTarget::Task(task_id) => format!(
