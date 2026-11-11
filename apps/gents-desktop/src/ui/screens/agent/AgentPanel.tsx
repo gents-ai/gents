@@ -6,7 +6,7 @@ import { useDraft } from "./draft";
 import { Fact, focusField, Group, PathFact, Row, Unfold } from "./rows";
 import { LocalServer } from "./LocalServer";
 import { AgentCard } from "./AgentCard";
-import { ConnectionGroup } from "./ConnectionGroup";
+import { CONNECTION_GROUP, ConnectionGroup } from "./ConnectionGroup";
 import { saveDefault } from "./BehaviorsPanel";
 import { packOrigin } from "./ListDetail";
 import { useApp } from "@/app/AppContext";
@@ -14,7 +14,22 @@ import { settleAvatar } from "@/lib/avatarRoll";
 import { useBootstrap, useNodeConfigReadOnly, useNodeReach } from "@/hooks/useClient";
 import { href } from "@/lib/router";
 
-export function AgentPanel({ deployment }: { deployment: NodeView }) {
+export function AgentPanel({
+  deployment,
+  item,
+}: {
+  deployment: NodeView;
+  /** `CONNECTION_GROUP` opens the page scrolled to the Connection group */
+  item?: string;
+}) {
+  /* after the page's own return to its top for a new route */
+  useEffect(() => {
+    if (item !== CONNECTION_GROUP) return;
+    const frame = requestAnimationFrame(() =>
+      document.getElementById(CONNECTION_GROUP)?.scrollIntoView({ block: "start" }),
+    );
+    return () => cancelAnimationFrame(frame);
+  }, [item, deployment.nodeDid]);
   const bootstrap = useBootstrap();
   const reach = useNodeReach(deployment);
   const { changeConfig } = useApp().actions;

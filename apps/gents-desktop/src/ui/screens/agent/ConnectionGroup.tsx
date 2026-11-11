@@ -8,6 +8,10 @@ import { StateDot, useNodeConnection } from "../NodeFacts";
 import { CopyButton } from "../sharing/parts";
 import { Fact, Group, Row } from "./rows";
 
+/** The Connection group's id, and the item of the node page's route that
+    opens the page scrolled to it. */
+export const CONNECTION_GROUP = "connection";
+
 /** How this app reaches the node: the connection as it stands, where to,
     on whose computer the node runs, how long a joined node lets this app
     in, and whether this app may change the node's configuration. */
@@ -18,7 +22,7 @@ export function ConnectionGroup({ deployment }: { deployment: NodeView }) {
   const peerId = joinedPeerId(deployment, homeDid);
   const lease = local ? null : leaseLeft(deployment.leaseExpiresAt);
   return (
-    <Group title="Connection">
+    <Group id={CONNECTION_GROUP} title="Connection">
       <Row label="Status" description={connection.detail}>
         <span
           data-testid="node-connection-status"

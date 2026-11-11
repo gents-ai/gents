@@ -52,7 +52,7 @@ export function nodeConnection(
 ) {
   const state = nodeConnectionState(deployment, stopped);
   const tone: Tone = stopped ? "idle" : statusTone(state.status.kind);
-  return { ...state, tone };
+  return { ...state, tone, stopped };
 }
 
 export function useNodeConnection(deployment: NodeView) {

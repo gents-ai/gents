@@ -1,9 +1,11 @@
-import { cleanup, screen, within } from "@testing-library/react";
+import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@gents/ui/components/tooltip";
 import type { NodeView } from "../src/hooks/fleetStore";
 import { nodeConnectionState } from "../src/ui/lib/nodeConnection";
 import { AgentScreen } from "../src/ui/screens/agent/AgentScreen";
+import { CONNECTION_GROUP } from "../src/ui/screens/agent/ConnectionGroup";
+import { href } from "../src/ui/lib/router";
 import { node, renderIn, testApp } from "./app-fixture";
 import { deployment } from "./config-panel-wiring/fixtures";
 
@@ -12,7 +14,7 @@ const JOINED = "did:key:amy";
 const PEER = "12D3KooWAmyTransportPeerId";
 const DAY = 24 * 60 * 60 * 1000;
 
-function nodePage(nodeDid: string, overrides: Partial<NodeView> = {}) {
+function nodePage(nodeDid: string, overrides: Partial<NodeView> = {}, item?: string) {
   const joined = node({
     nodeDid: JOINED,
     label: "amy-1",
@@ -32,7 +34,7 @@ function nodePage(nodeDid: string, overrides: Partial<NodeView> = {}) {
   renderIn(
     app,
     <TooltipProvider>
-      <AgentScreen nodeDid={nodeDid} section="agent" />
+      <AgentScreen nodeDid={nodeDid} section="agent" item={item} />
     </TooltipProvider>,
   );
   return within(
@@ -120,5 +122,64 @@ describe("a node's connection state", () => {
 
   it("reads this computer's stopped node as stopped", () => {
     expect(of("disconnected", true)).toEqual({ label: "Stopped", link: "idle" });
+  });
+});
+
+/* the node summary's Connection card, by its title */
+const card = () => screen.getByRole("link", { name: /^Connection/ });
+
+describe("the node summary's Connection card", () => {
+  it("shows this computer's node's state and address", () => {
+    nodePage(HOME);
+    const c = within(card());
+    expect(c.getByText("Connected")).toBeVisible();
+    expect(c.getByText("iroh://local")).toHaveClass("font-mono");
+  });
+
+  it("warns how soon a joined node's access ends", () => {
+    nodePage(JOINED);
+    const c = within(card());
+    expect(c.getByText("Connected")).toBeVisible();
+    expect(c.getByText("Access ends in 2 days")).toHaveClass("text-warning");
+    expect(c.queryByText("/ip4/10.0.0.7/tcp/9191")).toBeNull();
+  });
+
+  it("says what went wrong when the node refuses this app", () => {
+    nodePage(JOINED, {
+      runtimeConnection: "refused",
+      lastError: "certificate rejected",
+    });
+    const c = within(card());
+    expect(c.getByText("Refused")).toBeVisible();
+    expect(c.getByText("certificate rejected")).toBeVisible();
+    expect(c.queryByText(/Access ends/)).toBeNull();
+  });
+
+  it("falls back to the owner's detail when a problem has no error", () => {
+    nodePage(JOINED, { runtimeConnection: "disconnected", lastError: null });
+    expect(
+      within(card()).getByText("The runtime connection was lost; reconnecting."),
+    ).toBeVisible();
+  });
+
+  it("opens the node page at its Connection group", async () => {
+    const to = href({
+      name: "agent",
+      nodeDid: JOINED,
+      section: "agent",
+      item: CONNECTION_GROUP,
+    });
+    nodePage(JOINED);
+    expect(card()).toHaveAttribute("href", to);
+    cleanup();
+    const scrolled = vi.spyOn(HTMLElement.prototype, "scrollIntoView");
+    nodePage(JOINED, {}, CONNECTION_GROUP);
+    await waitFor(() =>
+      expect(scrolled.mock.contexts).toContain(
+        document.getElementById(CONNECTION_GROUP),
+      ),
+    );
+    expect(document.getElementById(CONNECTION_GROUP)?.tagName).toBe("FIELDSET");
+    scrolled.mockRestore();
   });
 });

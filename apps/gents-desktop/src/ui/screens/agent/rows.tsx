@@ -14,16 +14,19 @@ import {
 } from "@gents/ui/components/field";
 
 export function Group({
+  id,
   title,
   children,
   action,
 }: {
+  /** where a link opens the page scrolled to; clear of a banner held above */
+  id?: string;
   title?: string;
   children: ReactNode;
   action?: ReactNode;
 }) {
   return (
-    <FieldSet className="mb-8">
+    <FieldSet id={id} className={cn("mb-8", id && "scroll-mt-16")}>
       {(title || action) && (
         <div className="flex items-baseline justify-between">
           {title && <FieldLegend variant="eyebrow">{title}</FieldLegend>}
