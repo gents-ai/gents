@@ -459,158 +459,154 @@ mod tests {
         Ok(node)
     }
 
-    #[tokio::test]
-    async fn directory_retracts_own_publications_and_preserves_foreign_sources() -> Result<()> {
-        let cases =
-            &gents_lean_vocab::lean_contract_snapshot().identity_directory_publication_cases;
-        let mut checked = 0;
-        for case in cases.iter().filter(|case| case["name"] != "failed-delete") {
-            checked += 1;
-            let dir = tempfile::tempdir()?;
-            let node = acp_node(dir.path()).await?;
-            node.add_collection(gents_protocol::schemas::NODE_DIRECTORY_ENTRY)
-                .await?;
-            let store = GraphqlDirectoryStore::new(node.clone());
-            for entry in case["existing"].as_array().unwrap() {
-                let source = entry["source"].as_str().unwrap();
-                let did = entry["node"].as_str().unwrap();
-                let row = DirectoryEntry {
-                    directory_key: directory_entry_key(source, did),
-                    source_did: source.to_owned(),
-                    node_did: did.to_owned(),
-                    display_name: "previously published".into(),
-                    ..DirectoryEntry::default()
-                };
-                store.upsert_directory_entry(&row).await?;
-            }
-            let source = case["source"].as_str().unwrap();
-            assert!(case["expected_desired"].as_array().unwrap().is_empty());
-            let result = reconcile_directory_tick(&store, source).await?;
-            let deleted = case["deleted"]
-                .as_array()
-                .unwrap()
+    use gents_lean_vocab::families::directory_publication_reconcile as family;
+
+    struct FailingStore {
+        entries: tokio::sync::Mutex<BTreeMap<String, DirectoryEntry>>,
+        deleted: BTreeSet<String>,
+    }
+
+    #[async_trait]
+    impl DirectoryStore for FailingStore {
+        async fn load_source_snapshot(&self) -> Result<SourceSnapshot> {
+            Ok(SourceSnapshot::default())
+        }
+        async fn list_directory_entries(
+            &self,
+            source_did: &str,
+        ) -> Result<BTreeMap<String, DirectoryEntry>> {
+            Ok(self
+                .entries
+                .lock()
+                .await
                 .iter()
-                .filter_map(|value| value.as_str())
-                .filter(|did| {
-                    case["existing"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .any(|entry| entry["source"] == source && entry["node"] == *did)
-                })
-                .map(str::to_owned)
-                .collect::<BTreeSet<_>>();
-            assert_eq!(result.retracted, deleted, "{case}");
-            assert!(result.upserted.is_empty() && result.refreshed.is_empty());
-            for source in case["existing"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|entry| entry["source"].as_str().unwrap())
-                .collect::<BTreeSet<_>>()
-            {
-                let actual = store
-                    .list_directory_entries(source)
+                .filter(|(_, entry)| entry.source_did == source_did)
+                .map(|(did, entry)| (did.clone(), entry.clone()))
+                .collect())
+        }
+        async fn upsert_directory_entry(&self, _entry: &DirectoryEntry) -> Result<()> {
+            anyhow::bail!("unexpected upsert")
+        }
+        async fn delete_directory_entry(&self, _source_did: &str, node_did: &str) -> Result<()> {
+            anyhow::ensure!(self.deleted.contains(node_did), "injected delete failure");
+            self.entries.lock().await.remove(node_did);
+            Ok(())
+        }
+    }
+
+    fn entry_of(source: &str, node: &str) -> family::Entry {
+        family::Entry {
+            source: source.to_owned(),
+            node: node.to_owned(),
+        }
+    }
+
+    async fn reconcile_on_node(input: &family::ReconcileInput) -> Result<family::ReconcileOutput> {
+        let dir = tempfile::tempdir()?;
+        let node = acp_node(dir.path()).await?;
+        node.add_collection(gents_protocol::schemas::NODE_DIRECTORY_ENTRY)
+            .await?;
+        let store = GraphqlDirectoryStore::new(node.clone());
+        for entry in &input.existing {
+            let row = DirectoryEntry {
+                directory_key: directory_entry_key(&entry.source, &entry.node),
+                source_did: entry.source.clone(),
+                node_did: entry.node.clone(),
+                display_name: "previously published".into(),
+                ..DirectoryEntry::default()
+            };
+            store.upsert_directory_entry(&row).await?;
+        }
+        let result = reconcile_directory_tick(&store, &input.source).await?;
+        let desired = result
+            .upserted
+            .iter()
+            .chain(&result.refreshed)
+            .map(|node| entry_of(&input.source, node))
+            .collect();
+        let mut listed: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
+        for entry in &input.existing {
+            if !listed.contains_key(entry.source.as_str()) {
+                let keys = store
+                    .list_directory_entries(&entry.source)
                     .await?
                     .into_keys()
-                    .collect::<BTreeSet<_>>();
-                let expected = case["expected_remaining"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .filter(|entry| entry["source"] == source)
-                    .map(|entry| entry["node"].as_str().unwrap().to_owned())
-                    .collect::<BTreeSet<_>>();
-                assert_eq!(actual, expected, "{case}");
+                    .collect();
+                listed.insert(entry.source.as_str(), keys);
             }
-            assert_eq!(
-                reconcile_directory_tick(&store, source).await?,
-                DirectoryTickOutcome::default()
-            );
-            node.shutdown().await?;
         }
-        assert_eq!(checked, 3);
-        Ok(())
+        let remaining = input
+            .existing
+            .iter()
+            .filter(|entry| listed[entry.source.as_str()].contains(&entry.node))
+            .map(|entry| entry_of(&entry.source, &entry.node))
+            .collect();
+        assert_eq!(
+            reconcile_directory_tick(&store, &input.source).await?,
+            DirectoryTickOutcome::default()
+        );
+        node.shutdown().await?;
+        Ok(family::ReconcileOutput { desired, remaining })
+    }
+
+    async fn reconcile_with_failing_deletes(
+        input: &family::ReconcileInput,
+    ) -> family::ReconcileOutput {
+        let store = FailingStore {
+            entries: tokio::sync::Mutex::new(
+                input
+                    .existing
+                    .iter()
+                    .map(|entry| {
+                        (
+                            entry.node.clone(),
+                            DirectoryEntry {
+                                node_did: entry.node.clone(),
+                                source_did: entry.source.clone(),
+                                ..DirectoryEntry::default()
+                            },
+                        )
+                    })
+                    .collect(),
+            ),
+            deleted: input.deleted.iter().cloned().collect(),
+        };
+        assert!(reconcile_directory_tick(&store, &input.source)
+            .await
+            .is_err());
+        let present = store.entries.lock().await;
+        let remaining = input
+            .existing
+            .iter()
+            .filter(|entry| {
+                present
+                    .get(&entry.node)
+                    .is_some_and(|row| row.source_did == entry.source)
+            })
+            .map(|entry| entry_of(&entry.source, &entry.node))
+            .collect();
+        family::ReconcileOutput {
+            desired: Vec::new(),
+            remaining,
+        }
     }
 
     #[tokio::test]
-    async fn directory_failed_deletion_remains_visible() {
-        struct FailingStore {
-            entries: tokio::sync::Mutex<BTreeMap<String, DirectoryEntry>>,
-            deleted: BTreeSet<String>,
-        }
-        #[async_trait]
-        impl DirectoryStore for FailingStore {
-            async fn load_source_snapshot(&self) -> Result<SourceSnapshot> {
-                Ok(SourceSnapshot::default())
-            }
-            async fn list_directory_entries(
-                &self,
-                _source_did: &str,
-            ) -> Result<BTreeMap<String, DirectoryEntry>> {
-                Ok(self.entries.lock().await.clone())
-            }
-            async fn upsert_directory_entry(&self, _entry: &DirectoryEntry) -> Result<()> {
-                anyhow::bail!("unexpected upsert")
-            }
-            async fn delete_directory_entry(
-                &self,
-                _source_did: &str,
-                node_did: &str,
-            ) -> Result<()> {
-                anyhow::ensure!(self.deleted.contains(node_did), "injected delete failure");
-                self.entries.lock().await.remove(node_did);
-                Ok(())
-            }
-        }
-        let case = gents_lean_vocab::lean_contract_snapshot()
-            .identity_directory_publication_cases
-            .iter()
-            .find(|case| case["name"] == "failed-delete")
-            .unwrap();
-        let entries = case["existing"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|entry| {
-                let did = entry["node"].as_str().unwrap().to_owned();
-                (
-                    did.clone(),
-                    DirectoryEntry {
-                        node_did: did,
-                        source_did: entry["source"].as_str().unwrap().to_owned(),
-                        ..DirectoryEntry::default()
-                    },
-                )
-            })
-            .collect();
-        let store = FailingStore {
-            entries: tokio::sync::Mutex::new(entries),
-            deleted: case["deleted"]
-                .as_array()
-                .unwrap()
+    async fn directory_reconciliation_matches_lean_publication_model() -> Result<()> {
+        for case in family::cases() {
+            let input = &case.input;
+            let every_owned_delete_succeeds = input
+                .existing
                 .iter()
-                .map(|id| id.as_str().unwrap().to_owned())
-                .collect(),
-        };
-        assert!(
-            reconcile_directory_tick(&store, case["source"].as_str().unwrap())
-                .await
-                .is_err()
-        );
-        let actual = store
-            .entries
-            .lock()
-            .await
-            .keys()
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        let expected = case["expected_remaining"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|entry| entry["node"].as_str().unwrap().to_owned())
-            .collect::<BTreeSet<_>>();
-        assert_eq!(actual, expected);
+                .filter(|entry| entry.source == input.source)
+                .all(|entry| input.deleted.contains(&entry.node));
+            let output = if every_owned_delete_succeeds {
+                reconcile_on_node(input).await?
+            } else {
+                reconcile_with_failing_deletes(input).await
+            };
+            case.check(output);
+        }
+        Ok(())
     }
 }
