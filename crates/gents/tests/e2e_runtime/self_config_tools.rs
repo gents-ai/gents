@@ -580,6 +580,55 @@ async fn configure_automation_creates_one_chain_and_preserves_runtime_ownership(
     );
 }
 
+/// `task run` fires through the runtime's real `TaskRuns` service, which
+/// lives above the tool crate.
+#[tokio::test]
+async fn task_run_fires_a_task_now_and_reuses_target_id() {
+    let f = SelfConfig::new("self-config-task-run").await;
+    let tools = f
+        .tools(&f.config(&["tools", "automation"], false, false))
+        .await;
+    let config = |argv: Value| {
+        let tools = &tools;
+        async move {
+            tools
+                .iter()
+                .find(|tool| tool.name() == "config")
+                .unwrap()
+                .call(argv.to_string())
+                .await
+        }
+    };
+    config(json!({"argv":["task","create","review","--set",r#"prompt_template="Review {{ args.what }}""#]}))
+        .await
+        .unwrap();
+
+    let text = config(
+        json!({"argv":["task","run"],"target_id":"review","options":{"args":{"what":"the bill"}}}),
+    )
+    .await
+    .unwrap();
+    let fired: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(fired["status"], "pending", "{fired}");
+    assert_eq!(fired["duplicate"], false, "{fired}");
+    let request_id = fired["request_id"].as_str().unwrap();
+    let query = format!(
+        r#"query {{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{ content }} }}"#,
+        escape_graphql_string(request_id)
+    );
+    let response = f.actors.agent_access.execute(&query).await.unwrap();
+    assert_eq!(
+        response["data"]["AgentRequest"][0]["content"], "Review the bill",
+        "{response}"
+    );
+
+    let missing = config(json!({"argv":["task","run","absent"]}))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(missing.contains("task not found"), "{missing}");
+}
+
 #[tokio::test]
 async fn self_only_boundaries_reject_foreign_references_and_corrupted_bindings() {
     let f = SelfConfig::new("self-config-boundaries").await;

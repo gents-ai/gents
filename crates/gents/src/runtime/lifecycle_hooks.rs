@@ -1,27 +1,21 @@
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use gents_session::request::hooks::registry::Registry;
+use gents_store::node_extension::NodeExtensionError;
 
-/// The bundled lifecycle plugins, in their fixed order: triggers (core), then
-/// Goals, with the core operations and reads their effects may name. Bundled
-/// plugins are always on, so a plugin missing from this list is a defect of
-/// the build, not a state a node can be in.
-pub fn bundled() -> Arc<Registry> {
-    static BUNDLED: OnceLock<Arc<Registry>> = OnceLock::new();
-    Arc::clone(BUNDLED.get_or_init(|| {
-        let mut registry = Registry::default();
-        gents_session::request::lifecycle::requested_create::register(&mut registry);
-        gents_session::request::hooks::operations::register(&mut registry);
-        gents_tools::native::register_lifecycle_reads(&mut registry);
-        gents_automation::triggers::lifecycle_hooks::register(&mut registry);
-        gents_automation::goal::lifecycle_hooks::register(&mut registry);
-        Arc::new(registry)
-    }))
+/// Composes a started node with the bundled lifecycle plugins. Every
+/// production node start goes through here, so a served node always runs its
+/// lifecycle points with them; this process's transactions over a GraphQL
+/// endpoint run with the same plugins.
+pub fn compose(node: &Arc<defra_node::Node>) -> Result<(), NodeExtensionError> {
+    let bundled = gents_automation::lifecycle_hooks::bundled();
+    Registry::install_for_remote_transactions(Arc::clone(&bundled));
+    Registry::attach(node, bundled)
 }
 
-/// Installs the bundled plugins for this process. Every production node start
-/// goes through here, so a served node always runs its lifecycle points with
-/// them.
-pub fn install() {
-    Registry::install(bundled());
+/// Composes a client process that starts no node: its lifecycle transactions
+/// travel over a GraphQL endpoint and run the points in this process, so the
+/// bundled plugins are installed for them.
+pub fn compose_client() {
+    Registry::install_for_remote_transactions(gents_automation::lifecycle_hooks::bundled());
 }
