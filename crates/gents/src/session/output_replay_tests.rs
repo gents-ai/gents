@@ -13,7 +13,7 @@ use gents_protocol::rendered_request::RenderedRequestSource;
 use super::output::replay_candidates::load_canonical_assistant_candidates;
 use super::output::replay_request::ReplayRequestReader;
 use super::output::CanonicalReplayScope;
-use crate::turn::provider_context_reduction::capture_source_boundary;
+use crate::session::provider_context_reduction::capture_source_boundary;
 use gents_protocol::output::rows::{
     output_segment_create_variables, transcript_message_create_variables,
     CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,

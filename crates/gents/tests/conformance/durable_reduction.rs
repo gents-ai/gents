@@ -5,7 +5,7 @@ use gents::inference::llm::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
     UserContent,
 };
-use gents::turn::provider_context_reduction::{
+use gents::session::provider_context_reduction::{
     load_for_request, persist, reduction_key, rendered_capture_cites_reduction,
     NewProviderContextReduction,
 };

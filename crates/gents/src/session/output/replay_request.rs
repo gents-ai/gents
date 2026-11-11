@@ -139,7 +139,7 @@ pub(super) async fn validated_canonical_replay_boundary(
     BTreeSet<String>,
     Option<gents_protocol::transcript::TranscriptFactRef>,
 )> {
-    crate::turn::provider_context_reduction::validate_source_boundary(
+    crate::session::provider_context_reduction::validate_source_boundary(
         boundary,
         scope.request_doc_id,
         scope.request_commit_cid,

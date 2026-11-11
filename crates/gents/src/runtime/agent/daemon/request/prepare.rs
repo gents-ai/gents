@@ -533,7 +533,7 @@ where
             );
             let (prefix, suffix) = projected.split_at(exact.compacted_prefix.len());
             let associations =
-                crate::turn::provider_context_reduction::ReplayAssociations::from_tagged_split(
+                crate::session::provider_context_reduction::ReplayAssociations::from_tagged_split(
                     replay.required.clone(),
                     prefix,
                     suffix,
@@ -543,7 +543,7 @@ where
                 &projected,
                 exact,
             )?;
-            crate::turn::provider_context_reduction::validate_replay_associations(
+            crate::session::provider_context_reduction::validate_replay_associations(
                 &associations,
                 native.exact().compacted_prefix,
                 native.exact().retained_suffix,

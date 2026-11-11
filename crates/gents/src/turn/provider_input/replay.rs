@@ -34,7 +34,7 @@ pub(crate) fn owned_replay_input(
                 let access =
                     crate::store::config_client::ConfigAccess::local_as(node.clone(), actor);
                 let started = std::time::Instant::now();
-                let boundary = crate::turn::provider_context_reduction::capture_source_boundary(
+                let boundary = crate::session::provider_context_reduction::capture_source_boundary(
                     &access,
                     &request.session_id,
                     &request.node_did,

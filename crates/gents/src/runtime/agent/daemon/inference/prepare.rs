@@ -128,7 +128,7 @@ fn compact_turn(
         // Request-local sticky projection, not a
         // session-prefix cursor; the stronger
         // safe_to_reduce gate belongs to session compaction.
-        let source_boundary = crate::turn::provider_context_reduction::capture_source_boundary(
+        let source_boundary = crate::session::provider_context_reduction::capture_source_boundary(
             &crate::ConfigAccess::local_with_agent_signer(
                 node.clone(),
                 identity::Did::new(agent_did.clone()).map_err(compactor_failure)?,
@@ -158,7 +158,7 @@ fn compact_turn(
         let producer_call = producer_join
             .filter(|join| matches!(join.call_kind, CallKind::Compaction))
             .map(
-                |join| crate::turn::provider_context_reduction::ProducerCallRef {
+                |join| crate::session::provider_context_reduction::ProducerCallRef {
                     call_id: join.call_id,
                     call_seq: join.call_seq,
                 },
@@ -202,14 +202,14 @@ fn compact_turn(
         )?;
         let exact = native.exact();
         let associations =
-            crate::turn::provider_context_reduction::ReplayAssociations::from_tagged_split(
+            crate::session::provider_context_reduction::ReplayAssociations::from_tagged_split(
                 compaction_request.required,
                 &provider_view[..split],
                 &provider_view[split..],
             );
         let reduction_index = compaction_request.prior_reduction_keys.len() + 1;
-        crate::turn::provider_context_reduction::stage_exact(
-            crate::turn::provider_context_reduction::NewExactProviderContextReduction {
+        crate::session::provider_context_reduction::stage_exact(
+            crate::session::provider_context_reduction::NewExactProviderContextReduction {
                 agent_did: &agent_did,
                 node_did: &request.node_did,
                 requester_did: request.requester_did.as_deref(),
@@ -437,7 +437,7 @@ where
             identity::Did::new(request.agent_did.clone())?,
             self.agent_config.agent_identity.as_ref(),
         )?;
-        let restored = crate::turn::provider_context_reduction::load_unconsumed_for_request(
+        let restored = crate::session::provider_context_reduction::load_unconsumed_for_request(
             &reduction_access,
             &request.doc_id,
         )
@@ -491,7 +491,7 @@ where
             (messages, prompt)
         } else {
             loop_config.reduction_chain_keys =
-                crate::turn::provider_context_reduction::load_for_request(
+                crate::session::provider_context_reduction::load_for_request(
                     &reduction_access,
                     &request.doc_id,
                 )

@@ -578,7 +578,7 @@ async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fit
                         .collect::<Vec<_>>()
                 };
                 let associations =
-                    crate::turn::provider_context_reduction::ReplayAssociations::from_tagged_split(
+                    crate::session::provider_context_reduction::ReplayAssociations::from_tagged_split(
                         Vec::new(),
                         &tagged(&compacted_prefix),
                         &tagged(&retained_suffix),
@@ -589,8 +589,8 @@ async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fit
                     request_commit_cid: "claim-cid-3283".to_string(),
                     canonical_through: None,
                 };
-                crate::turn::provider_context_reduction::stage(
-                    crate::turn::provider_context_reduction::NewProviderContextReduction {
+                crate::session::provider_context_reduction::stage(
+                    crate::session::provider_context_reduction::NewProviderContextReduction {
                         agent_did: &agent_did,
                         node_did: &node_did,
                         requester_did: None,
@@ -649,7 +649,7 @@ async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fit
             agent.as_ref(),
         )
         .unwrap();
-        let rows = crate::turn::provider_context_reduction::load_for_request(
+        let rows = crate::session::provider_context_reduction::load_for_request(
             &agent_access,
             request_doc_id,
         )

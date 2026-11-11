@@ -2697,7 +2697,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerWithFollowUp
       "durable_reduction_cases"
       "DurableReductionCases"
-      "turn::provider_context_reduction::durable_reduction_conformance::generated_durable_reduction_cases_pin_storage_and_capture_citations"
+      "session::provider_context_reduction::durable_reduction_conformance::generated_durable_reduction_cases_pin_storage_and_capture_citations"
       "Checks durable create/load/conflict and capture citations. The exported send_permitted fence is not exercised: validate actual provider dispatch against durable reduction facts through the owned completion loop.")
       "compaction" [Surface.runtimeInternal]
   , tagged (consumerCoverage

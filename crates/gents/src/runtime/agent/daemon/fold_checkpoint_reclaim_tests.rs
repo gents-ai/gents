@@ -191,7 +191,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
         }
         if persist_checkpoint {
             let commit_cid = first.request_commit_cid().unwrap().to_owned();
-            let boundary = crate::turn::provider_context_reduction::capture_source_boundary(
+            let boundary = crate::session::provider_context_reduction::capture_source_boundary(
                 &agent_access,
                 &session_id,
                 agent_config.node_did(),
@@ -208,16 +208,16 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
                 crate::inference::llm::message::Message::user(head.content.clone()),
                 crate::inference::llm::message::Message::user(folded.content.clone()),
             ];
-            let row = |_| crate::turn::provider_context_reduction::ReplayRowAssociation {
+            let row = |_| crate::session::provider_context_reduction::ReplayRowAssociation {
                 source: None,
                 physical_header: None,
                 block_indices: Vec::new(),
             };
             let signer = agent_config.agent_identity.managed_agent_signer().unwrap();
-            crate::turn::provider_context_reduction::persist(
+            crate::session::provider_context_reduction::persist(
                 &node,
                 &signer,
-                crate::turn::provider_context_reduction::NewProviderContextReduction {
+                crate::session::provider_context_reduction::NewProviderContextReduction {
                     agent_did: &agent_config.agent_did,
                     node_did: agent_config.node_did(),
                     requester_did: Some(user.did()),
@@ -234,7 +234,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
                     retained_suffix: &suffix,
                     checkpoint_messages: &suffix,
                     replay_associations:
-                        &crate::turn::provider_context_reduction::ReplayAssociations {
+                        &crate::session::provider_context_reduction::ReplayAssociations {
                             required: Vec::new(),
                             prefix_rows: prefix.iter().map(row).collect(),
                             retained_rows: suffix.iter().map(row).collect(),
@@ -251,7 +251,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
         reclaimed.deadline = None;
         drop(first);
         assert_eq!(
-            crate::turn::provider_context_reduction::load_unconsumed_for_request(
+            crate::session::provider_context_reduction::load_unconsumed_for_request(
                 &agent_access,
                 &head.doc_id
             )
@@ -356,7 +356,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
         assert!(first_at < folded_at, "{case}: queue order");
         if persist_checkpoint {
             assert!(
-                crate::turn::provider_context_reduction::load_unconsumed_for_request(
+                crate::session::provider_context_reduction::load_unconsumed_for_request(
                     &agent_access,
                     &head.doc_id
                 )

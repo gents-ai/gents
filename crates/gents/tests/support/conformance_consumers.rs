@@ -2849,10 +2849,10 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_rendered_capture_cases_fence_persist_before_send",
         },
         ConformanceConsumer::RustTest {
-            id: "turn::provider_context_reduction::durable_reduction_conformance::generated_durable_reduction_cases_pin_storage_and_capture_citations",
+            id: "session::provider_context_reduction::durable_reduction_conformance::generated_durable_reduction_cases_pin_storage_and_capture_citations",
             package: "gents",
             source_path: "crates/gents/tests/conformance/durable_reduction.rs",
-            module_path: "turn::provider_context_reduction::durable_reduction_conformance",
+            module_path: "session::provider_context_reduction::durable_reduction_conformance",
             function: "generated_durable_reduction_cases_pin_storage_and_capture_citations",
         },
         ConformanceConsumer::RustTest {
