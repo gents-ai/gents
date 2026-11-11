@@ -93,7 +93,7 @@ pub(super) async fn unanswered_commands(
             continue;
         };
         let answered = if kind == CommandKind::GoalControl {
-            super::session_goal_control::has_verified_receipt(
+            crate::goal::session_goal_control::has_verified_receipt(
                 identity,
                 intent,
                 row.receipt_json.as_deref(),
@@ -183,7 +183,7 @@ pub(crate) async fn unanswered_goal_commands(
             .unwrap_or((None, false));
         let answered = match row["intent_json"].as_str() {
             Some(intent) => {
-                super::session_goal_control::has_verified_receipt(runtime, intent, raw_receipt)
+                crate::goal::session_goal_control::has_verified_receipt(runtime, intent, raw_receipt)
                     .await?
             }
             None => raw_receipt.is_some(),
@@ -221,7 +221,7 @@ pub(crate) async fn run_session_command_reconciler_with_agents(
     let changes = futures::stream::unfold(changes, |mut changes| async move {
         changes.recv().await.map(|batch| (batch, changes))
     });
-    let mut interval = tokio::time::interval(super::intervals::sweep_interval());
+    let mut interval = tokio::time::interval(super::p2p_reconcile::intervals::sweep_interval());
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let ticks = futures::stream::unfold(interval, |mut interval| async move {
         interval.tick().await;
@@ -391,7 +391,7 @@ where
                             agent_identity.did() == selected,
                             "goal command Agent identity differs from snapshot"
                         );
-                        super::session_goal_control::process_command(
+                        crate::goal::session_goal_control::process_command(
                             &node,
                             &identity,
                             &id,

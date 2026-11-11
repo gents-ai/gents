@@ -1,7 +1,7 @@
 use super::contract_tests::{persist_command, receipt};
 use super::*;
 use crate::goal::operator_resume::support::{execute, Fixture, SESSION};
-use crate::runtime::agent::p2p_reconcile::session_goal_control::process_command_at;
+use crate::goal::session_goal_control::process_command_at;
 use gents_protocol::goal_control::{GoalRevision, SESSION_GOAL_CONTROL_VERSION};
 use serde_json::Value;
 use std::collections::BTreeMap;

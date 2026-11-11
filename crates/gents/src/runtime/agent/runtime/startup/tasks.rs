@@ -427,7 +427,7 @@ pub(super) fn spawn_node_tasks(
     let session_command_cancel = cancel.child_token();
     background_tasks.spawn(async move {
         BackgroundTaskResult::SessionCommandReconcile(
-            crate::runtime::agent::p2p_reconcile::session_commands::run_session_command_reconciler_with_agents(
+            crate::runtime::agent::session_commands::run_session_command_reconciler_with_agents(
                 session_command_node,
                 session_command_identity,
                 Some(session_command_agents),

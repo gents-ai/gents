@@ -791,17 +791,17 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_client_edits_publish_concurrently_with_signed_effect_and_receipt",
         },
         ConformanceConsumer::RustTest {
-            id: "runtime::agent::p2p_reconcile::session_commands::tests::generated_session_command_discovery_uses_held_agent_and_native_visibility",
+            id: "runtime::agent::session_commands::tests::generated_session_command_discovery_uses_held_agent_and_native_visibility",
             package: "gents",
-            source_path: "crates/gents/src/runtime/agent/p2p_reconcile/session_commands.rs",
-            module_path: "runtime::agent::p2p_reconcile::session_commands::tests",
+            source_path: "crates/gents/src/runtime/agent/session_commands.rs",
+            module_path: "runtime::agent::session_commands::tests",
             function: "generated_session_command_discovery_uses_held_agent_and_native_visibility",
         },
         ConformanceConsumer::RustTest {
-            id: "runtime::agent::p2p_reconcile::session_input_edit::verified_graph_tests::signed_user_graph_and_agent_effect_share_the_claim_transaction",
+            id: "runtime::agent::session_input_edit::verified_graph_tests::signed_user_graph_and_agent_effect_share_the_claim_transaction",
             package: "gents",
-            source_path: "crates/gents/src/runtime/agent/p2p_reconcile/session_input_edit/verified_graph_tests.rs",
-            module_path: "runtime::agent::p2p_reconcile::session_input_edit::verified_graph_tests",
+            source_path: "crates/gents/src/runtime/agent/session_input_edit/verified_graph_tests.rs",
+            module_path: "runtime::agent::session_input_edit::verified_graph_tests",
             function: "signed_user_graph_and_agent_effect_share_the_claim_transaction",
         },
         ConformanceConsumer::RustTest {
@@ -826,10 +826,10 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "modeled_unsafe_stream_boundaries_never_intake_or_finish_before_provider_publication",
         },
         ConformanceConsumer::RustTest {
-            id: "runtime::agent::p2p_reconcile::session_input_edit::tests::generated_commands_bind_to_atomic_queue_owner",
+            id: "runtime::agent::session_input_edit::tests::generated_commands_bind_to_atomic_queue_owner",
             package: "gents",
-            source_path: "crates/gents/src/runtime/agent/p2p_reconcile/session_input_edit/tests.rs",
-            module_path: "runtime::agent::p2p_reconcile::session_input_edit::tests",
+            source_path: "crates/gents/src/runtime/agent/session_input_edit/tests.rs",
+            module_path: "runtime::agent::session_input_edit::tests",
             function: "generated_commands_bind_to_atomic_queue_owner",
         },
         ConformanceConsumer::RustTest {

@@ -20,9 +20,6 @@ pub mod intervals;
 pub mod policy;
 pub mod profiles;
 pub mod registry;
-pub mod session_commands;
-pub mod session_goal_control;
-pub mod session_input_edit;
 pub mod templates;
 pub mod trait_def;
 

@@ -1444,7 +1444,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerWithFollowUp
       "session_input_edit_cases"
       "SessionInputEditCases"
-      "runtime::agent::p2p_reconcile::session_input_edit::tests::generated_commands_bind_to_atomic_queue_owner"
+      "runtime::agent::session_input_edit::tests::generated_commands_bind_to_atomic_queue_owner"
       "The model composes existing authority observations with the queue replacement owner and atomic terminal receipt. Signature validity and session ownership are supplied by their existing native owners; edits are direct client-signed commands, and the command introduces no new authority kind. Native binding must exercise these facts, exact replay and identity collision through the real reconciler. Distinct physical commands sharing an ID are an observed fail-closed barrier, including before application and after a receipt on another session; existing effects and receipts remain intact.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
@@ -1673,12 +1673,12 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "session_input_edit_native_discovery_cases"
       "SessionCommandNativeDiscovery"
-      "runtime::agent::p2p_reconcile::session_commands::tests::generated_session_command_discovery_uses_held_agent_and_native_visibility")
+      "runtime::agent::session_commands::tests::generated_session_command_discovery_uses_held_agent_and_native_visibility")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "session_input_edit_native_claim_cases"
       "SessionInputEditNativeClaim"
-      "runtime::agent::p2p_reconcile::session_input_edit::verified_graph_tests::signed_user_graph_and_agent_effect_share_the_claim_transaction")
+      "runtime::agent::session_input_edit::verified_graph_tests::signed_user_graph_and_agent_effect_share_the_claim_transaction")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "identity_private_journal_policy"

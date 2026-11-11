@@ -149,7 +149,7 @@ pub fn test_agent_with_identity(
 pub async fn session_command_agent_snapshot(
     db: &super::TestDb,
 ) -> tokio::sync::watch::Receiver<
-    Arc<gents::runtime::agent::p2p_reconcile::session_commands::SessionCommandAgentSnapshot>,
+    Arc<gents::runtime::agent::session_commands::SessionCommandAgentSnapshot>,
 > {
     let access =
         gents::ConfigAccess::local_as(db.node.clone(), db.node_identity.did().parse().unwrap());
@@ -183,7 +183,7 @@ pub async fn session_command_agent_snapshot(
     let default_agent_did = agents.keys().next().unwrap().clone();
     let runtime_node = test_node_for(db.node_identity.clone(), &default_agent_did);
     let snapshot =
-        gents::runtime::agent::p2p_reconcile::session_commands::SessionCommandAgentSnapshot {
+        gents::runtime::agent::session_commands::SessionCommandAgentSnapshot {
             generation: 1,
             node: Some(runtime_node),
             local_did: db.node_identity.did().into(),

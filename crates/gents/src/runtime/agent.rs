@@ -33,6 +33,8 @@ pub(crate) mod document_view;
 pub(crate) mod loop_stream;
 pub(crate) mod output_obligation;
 pub mod p2p_reconcile;
+pub mod session_commands;
+pub mod session_input_edit;
 pub(crate) mod principal_assembly;
 mod reconcile;
 pub mod retry;

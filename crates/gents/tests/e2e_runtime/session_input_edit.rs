@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use gents::request::lifecycle::{prepare_pending_user_edit, PendingMessageEdit, PendingQueueEdit};
-use gents::runtime::agent::p2p_reconcile::session_commands::run_session_command_reconciler;
+use gents::runtime::agent::session_commands::run_session_command_reconciler;
 use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::escape_graphql_string;
 use gents::NodeIdentity as _;

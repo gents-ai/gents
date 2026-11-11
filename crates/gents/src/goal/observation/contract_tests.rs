@@ -239,7 +239,7 @@ async fn generated_goal_rescans_recover_lost_notifications() {
                 agent_executor_queue_capacities: Default::default(),
             });
             let (_snapshot_tx, snapshot_rx) = tokio::sync::watch::channel(snapshot);
-            let run = crate::runtime::agent::p2p_reconcile::session_commands::run_session_command_reconciler_observing(
+            let run = crate::runtime::agent::session_commands::run_session_command_reconciler_observing(
                 f.node.clone(), identity, cancel.clone(), changes,
                 ObservedTicks { waiting: waiting.clone(), ticks }, Some(snapshot_rx),
             );

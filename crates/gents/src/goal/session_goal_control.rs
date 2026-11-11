@@ -11,7 +11,7 @@ use gents_protocol::session_command_row::CommandRow;
 use crate::store::config_client::{ConfigAccess, IdempotentTransactionRetry};
 use crate::store::identity::NodeIdentity;
 
-pub(super) async fn has_verified_receipt(
+pub async fn has_verified_receipt(
     identity: &dyn NodeIdentity,
     intent: &str,
     raw: Option<&str>,
@@ -78,7 +78,7 @@ async fn intrinsic_rejection(
     Ok(None)
 }
 
-pub(crate) async fn process_command(
+pub async fn process_command(
     node: &Arc<EmbeddedNode>,
     identity: &Arc<dyn NodeIdentity>,
     doc_id: &str,
@@ -88,7 +88,7 @@ pub(crate) async fn process_command(
 }
 
 #[cfg(test)]
-pub(crate) async fn process_command_at(
+pub async fn process_command_at(
     node: &Arc<EmbeddedNode>,
     identity: &Arc<dyn NodeIdentity>,
     doc_id: &str,

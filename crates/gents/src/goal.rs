@@ -26,6 +26,7 @@ mod operator_resume;
 pub(crate) use operator_resume::support as operator_resume_test_support;
 mod readiness_gate;
 mod request_assignment;
+pub mod session_goal_control;
 mod request_head;
 mod reset_resume;
 mod state;
