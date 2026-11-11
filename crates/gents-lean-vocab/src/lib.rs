@@ -632,6 +632,8 @@ pub struct LeanContractSnapshot {
     pub lifecycle_hook_effect_cases: Vec<LeanLifecycleHookEffectCase>,
     pub lifecycle_hook_stage_cases: Vec<LeanLifecycleHookStageCase>,
     pub lifecycle_hook_must_commit_cases: Vec<LeanLifecycleHookMustCommitCase>,
+    pub lifecycle_hook_rerun_cases: Vec<LeanLifecycleHookRerunCase>,
+    pub lifecycle_hook_goal_resume_cases: Vec<LeanLifecycleHookGoalResumeCase>,
     pub lifecycle_hook_combine_cases: Vec<LeanLifecycleHookCombineCase>,
     pub lifecycle_hook_gate_cases: Vec<LeanLifecycleHookGateCase>,
     pub lifecycle_hook_queue_scope_cases: Vec<LeanLifecycleHookQueueScopeCase>,
@@ -3013,6 +3015,14 @@ pub fn lean_lifecycle_hook_stage_cases() -> &'static [LeanLifecycleHookStageCase
 
 pub fn lean_lifecycle_hook_must_commit_cases() -> &'static [LeanLifecycleHookMustCommitCase] {
     &lean_contract_snapshot().lifecycle_hook_must_commit_cases
+}
+
+pub fn lean_lifecycle_hook_rerun_cases() -> &'static [LeanLifecycleHookRerunCase] {
+    &lean_contract_snapshot().lifecycle_hook_rerun_cases
+}
+
+pub fn lean_lifecycle_hook_goal_resume_cases() -> &'static [LeanLifecycleHookGoalResumeCase] {
+    &lean_contract_snapshot().lifecycle_hook_goal_resume_cases
 }
 
 pub fn lean_lifecycle_hook_combine_cases() -> &'static [LeanLifecycleHookCombineCase] {

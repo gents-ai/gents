@@ -506,7 +506,7 @@ pub(crate) fn goal_session_is_idle(rows: &[AgentRequestRow]) -> bool {
 
 #[cfg(test)]
 #[path = "request_head_tests.rs"]
-mod tests;
+pub(crate) mod tests;
 
 #[cfg(test)]
 pub(crate) fn assignment_allows(assigned: Option<&str>, observed: Option<&str>) -> bool {

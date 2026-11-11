@@ -89,11 +89,7 @@ pub enum ConfigClientError {
     /// recorded. The transaction owner runs it again once per distinct note
     /// while it can discard the attempt; otherwise this is the failure.
     #[error("the transaction could not run again without part of its work")]
-    RerunRequested {
-        note: RerunNote,
-        #[source]
-        cause: Box<dyn std::error::Error + Send + Sync>,
-    },
+    RerunRequested(#[source] RerunRequest),
     /// Displays the whole wrapped chain and also exposes it as the source.
     #[error("{}", ErrorChain(.0.as_ref()))]
     StorageFailure(#[source] Box<ConfigClientError>),
@@ -554,9 +550,9 @@ impl ConfigClientError {
     }
 
     /// The note of a callback's request to run the transaction again.
-    pub(crate) fn rerun_requested(&self) -> Option<&RerunNote> {
+    pub(crate) fn rerun_note(&self) -> Option<&RerunNote> {
         match self.access() {
-            Self::RerunRequested { note, .. } => Some(note),
+            Self::RerunRequested(request) => Some(&request.note),
             _ => None,
         }
     }
@@ -668,6 +664,30 @@ impl RerunNote {
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+/// A callback's request to run its transaction again, carried as the source
+/// of [`ConfigClientError::RerunRequested`]. An owner enum that wraps the store
+/// error transparently forwards `source()` past it, so the transaction owner
+/// finds the request one level below, where no wrapper can hide it.
+#[derive(Debug, thiserror::Error)]
+#[error("a transaction callback asked to run again without part of its work")]
+pub struct RerunRequest {
+    note: RerunNote,
+    #[source]
+    cause: Box<dyn std::error::Error + Send + Sync>,
+}
+
+impl RerunRequest {
+    pub fn note(&self) -> &RerunNote {
+        &self.note
+    }
+}
+
+impl ConfigClientError {
+    pub fn rerun(note: RerunNote, cause: Box<dyn std::error::Error + Send + Sync>) -> Self {
+        Self::RerunRequested(RerunRequest { note, cause })
     }
 }
 
