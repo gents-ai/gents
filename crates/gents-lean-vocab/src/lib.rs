@@ -3987,10 +3987,6 @@ pub fn lean_command_env_case(name: &str) -> &'static LeanCommandEnvCase {
         .unwrap_or_else(|| panic!("Lean command env case {name:?} was not emitted"))
 }
 
-pub fn lean_identity_structural_cases() -> &'static [LeanIdentityStructuralCase] {
-    &lean_contract_snapshot().identity_structural_cases
-}
-
 pub fn lean_identity_permission_cases() -> &'static [LeanIdentityPermissionCase] {
     &lean_contract_snapshot().identity_permission_cases
 }

@@ -392,3 +392,15 @@ pub const CREDENTIAL_COLLECTION_NAMES: &[&str] = &[
 pub fn is_credential_collection(name: &str) -> bool {
     CREDENTIAL_COLLECTION_NAMES.contains(&name)
 }
+
+#[cfg(test)]
+mod conformance {
+    use super::*;
+
+    #[test]
+    fn network_protocol_collections_resolve_to_the_modeled_policy_resource() {
+        gents_lean_vocab::families::network_protocol_resource::replay(|i| {
+            identity_policy_resource(&i.collection).map(str::to_owned)
+        });
+    }
+}

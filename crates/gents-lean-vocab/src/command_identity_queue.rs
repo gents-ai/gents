@@ -288,14 +288,6 @@ pub struct LeanIdentityAgent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanIdentityStructuralCase {
-    pub name: String,
-    pub nodes: Vec<LeanIdentityNode>,
-    pub agents: Vec<LeanIdentityAgent>,
-    pub well_formed: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct LeanIdentityPermissionGrant {
     pub actor: String,
     pub permission: String,
