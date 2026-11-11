@@ -463,7 +463,7 @@ pub(crate) async fn prepare_pending_user_edit_with_deliveries(
     Ok(creates)
 }
 
-pub(crate) struct ValidatedPendingEdit {
+pub struct ValidatedPendingEdit {
     node_did: String,
     selected: Vec<AgentRequestRow>,
     creates: Vec<AgentRequestCreate>,

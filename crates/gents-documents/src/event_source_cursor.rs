@@ -6,7 +6,7 @@ use gents_store::graphql::escape_graphql_string;
 use serde_json::json;
 
 /// Receiving-node offsets must not replicate with shared EventSource configuration.
-pub(crate) struct CursorRecord {
+pub struct CursorRecord {
     pub doc_id: String,
     pub cursor: EventSourceCursor,
 }

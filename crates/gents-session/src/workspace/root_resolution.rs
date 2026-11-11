@@ -27,7 +27,7 @@ impl std::fmt::Display for RootDenialReason {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ResolvedToolRoot {
+pub struct ResolvedToolRoot {
     pub(crate) path: PathBuf,
     observed_parent: bool,
     observed_symlinks: Vec<PathBuf>,

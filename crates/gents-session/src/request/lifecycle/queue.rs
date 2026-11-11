@@ -91,7 +91,7 @@ pub(crate) use position::{effective_slots, InvalidQueuePosition};
 pub use submission::prepare_user_message_input;
 
 #[derive(Debug)]
-pub(crate) struct EnqueuedBackgroundCompletionInput {
+pub struct EnqueuedBackgroundCompletionInput {
     pub(crate) request: Option<EnqueuedAgentRequest>,
     #[cfg(test)]
     pub(crate) message_sequence: u32,

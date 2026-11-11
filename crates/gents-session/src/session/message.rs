@@ -48,7 +48,7 @@ pub use target::{
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct TaskBody {
+pub struct TaskBody {
     pub task_id: String,
     #[serde(default)]
     pub input: Option<serde_json::Value>,
@@ -98,7 +98,7 @@ pub struct AgentInterruptArgs {
 #[serde(deny_unknown_fields)]
 pub struct AgentListArgs {}
 
-pub(crate) enum MessageBody<'a> {
+pub enum MessageBody<'a> {
     Prompt(&'a str),
     Task(&'a TaskBody),
 }

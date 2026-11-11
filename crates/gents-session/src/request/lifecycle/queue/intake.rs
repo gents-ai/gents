@@ -149,7 +149,7 @@ pub(crate) fn boundary_candidate(rows: &[AgentRequestRow]) -> Option<&AgentReque
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum SteerAdmissionRefusal {
+pub enum SteerAdmissionRefusal {
     #[error("the steer is incompatible with the active request scope; use delivery=queue")]
     Incompatible,
     #[error(

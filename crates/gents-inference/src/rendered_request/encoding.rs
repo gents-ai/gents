@@ -117,7 +117,7 @@ pub struct BaseWitness {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub(crate) enum FieldDelta {
+pub enum FieldDelta {
     Full {
         value: Value,
     },
@@ -130,7 +130,7 @@ pub(crate) enum FieldDelta {
 
 /// Integrity comes from the field commit witness, never the writer-computed key.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct ManifestEntry {
+pub struct ManifestEntry {
     pub(crate) doc_id: String,
     pub(crate) content_key: String,
     pub(crate) field_commit_cid: String,
@@ -231,7 +231,7 @@ where
     Box::<RawValue>::deserialize(deserializer).map(Some)
 }
 
-pub(crate) struct EncodedJson {
+pub struct EncodedJson {
     pub(crate) stored: String,
 }
 
@@ -298,7 +298,7 @@ fn encode_envelope(payload: Payload) -> Result<String> {
     )?)?)
 }
 
-pub(crate) struct ChunkedBlock {
+pub struct ChunkedBlock {
     pub(crate) content_key: String,
     pub(crate) bytes: Vec<u8>,
 }
@@ -326,7 +326,7 @@ const PER_CALL_TRAILING_FIELDS: [&str; 5] = [
 
 /// A capture payload in block layout, with the extent of the fields that stay
 /// the same across the calls of a session.
-pub(crate) struct CaptureLayout {
+pub struct CaptureLayout {
     pub(crate) json: String,
     /// Length of the leading run of stable fields in `json`, through the
     /// separator before the first `APPEND_GROWING_FIELDS` key. Zero when
@@ -517,7 +517,7 @@ pub(crate) const TREE_RESOLUTION_FUEL: usize =
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct ManifestTree {
+pub struct ManifestTree {
     pub(crate) root: ManifestEntry,
     pub(crate) height: u8,
     pub(crate) leaves: usize,

@@ -59,7 +59,7 @@ pub(crate) struct WorkspacePlacementRecord {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct WorkspaceOverlay {
+pub struct WorkspaceOverlay {
     pub workspace_artifact: Option<super::ArtifactGrant>,
     pub root: PathBuf,
     pub cwd: PathBuf,

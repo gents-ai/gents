@@ -979,7 +979,7 @@ pub struct MailboxSweepReport {
     pub skipped_errors: usize,
 }
 
-pub(crate) struct MailboxSweepPage {
+pub struct MailboxSweepPage {
     pub report: MailboxSweepReport,
     pub next_cursor: Option<String>,
 }

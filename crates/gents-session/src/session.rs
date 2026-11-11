@@ -147,7 +147,7 @@ pub struct CompactionEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PromptCompactionState {
+pub struct PromptCompactionState {
     pub summaries: Vec<String>,
     pub total_messages_compacted: usize,
     pub compacted_through_sequence: Option<u32>,

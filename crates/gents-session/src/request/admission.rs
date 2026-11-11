@@ -23,7 +23,7 @@ use gents_store::identity::request_receipt::{
 use gents_store::identity::NodeIdentity;
 
 #[derive(Debug)]
-pub(crate) enum AgentRequestAdmissionError {
+pub enum AgentRequestAdmissionError {
     Denied(anyhow::Error),
     Unavailable(anyhow::Error),
 }
@@ -251,7 +251,7 @@ pub enum PendingRejectionOutcome {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum PendingRejectionError {
+pub enum PendingRejectionError {
     #[error("invalid selected agent identity: {0}")]
     InvalidAgent(#[source] anyhow::Error),
     #[error("pending request rejection failed: {0}")]

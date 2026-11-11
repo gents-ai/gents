@@ -214,7 +214,7 @@ fn tagged_checkpoint(
 /// discards the reduction, so a rebuilt request that cannot fit leaves no row
 /// (`Compaction.ReductionEngine.commitRequestLocalAfterRebuild`).
 #[derive(Debug)]
-pub(crate) struct StagedProviderContextReduction {
+pub struct StagedProviderContextReduction {
     intended: IntendedReduction,
 }
 

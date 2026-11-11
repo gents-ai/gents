@@ -26,7 +26,7 @@ pub struct AgentSessionListArgs {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct SessionFilter {
+pub struct SessionFilter {
     pub agent: Option<String>,
     pub status: Option<String>,
     pub relationship: Option<String>,

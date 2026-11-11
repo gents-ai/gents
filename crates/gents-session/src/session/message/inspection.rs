@@ -31,7 +31,7 @@ pub struct AgentSessionReadArgs {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum ReadView {
+pub enum ReadView {
     #[default]
     Last,
     Recent,

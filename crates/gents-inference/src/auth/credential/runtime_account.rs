@@ -5,7 +5,7 @@ use gents_store::config_client::{ConfigApplyTxn, ConfigClientError};
 use gents_store::identity::NodeIdentity;
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum RuntimeAccountMetadataError {
+pub enum RuntimeAccountMetadataError {
     #[error("account lookup requires the bound runtime and a managed Agent transaction")]
     RuntimeScope,
     #[error(transparent)]

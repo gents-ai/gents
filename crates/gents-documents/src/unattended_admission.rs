@@ -1,5 +1,5 @@
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum UnattendedAgentAdmissionError {
+pub enum UnattendedAgentAdmissionError {
     #[error("unattended admission actor does not match the selected Agent")]
     ActorMismatch,
     #[error("selected Agent configuration is unavailable")]

@@ -76,7 +76,7 @@ enum MediaDataPlan {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct EncodedNativeMessage {
+pub struct EncodedNativeMessage {
     pub(crate) role: MessageRole,
     pub(crate) native_id: Option<String>,
     pub(crate) native_request_id: Option<String>,

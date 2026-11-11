@@ -5,7 +5,7 @@ use gents_store::graphql::graphql_with_transaction_retry;
 
 /// The physical identity scopes live invalidations only; authority remains in
 /// the native scoped read, and feed overflow still requires a durable reread.
-pub(crate) struct ScopedInterruptObservation {
+pub struct ScopedInterruptObservation {
     pub(crate) request_doc_id: Option<String>,
     pub(crate) requested_at: Option<String>,
 }
