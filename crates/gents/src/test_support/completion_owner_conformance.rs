@@ -1,8 +1,7 @@
-use super::{
-    admission_fixture::{published_admission, PublishedAdmission, PublishedAdmissionOptions},
-    AwaitMode, ToolCallLifecycle,
-};
-use crate::goal::{load_canonical_goal_in_txn, set_goal_from_access};
+use crate::test_support::admission_fixture::{published_admission, PublishedAdmission, PublishedAdmissionOptions};
+use gents_automation::goal::{load_canonical_goal_in_txn, set_goal_from_access};
+use gents_protocol::tool_call::AwaitMode;
+use gents_toolcalls::call::lifecycle::ToolCallLifecycle;
 use anyhow::Context;
 use gents_lean_vocab::{
     lean_r6_backgrounding_case, lean_r6_backgrounding_cases, LeanR6BackgroundingCase,
@@ -36,7 +35,7 @@ async fn canonical_goal(
     access: &ConfigAccess,
     node_did: &str,
     session: &str,
-) -> Option<crate::goal::GoalDocument> {
+) -> Option<gents_automation::goal::GoalDocument> {
     access
         .transact_readonly("test.completion.goal", |txn| {
             Box::pin(async move { load_canonical_goal_in_txn(txn, node_did, session).await })
@@ -696,7 +695,7 @@ async fn background_wake_is_visible_to_the_owning_user_and_selected_agent() {
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 
-pub(crate) struct SelectedBackgroundWake {
+pub struct SelectedBackgroundWake {
     pub admission: PublishedAdmission,
     pub wake: gents_protocol::row::AgentRequest,
     pub notification_text: String,
@@ -712,7 +711,7 @@ pub(crate) async fn selected_background_wake() -> SelectedBackgroundWake {
 pub async fn selected_background_wake_with_successor(
     prepare_successor: bool,
 ) -> (SelectedBackgroundWake, Option<String>) {
-    use super::admission_fixture::{
+    use crate::test_support::admission_fixture::{
         complete_child_managed_verified, publish_accepted_on_claimed_request,
         published_session_message_with_owner,
     };
@@ -775,7 +774,7 @@ pub async fn selected_background_wake_with_successor(
         )
         .await
         .unwrap();
-        let receipt = super::admission_fixture::materialize_session_message(
+        let receipt = crate::test_support::admission_fixture::materialize_session_message(
             node,
             &owner,
             &mut call,
@@ -802,7 +801,7 @@ pub async fn selected_background_wake_with_successor(
         admission.runtime.clone(),
     )
     .await;
-    let settled = crate::background::completion::settle_running_session_message_rows_with_access(
+    let settled = gents_toolcalls::background::completion::settle_running_session_message_rows_with_access(
         node,
         &admission.tool.access().unwrap(),
         did,

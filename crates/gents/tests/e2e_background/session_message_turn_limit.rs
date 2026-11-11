@@ -455,8 +455,9 @@ async fn start_child_session(
     let child_behavior = agent
         .agents()
         .iter()
-        .find(|behavior| behavior.agent_did == child_did)
+        .find(|behavior| behavior.agent.agent_did == child_did)
         .expect("child agent resolved from documents")
+        .agent
         .clone();
     let node_did = agent.node_did().to_string();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);

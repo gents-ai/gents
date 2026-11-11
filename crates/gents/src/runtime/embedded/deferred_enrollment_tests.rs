@@ -6,6 +6,7 @@ use gents_lean_vocab::{lean_contract_snapshot, lean_identity_household_cases, Le
 use gents_store::config_client::node_deferred_operation::*;
 use gents_store::config_client::{ConfigAccess, GraphqlEndpoint, NodePermission};
 use gents_store::identity::NodeIdentity;
+use gents_store::graphql::escape_graphql_string;
 
 #[tokio::test]
 async fn deferred_enrollment_documents_remain_private_then_follow_the_node() -> Result<()> {

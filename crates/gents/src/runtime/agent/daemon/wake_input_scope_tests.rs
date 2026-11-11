@@ -714,7 +714,7 @@ async fn claimed_background_wake_reads_user_session_as_selected_agent() {
     use gents_protocol::tool_call::AwaitMode;
     use gents_session::request::lifecycle::queue::persist_background_completion_with_message_waking_with_access;
     use gents_session::request::lifecycle::RequestTerminalOutcome;
-    use gents_toolcalls::call::lifecycle::admission_fixture::{
+    use crate::test_support::admission_fixture::{
         published_admission_with_owner, PublishedAdmissionOptions,
     };
 

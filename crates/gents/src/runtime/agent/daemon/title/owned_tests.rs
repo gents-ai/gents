@@ -1244,6 +1244,7 @@ struct TitleFixture {
     user_access: ConfigAccess,
     node: Arc<EmbeddedNode>,
     agent_config: Arc<ResolvedAgent>,
+    tool_config: Arc<AgentToolSurfaceConfig>,
     identity: Arc<dyn NodeIdentity>,
     parent: AgentRequest,
     title: AgentRequest,
@@ -1349,7 +1350,6 @@ impl TitleFixture {
             max_turns: 2,
             max_turns_provenance: gents_inference::resolved::MaxTurnsProvenance::Default,
             system_prompt: "system".into(),
-            tools: AgentToolSurfaceConfig::meta_only(),
             compaction: None,
             compaction_inference: None,
             max_total_tokens: None,
@@ -1473,6 +1473,7 @@ impl TitleFixture {
             user_access,
             node,
             agent_config,
+            tool_config: Arc::new(AgentToolSurfaceConfig::meta_only()),
             identity,
             parent,
             title,
@@ -2205,6 +2206,10 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
             node: None,
             local_did: String::new(),
             default_agent_did: fixture.agent_config.agent_did.clone(),
+            tool_configs: rapidhash::RapidHashMap::from_iter([(
+                fixture.agent_config.agent_did.clone(),
+                fixture.tool_config.clone(),
+            )]),
             agents: rapidhash::RapidHashMap::from_iter([(
                 fixture.agent_config.agent_did.clone(),
                 fixture.agent_config.clone(),
@@ -2237,6 +2242,7 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         let mut daemon = AgentDaemon::new(AgentDaemonInit {
             node: fixture.node.clone(),
+            tool_config: fixture.tool_config.clone(),
             agent_config: fixture.agent_config.clone(),
             provider_family: None,
             model: Arc::new(provider),
@@ -2413,6 +2419,7 @@ async fn start_owned_title_daemon(
         node: None,
         local_did: String::new(),
         default_agent_did: fixture.agent_config.agent_did.clone(),
+        tool_configs: Default::default(),
         agents: Default::default(),
         tool_surfaces: Default::default(),
         backend_admission_configs: Default::default(),
@@ -2441,6 +2448,7 @@ async fn start_owned_title_daemon(
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let mut daemon = AgentDaemon::new(AgentDaemonInit {
         node: fixture.node.clone(),
+        tool_config: fixture.tool_config.clone(),
         agent_config: fixture.agent_config.clone(),
         provider_family: None,
         model: Arc::new(provider),

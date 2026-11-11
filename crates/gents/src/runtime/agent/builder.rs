@@ -775,12 +775,12 @@ mod tests {
             .pending_agent
             .build_with_identity_for_test(test_identity("builder-max-turns-explicit"));
 
-        assert_eq!(agent_config.max_turns, 40);
+        assert_eq!(agent_config.agent.max_turns, 40);
         assert_eq!(
-            agent_config.max_turns_provenance,
+            agent_config.agent.max_turns_provenance,
             MaxTurnsProvenance::BuilderOverride
         );
-        let message = agent_config.max_turns_provenance.describe();
+        let message = agent_config.agent.max_turns_provenance.describe();
         assert!(
             message.contains("AgentBuilder::max_turns"),
             "a builder-configured limit must name the builder: {message}"
@@ -798,12 +798,12 @@ mod tests {
             .pending_agent
             .build_with_identity_for_test(test_identity("builder-max-turns-default"));
 
-        assert_eq!(agent_config.max_turns, DEFAULT_MAX_TURNS);
+        assert_eq!(agent_config.agent.max_turns, DEFAULT_MAX_TURNS);
         assert_eq!(
-            agent_config.max_turns_provenance,
+            agent_config.agent.max_turns_provenance,
             MaxTurnsProvenance::Default
         );
-        let message = agent_config.max_turns_provenance.describe();
+        let message = agent_config.agent.max_turns_provenance.describe();
         assert!(
             message.contains("AgentBuilder::max_turns"),
             "a default limit on a built agent must name the builder knob: {message}"

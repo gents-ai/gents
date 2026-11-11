@@ -1644,7 +1644,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                             parent_request_doc_id: parent.doc_id.clone(),
                             ..Default::default()
                         }),
-                        ..crate::request::lifecycle::RequestSpec::new(
+                        ..gents_session::request::lifecycle::RequestSpec::new(
                             seed.purpose.into(), auxiliary_identity,
                             gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_control(
                                 agent.did(), &parent.request_id,

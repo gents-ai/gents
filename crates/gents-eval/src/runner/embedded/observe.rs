@@ -648,7 +648,7 @@ mod tests {
         use gents_session::request::lifecycle::RequestTerminalOutcome;
         use gents_session::request::streaming::DefraStreamWriter;
         use gents_store::identity::NodeIdentity;
-        use gents_toolcalls::call::lifecycle::admission_fixture::{
+        use gents::test_support::admission_fixture::{
             pending_client_fixture_request, publish_accepted_on_claimed_request,
         };
         let home = EmbeddedHome::create_temp("observe-evidence").await.unwrap();

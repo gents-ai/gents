@@ -111,6 +111,7 @@ async fn demotion_persistence_failure_closes_admission_and_cancels_runtime() {
             node: None,
             local_did: String::new(),
             default_agent_did: "general".to_string(),
+            tool_configs: Default::default(),
             agents: RapidHashMap::new(),
             tool_surfaces: RapidHashMap::new(),
             backend_admission_configs: RapidHashMap::new(),

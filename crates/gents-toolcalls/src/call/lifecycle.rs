@@ -52,8 +52,6 @@ mod background_hook_conformance;
 #[cfg(test)]
 mod client_control_race_tests;
 #[cfg(test)]
-pub mod completion_owner_conformance;
-#[cfg(test)]
 mod composed_conformance;
 #[cfg(test)]
 mod file_contents_store_tests;
@@ -126,12 +124,12 @@ impl ToolRowKind {
 
 #[derive(Clone)]
 pub struct ToolCallLifecycle {
-    actor: identity::Did,
+    pub actor: identity::Did,
     agent_signer: Option<gents_store::identity::ManagedAgentSigner>,
     node: Arc<EmbeddedNode>,
     request_id: String,
     request_doc_id: Option<String>,
-    session_id: String,
+    pub session_id: String,
     /// Immutable scope key used by filtered replication.
     node_did: String,
     requester_did: Option<String>,
@@ -171,10 +169,10 @@ struct SelectedToolIdentity {
 
 #[derive(Clone, Debug)]
 pub struct SpawnedBackgroundToolAdmission {
-    pub(crate) tool_name: String,
-    pub(crate) deadline_at: chrono::DateTime<chrono::Utc>,
+    pub tool_name: String,
+    pub deadline_at: chrono::DateTime<chrono::Utc>,
     /// Remote target identity recorded at creation for later wait-policy lookup.
-    pub(crate) selected_tool_identity: Option<(String, String)>,
+    pub selected_tool_identity: Option<(String, String)>,
 }
 
 impl ToolCallLifecycle {
@@ -475,7 +473,7 @@ impl ToolCallLifecycle {
         self.state
     }
 
-    pub(crate) fn request_doc_id(&self) -> Option<&str> {
+    pub fn request_doc_id(&self) -> Option<&str> {
         self.request_doc_id.as_deref()
     }
 

@@ -12,7 +12,7 @@ use gents_store::config_client::session_children::{
 use gents_store::graphql::escape_graphql_string;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct ProviderCallUsage(pub(crate) gents_protocol::usage::TokenUsage);
+pub struct ProviderCallUsage(pub(crate) gents_protocol::usage::TokenUsage);
 
 pub(super) fn completion_persistence_error(error: impl Into<anyhow::Error>) -> AdmissionError {
     let error = error.into();

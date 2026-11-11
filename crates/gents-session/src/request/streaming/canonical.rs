@@ -25,13 +25,13 @@ pub(crate) use source::{
 };
 
 pub struct ProviderPublicationPlan {
-    pub(crate) final_flush: Option<OutputSegment>,
-    pub(crate) message_key: String,
-    pub(crate) encoded: std::sync::Arc<super::native_encoding::EncodedNativeMessage>,
-    pub(crate) expected: std::sync::Arc<gents_protocol::message::Message>,
-    pub(crate) tool_deadline_at: String,
-    pub(crate) background_calls: Vec<String>,
-    pub(crate) consumes_folded: Option<crate::request::lifecycle::queue::FoldedConsumption>,
+    pub final_flush: Option<OutputSegment>,
+    pub message_key: String,
+    pub encoded: std::sync::Arc<super::native_encoding::EncodedNativeMessage>,
+    pub expected: std::sync::Arc<gents_protocol::message::Message>,
+    pub tool_deadline_at: String,
+    pub background_calls: Vec<String>,
+    pub consumes_folded: Option<crate::request::lifecycle::queue::FoldedConsumption>,
 }
 
 pub(crate) fn session_message_call_ids(message: &gents_protocol::message::Message) -> Vec<String> {
@@ -97,8 +97,8 @@ pub type PartialHeaderFactory =
 
 #[derive(Clone)]
 pub struct ProviderPartialCandidate {
-    pub(crate) closing: OutputSegment,
-    pub(crate) header: Option<PartialHeaderFactory>,
+    pub closing: OutputSegment,
+    pub header: Option<PartialHeaderFactory>,
 }
 
 pub fn partial_message_key(request_doc_id: &str, source: &OutputSource) -> Result<String> {

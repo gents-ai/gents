@@ -4273,6 +4273,7 @@ dependencies = [
  "eventsource-stream",
  "flate2",
  "futures",
+ "gents",
  "gents-automation",
  "gents-callback-fixture-create-workspace",
  "gents-claude",

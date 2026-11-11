@@ -1,5 +1,6 @@
 use gents_store::config_client::ConfigAccess;
 use gents_store::identity::agent::*;
+use gents_store::identity::NodeIdentity;
 
 #[tokio::test]
 async fn authorized_provisioning_grants_no_direct_node_permission() {

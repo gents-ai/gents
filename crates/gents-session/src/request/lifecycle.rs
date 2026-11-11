@@ -1,5 +1,5 @@
 mod client;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use client::stage_request_relationships_in_txn;
 pub use client::{
     bind_client_targets_in_txn, complete_client_request_relationships,

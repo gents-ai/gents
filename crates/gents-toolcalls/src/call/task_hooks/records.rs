@@ -34,7 +34,7 @@ pub struct TaskHookRecord {
 pub struct RecordedHookAttempt {
     pub hook_id: String,
     #[serde(default)]
-    pub(crate) process: Option<ProcessIdentity>,
+    pub process: Option<ProcessIdentity>,
     #[serde(default)]
     pub result: Option<HookCommandResult>,
 }

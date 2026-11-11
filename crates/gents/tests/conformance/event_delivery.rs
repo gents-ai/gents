@@ -775,6 +775,10 @@ fn active_snapshot(
         node: None,
         local_did: resolved.node.node_did.clone(),
         default_agent_did: agent_did.clone(),
+        tool_configs: RapidHashMap::from_iter([(
+            agent_did.clone(),
+            Arc::new(gents_tools::surface::AgentToolSurfaceConfig::default()),
+        )]),
         agents: RapidHashMap::from_iter([(agent_did, resolved)]),
         tool_surfaces: RapidHashMap::new(),
         backend_admission_configs: RapidHashMap::new(),

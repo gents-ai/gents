@@ -585,7 +585,7 @@ pub(super) mod tests {
                             runtime,
                         }) = &self.successor
                         {
-                            gents_toolcalls::call::lifecycle::admission_fixture::complete_child_managed_verified(
+                            crate::test_support::admission_fixture::complete_child_managed_verified(
                                 node,
                                 request_id,
                                 "successor native output",
@@ -728,7 +728,6 @@ pub(super) mod tests {
             max_turns: 2,
             max_turns_provenance: gents_inference::resolved::MaxTurnsProvenance::Default,
             system_prompt: "system".to_string(),
-            tools: AgentToolSurfaceConfig::meta_only(),
             compaction: None,
             compaction_inference: None,
             max_total_tokens: None,
@@ -1110,6 +1109,7 @@ pub(super) mod tests {
             .unwrap();
         let mut daemon = AgentDaemon::new(AgentDaemonInit {
             node: node.clone(),
+            tool_config: Arc::new(AgentToolSurfaceConfig::meta_only()),
             agent_config,
             provider_family: None,
             model: Arc::new(RoutedReplyModel),
@@ -1225,7 +1225,7 @@ pub(super) mod tests {
         use gents_protocol::request_lifecycle::RequestLifecycleState;
 
         let (selected, successor) =
-            gents_toolcalls::call::lifecycle::completion_owner_conformance::selected_background_wake_with_successor(true)
+            crate::test_support::completion_owner_conformance::selected_background_wake_with_successor(true)
                 .await;
         let admission = selected.admission;
         let wake = selected.wake;
@@ -1285,6 +1285,7 @@ pub(super) mod tests {
         let request_identity = agent_config.node_identity().clone();
         let mut daemon = AgentDaemon::new(AgentDaemonInit {
             node: node.clone(),
+            tool_config: Arc::new(AgentToolSurfaceConfig::meta_only()),
             agent_config: agent_config.clone(),
             provider_family: None,
             model: Arc::new(WakeInputModel {
@@ -1557,6 +1558,7 @@ pub(super) mod tests {
         let request_identity = agent_config.node_identity().clone();
         let mut daemon = AgentDaemon::new(AgentDaemonInit {
             node: node.clone(),
+            tool_config: Arc::new(AgentToolSurfaceConfig::meta_only()),
             agent_config: agent_config.clone(),
             provider_family: None,
             model: Arc::new(CountingReplyModel(calls.clone())),
@@ -1704,6 +1706,7 @@ pub(super) mod tests {
         let request_identity = agent_config.node_identity().clone();
         let mut daemon = AgentDaemon::new(AgentDaemonInit {
             node: node.clone(),
+            tool_config: Arc::new(AgentToolSurfaceConfig::meta_only()),
             agent_config: agent_config.clone(),
             provider_family: None,
             model: Arc::new(CountingReplyModel(calls.clone())),

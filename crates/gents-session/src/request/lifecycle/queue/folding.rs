@@ -71,7 +71,7 @@ pub(crate) fn folded_request_doc_id(key: &str) -> Option<&str> {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct FoldedConsumption {
+pub struct FoldedConsumption {
     pub(crate) folded_request_doc_id: String,
     pub(crate) head_request_id: String,
     pub(crate) head_doc_id: String,

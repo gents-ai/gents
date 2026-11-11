@@ -625,7 +625,7 @@ async fn signed_run(name: &str, batch_interval: Duration) -> SignedRun {
         AgentRequestAdmissionRecord::client(user.did()),
     );
     let mut lifecycle =
-        gents_toolcalls::call::lifecycle::admission_fixture::pending_client_fixture_request(
+        crate::test_support::admission_fixture::pending_client_fixture_request(
             &node,
             &owner,
             db.node_identity.clone(),

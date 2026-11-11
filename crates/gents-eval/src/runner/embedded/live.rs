@@ -297,15 +297,15 @@ mod tests {
 
     #[tokio::test]
     async fn last_tool_reads_canonical_delivery_and_keeps_running_calls_visible() {
-        let fixture = gents_toolcalls::call::lifecycle::admission_fixture::published_admission(
-            gents_toolcalls::call::lifecycle::admission_fixture::PublishedAdmissionOptions {
+        let fixture = gents::test_support::admission_fixture::published_admission(
+            gents::test_support::admission_fixture::PublishedAdmissionOptions {
                 name: "eval-last-tool".to_owned(),
                 ..Default::default()
             },
         )
         .await
         .unwrap();
-        let gents_toolcalls::call::lifecycle::admission_fixture::PublishedAdmission {
+        let gents::test_support::admission_fixture::PublishedAdmission {
             node,
             path,
             mut tool,

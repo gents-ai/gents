@@ -552,7 +552,7 @@ async fn oversized_tool_result_is_bounded_before_threading() {
 fn plugin_image_tool(image_bytes: usize) -> (tempfile::TempDir, Box<dyn ToolDyn>) {
     const PREFIX: &[u8] = br#"{"response":{"width":2,"height":2},"parts":[{"type":"image","mimeType":"image/png","data":""#;
     const SUFFIX: &[u8] = br#""}]}"#;
-    let (home, record) = gents_toolcalls::plugin::tests::executor::installed_plugin(
+    let (home, record) = gents_toolcalls::test_support::plugin::installed_plugin(
         &gents_pack::plugin::test_fixtures::filled_output_wat(PREFIX, image_bytes, SUFFIX),
         None,
     );
@@ -1317,8 +1317,8 @@ async fn composed_children_outlast_the_guest_clock_and_fail_without_ending_the_p
     let request = serde_json::json!({"tool_calls": {"requests": [
         {"id": "slow", "tool_name": "slow", "arguments": {}},
         {"id": "late", "tool_name": "late", "arguments": {}}]}});
-    let (home, record) = gents_toolcalls::plugin::tests::executor::installed_plugin(
-        &gents_toolcalls::plugin::tests::executor::asking_plugin_wat(
+    let (home, record) = gents_toolcalls::test_support::plugin::installed_plugin(
+        &gents_toolcalls::test_support::plugin::asking_plugin_wat(
             "tool_calls",
             "tool_results",
             &request,
