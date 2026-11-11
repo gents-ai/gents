@@ -11,6 +11,7 @@ pub(crate) mod overlay;
 mod path_capability;
 mod publication;
 mod quickstart;
+pub mod root_resolution;
 mod runtime;
 pub mod sandbox;
 

@@ -664,7 +664,7 @@ async fn serve_foreground(
         effective_tool_root
             .as_deref()
             .map(|root| {
-                gents::tools::surface::resolve_configured_tool_root(root)
+                gents::workspace::root_resolution::resolve_configured_tool_root(root)
                     .map(|resolved| resolved.to_string_lossy().into_owned())
                     .map_err(|error| {
                         format!("tool root {} does not resolve: {error:#}", root.display())
@@ -753,7 +753,7 @@ async fn serve_foreground(
             // be covered by a published WorkspaceRoot before serving.
             if let Some(Ok(root)) = effective_tool_root
                 .as_deref()
-                .map(gents::tools::surface::resolve_configured_tool_root)
+                .map(gents::workspace::root_resolution::resolve_configured_tool_root)
             {
                 gents::tools::surface::ensure_configured_root_published(&node, &root)
                     .await

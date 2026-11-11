@@ -280,7 +280,7 @@ pub fn resolve_effective_tool_root(
     match (selection_root, ceiling_root) {
         (Some(selection_root), Some(ceiling_root)) => {
             let decision =
-                super::root_admission::resolve_admitted_tool_root(selection_root, [ceiling_root])
+                crate::workspace::root_resolution::resolve_admitted_tool_root(selection_root, [ceiling_root])
                     .with_context(|| {
                     format!(
                         "resolving agent {agent_name} file tool root {}",
@@ -288,12 +288,12 @@ pub fn resolve_effective_tool_root(
                     )
                 })?;
             match decision {
-                super::root_admission::RootAdmission::Admitted(root) => Ok(Some(root)),
-                denied @ super::root_admission::RootAdmission::Denied { .. } => {
+                crate::workspace::root_resolution::RootAdmission::Admitted(root) => Ok(Some(root)),
+                denied @ crate::workspace::root_resolution::RootAdmission::Denied { .. } => {
                     // The operator root moves independently of the authored
                     // grant: a grant that still contains the narrowed operator
                     // root clamps to it, only a disjoint grant is refused.
-                    let operator_narrowed = super::root_admission::resolve_admitted_tool_root(
+                    let operator_narrowed = crate::workspace::root_resolution::resolve_admitted_tool_root(
                         ceiling_root,
                         [selection_root],
                     )
@@ -307,7 +307,7 @@ pub fn resolve_effective_tool_root(
                                 operator_root = %ceiling_root.display(),
                                 "clamping file tool root to the narrowed operator tool root"
                             );
-                            super::root_admission::resolve_configured_tool_root(ceiling_root)
+                            crate::workspace::root_resolution::resolve_configured_tool_root(ceiling_root)
                                 .map(Some)
                         }
                         None => Err(anyhow!(
@@ -321,7 +321,7 @@ pub fn resolve_effective_tool_root(
             }
         }
         (Some(selection_root), None) => {
-            super::root_admission::resolve_configured_tool_root(selection_root)
+            crate::workspace::root_resolution::resolve_configured_tool_root(selection_root)
                 .with_context(|| {
                     format!(
                         "resolving agent {agent_name} file tool root {}",
@@ -331,7 +331,7 @@ pub fn resolve_effective_tool_root(
                 .map(Some)
         }
         (None, Some(ceiling_root)) => {
-            super::root_admission::resolve_configured_tool_root(ceiling_root).map(Some)
+            crate::workspace::root_resolution::resolve_configured_tool_root(ceiling_root).map(Some)
         }
         (None, None) => Ok(None),
     }

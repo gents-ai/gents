@@ -13,7 +13,7 @@ use crate::store::graphql::escape_graphql_string;
 use crate::store::graphql::{first_row, graphql_with_transaction_retry, rows};
 use crate::workspace::sandbox::workspace_write_sandbox_enforced;
 use gents_loop::tool_policy::WorkspaceAuthority;
-use crate::tools::surface::resolve_configured_tool_root;
+use super::root_resolution::resolve_configured_tool_root;
 use gents_protocol::row::AgentRequest;
 
 #[cfg(test)]
@@ -541,7 +541,7 @@ fn resolve_bound_cwd(root: &Path, cwd: Option<&Path>) -> Result<PathBuf> {
         "request cwd {} is not a directory",
         canonical.display()
     );
-    let admission = crate::tools::surface::resolve_admitted_tool_root(&canonical, [root])?;
+    let admission = super::root_resolution::resolve_admitted_tool_root(&canonical, [root])?;
     anyhow::ensure!(
         admission.admitted().is_some(),
         "request cwd {} is not under workspace root {}",
@@ -571,7 +571,7 @@ pub(crate) fn require_under_ceiling(path: &Path, operator_tool_root: Option<&Pat
         .map(resolve_configured_tool_root)
         .transpose()?;
     if let Some(ceiling) = operator.as_deref() {
-        let admission = crate::tools::surface::resolve_admitted_tool_root(path, [ceiling])?;
+        let admission = super::root_resolution::resolve_admitted_tool_root(path, [ceiling])?;
         if admission.admitted().is_none() {
             bail!(
                 "workspace placement {} escapes operator tool root {}",
