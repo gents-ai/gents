@@ -728,7 +728,7 @@ Semantic submodules:
 | `Proofs.RequestExecutionLease` | `State`, `Transition`, `Properties` |
 | `Proofs.InferenceCall` | `State`, `Transition`, `Executable`, `Properties`, `SlotAccounting`, `ControllerBookkeeping`, `Registry`, `Persistence` |
 | `Proofs.RuntimeReconcile` | `State`, `Transition`, `Executable` |
-| `Proofs.ApplyReconcile` | `Collections`, `Manifest`, `Publication` (includes digest-guarded `publishIf`), `Convergence`, `ContractCases`, `RuntimeBridge` |
+| `Proofs.ApplyReconcile` | `Collections`, `Manifest`, `Publication` (includes digest-guarded `publishIf`), `Convergence`, `RuntimeBridge` |
 | `Proofs.Triggers` | `Types`, `Dispatch`, `Reachability`, `SerialSupport`, `Serial`, `LatestOnly`, `Lineage`, `Groups`, `Identity`, `Queue`, `Durable`, `Refinement` |
 | `Proofs.Triggers.SerialSupport` | `Counting`, `Preservation` |
 | `Proofs.Client` | `Types`, `Lifecycle`, `Terminal`, `Replacement`, `Output` |

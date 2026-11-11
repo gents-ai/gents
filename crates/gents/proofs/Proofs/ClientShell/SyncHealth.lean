@@ -1,4 +1,5 @@
 import Proofs.ClientShell.ObservationOrdering
+import Mathlib.Tactic.SplitIfs
 
 /-!
 Client sync health: the one product state the desktop shows for its sync.

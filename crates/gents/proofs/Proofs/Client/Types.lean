@@ -1,4 +1,4 @@
-import Proofs.Request
+import Proofs.Request.State
 
 inductive ClientTurnState where
   | waitingForClaim

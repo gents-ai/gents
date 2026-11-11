@@ -1,4 +1,5 @@
-import Proofs.Fleet
+import Proofs.Fleet.Properties
+import Proofs.Request.Properties
 
 open AdmissionState SchedulerState FleetState
 

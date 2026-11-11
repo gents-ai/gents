@@ -3,6 +3,7 @@ import Proofs.Background.ToolOutput
 import Proofs.Background.CompletionContinuation
 import Proofs.Background.ProcessControl
 import Proofs.Conformance.ContractCases.Types
+import Proofs.Goals
 import Proofs.Recovery.Sweeps.BackgroundRestart
 import Proofs.Session.State
 import Proofs.ToolExecution.Executable

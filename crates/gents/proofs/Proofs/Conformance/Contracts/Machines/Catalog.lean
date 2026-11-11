@@ -9,7 +9,7 @@ import Proofs.Conformance.Contracts.Machines.ToolCall
 import Proofs.Conformance.Contracts.Machines.ManagedExec
 import Proofs.Conformance.Contracts.Machines.Goal
 import Proofs.Conformance.Contracts.Machines.Mailbox
-import Proofs.CompletionRetry.Contracts
+import Proofs.Conformance.CompletionRetry.Contracts
 import Proofs.Eval
 
 namespace Conformance.Contracts

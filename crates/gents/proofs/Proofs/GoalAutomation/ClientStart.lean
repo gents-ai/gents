@@ -330,7 +330,7 @@ def replace? (s : State) (assignments : Assignments) (replacement : Replacement)
     let fresh : Assignment :=
       { id := replacement.nextId, creationKey := replacement.creationKey
         snapshot :=
-          { revision := replacement.nextRevision, objective := canonicalObjective objective
+          { revision := replacement.nextRevision, objective := TextNormalization.canonicalObjective objective
             execution :=
               { goal := ⟨.active, 0, false, false⟩, sequence := 0
                 lastContinuedFrom := none, latestRequest := 0, children := []

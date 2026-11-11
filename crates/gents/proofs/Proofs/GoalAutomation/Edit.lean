@@ -33,10 +33,10 @@ def apply? (observed current : Assignment) (fields : Fields)
   if !editable origin current.status || observed.status != current.status ||
       observed.sequence != current.sequence then none
   else if fields.objective.isNone && fields.budget.isNone then none
-  else if fields.objective.any (fun objective => (canonicalObjective objective).isEmpty) ||
+  else if fields.objective.any (fun objective => (TextNormalization.canonicalObjective objective).isEmpty) ||
       !validBudget fields.budget then none
   else some { current with
-    objective := fields.objective.map canonicalObjective |>.getD current.objective
+    objective := fields.objective.map TextNormalization.canonicalObjective |>.getD current.objective
     budget := fields.budget.or current.budget }
 
 theorem edit_preserves_status_and_epoch (observed current next : Assignment) (fields : Fields)

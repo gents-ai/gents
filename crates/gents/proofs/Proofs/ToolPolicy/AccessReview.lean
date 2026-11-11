@@ -1,6 +1,6 @@
 import Lean
 import Proofs.ToolPolicy.WorkspacePermissions
-import Proofs.GoalAutomation
+import Proofs.TextNormalization
 
 namespace ToolPolicy.AccessReview
 open Lean WorkspacePermissions
@@ -21,7 +21,7 @@ Tasks requiring hooks, goals, outcomes, or a different output contract cannot
 silently lose those requirements when selected as a reviewer. -/
 def taskEligible (node task agent : String) (policy : TaskPolicy) : Bool :=
   policy.node == node && policy.task == task && policy.agent == agent &&
-    !(GoalAutomation.canonicalObjective policy.prompt).isEmpty && policy.enabled &&
+    !(TextNormalization.canonicalObjective policy.prompt).isEmpty && policy.enabled &&
     !policy.hooks && !policy.outcome && !policy.goal && !policy.schema
 
 theorem task_hooks_cannot_run_as_a_review (node task agent : String) (policy : TaskPolicy)

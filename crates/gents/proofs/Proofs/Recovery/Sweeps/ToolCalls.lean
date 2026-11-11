@@ -1,5 +1,5 @@
 import Proofs.Recovery.Sweeps.Requests
-import Proofs.ToolExecution
+import Proofs.ToolExecution.State
 import Proofs.ManagedExec.Ownership
 
 namespace Recovery

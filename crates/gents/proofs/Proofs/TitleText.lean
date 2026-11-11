@@ -1,4 +1,4 @@
-import Proofs.GoalAutomation
+import Proofs.TextNormalization
 import Proofs.Enrollment.CapturedContext
 import Lean
 
@@ -10,7 +10,7 @@ def preamble : String := "Generate concise conversation titles. Return only a sh
 def maxWords : Nat := 8
 def maxCharacters : Nat := 72
 
-def trim (text : String) : String := GoalAutomation.canonicalObjective text
+def trim (text : String) : String := TextNormalization.canonicalObjective text
 
 def unquote (text : String) : String :=
   let quote := fun c => c == '\'' || c == '"' || c == '`'
@@ -22,7 +22,7 @@ def firstLine (text : String) : String :=
 def phrase (text : String) : String :=
   let slug := text.contains '-' && text.toList.all (fun c =>
     (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-')
-  String.mk (text.toList.map (fun c => if GoalAutomation.objectiveWhitespace c || (slug && c == '-') then ' ' else c))
+  String.mk (text.toList.map (fun c => if TextNormalization.objectiveWhitespace c || (slug && c == '-') then ' ' else c))
 
 def boundedWords : List String → String → String
   | [], acc => acc

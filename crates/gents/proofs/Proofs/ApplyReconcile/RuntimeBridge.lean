@@ -1,4 +1,4 @@
-import Proofs.RuntimeReconcile
+import Proofs.RuntimeReconcile.State
 import Mathlib.Data.Finset.Image
 import Mathlib.Data.Finset.SDiff
 import Proofs.ApplyReconcile.Manifest

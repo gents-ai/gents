@@ -1,4 +1,4 @@
-import Proofs.Fleet
+import Proofs.Fleet.Transition
 import Proofs.Properties.Liveness
 
 open FleetState AdmissionState

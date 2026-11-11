@@ -1,6 +1,6 @@
 import Proofs.Basic
 import Proofs.Scheduling
-import Proofs.RuntimeReconcile
+import Proofs.RuntimeReconcile.State
 
 inductive TriggerKind where
   | schedule
