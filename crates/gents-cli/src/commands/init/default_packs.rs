@@ -477,7 +477,10 @@ enum Outcome {
 struct Resolved {
     source: command::PackSource,
     requested: Value,
-    /// The Tools it ships that run under the Engineer's tool root.
+    /// The archives of the packs it depends on.
+    dependencies: Vec<command::PackSource>,
+    /// The Tools it and its dependencies ship that run under the Engineer's
+    /// tool root.
     host_tools: Vec<String>,
 }
 
@@ -520,10 +523,14 @@ async fn resolve(home: &Path, pack: &str, registry: Option<&str>) -> Result<Reso
             .map(|dependency| dependency.manifest())
             .collect::<Vec<_>>(),
     )?;
-    let host_tools = command::wire::tools_taking_installer_root(&source);
+    let host_tools = std::iter::once(&source)
+        .chain(&dependencies)
+        .flat_map(command::wire::tools_taking_installer_root)
+        .collect();
     Ok(Resolved {
         source,
         requested,
+        dependencies,
         host_tools,
     })
 }
@@ -542,6 +549,7 @@ async fn install_one(
     let Resolved {
         source,
         requested,
+        dependencies,
         host_tools,
     } = resolve(home, pack, registry).await?;
     command::check_expected_digest(expect_digest, source.digest())?;
@@ -602,6 +610,20 @@ async fn install_one(
     let (access, owner) = command::resolve_scope_owner(&scope(home)).await?;
     let already = gents::pack::read_home_install(home, &coordinate)?
         .is_some_and(|record| record.digest == source.digest());
+    // The pack and the dependencies this install installs with it: the
+    // agents an approval grants the Engineer's root.
+    let installing = async {
+        let mut installing = vec![coordinate.clone()];
+        for dependency in command::wire::new_dependencies(&access, &owner, &dependencies).await? {
+            installing.push(format!(
+                "{}/{}",
+                dependency.manifest().metadata.namespace,
+                dependency.manifest().name
+            ));
+        }
+        anyhow::Ok(installing)
+    }
+    .await;
     let installed = if already {
         Ok(())
     } else {
@@ -617,6 +639,7 @@ async fn install_one(
         .map(drop)
     };
     let attached = async {
+        let installing = installing?;
         installed?;
         // The Engineer installed the pack, so its rootless Tools took the
         // Engineer's root: the one root this approval grants reader on.
@@ -626,7 +649,7 @@ async fn install_one(
             command::wire::grant_pack_root_readers(
                 &access,
                 &owner,
-                &coordinate,
+                &installing,
                 supplied.as_deref(),
                 approved,
             )

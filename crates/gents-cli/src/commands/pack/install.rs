@@ -226,7 +226,23 @@ pub(crate) async fn install_documents_pack(
     args: &PackInstallArgs,
     explicit: bool,
 ) -> Result<serde_json::Value, PackChangeError> {
-    install_documents_pack_inner(access, owner, pack, args, explicit, None).await
+    let dependencies = resolve_dependencies(pack, args).await?;
+    install_documents_pack_inner(access, owner, pack, args, explicit, dependencies, None).await
+}
+
+/// The archives of the packs `pack` declares as dependencies.
+async fn resolve_dependencies(
+    pack: &PackSource,
+    args: &PackInstallArgs,
+) -> Result<Vec<PackSource>> {
+    let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
+    futures_util::stream::iter(pack.manifest().metadata.dependencies.iter())
+        .map(|coordinate| resolve_pack_source(coordinate, args.registry.as_deref(), &home))
+        .buffered(4)
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect()
 }
 
 async fn install_documents_pack_inner(
@@ -235,17 +251,9 @@ async fn install_documents_pack_inner(
     pack: &PackSource,
     args: &PackInstallArgs,
     explicit: bool,
+    dependencies: Vec<PackSource>,
     local: Option<&LocalPackAccess>,
 ) -> Result<serde_json::Value, PackChangeError> {
-    let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
-    let dependencies: Vec<PackSource> =
-        futures_util::stream::iter(pack.manifest().metadata.dependencies.iter())
-            .map(|coordinate| resolve_pack_source(coordinate, args.registry.as_deref(), &home))
-            .buffered(4)
-            .collect::<Vec<_>>()
-            .await
-            .into_iter()
-            .collect::<Result<Vec<_>>>()?;
     if let gents::store::config_client::ConfigAccess::Graphql(endpoint) = access {
         let mut needs_runtime_store = false;
         for source in std::iter::once(pack).chain(dependencies.iter()) {
@@ -770,7 +778,22 @@ pub(super) async fn install_documents_command_with_local(
             pack.manifest().metadata.namespace,
             pack.manifest().name
         );
-        let supplied = wire::supplied_tool_root(&access, &owner, None, pack).await?;
+        let dependencies = resolve_dependencies(pack, args).await?;
+        // The root pack and the dependencies this install installs with it.
+        let mut installing = vec![pack];
+        installing.extend(wire::new_dependencies(&access, &owner, &dependencies).await?);
+        let coordinates: Vec<String> = installing
+            .iter()
+            .map(|source| {
+                format!(
+                    "{}/{}",
+                    source.manifest().metadata.namespace,
+                    source.manifest().name
+                )
+            })
+            .collect();
+        let supplied = wire::supplied_tool_root(&access, &owner, None, &installing).await?;
+        drop(installing);
         if let Some(published) = supplied
             .as_ref()
             .and_then(|supplied| supplied["reader_on"].as_str())
@@ -807,6 +830,7 @@ pub(super) async fn install_documents_command_with_local(
             pack,
             args,
             args.explicit,
+            dependencies,
             local.as_ref(),
         )
         .await?;
@@ -821,7 +845,7 @@ pub(super) async fn install_documents_command_with_local(
             let readers = wire::grant_pack_root_readers(
                 &access,
                 &owner,
-                &coordinate,
+                &coordinates,
                 supplied
                     .as_ref()
                     .and_then(|supplied| supplied["root"].as_str()),

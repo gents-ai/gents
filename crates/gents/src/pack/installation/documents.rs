@@ -1029,6 +1029,9 @@ async fn load_dependency(
             reconfigure: false,
         });
     }
+    let installer = bindings
+        .provisioner
+        .and_then(|context| context.selected_agent_did);
     let resolver = super::super::loader::DependencyVariableResolver::new(
         record.doc_id.is_some(),
         &record.variables,
@@ -1050,7 +1053,10 @@ async fn load_dependency(
     let variables = resolver
         .finish()
         .with_context(|| format!("preparing dependency {coordinate}"))?;
-    let bound = bound?;
+    let mut bound = bound?;
+    // A dependency rendered from its archive is installed by this install,
+    // so its rootless host tools take the installer's root as the root's do.
+    default_host_tool_roots(access, owner, installer, &mut bound.config).await?;
     Ok(LoadedDependency {
         bound,
         reconfigure: selected.is_some() && snapshot.is_some(),

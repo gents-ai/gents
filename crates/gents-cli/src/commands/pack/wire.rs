@@ -237,18 +237,47 @@ pub(crate) fn tools_taking_installer_root(pack: &super::PackSource) -> Vec<Strin
     })
 }
 
+/// The dependencies of an install that are not on the node yet: the ones
+/// this install installs, whose agents take the installer's root and its
+/// reader grant with the root pack's.
+pub(crate) async fn new_dependencies<'a>(
+    access: &ConfigAccess,
+    owner: &str,
+    dependencies: &'a [super::PackSource],
+) -> Result<Vec<&'a super::PackSource>> {
+    let mut new = Vec::new();
+    for dependency in dependencies {
+        let coordinate = format!(
+            "{}/{}",
+            dependency.manifest().metadata.namespace,
+            dependency.manifest().name
+        );
+        if installed_pack_documents(access, owner, &coordinate)
+            .await?
+            .is_empty()
+        {
+            new.push(dependency);
+        }
+    }
+    Ok(new)
+}
+
 /// The root an install by `installer` (the node's User when `None`) supplies
-/// to the Tools `pack` ships without one, and the reader its agents need
-/// there: what a preview lists and an approval covers. `None` when the pack
-/// ships no such Tools, the installer has no root, or no reader is needed.
+/// to the Tools `packs` (the root pack and the dependencies it newly
+/// installs) ship without one, and the reader their agents need there: what a
+/// preview lists and an approval covers. `None` when they ship no such
+/// Tools, the installer has no root, or no reader is needed.
 pub(crate) async fn supplied_tool_root(
     access: &ConfigAccess,
     owner: &str,
     installer: Option<&str>,
-    pack: &super::PackSource,
+    packs: &[&super::PackSource],
 ) -> Result<Option<Value>> {
     use gents::tools::surface::ToolRootReader;
-    let tools = tools_taking_installer_root(pack);
+    let tools: Vec<String> = packs
+        .iter()
+        .flat_map(|pack| tools_taking_installer_root(pack))
+        .collect();
     if tools.is_empty() {
         return Ok(None);
     }
@@ -268,8 +297,8 @@ pub(crate) async fn supplied_tool_root(
     )
 }
 
-/// Grants each agent the installed pack `coordinate` ships with host tools
-/// reader on the published WorkspaceRoot covering its tool root, as the User
+/// Grants each agent the installed packs `coordinates` (a pack and the
+/// dependencies its install newly installed) ship with host tools reader on the published WorkspaceRoot covering its tool root, as the User
 /// holding `access`: a new agent lacks that grant, only a User makes it, and
 /// without it the runtime reports the agent unavailable.
 ///
@@ -282,18 +311,22 @@ pub(crate) async fn supplied_tool_root(
 pub(crate) async fn grant_pack_root_readers(
     access: &ConfigAccess,
     owner: &str,
-    coordinate: &str,
+    coordinates: &[String],
     supplied: Option<&str>,
     approved: bool,
 ) -> Result<Vec<Value>> {
     use gents::tools::surface::ToolRootReader;
     let mut granted = Vec::new();
-    let agents: Vec<String> = installed_pack_documents(access, owner, coordinate)
-        .await?
-        .into_iter()
-        .filter(|(collection, _)| *collection == Collection::Agent)
-        .map(|(_, agent)| agent)
-        .collect();
+    let mut agents = Vec::new();
+    for coordinate in coordinates {
+        agents.extend(
+            installed_pack_documents(access, owner, coordinate)
+                .await?
+                .into_iter()
+                .filter(|(collection, _)| *collection == Collection::Agent)
+                .map(|(_, agent)| agent),
+        );
+    }
     for (agent, root, reader) in
         gents::tools::surface::agents_tool_root_readers(access, owner, &agents).await?
     {

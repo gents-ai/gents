@@ -848,12 +848,8 @@ fn host_tools_pack_dir(name: &str, host: serde_json::Value) -> tempfile::TempDir
     dir
 }
 
-/// The reader grant a User install makes is the installer's consent to its
-/// own root: a pack that authors a root is refused, a root an install
-/// variable set is never granted, and the installer's root is granted only
-/// with `--grant-authority`, after a preview that lists it.
-#[tokio::test]
-async fn an_install_grants_reader_only_on_its_own_root_and_only_with_the_flag() {
+/// A fresh Engineer home, with what its init reported.
+async fn engineer_home() -> (tempfile::TempDir, serde_json::Value) {
     use clap::Parser;
     let home = tempfile::tempdir().unwrap();
     let cli = crate::cli::Cli::try_parse_from([
@@ -875,6 +871,16 @@ async fn an_install_grants_reader_only_on_its_own_root_and_only_with_the_flag() 
         panic!("expected init")
     };
     let initialized = crate::commands::init::init_home(init_args).await.unwrap();
+    (home, initialized)
+}
+
+/// The reader grant a User install makes is the installer's consent to its
+/// own root: a pack that authors a root is refused, a root an install
+/// variable set is never granted, and the installer's root is granted only
+/// with `--grant-authority`, after a preview that lists it.
+#[tokio::test]
+async fn an_install_grants_reader_only_on_its_own_root_and_only_with_the_flag() {
+    let (home, initialized) = engineer_home().await;
     let engineer_root = initialized["tool_root"].as_str().unwrap().to_owned();
 
     // Another folder the node publishes, which no pack was given.
@@ -985,4 +991,62 @@ async fn an_install_grants_reader_only_on_its_own_root_and_only_with_the_flag() 
         "{again}"
     );
     assert!(again["host_tool_roots"][0]["next"].is_string(), "{again}");
+}
+
+/// An agent a freshly installed dependency ships runs under the installer's
+/// root like the root pack's agents, and the approved install grants it
+/// reader there.
+#[tokio::test]
+async fn a_new_dependencys_agents_take_the_installers_root_and_its_grant() {
+    let (home, initialized) = engineer_home().await;
+    let engineer_root = initialized["tool_root"].as_str().unwrap().to_owned();
+    let dependency = host_tools_pack_dir("depworker", json!({"files": {"mode": "ReadOnly"}}));
+    gents::pack::local::open(
+        &gents::pack::local::LocalName::Path(dependency.path()),
+        home.path(),
+    )
+    .unwrap();
+    let dependent = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dependent.path().join("manifest.json"),
+        serde_json::to_vec(&json!({
+            "manifest_version": 1, "name": "dependent", "namespace": "fixture",
+            "version": "1.0.0", "description": "Depends on a pack with an agent",
+            "authors": ["tests"], "tags": [], "kind": "documents",
+            "assets": ["README.md", "pack_config.json"],
+            "dependencies": ["fixture/depworker"], "config": "pack_config.json",
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(dependent.path().join("README.md"), "# fixture").unwrap();
+    std::fs::write(
+        dependent.path().join("pack_config.json"),
+        serde_json::to_vec(&json!({
+            "node": { "node_did": "${GENTS_PACK_NODE_DID}" },
+            "tools": [{ "tools_id": "dependent-tools", "display_name": "No tools" }],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let mut args = document_install_args(home.path(), dependent.path(), Vec::new());
+    args.preview = true;
+    let preview = crate::request_helpers::capture_report(install(args))
+        .await
+        .unwrap();
+    assert_eq!(
+        preview["host_tool_roots"]["tools"],
+        json!(["depworker-tools"]),
+        "{preview}"
+    );
+    let mut args = document_install_args(home.path(), dependent.path(), Vec::new());
+    args.grant_authority = true;
+    let report = crate::request_helpers::capture_report(install(args))
+        .await
+        .unwrap();
+    let roots = report["host_tool_roots"].as_array().unwrap();
+    assert_eq!(roots.len(), 1, "{report}");
+    assert_eq!(roots[0]["root"], engineer_root, "{report}");
+    assert!(roots[0]["reader_on"].is_string(), "{report}");
 }
