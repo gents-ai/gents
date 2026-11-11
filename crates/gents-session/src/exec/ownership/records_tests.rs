@@ -51,3 +51,4 @@ fn strict_and_recovery_reads_ignore_staged_files_and_unrelated_entries() {
     assert_eq!(store.list(), std::slice::from_ref(&row));
     assert_eq!(store.try_list().unwrap(), [row]);
 }
+

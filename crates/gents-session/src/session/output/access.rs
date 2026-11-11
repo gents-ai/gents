@@ -9,7 +9,7 @@ use gents_protocol::output::rows::{request_output_segments_query, AGENT_OUTPUT_S
 use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
 
 #[derive(Clone, Copy)]
-pub(in crate::session) enum ReadAccess<'a, 'txn> {
+pub enum ReadAccess<'a, 'txn> {
     Node(&'a EmbeddedNode),
     Txn(&'a ConfigApplyTxn<'txn>),
     Config(&'a ConfigAccess),

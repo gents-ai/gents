@@ -1,4 +1,4 @@
-mod client;
+pub mod client;
 #[cfg(test)]
 pub use client::stage_request_relationships_in_txn;
 pub use client::{
@@ -26,15 +26,15 @@ use crate::session;
 use gents_protocol::row::AgentRequest;
 use gents_store::graphql::{escape_graphql_string, response_has_documents};
 
-mod backend_wait;
+pub mod backend_wait;
 pub(crate) use backend_wait::{fresh_healthy, repark_expired_resume};
 mod background_wake_recovery;
 pub use background_wake_recovery::{background_wake_next_retry_at, background_wake_retry_delay};
 pub mod arrival_order;
-mod claim;
+pub mod claim;
 #[cfg(test)]
 pub use claim::{claim_gate_in_txn, ClaimGate};
-mod execution_lease;
+pub mod execution_lease;
 mod execution_renewal;
 #[cfg(test)]
 pub(crate) use execution_renewal::renew_in_transaction;
@@ -46,7 +46,7 @@ pub(crate) use execution_renewal::renew_with_recheck_at;
 pub use execution_renewal::RenewalAttemptOutcome;
 mod terminal_binding;
 pub use terminal_binding::is_exact_invocation_reply;
-mod terminal_tools;
+pub mod terminal_tools;
 #[cfg(test)]
 pub use execution_lease::revoke_execution_preserving_output_at_with_access;
 #[cfg(test)]
@@ -64,7 +64,7 @@ pub mod materialize;
 mod session_message_presentation;
 pub use session_message_presentation::session_message_display_body;
 pub(crate) use session_message_presentation::session_message_display_body_with_content;
-mod query;
+pub mod query;
 pub mod queue;
 mod recovery;
 pub mod requested_create;
@@ -74,7 +74,7 @@ pub use recovery::{
     RecoverySelectionRejected,
 };
 mod task_title;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub mod test_support;
 mod transition;
 
@@ -310,7 +310,7 @@ pub fn is_runtime_control_message(
         })
 }
 
-fn extract_single_doc_id(response: &defra_node::QueryResponse, key: &str) -> Option<String> {
+pub fn extract_single_doc_id(response: &defra_node::QueryResponse, key: &str) -> Option<String> {
     // DefraDB's GraphQL surface accepts `create_<Collection>` while the
     // response data may expose the normalized `add_<Collection>` field.
     let normalized_add_key = key

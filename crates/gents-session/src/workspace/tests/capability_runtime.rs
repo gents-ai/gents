@@ -1,3 +1,4 @@
+use crate::workspace::{bind_integrate, git, git_worktree_caps, integrate_writer, seal_writer, Fixture};
 use super::*;
 use crate::request::lifecycle::{RequestLifecycle, RequestTerminalOutcome, WorkspaceLineage};
 use anyhow::Context;

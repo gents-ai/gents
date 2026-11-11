@@ -16,25 +16,27 @@ pub mod tool_presentation;
 pub use archive::set_session_archived_on;
 mod compaction_entries;
 mod control;
-mod fork;
+pub mod fork;
 mod history;
-#[cfg(test)]
-mod model_test_support;
-mod observations;
-mod output;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod model_test_support;
+pub mod observations;
+pub mod output;
 pub mod output_render;
 mod preview;
 pub mod provider_context_reduction;
 pub(crate) use preview::{request_preview_in_txn, visible_reply_preview};
 #[cfg(test)]
 mod output_replay_tests;
-mod query;
+pub mod query;
 mod request_output;
 mod rows;
 mod sessions;
 pub use sessions::{close_session_with_access, recover_agent_session_relationships_with_access};
 pub mod title_text;
 pub use title_text::display_session_title;
+#[cfg(test)]
+mod tests;
 #[cfg(any(test, feature = "test-fixtures"))]
 mod history_fixtures;
 #[cfg(any(test, feature = "test-fixtures"))]

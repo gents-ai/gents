@@ -8,7 +8,7 @@ use gents_store::config_client::ConfigAccess;
 
 use super::{AgentMessageDelivery, Delivery, RenderedBody, SessionMessageGoals};
 
-pub(super) enum PlannedWrite {
+pub enum PlannedWrite {
     Request {
         create: gents_protocol::request_admission::AgentRequestCreate,
         delivery: Delivery,

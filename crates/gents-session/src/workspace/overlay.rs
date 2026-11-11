@@ -849,7 +849,7 @@ pub(super) fn workspace_bindings_query(workspace_id: &str, node_did: &str) -> St
     )
 }
 
-pub(super) fn workspace_bindings_for_parent_query(workspace_doc_id: &str) -> String {
+pub fn workspace_bindings_for_parent_query(workspace_doc_id: &str) -> String {
     format!(
         r#"{{ WorkspaceBinding(filter: {{ workspace_doc_id: {{ _eq: "{}" }} }}) {{ binding_id workspace_id workspace_doc_id request_id request_doc_id authority owner_node_did seal_hash lifecycle_state }} }}"#,
         escape_graphql_string(workspace_doc_id)

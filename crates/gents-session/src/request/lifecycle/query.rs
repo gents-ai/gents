@@ -58,7 +58,7 @@ pub(super) async fn request_view(
 }
 
 /// The read and winning request CAS must share the transaction's mutation gate.
-pub(super) async fn claim_queue_allows(
+pub async fn claim_queue_allows(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequest,
 ) -> Result<bool> {

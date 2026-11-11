@@ -2381,4 +2381,125 @@ mod tests {
         node.shutdown().await.expect("shut down test node");
     }
 
+    #[tokio::test]
+    async fn delegated_recovery_does_not_grant_a_signed_request_without_its_creation_receipt() {
+        let db = gents_inference::test_support::test_db("delegated-recovery").await;
+        let (db, user, user_access, parent) =
+            gents_inference::test_support::signed_test_node_from_db(db, "delegated-recovery").await;
+        let node = db.node.clone();
+        let runtime = db.node_identity.clone();
+        let target = gents_store::identity::provision_agent_identity_authorized(
+            &node,
+            runtime.as_ref(),
+            &identity::Did::new(user.did()).unwrap(),
+        )
+        .await
+        .unwrap();
+        gents_inference::test_support::install_test_agent_binding_with_access(
+            runtime.did(),
+            "target",
+            &target,
+            &user_access,
+        )
+        .await;
+        let escaped = gents_store::graphql::escape_graphql_string(&target.agent_did);
+        let target_row = user_access
+            .execute(&format!(
+                r#"{{ Agent(filter: {{ agent_did: {{ _eq: "{escaped}" }} }}) {{ _docID }} }}"#
+            ))
+            .await
+            .unwrap();
+        let target_doc = target_row["data"]["Agent"][0]["_docID"].as_str().unwrap();
+        user_access
+            .add_actor_relationship(
+                "Agent",
+                target_doc,
+                "session_writer",
+                &parent.agent_did.parse().unwrap(),
+            )
+            .await
+            .unwrap();
+        let signer =
+            gents_store::identity::resolve_agent_identity(runtime.as_ref(), &parent).unwrap();
+        let actor: identity::Did = parent.agent_did.parse().unwrap();
+        let access =
+            ConfigAccess::local_managed_agent(node.clone(), actor.clone(), signer.as_ref())
+                .unwrap();
+        let mut forged = AgentRequestCreate::base(
+            RequestPurpose::Normal,
+            "forged-delegated-request",
+            runtime.did(),
+            &parent.agent_did,
+            &target.agent_did,
+            "forged-delegated-session",
+            "hello",
+            "interactive",
+            "2026-11-04T00:00:00Z",
+            AgentRequestAdmissionRecord::client(&parent.agent_did),
+        );
+        forged.input.session_creation =
+            Some(gents_protocol::request_input::SessionCreationIntent::AgentNew);
+        forged.input.started_by = Some(gents_protocol::session::SessionReference {
+            node_did: runtime.did().to_owned(),
+            session_id: "missing-parent-session".to_owned(),
+            requester_did: Some(user.did().to_owned()),
+        });
+        forged.caused_by_parent_request_id = Some("missing-parent-request".to_owned());
+        forged.caused_by_parent_request_doc_id = Some("missing-parent-doc".to_owned());
+        forged.caused_by_parent_tool_call_id = Some("missing-tool-call".to_owned());
+        forged.caused_by_parent_tool_call_doc_id = Some("missing-tool-doc".to_owned());
+        let (session, agent) = reserve_client_targets(&access, &forged).await.unwrap();
+        forged.session_doc_id = Some(session);
+        forged.agent_doc_id = Some(agent);
+        crate::request::admission::sign_agent_request_create(signer.as_ref(), &mut forged)
+            .await
+            .unwrap();
+        access
+            .write(
+                "test.forged_delegated_request",
+                &forged.graphql_client_publication_mutation().unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            recover_delegated_client_request_relationships(&node, runtime.did(), &actor)
+                .await
+                .unwrap(),
+            0
+        );
+        let rows = access
+            .execute("{ AgentRequest { request_id relationships_pending } }")
+            .await
+            .unwrap();
+        let model = &gents_lean_vocab::lean_contract_snapshot().delegated_publication_cases;
+        let wrong_receipt = model
+            .iter()
+            .find(|case| case["name"] == "wrong-receipt")
+            .unwrap();
+        assert_eq!(
+            rows["data"]["AgentRequest"][0]["relationships_pending"],
+            wrong_receipt["expected_request_pending"]
+        );
+        let target_signer =
+            gents_store::identity::resolve_agent_identity(runtime.as_ref(), &target).unwrap();
+        let target_access = ConfigAccess::local_managed_agent(
+            node.clone(),
+            target.agent_did.parse().unwrap(),
+            target_signer.as_ref(),
+        )
+        .unwrap();
+        let visible = target_access
+            .execute("{ AgentRequest { request_id } }")
+            .await
+            .unwrap();
+        assert_eq!(
+            !visible["data"]["AgentRequest"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            wrong_receipt["expected_target_read"].as_bool().unwrap()
+        );
+        node.shutdown().await.unwrap();
+    }
+
 }

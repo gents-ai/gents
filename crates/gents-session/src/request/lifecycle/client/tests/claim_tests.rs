@@ -584,3 +584,4 @@ async fn active_client_steer_rechecks_its_own_author_at_atomic_consumption() {
     drop(lifecycle);
     node.shutdown().await.unwrap();
 }
+

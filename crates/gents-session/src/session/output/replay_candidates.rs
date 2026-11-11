@@ -23,8 +23,8 @@ use gents_protocol::session::session_scope_filter;
 /// Resolve physical assistant origins reachable from the bounded session view.
 /// Forks retain their origin's request/session scope; an arbitrary historical
 /// request supplied by the caller is never a lookup root.
-#[cfg(test)]
-pub(crate) async fn load_canonical_assistant_candidates(
+#[cfg(any(test, feature = "test-fixtures"))]
+pub async fn load_canonical_assistant_candidates(
     access: &gents_store::config_client::ConfigAccess,
     scope: CanonicalReplayScope<'_>,
     boundary: &gents_protocol::transcript::SourceBoundary,
@@ -32,7 +32,7 @@ pub(crate) async fn load_canonical_assistant_candidates(
     load_canonical_assistant_candidates_with(access, access, scope, boundary, None).await
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub(crate) async fn load_canonical_assistant_candidates_with(
     access: &gents_store::config_client::ConfigAccess,
     requests: &impl ReplayRequestReader,

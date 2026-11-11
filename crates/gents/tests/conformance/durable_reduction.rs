@@ -1,6 +1,6 @@
 use super::ReplayAssociations;
 use defra_node::Node as EmbeddedNode;
-use gents::session::provider_context_reduction::{
+use crate::session::provider_context_reduction::{
     load_for_request, persist, reduction_key, rendered_capture_cites_reduction,
     NewProviderContextReduction,
 };

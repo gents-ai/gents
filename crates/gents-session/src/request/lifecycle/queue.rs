@@ -22,13 +22,13 @@ mod folding;
 mod input;
 mod intake;
 mod management;
-mod mutation;
+pub mod mutation;
 mod position;
 mod submission;
 
 pub use atomic_inputs::next_append_sequence_in_transaction;
 pub use atomic_inputs::persist_background_completion_with_message_canonical_with_access;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use atomic_inputs::persist_background_completion_with_message_waking_with_access;
 use atomic_inputs::steering_transaction_attempt;
 #[cfg(test)]

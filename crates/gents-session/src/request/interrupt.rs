@@ -243,7 +243,7 @@ pub async fn interrupt_active_session_in_txn(
     Ok(Some(request_id))
 }
 
-pub(crate) async fn active_session_request_with_access(
+pub async fn active_session_request_with_access(
     access: &gents_store::config_client::ConfigAccess,
     session_id: &str,
     node_did: &str,

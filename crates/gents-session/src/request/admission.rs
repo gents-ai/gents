@@ -136,7 +136,7 @@ fn deny_if(condition: bool, message: &'static str) -> AdmissionResult<()> {
     }
 }
 
-pub(crate) async fn verify_fresh_local_self_request(
+pub async fn verify_fresh_local_self_request(
     node: &Arc<EmbeddedNode>,
     identity: &dyn NodeIdentity,
     request: &AgentRequest,
@@ -1413,7 +1413,7 @@ async fn verify_automated_trigger_source(
 static DEFAULT_REQUEST_INPUT: std::sync::LazyLock<gents_protocol::request_input::RequestInput> =
     std::sync::LazyLock::new(Default::default);
 
-fn row_into_agent_request(row: AgentRequestRow, expected_doc_id: &str) -> Result<AgentRequest> {
+pub fn row_into_agent_request(row: AgentRequestRow, expected_doc_id: &str) -> Result<AgentRequest> {
     anyhow::ensure!(
         row.doc_id.as_deref() == Some(expected_doc_id),
         "fresh AgentRequest document binding changed before admission"
@@ -1511,7 +1511,7 @@ fn resume_claim_valid(facts: &ResumeClaimFacts) -> bool {
 
 /// Reads as the Agent that parked the request: it owns both the wait record
 /// and the claim version being reconstructed.
-pub(crate) async fn verify_resumed_claim_version(
+pub async fn verify_resumed_claim_version(
     access: &gents_store::config_client::ConfigAccess,
     current: &AgentRequestRow,
 ) -> AdmissionResult<bool> {
@@ -1954,6 +1954,765 @@ mod tests {
         .await
         .is_err());
     }
+
+    /// Signed admission fixture: a test home whose ACP policies are installed,
+    /// whose default managed Agent holds its projected baseline grants, and whose
+    /// setup rows are written through the runtime owner's access.
+    struct AdmissionFixture {
+        db: gents_inference::test_support::TestDb,
+        runtime: Arc<dyn NodeIdentity>,
+        agent: Arc<dyn NodeIdentity>,
+        admin: gents_store::config_client::ConfigAccess,
+        /// The configuring User's client-signed access; it owns Agent configuration.
+        user: gents_store::config_client::ConfigAccess,
+    }
+
+    impl AdmissionFixture {
+        async fn new(name: &str) -> Self {
+            let db = gents_inference::test_support::test_db(name).await;
+            let (db, _user, user, binding) =
+                gents_inference::test_support::signed_test_node_from_db(db, name).await;
+            let runtime = db.node_identity.clone();
+            let agent =
+                gents_store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
+            let admin = gents_store::config_client::ConfigAccess::local_as(
+                db.node.clone(),
+                identity::Did::new(runtime.did()).unwrap(),
+            );
+            let runtime_did = runtime.did().to_owned();
+            let agent_did = agent.did().to_owned();
+            admin
+                .transact_write("test.admission_fixture_executor", |txn| {
+                    let runtime_did = &runtime_did;
+                    let agent_did = &agent_did;
+                    Box::pin(async move {
+                        let (agent_doc, _) = gents_documents::read_desired_state_record_in_txn(
+                            txn,
+                            gents_store::collection::Collection::Agent,
+                            runtime_did,
+                            agent_did,
+                        )
+                        .await?
+                        .ok_or_else(|| anyhow::anyhow!("fixture Agent document is missing"))?;
+                        txn.add_actor_relationship(
+                            "Agent",
+                            &agent_doc,
+                            "executor",
+                            &identity::Did::new(agent_did)?,
+                        )
+                        .await?;
+                        Ok::<_, anyhow::Error>(())
+                    })
+                })
+                .await
+                .unwrap();
+            Self {
+                db,
+                runtime,
+                agent,
+                admin,
+                user,
+            }
+        }
+
+        fn node(&self) -> &Arc<defra_node::Node> {
+            &self.db.node
+        }
+
+        fn local_self_create(
+            &self,
+            request_id: &str,
+            session_id: &str,
+            agent_did: &str,
+            input: Option<serde_json::Value>,
+        ) -> AgentRequestCreate {
+            let mut create = AgentRequestCreate::base(
+                gents_protocol::request_admission::RequestPurpose::Normal,
+                request_id,
+                self.runtime.did(),
+                self.runtime.did(),
+                agent_did,
+                session_id,
+                "run the disallowed skill",
+                "interactive",
+                "2026-09-01T00:00:00Z",
+                AgentRequestAdmissionRecord::local_self(self.runtime.did()),
+            );
+            if let Some(input) = input {
+                create.input = serde_json::from_value(input).unwrap();
+            }
+            create
+        }
+
+        /// Signs `create` as the runtime and writes it through the runtime's access.
+        async fn create_signed_request(&self, mut create: AgentRequestCreate) -> String {
+            super::sign_agent_request_create(
+                self.runtime.as_ref(),
+                &mut create,
+            )
+            .await
+            .unwrap();
+            self.insert_signed_request(&create).await
+        }
+
+        /// Signs `create` as the managed Agent. Only a request the Agent authors for
+        /// itself (requester and signer both its DID) is admitted as local-self.
+        async fn create_agent_signed_request(&self, mut create: AgentRequestCreate) -> String {
+            super::sign_agent_request_create(self.agent.as_ref(), &mut create)
+                .await
+                .unwrap();
+            self.insert_signed_request(&create).await
+        }
+
+        fn agent_self_create(
+            &self,
+            request_id: &str,
+            session_id: &str,
+            content: &str,
+            input: Option<serde_json::Value>,
+        ) -> AgentRequestCreate {
+            let agent_did = self.agent.did();
+            let mut create = AgentRequestCreate::base(
+                gents_protocol::request_admission::RequestPurpose::Normal,
+                request_id,
+                self.runtime.did(),
+                agent_did,
+                agent_did,
+                session_id,
+                content,
+                "interactive",
+                "2026-09-01T00:00:00Z",
+                AgentRequestAdmissionRecord::local_self(agent_did),
+            );
+            if let Some(input) = input {
+                create.input = serde_json::from_value(input).unwrap();
+            }
+            create
+        }
+
+        /// Writes a signed request through the runtime's access and stages the
+        /// `working_agent` edge that lets its target Agent read and terminalize it.
+        async fn insert_signed_request(&self, create: &AgentRequestCreate) -> String {
+            let mutation = create.graphql_mutation().unwrap();
+            let doc_id = self.write_as_runtime(mutation, "AgentRequest").await;
+            self.grant_working_agent(&doc_id, &create.agent_did).await;
+            doc_id
+        }
+
+        async fn grant_working_agent(&self, doc_id: &str, agent_did: &str) {
+            self.admin
+                .add_actor_relationship(
+                    "AgentRequest",
+                    doc_id,
+                    "working_agent",
+                    &identity::Did::new(agent_did).unwrap(),
+                )
+                .await
+                .unwrap();
+        }
+
+        /// The managed Agent owns the sessions it projects into; fixture sessions
+        /// and their observations are written and read under that same actor.
+        fn agent_access(&self) -> gents_store::config_client::ConfigAccess {
+            gents_store::config_client::ConfigAccess::local_managed_agent(
+                self.db.node.clone(),
+                identity::Did::new(self.agent.did()).unwrap(),
+                self.agent.as_ref(),
+            )
+            .unwrap()
+        }
+
+        async fn ensure_agent_session(&self, session_id: &str, requester_did: Option<&str>) {
+            let node_did = self.runtime.did().to_owned();
+            let agent_did = self.agent.did().to_owned();
+            self.agent_access()
+                .transact_write("test.admission_fixture_session", |txn| {
+                    let node_did = &node_did;
+                    let agent_did = &agent_did;
+                    Box::pin(async move {
+                        crate::session::ensure_session_in_txn(
+                            txn,
+                            session_id,
+                            node_did,
+                            agent_did,
+                            requester_did,
+                            None,
+                            None,
+                            "2026-09-01T00:00:00Z",
+                        )
+                        .await
+                    })
+                })
+                .await
+                .unwrap();
+        }
+
+        async fn write_as_agent(&self, mutation: String, collection: &'static str) -> String {
+            self.agent_access()
+                .transact_write("test.admission_fixture_agent_write", |txn| {
+                    let mutation = &mutation;
+                    Box::pin(async move {
+                        let response = txn.execute(mutation).await?;
+                        let doc_id = gents_store::graphql::created_doc_id(&response, collection)?;
+                        Ok::<_, anyhow::Error>(doc_id)
+                    })
+                })
+                .await
+                .unwrap()
+        }
+
+        async fn read_as_agent(&self, document: &str) -> defra_node::QueryResponse {
+            self.agent_access()
+                .transact_readonly("test.admission_fixture_agent_read", |txn| {
+                    Box::pin(async move { txn.execute_local_response(document).await })
+                })
+                .await
+                .unwrap()
+        }
+
+        async fn write_as_runtime(&self, mutation: String, collection: &'static str) -> String {
+            self.admin
+                .transact_write("test.admission_fixture_write", |txn| {
+                    let mutation = &mutation;
+                    Box::pin(async move {
+                        let response = txn.execute(mutation).await?;
+                        let doc_id = gents_store::graphql::created_doc_id(&response, collection)?;
+                        Ok::<_, anyhow::Error>(doc_id)
+                    })
+                })
+                .await
+                .unwrap()
+        }
+    }
+
+    #[tokio::test]
+    async fn pending_admission_rejection_selects_terminal_no_message() {
+        let fixture = AdmissionFixture::new("pending-rejection").await;
+        let agent_did = fixture.agent.did().to_owned();
+        let create = fixture.local_self_create("rejected-request", "session", &agent_did, None);
+        let doc_id = fixture.create_signed_request(create).await;
+
+        super::terminalize_pending_request_rejection(
+            fixture.node(),
+            &doc_id,
+            fixture.runtime.did(),
+            &agent_did,
+            fixture.agent.as_ref(),
+            "request activates a skill outside its context allowlist",
+            "test.admission_rejection",
+        )
+        .await
+        .unwrap();
+
+        let escaped_doc_id = gents_store::graphql::escape_graphql_string(&doc_id);
+        let selected = fixture
+            .node()
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }}, limit: 1) {{ lifecycle_state failure_reason terminal_output }} }}"#
+            ))
+            .await;
+        assert!(!selected.has_errors(), "{:?}", selected.errors);
+        let row = gents_store::graphql::first_row::<serde_json::Value>(&selected, "AgentRequest")
+            .unwrap()
+            .unwrap();
+        assert_eq!(row["lifecycle_state"], "failed");
+        assert_eq!(
+            row["failure_reason"],
+            "request activates a skill outside its context allowlist"
+        );
+        let terminal_output: gents_protocol::output::TerminalOutput =
+            serde_json::from_value(row["terminal_output"].clone()).unwrap();
+        assert_eq!(
+            terminal_output,
+            gents_protocol::output::TerminalOutput::NoMessage
+        );
+        fixture
+            .db
+            .node
+            .shutdown()
+            .await
+            .expect("shut down test node");
+    }
+
+    #[tokio::test]
+    async fn signed_input_cannot_expand_context_or_spoof_runtime_queue() {
+        let fixture = AdmissionFixture::new("signed-input").await;
+        let agent_did = fixture.agent.did().to_owned();
+        let owner = fixture.runtime.did().to_owned();
+        let context = format!("{agent_did}:context");
+        fixture
+            .user
+            .transact_write("test.admission_context_allowlist", |txn| {
+                let owner = &owner;
+                let context = &context;
+                Box::pin(async move {
+                    let (_, mut record) = gents_documents::read_desired_state_record_in_txn(
+                        txn,
+                        gents_store::collection::Collection::AgentContext,
+                        owner,
+                        context,
+                    )
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("fixture AgentContext is missing"))?;
+                    record["skill_ids"] = serde_json::json!(["allowed"]);
+                    let skill = serde_json::json!({
+                        "skill_id": "allowed", "node_did": owner, "name": "Allowed skill",
+                        "instructions": "Admitted by the context allowlist.", "enabled": true,
+                    });
+                    let plan = gents_documents::DesiredStateApplyPlan::new(vec![
+                        gents_documents::DesiredStateApplyDocument {
+                            collection: gents_store::collection::Collection::Skill,
+                            add: skill.clone(),
+                            update: skill,
+                        },
+                        gents_documents::DesiredStateApplyDocument {
+                            collection: gents_store::collection::Collection::AgentContext,
+                            add: record.clone(),
+                            update: record,
+                        },
+                    ])?;
+                    gents_documents::apply_desired_state_plan(
+                        txn,
+                        &plan,
+                        &gents_inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap();
+        for (index, input, allowed) in [
+            (
+                0,
+                serde_json::json!({"selected_skill_ids":["allowed"]}),
+                true,
+            ),
+            (
+                1,
+                serde_json::json!({"selected_skill_ids":["unconfigured"]}),
+                false,
+            ),
+            (
+                2,
+                serde_json::json!({"queue":{"source":"steering","policy":"append"}}),
+                false,
+            ),
+            (
+                3,
+                serde_json::json!({"queue":{"source":"goal","policy":"coalesce"},"goal_continuation":{"sequence":1,"wrapup":false}}),
+                false,
+            ),
+        ] {
+            let create = fixture.agent_self_create(
+                &format!("input-{index}"),
+                "session",
+                "work",
+                Some(input),
+            );
+            let doc_id = fixture.create_agent_signed_request(create).await;
+            let request = super::load_request_for_admission_test(fixture.node(), &doc_id)
+                .await
+                .unwrap();
+            let admitted = super::verify_fresh_local_self_request(
+                fixture.node(),
+                fixture.runtime.as_ref(),
+                &request,
+                &agent_did,
+            )
+            .await;
+            assert_eq!(admitted.is_ok(), allowed, "case {index}: {admitted:?}");
+        }
+        fixture
+            .db
+            .node
+            .shutdown()
+            .await
+            .expect("shut down test node");
+    }
+
+    #[tokio::test]
+    async fn admission_rejection_projects_the_failed_turn_into_the_request_owned_session_only() {
+        let temp = tempfile::tempdir().unwrap();
+        let foreign = KeyIdentity::load_or_create(temp.path().join("foreign.key"), None).unwrap();
+        let fixture = AdmissionFixture::new("admission-projection").await;
+        let agent_did = fixture.agent.did().to_owned();
+        let owner = gents_store::graphql::escape_graphql_string(fixture.runtime.did());
+        fixture
+            .ensure_agent_session("foreign-session", Some(foreign.did()))
+            .await;
+
+        let refusal_reason =
+            "request admission denied: request activates a skill outside its context allowlist";
+        for (request_id, session_id) in [
+            ("refused-skill", "session"),
+            ("foreign-scope", "foreign-session"),
+        ] {
+            let create = fixture.local_self_create(
+                request_id,
+                session_id,
+                &agent_did,
+                Some(serde_json::json!({"selected_skill_ids": ["unconfigured"]})),
+            );
+            let doc_id = fixture.create_signed_request(create).await;
+
+            let request = super::load_request_for_admission_test(fixture.node(), &doc_id)
+                .await
+                .unwrap();
+            assert!(
+                super::verify_fresh_local_self_request(
+                    fixture.node(),
+                    fixture.runtime.as_ref(),
+                    &request,
+                    &agent_did,
+                )
+                .await
+                .is_err(),
+                "{request_id} must be denied by the context allowlist"
+            );
+
+            super::terminalize_pending_request_rejection(
+                fixture.node(),
+                &doc_id,
+                fixture.runtime.did(),
+                &agent_did,
+                fixture.agent.as_ref(),
+                refusal_reason,
+                "test.admission_rejection_projection",
+            )
+            .await
+            .unwrap();
+
+            let selected = fixture
+                .read_as_agent(&format!(
+                    r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{owner}" }}, session_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
+                    gents_store::graphql::escape_graphql_string(session_id),
+                    gents_protocol::session::AGENT_SESSION_FIELDS,
+                ))
+                .await;
+            assert!(!selected.has_errors(), "{:?}", selected.errors);
+            let rows = selected.data.as_ref().unwrap()["AgentSession"]
+                .as_array()
+                .cloned()
+                .unwrap();
+            assert_eq!(rows.len(), 1, "{request_id} must not add session rows");
+            let session = gents_protocol::session::decode_session_row(&rows[0])
+                .unwrap()
+                .session;
+            if session_id == "session" {
+                assert_eq!(
+                    session.requester_did.as_deref(),
+                    Some(fixture.runtime.did())
+                );
+                let latest = session
+                    .observation
+                    .expect("refused request advances the session observation")
+                    .latest_request
+                    .expect("observation names the refused request");
+                assert_eq!(latest.request_id, request_id);
+                assert_eq!(
+                    latest.lifecycle_state,
+                    gents_protocol::request_lifecycle::RequestLifecycleState::Failed
+                );
+            } else {
+                assert!(
+                    session.observation.is_none(),
+                    "a refusal must not touch a session owned by another requester"
+                );
+                assert_eq!(session.requester_did.as_deref(), Some(foreign.did()));
+            }
+        }
+        fixture
+            .db
+            .node
+            .shutdown()
+            .await
+            .expect("shut down test node");
+    }
+
+    async fn refused_pending_request_under_session(
+        fixture: &AdmissionFixture,
+        request_id: &str,
+        session_id: &str,
+        agent_did: &str,
+    ) -> String {
+        let create = fixture.local_self_create(
+            request_id,
+            session_id,
+            agent_did,
+            Some(serde_json::json!({"selected_skill_ids": ["unconfigured"]})),
+        );
+        fixture.create_signed_request(create).await
+    }
+
+    #[tokio::test]
+    async fn refusal_survives_undecodable_session_rows_sharing_its_label() {
+        let temp = tempfile::tempdir().unwrap();
+        let foreign =
+            KeyIdentity::load_or_create(temp.path().join("corrupt-foreign.key"), None).unwrap();
+        let fixture = AdmissionFixture::new("corrupt-session-rows").await;
+        let agent_did = fixture.agent.did().to_owned();
+        let escaped_agent_did = gents_store::graphql::escape_graphql_string(&agent_did);
+        let node_did = gents_store::graphql::escape_graphql_string(fixture.runtime.did());
+        for (session_id, requester_did) in [
+            ("corrupt-foreign-scope", Some(foreign.did())),
+            ("corrupt-own-scope", Some(fixture.runtime.did())),
+        ] {
+            let requester = match requester_did {
+                Some(did) => format!(
+                    r#"requester_did: "{}","#,
+                    gents_store::graphql::escape_graphql_string(did)
+                ),
+                None => "requester_did: null,".to_owned(),
+            };
+            fixture
+                .write_as_agent(
+                    format!(
+                        r#"mutation {{ create_AgentSession(input: {{
+                        session_id: "{}", node_did: "{node_did}", {requester} agent_did: "{escaped_agent_did}",
+                        created_at: "not-an-rfc3339-timestamp"
+                    }}) {{ _docID }} }}"#,
+                        gents_store::graphql::escape_graphql_string(session_id),
+                    ),
+                    "AgentSession",
+                )
+                .await;
+
+            let request_id = format!("refused-under-{session_id}");
+            let doc_id = refused_pending_request_under_session(
+                &fixture,
+                &request_id,
+                session_id,
+                &agent_did,
+            )
+            .await;
+            super::terminalize_pending_request_rejection(
+                fixture.node(),
+                &doc_id,
+                fixture.runtime.did(),
+                &agent_did,
+                fixture.agent.as_ref(),
+                "request admission denied: request activates a skill outside its context allowlist",
+                "test.admission_rejection_corrupt_session_row",
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{session_id}: the refusal must persist: {error}"));
+
+            let selected = fixture
+                .node()
+                .execute(&format!(
+                    r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state }} }}"#,
+                    gents_store::graphql::escape_graphql_string(&doc_id),
+                ))
+                .await;
+            assert!(!selected.has_errors(), "{:?}", selected.errors);
+            assert_eq!(
+                selected.data.as_ref().unwrap()["AgentRequest"][0]["lifecycle_state"],
+                "failed",
+                "{session_id}: the refused request must not stay pending"
+            );
+            let sessions = fixture
+                .read_as_agent(&format!(
+                    r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
+                    gents_store::graphql::escape_graphql_string(session_id),
+                    gents_protocol::session::AGENT_SESSION_FIELDS,
+                ))
+                .await;
+            assert!(!sessions.has_errors(), "{:?}", sessions.errors);
+            let rows = sessions.data.as_ref().unwrap()["AgentSession"]
+                .as_array()
+                .cloned()
+                .unwrap();
+            assert_eq!(
+                rows.len(),
+                1,
+                "{session_id}: the refusal must not mint beside an undecodable row"
+            );
+            assert!(
+                gents_protocol::session::decode_session_row(&rows[0]).is_err(),
+                "{session_id}: the refusal must leave the undecodable row untouched"
+            );
+        }
+        fixture
+            .db
+            .node
+            .shutdown()
+            .await
+            .expect("shut down test node");
+    }
+
+    #[tokio::test]
+    async fn refusal_survives_unreadable_scoped_request_facts() {
+        let fixture = AdmissionFixture::new("corrupt-facts").await;
+        let agent_did = fixture.agent.did().to_owned();
+        let escaped_agent_did = gents_store::graphql::escape_graphql_string(&agent_did);
+        let node_did = gents_store::graphql::escape_graphql_string(fixture.runtime.did());
+        for (session_id, sibling_request_id, sibling_created_at) in [
+            ("facts-invalid-created-at", "sibling-invalid", "yesterday"),
+            (
+                "facts-duplicate-roots",
+                "refused-dup-root",
+                "2026-09-01T00:00:00Z",
+            ),
+        ] {
+            fixture
+                .ensure_agent_session(session_id, Some(fixture.runtime.did()))
+                .await;
+            let request_id = if session_id == "facts-duplicate-roots" {
+                "refused-dup-root".to_owned()
+            } else {
+                format!("refused-{session_id}")
+            };
+            let doc_id = refused_pending_request_under_session(
+                &fixture,
+                &request_id,
+                session_id,
+                &agent_did,
+            )
+            .await;
+            let sibling = fixture
+                .write_as_runtime(
+                    format!(
+                        r#"mutation {{ create_AgentRequest(input: {{
+                        request_id: "{}", purpose: "normal", node_did: "{node_did}",
+                        requester_did: "{node_did}", agent_did: "{escaped_agent_did}", session_id: "{}",
+                        content: "sibling turn", lifecycle_state: "pending",
+                        created_at: "{}", retry_count: 0, max_retries: 3, request_hop: 0
+                    }}) {{ _docID }} }}"#,
+                        gents_store::graphql::escape_graphql_string(sibling_request_id),
+                        gents_store::graphql::escape_graphql_string(session_id),
+                        gents_store::graphql::escape_graphql_string(sibling_created_at),
+                    ),
+                    "AgentRequest",
+                )
+                .await;
+            fixture.grant_working_agent(&sibling, &agent_did).await;
+
+            super::terminalize_pending_request_rejection(
+                fixture.node(),
+                &doc_id,
+                fixture.runtime.did(),
+                &agent_did,
+                fixture.agent.as_ref(),
+                "request admission denied: request activates a skill outside its context allowlist",
+                "test.admission_rejection_unreadable_facts",
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{session_id}: the refusal must persist: {error}"));
+
+            let selected = fixture
+                .node()
+                .execute(&format!(
+                    r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state }} }}"#,
+                    gents_store::graphql::escape_graphql_string(&doc_id),
+                ))
+                .await;
+            assert!(!selected.has_errors(), "{:?}", selected.errors);
+            assert_eq!(
+                selected.data.as_ref().unwrap()["AgentRequest"][0]["lifecycle_state"],
+                "failed",
+                "{session_id}: the refused request must not stay pending"
+            );
+            let sessions = fixture
+                .read_as_agent(&format!(
+                    r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
+                    gents_store::graphql::escape_graphql_string(session_id),
+                    gents_protocol::session::AGENT_SESSION_FIELDS,
+                ))
+                .await;
+            assert!(!sessions.has_errors(), "{:?}", sessions.errors);
+            let rows = sessions.data.as_ref().unwrap()["AgentSession"]
+                .as_array()
+                .cloned()
+                .unwrap();
+            assert_eq!(rows.len(), 1, "{session_id}: one session row");
+            let session = gents_protocol::session::decode_session_row(&rows[0])
+                .unwrap()
+                .session;
+            assert!(
+                session.observation.is_none(),
+                "{session_id}: a projection the facts cannot order must leave the session \
+                 untouched, got {:?}",
+                session.observation
+            );
+        }
+        fixture
+            .db
+            .node
+            .shutdown()
+            .await
+            .expect("shut down test node");
+    }
+
+    #[tokio::test]
+    async fn final_verifier_returns_the_exact_fresh_signed_snapshot() {
+        let fixture = AdmissionFixture::new("final-verifier").await;
+        let agent_did = fixture.agent.did().to_owned();
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let create =
+            fixture.agent_self_create(&request_id, &session_id, "durable signed content", None);
+        let doc_id = fixture.create_agent_signed_request(create).await;
+
+        let row = super::load_signed_request(fixture.node().as_ref(), &doc_id)
+            .await
+            .unwrap();
+        gents_store::identity::request_receipt::verify_request_receipt_signature(&row)
+            .expect("original local-self immutable receipt signature");
+        let mut queued = super::row_into_agent_request(row, &doc_id).unwrap();
+        queued.content = "stale queued content".to_string();
+
+        fixture
+            .admin
+            .write(
+                "test.final_verifier.runtime_state",
+                &format!(
+                    r#"mutation {{ update_AgentRequest(filter: {{_docID: {{_eq:"{}"}}}}, input: {{execution_generation:"previous-claim",max_total_tokens:0}}) {{_docID}} }}"#,
+                    gents_store::graphql::escape_graphql_string(&doc_id)
+                ),
+            )
+            .await
+            .unwrap();
+        let (_authority_owner, authority) = enrollment_authority_channel();
+        let verifier = AgentRequestAdmissionVerifier::new(
+            fixture.node().clone(),
+            fixture.runtime.clone(),
+            authority,
+        );
+        let verified = verifier.verify_fresh(&queued, &agent_did).await.unwrap();
+        assert_eq!(verified.content, "durable signed content");
+        assert_ne!(verified.content, queued.content);
+        assert_eq!(
+            verified.execution_generation.as_deref(),
+            Some("previous-claim")
+        );
+        assert_eq!(verified.max_total_tokens, Some(0));
+
+        fixture
+            .admin
+            .write(
+                "test.final_verifier.preclaim_deadline",
+                &format!(
+                    r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ deadline: "2099-01-01T00:00:00Z" }}) {{ _docID }} }}"#,
+                    gents_store::graphql::escape_graphql_string(&queued.doc_id),
+                ),
+            )
+            .await
+            .unwrap();
+        let error = verifier
+            .verify_fresh(&queued, &agent_did)
+            .await
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("caller-authored execution deadline"));
+        fixture
+            .db
+            .node
+            .shutdown()
+            .await
+            .expect("shut down test node");
+    }
+
 }
 
 #[cfg(test)]

@@ -16,7 +16,7 @@ pub async fn native_queue_image(
 }
 
 /// The queue image observed by `access`, such as the Agent that owns the rows.
-pub(crate) async fn native_queue_image_with_access(
+pub async fn native_queue_image_with_access(
     access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
     session_id: &str,

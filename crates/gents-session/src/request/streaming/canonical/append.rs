@@ -15,7 +15,7 @@ use super::{
     ProviderAppendRejection,
 };
 
-pub(in crate::request::streaming) async fn append_provider_segment_with_signer(
+pub async fn append_provider_segment_with_signer(
     node: &std::sync::Arc<EmbeddedNode>,
     actor: identity::Did,
     signer: Option<gents_store::identity::ManagedAgentSigner>,

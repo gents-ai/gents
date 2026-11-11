@@ -1,3 +1,4 @@
+use anyhow::Result;
 use super::*;
 use std::{sync::Arc, time::Duration};
 use tracing::field::{Field, Visit};
@@ -8,4 +9,2307 @@ use tracing_subscriber::{Layer, Registry};
 mod generated_policy;
 mod request_row_writers;
 mod workspace_recovery;
+
+async fn test_node() -> (
+    Arc<EmbeddedNode>,
+    gents_inference::test_support::TestDb,
+    Arc<dyn gents_store::identity::NodeIdentity>,
+    gents_protocol::agent_identity::AgentIdentityBinding,
+) {
+    let db = gents_inference::test_support::test_db("execution-lease-fixture").await;
+    let (db, _user, _access, agent) =
+        gents_inference::test_support::signed_test_node_from_db(db, "execution-lease-owner").await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
+    (node, db, identity, agent)
+}
+
+async fn claimed_owner(
+    node: &Arc<EmbeddedNode>,
+    identity: &Arc<dyn gents_store::identity::NodeIdentity>,
+    agent: &gents_protocol::agent_identity::AgentIdentityBinding,
+) -> RequestLifecycle {
+    claimed_owner_caused_by(node, identity, agent, TriggerLineage::default()).await
+}
+
+async fn claimed_owner_caused_by(
+    node: &Arc<EmbeddedNode>,
+    identity: &Arc<dyn gents_store::identity::NodeIdentity>,
+    agent: &gents_protocol::agent_identity::AgentIdentityBinding,
+    lineage: TriggerLineage,
+) -> RequestLifecycle {
+    let agent_identity =
+        gents_store::identity::resolve_agent_identity(identity.as_ref(), agent).unwrap();
+    let mut lifecycle = RequestLifecycle::materialize_pending_with_execution_binding(
+        node.clone(),
+        &agent.agent_did,
+        identity.clone(),
+        "hello",
+        60,
+        ExecutionOrigin::Interactive,
+        "lease-test",
+        lineage,
+        Some(agent_identity),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        lifecycle.claim_with_identity().await.unwrap(),
+        ClaimOutcome::Claimed
+    );
+    lifecycle
+}
+
+async fn claimed_owner_with_short_lease(
+    node: &Arc<EmbeddedNode>,
+    identity: &Arc<dyn gents_store::identity::NodeIdentity>,
+    agent: &gents_protocol::agent_identity::AgentIdentityBinding,
+) -> RequestLifecycle {
+    let mut lifecycle = RequestLifecycle::materialize_pending_with_execution_binding(
+        node.clone(),
+        &agent.agent_did,
+        identity.clone(),
+        "hello",
+        60,
+        ExecutionOrigin::Interactive,
+        "lease-test",
+        TriggerLineage::default(),
+        Some(gents_store::identity::resolve_agent_identity(identity.as_ref(), agent).unwrap()),
+    )
+    .await
+    .unwrap();
+    lifecycle.set_execution_lease_duration(Duration::from_secs(2));
+    assert_eq!(
+        lifecycle.claim_with_identity().await.unwrap(),
+        ClaimOutcome::Claimed
+    );
+    lifecycle
+}
+
+async fn owner(
+    node: &Arc<EmbeddedNode>,
+    identity: &Arc<dyn gents_store::identity::NodeIdentity>,
+    agent: &gents_protocol::agent_identity::AgentIdentityBinding,
+) -> RequestLifecycle {
+    let mut lifecycle = claimed_owner(node, identity, agent).await;
+    let writer = crate::request::streaming::DefraStreamWriter::new_managed(
+        node.clone(),
+        gents_store::identity::resolve_agent_identity(identity.as_ref(), agent)
+            .unwrap()
+            .as_ref(),
+        Duration::ZERO,
+    )
+    .unwrap();
+    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    lifecycle
+}
+
+fn agent_identity(
+    identity: &Arc<dyn gents_store::identity::NodeIdentity>,
+    agent: &gents_protocol::agent_identity::AgentIdentityBinding,
+) -> Arc<dyn gents_store::identity::NodeIdentity> {
+    gents_store::identity::resolve_agent_identity(identity.as_ref(), agent).unwrap()
+}
+
+/// Request, output and transcript rows are owned by the Agent, so fixtures read
+/// and write them through the Agent's own signed access, never the node identity.
+fn agent_access(
+    node: &Arc<EmbeddedNode>,
+    identity: &Arc<dyn gents_store::identity::NodeIdentity>,
+    agent: &gents_protocol::agent_identity::AgentIdentityBinding,
+) -> gents_store::config_client::ConfigAccess {
+    gents_store::config_client::ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(&agent.agent_did).unwrap(),
+        agent_identity(identity, agent).as_ref(),
+    )
+    .unwrap()
+}
+
+fn agent_signer(
+    identity: &Arc<dyn gents_store::identity::NodeIdentity>,
+    agent: &gents_protocol::agent_identity::AgentIdentityBinding,
+) -> gents_store::identity::ManagedAgentSigner {
+    agent_identity(identity, agent)
+        .managed_agent_signer()
+        .expect("managed Agent signer")
+}
+
+async fn agent_write_value(
+    access: &gents_store::config_client::ConfigAccess,
+    operation: &'static str,
+    mutation: &'static str,
+    variables: serde_json::Value,
+) -> serde_json::Value {
+    access
+        .transact_write(operation, |txn| {
+            let variables = &variables;
+            Box::pin(async move { txn.execute_with_variables(mutation, variables).await })
+        })
+        .await
+        .expect("Agent-signed canonical write")
+}
+
+async fn request_row(
+    access: &gents_store::config_client::ConfigAccess,
+    doc_id: &str,
+) -> AgentRequestRow {
+    let response = access
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ _docID request_id purpose node_did requester_did agent_did session_id lifecycle_state execution_generation execution_lease_expires_at terminal_output terminalized_at failure_reason }} }}"#,
+            escape_graphql_string(doc_id),
+        ))
+        .await
+        .expect("AgentRequest read as its Agent");
+    serde_json::from_value::<Vec<AgentRequestRow>>(response["data"]["AgentRequest"].clone())
+        .unwrap()
+        .pop()
+        .expect("AgentRequest visible to its Agent")
+}
+
+async fn request_composite_version(
+    access: &gents_store::config_client::ConfigAccess,
+    doc_id: &str,
+) -> String {
+    let response = access
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ _version {{ cid height fieldName }} }} }}"#,
+            escape_graphql_string(doc_id),
+        ))
+        .await
+        .expect("AgentRequest version read as its Agent");
+    let row = &response["data"]["AgentRequest"][0];
+    gents_store::graphql::document_composite_version(row, "AgentRequest begin replay")
+        .unwrap()
+        .expect("AgentRequest composite version")
+        .cid
+}
+
+fn lease_tuple(row: &AgentRequestRow) -> (Option<String>, Option<String>) {
+    (
+        row.execution_generation.clone(),
+        row.execution_lease_expires_at.clone(),
+    )
+}
+
+async fn await_expired(access: &gents_store::config_client::ConfigAccess, doc_id: &str) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let row = request_row(access, doc_id).await;
+            let deadline =
+                DateTime::parse_from_rfc3339(row.execution_lease_expires_at.as_deref().unwrap())
+                    .unwrap();
+            if deadline < Utc::now() {
+                assert_eq!(
+                    row.lifecycle_state,
+                    Some(RequestLifecycleState::Processing),
+                    "drop relinquishes; recovery terminalizes"
+                );
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("dropped owner must promptly expire its lease, before normal lease timeout");
+}
+
+#[tokio::test]
+async fn execution_owner_drop_panic_and_abort_expire_for_recovery() {
+    let (node, _dir, identity, agent) = test_node().await;
+    let access = agent_access(&node, &identity, &agent);
+    for exit in ["drop", "panic", "abort"] {
+        let lifecycle = owner(&node, &identity, &agent).await;
+        let doc_id = lifecycle.request().doc_id.clone();
+        let before = request_row(&access, &doc_id).await;
+        assert!(
+            DateTime::parse_from_rfc3339(before.execution_lease_expires_at.as_deref().unwrap())
+                .unwrap()
+                > Utc::now() + chrono::Duration::seconds(10)
+        );
+        match exit {
+            "drop" => drop(lifecycle),
+            "panic" => {
+                let joined = tokio::spawn(async move {
+                    let _owned_lifecycle = lifecycle;
+                    panic!("simulated execution panic");
+                })
+                .await;
+                assert!(joined.unwrap_err().is_panic());
+            }
+            "abort" => {
+                let (ready, started) = tokio::sync::oneshot::channel();
+                let task = tokio::spawn(async move {
+                    let _owned_lifecycle = lifecycle;
+                    ready.send(()).unwrap();
+                    std::future::pending::<()>().await;
+                });
+                started.await.unwrap();
+                task.abort();
+                assert!(task.await.unwrap_err().is_cancelled());
+            }
+            _ => unreachable!(),
+        }
+        await_expired(&access, &doc_id).await;
+        let report = RequestLifecycle::recover_all_with_identities(
+            &node,
+            identity.did(),
+            &[gents_store::identity::resolve_agent_identity(identity.as_ref(), &agent).unwrap()],
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.requests_recovered, 1, "{exit}");
+        assert_eq!(
+            request_row(&access, &doc_id).await.lifecycle_state,
+            Some(RequestLifecycleState::Failed),
+            "{exit}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn stale_execution_owner_drop_does_not_expire_successor_generation() {
+    let (node, _dir, identity, agent) = test_node().await;
+    let access = agent_access(&node, &identity, &agent);
+    let lifecycle = owner(&node, &identity, &agent).await;
+    let doc_id = lifecycle.request().doc_id.clone();
+    let successor_generation = uuid::Uuid::new_v4().to_string();
+    let successor_deadline = (Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+    access
+        .write(
+            "test.agent_graphql_mutation",
+            &format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_generation: "{}", execution_lease_expires_at: "{}" }}) {{ _docID }} }}"#,
+        escape_graphql_string(&doc_id), escape_graphql_string(&successor_generation), escape_graphql_string(&successor_deadline),
+    ),
+        )
+        .await
+        .unwrap();
+    let before = lease_tuple(&request_row(&access, &doc_id).await);
+    let owners_before_drop = Arc::strong_count(&node);
+    drop(lifecycle);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while Arc::strong_count(&node) >= owners_before_drop {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("detached relinquishment task must finish");
+    assert_eq!(lease_tuple(&request_row(&access, &doc_id).await), before);
+    let report = RequestLifecycle::recover_all_with_identities(
+        &node,
+        identity.did(),
+        &[gents_store::identity::resolve_agent_identity(identity.as_ref(), &agent).unwrap()],
+    )
+    .await
+    .unwrap();
+    assert_eq!(report.requests_recovered, 0);
+    assert_eq!(
+        request_row(&access, &doc_id).await.lifecycle_state,
+        Some(RequestLifecycleState::Processing)
+    );
+}
+
+#[tokio::test]
+async fn expired_execution_owner_drop_preserves_the_authoritative_deadline() {
+    let (node, _dir, identity, agent) = test_node().await;
+    let access = agent_access(&node, &identity, &agent);
+    let lifecycle = owner(&node, &identity, &agent).await;
+    let doc_id = lifecycle.request().doc_id.clone();
+    access.write("test.expired_owner_drop",
+        &format!(
+            r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ execution_lease_expires_at: "2000-01-01T00:00:00Z" }}) {{ _docID }} }}"#,
+            escape_graphql_string(&doc_id),
+        ),
+    )
+    .await
+    .unwrap();
+    let before = lease_tuple(&request_row(&access, &doc_id).await);
+    let owners_before_drop = Arc::strong_count(&node);
+    drop(lifecycle);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while Arc::strong_count(&node) >= owners_before_drop {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("detached relinquishment must finish before its outcome is observed");
+    assert_eq!(lease_tuple(&request_row(&access, &doc_id).await), before);
+    node.shutdown().await.expect("shut down test node");
+}
+
+#[tokio::test]
+async fn native_relinquishment_follows_generated_drop_cases() {
+    use gents_lean_vocab::{
+        LeanRequestExecutionAction, LeanRequestExecutionBoundary, LeanRequestExecutionLeaseStatus,
+    };
+
+    let (node, _dir, identity, agent) = test_node().await;
+
+    let access = agent_access(&node, &identity, &agent);
+    let mut exercised = 0;
+    for case in gents_lean_vocab::lean_request_execution_lease_cases() {
+        let LeanRequestExecutionAction::Drop {
+            boundary: LeanRequestExecutionBoundary::MutationWriteGate,
+            generation,
+        } = case.action
+        else {
+            continue;
+        };
+        let Some(expected) = &case.expected else {
+            continue;
+        };
+        let mut lifecycle = owner(&node, &identity, &agent).await;
+        drop(lifecycle.renewal_task.take());
+        lifecycle.state = LocalLifecycleState::Completed;
+        let doc_id = lifecycle.request().doc_id.clone();
+        let observed_generation = case.pre.lease.generation.unwrap().to_string();
+        let deadline = DateTime::from_timestamp_millis(
+            case.pre
+                .lease
+                .explicit_deadline
+                .unwrap()
+                .try_into()
+                .unwrap(),
+        )
+        .unwrap();
+        let now = DateTime::from_timestamp_millis(case.pre.now.try_into().unwrap()).unwrap();
+        access.write("test.generated_drop_case",
+            &format!(
+                r#"mutation {{ update_AgentRequest(docID: "{}", input: {{
+                    lifecycle_state: "{}", execution_generation: "{}", execution_lease_expires_at: "{}"
+                }}) {{ _docID }} }}"#,
+                escape_graphql_string(&doc_id),
+                escape_graphql_string(case.pre.request.as_str()),
+                escape_graphql_string(&observed_generation),
+                escape_graphql_string(&deadline.to_rfc3339()),
+            ),
+        ).await.unwrap();
+        let before = lease_tuple(&request_row(&access, &doc_id).await);
+        relinquish_execution_lease(&access, &doc_id, &generation.to_string(), now)
+            .await
+            .unwrap();
+        let row = request_row(&access, &doc_id).await;
+        assert_eq!(row.lifecycle_state, Some(expected.request), "{}", case.name);
+        assert_eq!(
+            row.execution_generation.as_deref(),
+            Some(observed_generation.as_str()),
+            "{}",
+            case.name
+        );
+        match expected.lease.status {
+            LeanRequestExecutionLeaseStatus::Active => {
+                assert_eq!(lease_tuple(&row), before, "{}", case.name);
+            }
+            LeanRequestExecutionLeaseStatus::Recoverable => {
+                assert!(
+                    DateTime::parse_from_rfc3339(
+                        row.execution_lease_expires_at.as_deref().unwrap()
+                    )
+                    .unwrap()
+                        < now,
+                    "{}",
+                    case.name
+                );
+            }
+            _ => panic!("unexpected generated drop outcome: {}", case.name),
+        }
+        exercised += 1;
+    }
+    assert_eq!(exercised, 3);
+    node.shutdown().await.expect("shut down test node");
+}
+
+#[tokio::test]
+async fn owned_stream_appends_do_not_renew_execution_lease() {
+    let (node, _dir, identity, agent) = test_node().await;
+    let access = agent_access(&node, &identity, &agent);
+    let mut lifecycle = claimed_owner(&node, &identity, &agent).await;
+    let request = lifecycle.request().clone();
+    let writer = crate::request::streaming::DefraStreamWriter::new_managed(
+        node.clone(),
+        gents_store::identity::resolve_agent_identity(identity.as_ref(), &agent)
+            .unwrap()
+            .as_ref(),
+        Duration::ZERO,
+    )
+    .unwrap();
+    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    let doc_id = lifecycle.request().doc_id.clone();
+    let initial = lease_tuple(&request_row(&access, &request.doc_id).await);
+    writer
+        .start_provider_attempt(&doc_id, 0, 0, "inference.1".parse().unwrap())
+        .await;
+    assert!(writer
+        .flush_native_partial(
+            &lifecycle,
+            &gents_protocol::message::Message::assistant("durable text"),
+        )
+        .await
+        .unwrap());
+    assert_eq!(
+        lease_tuple(&request_row(&access, &request.doc_id).await),
+        initial,
+        "output flushes do not renew the execution lease"
+    );
+    drop(lifecycle);
+}
+
+#[tokio::test]
+async fn renewal_timer_advances_durable_deadline_while_provider_and_tool_reads_wait() {
+    use tokio::io::AsyncReadExt;
+
+    let (node, _dir, identity, agent) = test_node().await;
+
+    let access = agent_access(&node, &identity, &agent);
+    let mut lifecycle = claimed_owner_with_short_lease(&node, &identity, &agent).await;
+    let writer = crate::request::streaming::DefraStreamWriter::new_managed(
+        node.clone(),
+        gents_store::identity::resolve_agent_identity(identity.as_ref(), &agent)
+            .unwrap()
+            .as_ref(),
+        Duration::ZERO,
+    )
+    .unwrap();
+    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    let doc_id = lifecycle.request().doc_id.clone();
+
+    let (mut provider_reader, _provider_writer) = tokio::io::duplex(64);
+    let (mut tool_reader, _tool_writer) = tokio::io::duplex(64);
+    let provider_read = tokio::spawn(async move {
+        let mut byte = [0];
+        provider_reader.read_exact(&mut byte).await
+    });
+    let tool_read = tokio::spawn(async move {
+        let mut byte = [0];
+        tool_reader.read_exact(&mut byte).await
+    });
+    tokio::task::yield_now().await;
+    assert!(!provider_read.is_finished());
+    assert!(!tool_read.is_finished());
+    let before = request_row(&access, &doc_id).await;
+    let generation = before.execution_generation.clone();
+    let first_deadline =
+        DateTime::parse_from_rfc3339(before.execution_lease_expires_at.as_deref().unwrap())
+            .unwrap();
+
+    tokio::time::timeout(Duration::from_secs(8), async {
+        loop {
+            let row = request_row(&access, &doc_id).await;
+            let deadline =
+                DateTime::parse_from_rfc3339(row.execution_lease_expires_at.as_deref().unwrap())
+                    .unwrap();
+            if deadline > first_deadline {
+                assert_eq!(row.lifecycle_state, Some(RequestLifecycleState::Processing));
+                assert_eq!(row.execution_generation, generation);
+                assert!(!provider_read.is_finished());
+                assert!(!tool_read.is_finished());
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("the actual renewal timer must advance the durable deadline while reads wait");
+
+    provider_read.abort();
+    tool_read.abort();
+    drop(lifecycle);
+}
+
+#[tokio::test]
+async fn renewal_after_a_simulated_scheduling_gap_cannot_revive_expired_owner() {
+    let (node, _dir, identity, agent) = test_node().await;
+    let access = agent_access(&node, &identity, &agent);
+    let mut lifecycle = claimed_owner_with_short_lease(&node, &identity, &agent).await;
+    let writer = crate::request::streaming::DefraStreamWriter::new_managed(
+        node.clone(),
+        gents_store::identity::resolve_agent_identity(identity.as_ref(), &agent)
+            .unwrap()
+            .as_ref(),
+        Duration::ZERO,
+    )
+    .unwrap();
+    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    let doc_id = lifecycle.request().doc_id.clone();
+    let generation = request_row(&access, &doc_id)
+        .await
+        .execution_generation
+        .expect("claimed generation");
+
+    drop(lifecycle.renewal_task.take());
+    let before = request_row(&access, &doc_id).await;
+    let deadline =
+        DateTime::parse_from_rfc3339(before.execution_lease_expires_at.as_deref().unwrap())
+            .unwrap()
+            .with_timezone(&Utc);
+    let until_expired = (deadline - Utc::now() + chrono::Duration::milliseconds(50))
+        .to_std()
+        .unwrap_or(Duration::ZERO);
+    tokio::time::sleep(until_expired).await;
+    let observed_now = Utc::now();
+    assert!(observed_now >= deadline);
+
+    assert_eq!(
+        crate::request::lifecycle::renew_execution_lease_once_at_with_access(
+            &access,
+            &doc_id,
+            &generation,
+            deadline,
+            observed_now,
+        )
+        .await
+        .unwrap(),
+        crate::request::lifecycle::RenewalAttemptOutcome::Lost,
+    );
+    assert_eq!(
+        lease_tuple(&request_row(&access, &doc_id).await),
+        lease_tuple(&before)
+    );
+    assert_eq!(
+        RequestLifecycle::recover_all_with_identities(
+            &node,
+            identity.did(),
+            &[gents_store::identity::resolve_agent_identity(identity.as_ref(), &agent).unwrap()]
+        )
+        .await
+        .unwrap()
+        .requests_recovered,
+        1,
+    );
+    let recovered = request_row(&access, &doc_id).await;
+    assert_eq!(
+        recovered.lifecycle_state,
+        Some(RequestLifecycleState::Failed)
+    );
+    assert_ne!(
+        recovered.execution_generation.as_deref(),
+        Some(generation.as_str())
+    );
+    drop(lifecycle);
+}
+
+async fn output_segment_count(
+    access: &gents_store::config_client::ConfigAccess,
+    request_doc_id: &str,
+) -> usize {
+    let response = access
+        .execute(&format!(
+            r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+            escape_graphql_string(request_doc_id),
+        ))
+        .await
+        .expect("AgentOutputSegment read as its Agent");
+    response["data"]["AgentOutputSegment"]
+        .as_array()
+        .unwrap()
+        .len()
+}
+
+#[tokio::test]
+async fn owned_begin_rejects_expiry_without_materializing_response() {
+    let (node, _dir, identity, agent) = test_node().await;
+    let access = agent_access(&node, &identity, &agent);
+    let mut lifecycle = claimed_owner(&node, &identity, &agent).await;
+    let doc_id = lifecycle.request.doc_id.clone();
+    let expired = (Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
+    access
+        .write(
+            "test.agent_graphql_mutation",
+            &format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_lease_expires_at: "{}" }}) {{ _docID }} }}"#,
+        escape_graphql_string(&doc_id), escape_graphql_string(&expired),
+    ),
+        )
+        .await
+        .unwrap();
+    let before = request_row(&access, &doc_id).await;
+    let writer = crate::request::streaming::DefraStreamWriter::new_managed(
+        node.clone(),
+        gents_store::identity::resolve_agent_identity(identity.as_ref(), &agent)
+            .unwrap()
+            .as_ref(),
+        Duration::ZERO,
+    )
+    .unwrap();
+    assert!(lifecycle.begin_owned_execution(&writer).await.is_err());
+    let after = request_row(&access, &doc_id).await;
+    assert_eq!(after.lifecycle_state, Some(RequestLifecycleState::Claimed));
+    assert_eq!(lease_tuple(&after), lease_tuple(&before));
+    assert_eq!(output_segment_count(&access, &doc_id).await, 0);
+}
+
+#[tokio::test]
+async fn racing_owned_begins_commit_one_processing_transition_without_renewal() {
+    let (node, _dir, identity, agent) = test_node().await;
+    let access = agent_access(&node, &identity, &agent);
+    let mut lifecycle = claimed_owner(&node, &identity, &agent).await;
+    let before = request_row(&access, &lifecycle.request.doc_id).await;
+    let mut competitor =
+        RequestLifecycle::new_with_node_did(node.clone(), lifecycle.request().clone(), 60);
+    competitor
+        .bind_managed_agent(
+            gents_store::identity::resolve_agent_identity(identity.as_ref(), &agent)
+                .unwrap()
+                .as_ref(),
+        )
+        .unwrap();
+    competitor.state = LocalLifecycleState::Claimed;
+    competitor.execution_lease = lifecycle.execution_lease.clone();
+    let first_writer = crate::request::streaming::DefraStreamWriter::new_managed(
+        node.clone(),
+        gents_store::identity::resolve_agent_identity(identity.as_ref(), &agent)
+            .unwrap()
+            .as_ref(),
+        Duration::ZERO,
+    )
+    .unwrap();
+    let second_writer = crate::request::streaming::DefraStreamWriter::new_managed(
+        node.clone(),
+        gents_store::identity::resolve_agent_identity(identity.as_ref(), &agent)
+            .unwrap()
+            .as_ref(),
+        Duration::ZERO,
+    )
+    .unwrap();
+    let (first, second) = tokio::join!(
+        lifecycle.begin_owned_execution(&first_writer),
+        competitor.begin_owned_execution(&second_writer),
+    );
+    assert!(first.is_ok(), "first={first:?}; second={second:?}");
+    assert!(second.is_ok(), "first={first:?}; second={second:?}");
+    let after = request_row(&access, &lifecycle.request.doc_id).await;
+    assert_eq!(
+        after.lifecycle_state,
+        Some(RequestLifecycleState::Processing)
+    );
+    assert_eq!(
+        lease_tuple(&after),
+        lease_tuple(&before),
+        "begin is not semantic renewal"
+    );
+    assert_eq!(
+        output_segment_count(&access, &lifecycle.request.doc_id).await,
+        0
+    );
+    let committed_version = request_composite_version(&access, &lifecycle.request.doc_id).await;
+    lifecycle
+        .begin_owned_execution(&first_writer)
+        .await
+        .unwrap();
+    assert_eq!(
+        request_composite_version(&access, &lifecycle.request.doc_id).await,
+        committed_version,
+        "acknowledgement replay must not create another durable request version"
+    );
+    assert_eq!(
+        lease_tuple(&request_row(&access, &lifecycle.request.doc_id).await),
+        lease_tuple(&after),
+        "acknowledgement replay must not renew the lease"
+    );
+}
+
+async fn observed_execution(
+    access: &gents_store::config_client::ConfigAccess,
+    doc_id: &str,
+) -> AgentRequestRow {
+    let mut row = request_row(access, doc_id).await;
+    row.doc_id = Some(doc_id.to_owned());
+    row
+}
+
+async fn expire_observed_execution(
+    access: &gents_store::config_client::ConfigAccess,
+    doc_id: &str,
+) -> AgentRequestRow {
+    let expiry = (Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
+    access
+        .write(
+            "test.expire_observed_execution",
+            &format!(
+                r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_lease_expires_at: "{}" }}) {{ _docID }} }}"#,
+                escape_graphql_string(doc_id),
+                escape_graphql_string(&expiry),
+            ),
+        )
+        .await
+        .expect("expire observed execution as its Agent");
+    observed_execution(access, doc_id).await
+}
+
+async fn recover_observed_execution(
+    node: &Arc<EmbeddedNode>,
+    row: &AgentRequestRow,
+    identity: &Arc<dyn gents_store::identity::NodeIdentity>,
+    binding: &gents_protocol::agent_identity::AgentIdentityBinding,
+) -> Result<TerminalizeResult> {
+    let agent = row
+        .node_did
+        .as_deref()
+        .context("observed request missing agent")?;
+    let before_generation = row.execution_generation.as_deref();
+    let report = RequestLifecycle::recover_all_with_identities(
+        node,
+        agent,
+        &[gents_store::identity::resolve_agent_identity(
+            identity.as_ref(),
+            binding,
+        )?],
+    )
+    .await?;
+    let access = agent_access(node, identity, binding);
+    let after = request_row(
+        &access,
+        row.doc_id
+            .as_deref()
+            .context("observed request missing document")?,
+    )
+    .await;
+    let recovered_exact_request = after
+        .lifecycle_state
+        .is_some_and(|state| state.is_terminal())
+        && after.execution_generation.as_deref() != before_generation;
+    Ok(
+        if report.requests_recovered == 1 && recovered_exact_request {
+            TerminalizeResult::Won
+        } else {
+            TerminalizeResult::Lost
+        },
+    )
+}
+
+async fn output_segment_snapshot(
+    access: &gents_store::config_client::ConfigAccess,
+    doc_id: &str,
+) -> serde_json::Value {
+    let response = access
+        .execute(&format!(
+            r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ _docID ordinal payload close }} }}"#,
+            escape_graphql_string(doc_id),
+        ))
+        .await
+        .expect("AgentOutputSegment read as its Agent");
+    response["data"]["AgentOutputSegment"].clone()
+}
+
+#[tokio::test]
+async fn revocation_preserves_latest_published_header_for_supersession_and_dead_child() {
+    for outcome in [
+        RequestTerminalOutcome::Superseded,
+        RequestTerminalOutcome::Dead,
+    ] {
+        let (node, _dir, identity, agent) = test_node().await;
+        let access = agent_access(&node, &identity, &agent);
+        let mut lifecycle = claimed_owner(&node, &identity, &agent).await;
+        let writer = crate::request::streaming::DefraStreamWriter::new_managed(
+            node.clone(),
+            gents_store::identity::resolve_agent_identity(identity.as_ref(), &agent)
+                .unwrap()
+                .as_ref(),
+            Duration::ZERO,
+        )
+        .unwrap();
+        lifecycle.begin_owned_execution(&writer).await.unwrap();
+        let doc_id = lifecycle.request().doc_id.clone();
+        let mut latest = None;
+        for turn in 0..2 {
+            writer
+                .start_provider_attempt(&doc_id, turn, 0, "inference.1".parse().unwrap())
+                .await;
+            latest = Some(
+                writer
+                    .publish_native_turn(
+                        &lifecycle,
+                        turn,
+                        0,
+                        &gents_protocol::message::Message::assistant(format!(
+                            "published turn {turn}"
+                        )),
+                    )
+                    .await
+                    .unwrap(),
+            );
+        }
+        let segments_before = output_segment_snapshot(&access, &doc_id).await;
+        let observed = observed_execution(&access, &doc_id).await;
+        assert_eq!(
+            revoke_execution_preserving_output_with_access(
+                &access,
+                &observed,
+                outcome,
+                "policy revocation",
+            )
+            .await
+            .unwrap(),
+            TerminalizeResult::Won
+        );
+        let terminal = request_row(&access, &doc_id).await;
+        assert_eq!(terminal.lifecycle_state, Some(outcome.request_state()));
+        assert_eq!(
+            terminal.terminal_output,
+            Some(TerminalOutput::Message {
+                message_doc_id: latest.unwrap().message_doc_id,
+            })
+        );
+        assert_ne!(terminal.execution_generation, observed.execution_generation);
+        assert_eq!(
+            output_segment_snapshot(&access, &doc_id).await,
+            segments_before
+        );
+    }
+}
+
+#[tokio::test]
+async fn expired_conflicting_source_is_revoked_without_rewriting_its_records() {
+    use gents_protocol::output::rows::{
+        decode_output_segment_row, output_segment_create_variables, AGENT_OUTPUT_SEGMENT_FIELDS,
+        CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+    };
+    let (node, _dir, identity, agent) = test_node().await;
+    let access = agent_access(&node, &identity, &agent);
+    let mut lifecycle = claimed_owner(&node, &identity, &agent).await;
+    let writer = crate::request::streaming::DefraStreamWriter::new_managed(
+        node.clone(),
+        gents_store::identity::resolve_agent_identity(identity.as_ref(), &agent)
+            .unwrap()
+            .as_ref(),
+        Duration::ZERO,
+    )
+    .unwrap();
+    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    let doc_id = lifecycle.request().doc_id.clone();
+    writer
+        .start_provider_attempt(&doc_id, 0, 0, "inference.1".parse().unwrap())
+        .await;
+    writer
+        .flush_native_partial(
+            &lifecycle,
+            &gents_protocol::message::Message::assistant("retained bytes"),
+        )
+        .await
+        .unwrap();
+    let response = access
+        .execute(&format!("{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: \"{}\" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}",
+        escape_graphql_string(&doc_id),
+    ))
+        .await
+        .expect("read as its Agent");
+    let rows = response["data"]["AgentOutputSegment"].as_array().unwrap();
+    let mut twin = rows
+        .iter()
+        .map(|row| decode_output_segment_row(row).unwrap())
+        .find(|row| {
+            matches!(
+                row.segment.source,
+                gents_protocol::output::OutputSource::ProviderTurn { .. }
+            )
+        })
+        .unwrap()
+        .segment;
+    twin.payload = "conflict bytes".into();
+    agent_write_value(
+        &access,
+        "test.canonical_fixture_write",
+        CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+        output_segment_create_variables(&twin).unwrap(),
+    )
+    .await;
+    let before = output_segment_snapshot(&access, &doc_id).await;
+    let observed = expire_observed_execution(&access, &doc_id).await;
+    let report = RequestLifecycle::recover_all_with_identities(
+        &node,
+        identity.did(),
+        &[gents_store::identity::resolve_agent_identity(identity.as_ref(), &agent).unwrap()],
+    )
+    .await
+    .unwrap();
+    assert_eq!(report.requests_recovered, 1);
+    let terminal = request_row(&access, &doc_id).await;
+    assert_eq!(terminal.lifecycle_state, Some(RequestLifecycleState::Dead));
+    assert_ne!(terminal.execution_generation, observed.execution_generation);
+    assert_eq!(terminal.terminal_output, Some(TerminalOutput::NoMessage));
+    assert_eq!(output_segment_snapshot(&access, &doc_id).await, before);
+}
+
+#[tokio::test]
+async fn revoked_execution_rejects_stale_progress_stream_write_and_terminalization() {
+    let (node, _dir, identity, agent) = test_node().await;
+    let access = agent_access(&node, &identity, &agent);
+    let mut lifecycle = claimed_owner(&node, &identity, &agent).await;
+    let writer = crate::request::streaming::DefraStreamWriter::new_managed(
+        node.clone(),
+        gents_store::identity::resolve_agent_identity(identity.as_ref(), &agent)
+            .unwrap()
+            .as_ref(),
+        Duration::ZERO,
+    )
+    .unwrap();
+    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    let response_doc_id = lifecycle.request().doc_id.clone();
+    writer
+        .start_provider_attempt(&response_doc_id, 0, 0, "inference.1".parse().unwrap())
+        .await;
+    writer
+        .flush_native_partial(
+            &lifecycle,
+            &gents_protocol::message::Message::assistant("preserved partial"),
+        )
+        .await
+        .unwrap();
+    let doc_id = lifecycle.request().doc_id.clone();
+    let observed = observed_execution(&access, &doc_id).await;
+    assert_eq!(
+        revoke_execution_generation(
+            &access,
+            &observed,
+            RequestTerminalOutcome::Superseded,
+            TerminalOutput::NoMessage,
+            "newer request"
+        )
+        .await
+        .unwrap(),
+        TerminalizeResult::Won
+    );
+    let terminal = request_row(&access, &doc_id).await;
+    let response = output_segment_snapshot(&access, &doc_id).await;
+    assert_ne!(terminal.execution_generation, observed.execution_generation);
+    assert_eq!(
+        terminal.lifecycle_state,
+        Some(RequestLifecycleState::Superseded)
+    );
+    assert!(response.to_string().contains("preserved partial"));
+    assert!(lifecycle.validate_owned_execution().await.is_err());
+    assert!(writer
+        .flush_native_partial(
+            &lifecycle,
+            &gents_protocol::message::Message::assistant("preserved partial stale overwrite"),
+        )
+        .await
+        .is_err());
+    assert_eq!(
+        lifecycle
+            .terminalize_owned(
+                RequestTerminalOutcome::Completed,
+                TerminalOutput::NoMessage,
+                None
+            )
+            .await
+            .unwrap(),
+        TerminalizeResult::Lost
+    );
+    assert_eq!(
+        lease_tuple(&request_row(&access, &doc_id).await),
+        lease_tuple(&terminal)
+    );
+    assert_eq!(output_segment_snapshot(&access, &doc_id).await, response);
+}
+
+#[tokio::test]
+async fn expired_owner_racing_recovery_cannot_win_terminalization() {
+    let (node, _dir, identity, agent) = test_node().await;
+    let access = agent_access(&node, &identity, &agent);
+    let mut lifecycle = owner(&node, &identity, &agent).await;
+    let doc_id = lifecycle.request().doc_id.clone();
+    let observed = expire_observed_execution(&access, &doc_id).await;
+    let (owner_result, recovery_result) = tokio::join!(
+        lifecycle.terminalize_owned(
+            RequestTerminalOutcome::Completed,
+            TerminalOutput::NoMessage,
+            None
+        ),
+        recover_observed_execution(&node, &observed, &identity, &agent),
+    );
+    assert_eq!(owner_result.unwrap(), TerminalizeResult::Lost);
+    assert_eq!(recovery_result.unwrap(), TerminalizeResult::Won);
+    let terminal = request_row(&access, &doc_id).await;
+    assert_eq!(
+        terminal.lifecycle_state,
+        Some(RequestLifecycleState::Failed)
+    );
+    assert_ne!(terminal.execution_generation, observed.execution_generation);
+    assert_eq!(terminal.terminal_output, Some(TerminalOutput::NoMessage));
+}
+
+#[tokio::test]
+async fn expired_stored_deadline_blocks_old_publication_and_tool_admission_after_recovery() {
+    use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
+
+    let (node, _dir, identity, agent) = test_node().await;
+
+    let access = agent_access(&node, &identity, &agent);
+    let lifecycle = owner(&node, &identity, &agent).await;
+    let doc_id = lifecycle.request().doc_id.clone();
+    let writer = crate::request::streaming::DefraStreamWriter::new_managed(
+        node.clone(),
+        gents_store::identity::resolve_agent_identity(identity.as_ref(), &agent)
+            .unwrap()
+            .as_ref(),
+        Duration::ZERO,
+    )
+    .unwrap();
+    writer
+        .start_provider_attempt(&doc_id, 0, 0, "inference.1".parse().unwrap())
+        .await;
+    let before = request_row(&access, &doc_id).await;
+    let observed = expire_observed_execution(&access, &doc_id).await;
+    assert_eq!(observed.execution_generation, before.execution_generation);
+    assert_eq!(
+        observed.lifecycle_state,
+        Some(RequestLifecycleState::Processing)
+    );
+
+    let tool_turn = Message::Assistant {
+        request_id: None,
+        id: None,
+        content: vec![AssistantContent::ToolCall(ToolCall {
+            raw_arguments: None,
+            id: "stale-tool".into(),
+            call_id: None,
+            function: ToolFunction::new("echo".into(), serde_json::json!({"value":"stale"})),
+            signature: None,
+            additional_params: None,
+        })],
+    };
+    assert!(writer
+        .flush_native_partial(&lifecycle, &Message::assistant("stale bytes"))
+        .await
+        .is_err());
+    assert!(writer
+        .publish_native_turn(&lifecycle, 0, 0, &tool_turn)
+        .await
+        .is_err());
+    assert_eq!(output_segment_count(&access, &doc_id).await, 0);
+
+    assert_eq!(
+        recover_observed_execution(&node, &observed, &identity, &agent)
+            .await
+            .unwrap(),
+        TerminalizeResult::Won
+    );
+    let recovered = request_row(&access, &doc_id).await;
+    assert_eq!(
+        recovered.lifecycle_state,
+        Some(RequestLifecycleState::Failed)
+    );
+    assert_ne!(
+        recovered.execution_generation,
+        observed.execution_generation
+    );
+    assert!(writer
+        .publish_native_turn(&lifecycle, 0, 0, &tool_turn)
+        .await
+        .is_err());
+    assert_eq!(output_segment_count(&access, &doc_id).await, 0);
+    assert_eq!(
+        request_row(&access, &doc_id).await.execution_generation,
+        recovered.execution_generation
+    );
+
+    for collection in ["AgentMessage", "AgentToolCall"] {
+        let query = format!(
+            r#"{{ {collection}(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+            escape_graphql_string(&doc_id)
+        );
+        let response = access.execute(&query).await.expect(collection);
+        assert!(response["data"][collection].as_array().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn concurrent_recovery_of_one_observed_execution_commits_one_terminal_winner() {
+    let (node, _dir, identity, agent) = test_node().await;
+    let access = agent_access(&node, &identity, &agent);
+    for processing in [false, true] {
+        let lifecycle = if processing {
+            owner(&node, &identity, &agent).await
+        } else {
+            claimed_owner(&node, &identity, &agent).await
+        };
+        let doc_id = lifecycle.request().doc_id.clone();
+        let observed = expire_observed_execution(&access, &doc_id).await;
+        let (first, second) = tokio::join!(
+            recover_observed_execution(&node, &observed, &identity, &agent),
+            recover_observed_execution(&node, &observed, &identity, &agent),
+        );
+        let outcomes = [first.unwrap(), second.unwrap()];
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|outcome| **outcome == TerminalizeResult::Won)
+                .count(),
+            1,
+            "{outcomes:?}"
+        );
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|outcome| **outcome == TerminalizeResult::Lost)
+                .count(),
+            1,
+            "{outcomes:?}"
+        );
+        let terminal = request_row(&access, &doc_id).await;
+        let response = output_segment_snapshot(&access, &doc_id).await;
+        assert_eq!(
+            terminal.lifecycle_state,
+            Some(RequestLifecycleState::Failed)
+        );
+        assert_eq!(terminal.terminal_output, Some(TerminalOutput::NoMessage));
+        assert_eq!(
+            recover_observed_execution(&node, &observed, &identity, &agent)
+                .await
+                .unwrap(),
+            TerminalizeResult::Lost
+        );
+        assert_eq!(
+            lease_tuple(&request_row(&access, &doc_id).await),
+            lease_tuple(&terminal)
+        );
+        assert_eq!(output_segment_snapshot(&access, &doc_id).await, response);
+    }
+}
+
+#[tokio::test]
+async fn cancel_racing_provider_eof_commits_one_agreeing_terminal_pair() {
+    let (node, _dir, identity, agent) = test_node().await;
+    let access = agent_access(&node, &identity, &agent);
+    for ordering in 0..3 {
+        let mut lifecycle = owner(&node, &identity, &agent).await;
+        let doc_id = lifecycle.request().doc_id.clone();
+        let node_did = lifecycle.request().node_did.clone();
+        let requester_did = lifecycle.request().requester_did.clone();
+        let outcome = match ordering {
+            0 => {
+                crate::request::interrupt::interrupt_request_by_doc_id_with_access(
+                    &access,
+                    &doc_id,
+                    &node_did,
+                    requester_did.as_deref(),
+                )
+                .await
+                .unwrap();
+                lifecycle
+                    .terminalize_owned(
+                        RequestTerminalOutcome::Failed,
+                        TerminalOutput::NoMessage,
+                        Some("provider EOF without terminal event"),
+                    )
+                    .await
+                    .unwrap()
+            }
+            1 => {
+                let result = lifecycle
+                    .terminalize_owned(
+                        RequestTerminalOutcome::Failed,
+                        TerminalOutput::NoMessage,
+                        Some("provider EOF without terminal event"),
+                    )
+                    .await
+                    .unwrap();
+                crate::request::interrupt::interrupt_request_by_doc_id_with_access(
+                    &access,
+                    &doc_id,
+                    &node_did,
+                    requester_did.as_deref(),
+                )
+                .await
+                .unwrap();
+                result
+            }
+            _ => {
+                let (cancel, eof) = tokio::join!(
+                    crate::request::interrupt::interrupt_request_by_doc_id_with_access(
+                        &access,
+                        &doc_id,
+                        &node_did,
+                        requester_did.as_deref()
+                    ),
+                    lifecycle.terminalize_owned(
+                        RequestTerminalOutcome::Failed,
+                        TerminalOutput::NoMessage,
+                        Some("provider EOF without terminal event"),
+                    ),
+                );
+                cancel.unwrap();
+                eof.unwrap()
+            }
+        };
+        assert_eq!(outcome, TerminalizeResult::Won);
+        let terminal = request_row(&access, &doc_id).await;
+        match ordering {
+            0 => assert_eq!(
+                terminal.lifecycle_state,
+                Some(RequestLifecycleState::Interrupted)
+            ),
+            1 => assert_eq!(
+                terminal.lifecycle_state,
+                Some(RequestLifecycleState::Failed)
+            ),
+            _ => assert!(matches!(
+                terminal.lifecycle_state,
+                Some(RequestLifecycleState::Failed | RequestLifecycleState::Interrupted)
+            )),
+        }
+        let response = output_segment_snapshot(&access, &doc_id).await;
+        assert_eq!(terminal.terminal_output, Some(TerminalOutput::NoMessage));
+        let replay = lifecycle
+            .terminalize_owned(
+                RequestTerminalOutcome::Failed,
+                TerminalOutput::NoMessage,
+                Some("replayed provider EOF"),
+            )
+            .await
+            .unwrap();
+        assert_ne!(replay, TerminalizeResult::Won);
+        assert_eq!(output_segment_snapshot(&access, &doc_id).await, response);
+        assert_eq!(
+            request_row(&access, &doc_id).await.lifecycle_state,
+            terminal.lifecycle_state
+        );
+    }
+}
+
+#[tokio::test]
+async fn native_doc_id_targeting_preserves_request_update_filters() {
+    let (node, _dir, identity, agent) = test_node().await;
+    let access = agent_access(&node, &identity, &agent);
+    let target = claimed_owner(&node, &identity, &agent).await;
+    let unrelated = claimed_owner(&node, &identity, &agent).await;
+    let before = request_row(&access, &target.request.doc_id).await;
+    let unrelated_before = request_row(&access, &unrelated.request.doc_id).await;
+    let doc_id = escape_graphql_string(&target.request.doc_id);
+    let generation = before.execution_generation.as_deref().unwrap();
+    let expiry = before.execution_lease_expires_at.as_deref().unwrap();
+    let next = (Utc::now() + chrono::Duration::minutes(5)).to_rfc3339();
+    for (state, observed_generation, expected_rows) in [
+        ("processing", generation, 0),
+        ("claimed", "superseded-generation", 0),
+        ("claimed", generation, 1),
+    ] {
+        let mutation = format!(
+            r#"mutation {{ update_AgentRequest(
+            docID: "{doc_id}",
+            filter: {{ _docID: {{ _eq: "{doc_id}" }}, lifecycle_state: {{ _eq: "{state}" }},
+                execution_generation: {{ _eq: "{observed_generation}" }}, execution_lease_expires_at: {{ _eq: "{expiry}" }} }},
+            input: {{ execution_lease_expires_at: "{next}" }}
+        ) {{ _docID }} }}"#,
+            state = escape_graphql_string(state),
+            observed_generation = escape_graphql_string(observed_generation),
+            expiry = escape_graphql_string(expiry),
+            next = escape_graphql_string(&next),
+        );
+        let response = access
+            .write("test.request_doc_id_filters", &mutation)
+            .await
+            .unwrap();
+        let rows = response["data"]["update_AgentRequest"].as_array().unwrap();
+        assert_eq!(rows.len(), expected_rows);
+        let observed = request_row(&access, &target.request.doc_id).await;
+        assert_eq!(observed.lifecycle_state, before.lifecycle_state);
+        assert_eq!(observed.execution_generation, before.execution_generation);
+        if expected_rows == 0 {
+            assert_eq!(
+                observed.execution_lease_expires_at,
+                before.execution_lease_expires_at
+            );
+        } else {
+            assert_eq!(rows[0]["_docID"], target.request.doc_id);
+            assert_eq!(
+                DateTime::parse_from_rfc3339(
+                    observed.execution_lease_expires_at.as_deref().unwrap()
+                )
+                .unwrap(),
+                DateTime::parse_from_rfc3339(&next).unwrap()
+            );
+        }
+        let unrelated_after = request_row(&access, &unrelated.request.doc_id).await;
+        assert_eq!(
+            unrelated_after.lifecycle_state,
+            unrelated_before.lifecycle_state
+        );
+        assert_eq!(
+            lease_tuple(&unrelated_after),
+            lease_tuple(&unrelated_before)
+        );
+    }
+}
+
+async fn observed_case_request(
+    node: &Arc<EmbeddedNode>,
+    identity: &Arc<dyn gents_store::identity::NodeIdentity>,
+    agent: &gents_protocol::agent_identity::AgentIdentityBinding,
+    case: &gents_lean_vocab::LeanRequestExecutionObservedCase,
+    epoch: DateTime<Utc>,
+) -> RequestLifecycle {
+    let lifecycle = owner(node, identity, agent).await;
+    let doc_id = escape_graphql_string(&lifecycle.request.doc_id);
+    let deadline =
+        epoch + chrono::Duration::seconds(case.pre.lease.explicit_deadline.unwrap() as i64);
+    agent_access(node, identity, agent).write("test.observed_lease_seed", &format!(
+        r#"mutation {{ update_AgentRequest(docID: "{doc_id}", input: {{ execution_lease_secs: {}, execution_lease_expires_at: "{}" }}) {{ _docID }} }}"#,
+        case.pre.lease.duration.unwrap(), escape_graphql_string(&deadline.to_rfc3339()),
+    )).await.unwrap();
+    lifecycle
+}
+
+#[tokio::test]
+async fn generated_renewal_invalidates_real_publication_point_read_transaction() {
+    use gents_lean_vocab::LeanRequestExecutionAction;
+    use gents_protocol::output::rows::{
+        output_segment_create_variables, transcript_message_create_variables,
+        CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+    };
+    use gents_protocol::output::{
+        MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
+        OutputWriter, SegmentRun, SourceClose, StreamDeclaration, StreamPayload, TranscriptMessage,
+    };
+    let case = gents_lean_vocab::lean_request_execution_lease_observed_cases()
+        .iter()
+        .find(|case| case.name == "renewal_invalidates_admitted_publication")
+        .unwrap();
+    let (node, _dir, identity, agent) = test_node().await;
+    let access = agent_access(&node, &identity, &agent);
+    let epoch = Utc::now();
+    let lifecycle = observed_case_request(&node, &identity, &agent, case, epoch).await;
+    let row = request_row(&access, &lifecycle.request.doc_id).await;
+    let request = escape_graphql_string(&lifecycle.request.doc_id);
+    let txn = gents_store::config_client::ConfigApplyTxn::begin_local_with_signer(
+        &node,
+        identity::Did::new(&agent.agent_did).unwrap(),
+        agent_signer(&identity, &agent),
+    )
+    .await
+    .unwrap();
+    txn.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request}" }} }}) {{ execution_generation execution_lease_expires_at }} }}"#)).await.unwrap();
+    let now = epoch.to_rfc3339();
+    let generation = row.execution_generation.as_deref().unwrap();
+    let message_key = format!("renewal-publication:{}", lifecycle.request.doc_id);
+    let payload = "publication staged before renewal";
+    let segment = OutputSegment {
+        node_did: lifecycle.request.node_did.clone(),
+        requester_did: lifecycle.request.requester_did.clone(),
+        session_id: lifecycle.request.session_id.clone(),
+        request_doc_id: lifecycle.request.doc_id.clone(),
+        source: OutputSource::Authored {
+            key: message_key.clone(),
+        },
+        writer: OutputWriter::RequestExecution {
+            execution_generation: generation.to_owned(),
+        },
+        ordinal: Some(0),
+        runs: vec![SegmentRun {
+            stream: 0,
+            bytes: payload.len().try_into().unwrap(),
+            declaration: Some(StreamDeclaration {
+                block_index: 0,
+                part_index: 0,
+                payload: StreamPayload::Text,
+            }),
+        }],
+        payload: payload.to_owned(),
+        close: Some(SourceClose::Closed {
+            outcome: OutputOutcome::Complete,
+            segments: 1,
+            stream_bytes: vec![payload.len() as u64],
+        }),
+        created_at: now.clone(),
+    };
+    let segment_result = txn
+        .execute_with_variables(
+            CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+            &output_segment_create_variables(&segment).unwrap(),
+        )
+        .await
+        .unwrap();
+    let segment_doc_id =
+        gents_store::graphql::created_doc_id(&segment_result, "AgentOutputSegment").unwrap();
+    let message = TranscriptMessage {
+        native_request_id: None,
+        message_key: message_key.clone(),
+        session_id: lifecycle.request.session_id.clone(),
+        node_did: lifecycle.request.node_did.clone(),
+        requester_did: lifecycle.request.requester_did.clone(),
+        request_doc_id: Some(lifecycle.request.doc_id.clone()),
+        publication: MessagePublication::RequestExecution {
+            execution_generation: generation.to_owned(),
+        },
+        outcome: OutputOutcome::Complete,
+        sequence: 0,
+        role: MessageRole::Assistant,
+        native_id: None,
+        blocks: vec![MessageBlock::Text {
+            text: gents_protocol::output::PresentedPayload {
+                output: gents_protocol::output::PayloadRef {
+                    close_doc_id: segment_doc_id,
+                    stream: 0,
+                },
+                presentation: gents_protocol::output::PayloadPresentation::Full,
+            },
+        }],
+        created_at: now,
+    };
+    txn.execute_with_variables(
+        CREATE_AGENT_MESSAGE_MUTATION,
+        &transcript_message_create_variables(&message).unwrap(),
+    )
+    .await
+    .unwrap();
+    let [LeanRequestExecutionAction::Renew {
+        expected_deadline, ..
+    }] = case.intervening.as_slice()
+    else {
+        panic!("generated renewal interleaving")
+    };
+    let renewed = tokio::time::timeout(
+        Duration::from_secs(10),
+        crate::request::lifecycle::renew_execution_lease_once_at_with_access(
+            &access,
+            &lifecycle.request.doc_id,
+            row.execution_generation.as_deref().unwrap(),
+            epoch + chrono::Duration::seconds(*expected_deadline as i64),
+            epoch + chrono::Duration::seconds(case.pre.now as i64),
+        ),
+    )
+    .await
+    .expect("renewal must not wait for the held ordinary gate")
+    .unwrap();
+    assert_eq!(
+        renewed,
+        crate::request::lifecycle::RenewalAttemptOutcome::Committed
+    );
+    let result = txn.commit().await;
+    assert_eq!(result.is_ok(), case.expected.is_some(), "{}", case.name);
+    assert!(gents_store::config_client::is_classified_transaction_conflict(&result.unwrap_err()));
+    let request = escape_graphql_string(&lifecycle.request.doc_id);
+    let key = escape_graphql_string(&message_key);
+    let published = access
+        .execute(
+            &format!(r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{key}" }} }}) {{ _docID }} AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ _docID source }} }}"#),
+        )
+    .await
+    .unwrap();
+    assert_eq!(
+        published["data"]["AgentMessage"].as_array().unwrap().len(),
+        0
+    );
+    assert!(published["data"]["AgentOutputSegment"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|row| row["source"]["key"] != message_key));
+}
+
+#[tokio::test]
+async fn generated_recovery_invalidates_real_admitted_renewal_transaction() {
+    use gents_lean_vocab::LeanRequestExecutionAction;
+    let case = gents_lean_vocab::lean_request_execution_lease_observed_cases()
+        .iter()
+        .find(|case| case.name == "recovery_invalidates_admitted_renewal")
+        .unwrap();
+    let (node, _dir, identity, agent) = test_node().await;
+    let access = agent_access(&node, &identity, &agent);
+    let epoch = Utc::now();
+    let lifecycle = observed_case_request(&node, &identity, &agent, case, epoch).await;
+    let row = request_row(&access, &lifecycle.request.doc_id).await;
+    let generation = row.execution_generation.as_deref().unwrap();
+    let expiry = row.execution_lease_expires_at.as_deref().unwrap();
+    let deadline = DateTime::parse_from_rfc3339(expiry)
+        .unwrap()
+        .with_timezone(&Utc);
+    let txn =
+        gents_store::config_client::ConfigApplyTxn::begin_execution_renewal_for_test_with_signer(
+            &node,
+            identity::Did::new(&agent.agent_did).unwrap(),
+            agent_signer(&identity, &agent),
+        )
+        .await
+        .unwrap();
+    let renewed = crate::request::lifecycle::renew_in_transaction(
+        &txn,
+        &lifecycle.request.doc_id,
+        generation,
+        Some(deadline),
+        Some(epoch + chrono::Duration::seconds(case.pre.now as i64)),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        renewed,
+        crate::request::lifecycle::RenewalAttemptOutcome::Committed
+    );
+    let [LeanRequestExecutionAction::AdvanceTime { now }, LeanRequestExecutionAction::RecoverExpiredAndFail {
+        fresh_generation, ..
+    }] = case.intervening.as_slice()
+    else {
+        panic!("generated recovery interleaving")
+    };
+    let fresh = format!("modeled-recovery-{fresh_generation}");
+    let recovered = crate::request::lifecycle::recover_expired_generation_with_access_for_test(
+        &access,
+        &row,
+        generation,
+        expiry,
+        fresh.clone(),
+        epoch + chrono::Duration::seconds(*now as i64),
+        Some(crate::request::lifecycle::RecoverySelectionChoice::NoMessage),
+        Some(RequestLifecycleState::Failed),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        recovered,
+        crate::request::lifecycle::RecoveryResult::Won { .. }
+    ));
+    let result = txn.commit().await;
+    assert_eq!(result.is_ok(), case.expected.is_some(), "{}", case.name);
+    assert!(gents_store::config_client::is_classified_transaction_conflict(&result.unwrap_err()));
+    let terminal = request_row(&access, &lifecycle.request.doc_id).await;
+    assert_eq!(
+        terminal.lifecycle_state,
+        Some(RequestLifecycleState::Failed)
+    );
+    assert_eq!(
+        terminal.execution_generation.as_deref(),
+        Some(fresh.as_str())
+    );
+}
+
+#[tokio::test]
+async fn renewal_expiring_during_mutation_rolls_back_before_commit_admission() {
+    let cases = gents_lean_vocab::lean_request_execution_lease_observed_cases();
+    let admitted = cases
+        .iter()
+        .find(|case| {
+            case.name == "admitted_renewal_can_commit_after_clock_expiry_without_storage_conflict"
+        })
+        .unwrap();
+    let expired = cases
+        .iter()
+        .find(|case| case.name == "renewal_admission_after_expiry_is_rejected")
+        .unwrap();
+    let (node, _dir, identity, agent) = test_node().await;
+    let access = agent_access(&node, &identity, &agent);
+    let epoch = Utc::now();
+    let lifecycle = observed_case_request(&node, &identity, &agent, admitted, epoch).await;
+    let before = request_row(&access, &lifecycle.request.doc_id).await;
+    let deadline =
+        epoch + chrono::Duration::seconds(admitted.pre.lease.explicit_deadline.unwrap() as i64);
+    let result = crate::request::lifecycle::renew_with_recheck_at(
+        &access,
+        &lifecycle.request.doc_id,
+        before.execution_generation.as_deref().unwrap(),
+        deadline,
+        epoch + chrono::Duration::seconds(admitted.pre.now as i64),
+        epoch + chrono::Duration::seconds(expired.pre.now as i64),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        result == crate::request::lifecycle::RenewalAttemptOutcome::Committed,
+        expired.expected.is_some()
+    );
+    assert_eq!(
+        result,
+        crate::request::lifecycle::RenewalAttemptOutcome::Lost
+    );
+    let after = request_row(&access, &lifecycle.request.doc_id).await;
+    assert_eq!(lease_tuple(&after), lease_tuple(&before));
+    assert_eq!(after.lifecycle_state, before.lifecycle_state);
+}
+
+#[tokio::test]
+async fn natural_finish_retries_changed_pending_snapshot_and_selects_exact_saved_header() {
+    let case = gents_lean_vocab::lean_steering_publication_cases()
+        .iter()
+        .find(|case| case.name == "natural_completion_intakes_late_input_before_terminal")
+        .expect("executable natural completion case");
+    let finishes = case
+        .steps
+        .iter()
+        .zip(&case.expected)
+        .filter_map(|(step, expected)| {
+            matches!(
+                step,
+                gents_lean_vocab::LeanFoldPublicationStep::FinishOrIntake { .. }
+            )
+            .then_some(expected)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(finishes.len(), 2);
+    assert_eq!(finishes[0].active, Some(case.head));
+    assert_eq!(finishes[1].active, None);
+    assert!(finishes[1].terminal.contains(&case.head));
+    assert_eq!(case.expected.last().unwrap().active, None);
+
+    let (node, _dir, identity, agent) = test_node().await;
+
+    let access = agent_access(&node, &identity, &agent);
+    let mut lifecycle = owner(&node, &identity, &agent).await;
+    let writer = crate::request::streaming::DefraStreamWriter::new_managed(
+        node.clone(),
+        gents_store::identity::resolve_agent_identity(identity.as_ref(), &agent)
+            .unwrap()
+            .as_ref(),
+        Duration::ZERO,
+    )
+    .unwrap();
+    writer
+        .start_provider_attempt(
+            &lifecycle.request.doc_id,
+            0,
+            0,
+            "inference.1".parse().unwrap(),
+        )
+        .await;
+    let saved = writer
+        .publish_native_turn(
+            &lifecycle,
+            0,
+            0,
+            &gents_protocol::message::Message::assistant("saved provider response"),
+        )
+        .await
+        .unwrap();
+    let mut pending = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        "late-input",
+        identity.did(),
+        &agent.agent_did,
+        &agent.agent_did,
+        &lifecycle.request.session_id,
+        "late input",
+        "interactive",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
+            &agent.agent_did,
+        ),
+    );
+    crate::request::admission::sign_agent_request_create(
+        gents_store::identity::resolve_agent_identity(identity.as_ref(), &agent)
+            .unwrap()
+            .as_ref(),
+        &mut pending,
+    )
+    .await
+    .unwrap();
+    let response = access
+        .write(
+            "test.same_session_pending",
+            &pending.graphql_mutation().unwrap(),
+        )
+        .await
+        .unwrap();
+    let pending_doc_id = gents_store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
+
+    assert!(!lifecycle
+        .finish_natural_turn(&saved.message_doc_id, &[])
+        .await
+        .unwrap());
+    let active = request_row(&access, &lifecycle.request.doc_id).await;
+    assert_eq!(
+        active.lifecycle_state,
+        Some(RequestLifecycleState::Processing)
+    );
+    assert!(active.terminal_output.is_none());
+    assert!(lifecycle
+        .finish_natural_turn(&saved.message_doc_id, std::slice::from_ref(&pending_doc_id),)
+        .await
+        .unwrap());
+    let terminal = request_row(&access, &lifecycle.request.doc_id).await;
+    assert_eq!(
+        terminal.lifecycle_state,
+        Some(RequestLifecycleState::Completed)
+    );
+    assert_eq!(
+        terminal.terminal_output,
+        Some(TerminalOutput::Message {
+            message_doc_id: saved.message_doc_id,
+        })
+    );
+    assert_eq!(
+        request_row(&access, &pending_doc_id).await.lifecycle_state,
+        Some(RequestLifecycleState::Pending)
+    );
+}
+
+/// Parked-request fixtures act as the Agent that owns the request: the wait
+/// record and every lifecycle write are that Agent's documents.
+async fn parked_fixture() -> (
+    Arc<EmbeddedNode>,
+    gents_inference::test_support::TestDb,
+    Arc<dyn gents_store::identity::NodeIdentity>,
+    gents_protocol::agent_identity::AgentIdentityBinding,
+    gents_store::config_client::ConfigAccess,
+    RequestLifecycle,
+) {
+    let (node, db, identity, agent) = test_node().await;
+    let access = agent_access(&node, &identity, &agent);
+    let lifecycle = owner(&node, &identity, &agent).await;
+    (node, db, identity, agent, access, lifecycle)
+}
+
+async fn agent_update_request(
+    access: &gents_store::config_client::ConfigAccess,
+    doc_id: &str,
+    input: &str,
+) {
+    let doc_id = escape_graphql_string(doc_id);
+    access
+        .write(
+            "test.update_parked_request",
+            &format!(
+                r#"mutation {{ update_AgentRequest(docID: "{doc_id}", input: {{ {input} }}) {{ _docID }} }}"#
+            ),
+        )
+        .await
+        .expect("Agent updates its request");
+}
+
+async fn agent_set_backend_retry(
+    access: &gents_store::config_client::ConfigAccess,
+    doc_id: &str,
+    retry_at: DateTime<Utc>,
+) {
+    let doc = escape_graphql_string(doc_id);
+    let wait = access
+        .execute(&format!(
+            r#"{{ AgentRequestBackendWait(filter: {{ request_doc_id: {{ _eq: "{doc}" }} }}) {{ _docID }} }}"#
+        ))
+        .await
+        .expect("Agent reads its backend wait");
+    let wait_doc = escape_graphql_string(
+        wait["data"]["AgentRequestBackendWait"][0]["_docID"]
+            .as_str()
+            .expect("backend wait visible to its Agent"),
+    );
+    let retry_at = escape_graphql_string(&retry_at.to_rfc3339());
+    access
+        .write(
+            "test.set_backend_retry",
+            &format!(
+                r#"mutation {{ update_AgentRequestBackendWait(docID: "{wait_doc}", input: {{ retry_at: "{retry_at}" }}) {{ _docID }} }}"#
+            ),
+        )
+        .await
+        .expect("Agent updates its backend wait");
+}
+
+#[tokio::test]
+async fn backend_park_releases_local_lease_only_after_durable_transition() {
+    let (_node, _db, _identity, _agent, access, mut lifecycle) = parked_fixture().await;
+    let doc_id = lifecycle.request().doc_id.clone();
+    assert!(lifecycle.park_for_backend().await.unwrap());
+    assert!(lifecycle.execution_generation().is_err());
+    assert_eq!(lifecycle.state, LocalLifecycleState::Parked);
+    drop(lifecycle);
+    let row = request_row(&access, &doc_id).await;
+    assert_eq!(
+        row.lifecycle_state,
+        Some(RequestLifecycleState::WaitingForBackend)
+    );
+    assert!(row.execution_lease_expires_at.is_none());
+}
+
+#[tokio::test]
+async fn backend_wait_is_invisible_to_the_node_identity() {
+    let (node, _db, identity, _agent, access, mut lifecycle) = parked_fixture().await;
+    let doc_id = lifecycle.request().doc_id.clone();
+    assert!(lifecycle.park_for_backend().await.unwrap());
+    let query = format!(
+        r#"{{ AgentRequestBackendWait(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+        escape_graphql_string(&doc_id)
+    );
+    let as_agent = access.execute(&query).await.unwrap();
+    assert_eq!(
+        as_agent["data"]["AgentRequestBackendWait"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let as_node =
+        gents_store::config_client::ConfigAccess::local_as(node, identity.did().parse().unwrap())
+            .execute(&query)
+            .await
+            .unwrap();
+    assert!(as_node["data"]["AgentRequestBackendWait"]
+        .as_array()
+        .is_none_or(Vec::is_empty));
+}
+
+#[tokio::test]
+async fn session_interrupt_finds_parked_backend_request() {
+    let (_node, _db, _identity, _agent, access, mut lifecycle) = parked_fixture().await;
+    let request = lifecycle.request().clone();
+    assert!(lifecycle.park_for_backend().await.unwrap());
+    let active = crate::request::interrupt::active_session_request_with_access(
+        &access,
+        &request.session_id,
+        &request.node_did,
+        request.requester_did.as_deref(),
+    )
+    .await
+    .unwrap()
+    .expect("parked work is active for session control");
+    assert_eq!(active.doc_id.as_deref(), Some(request.doc_id.as_str()));
+    let interrupted = access
+        .transact_write("test.interrupt_parked_session", |txn| {
+            let request = &request;
+            Box::pin(async move {
+                crate::request::interrupt::interrupt_active_session_in_txn(
+                    txn,
+                    &request.session_id,
+                    &request.node_did,
+                    request.requester_did.as_deref(),
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
+    assert_eq!(interrupted.as_deref(), Some(request.request_id.as_str()));
+    assert!(
+        crate::request::interrupt::fetch_interrupt_requested_at_by_doc_id_with_access(
+            &access,
+            &request.doc_id
+        )
+        .await
+        .unwrap()
+        .is_some()
+    );
+    let wake = crate::request::lifecycle::backend_wait::wake_parked_execution(
+        &access,
+        &request.doc_id,
+        "lease-test",
+        Some(chrono::Utc::now()),
+        chrono::Utc::now(),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        wake,
+        crate::request::lifecycle::backend_wait::WakeResult::Lost
+    ));
+}
+
+#[tokio::test]
+async fn backend_park_does_not_release_lease_when_interrupted() {
+    let (_node, _db, _identity, _agent, access, mut lifecycle) = parked_fixture().await;
+    let interrupted_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+    agent_update_request(
+        &access,
+        &lifecycle.request().doc_id,
+        &format!(r#"interrupt_requested_at: "{interrupted_at}""#),
+    )
+    .await;
+    assert!(!lifecycle.park_for_backend().await.unwrap());
+    assert!(lifecycle.execution_generation().is_ok());
+    assert_eq!(lifecycle.state, LocalLifecycleState::Streaming);
+}
+
+#[tokio::test]
+async fn backend_resume_continues_from_the_turns_already_completed() {
+    let (node, _db, identity, agent, _access, mut lifecycle) = parked_fixture().await;
+    assert_eq!(lifecycle.resumed_turn_index().await.unwrap(), 0);
+    let writer = crate::request::streaming::DefraStreamWriter::new_managed(
+        node.clone(),
+        agent_identity(&identity, &agent).as_ref(),
+        Duration::ZERO,
+    )
+    .unwrap();
+    let doc_id = lifecycle.request().doc_id.clone();
+    for turn in 0..2 {
+        writer
+            .start_provider_attempt(&doc_id, turn, 0, "inference.1".parse().unwrap())
+            .await;
+        writer
+            .publish_native_turn(
+                &lifecycle,
+                turn,
+                0,
+                &gents_protocol::message::Message::assistant(format!("turn {turn}")),
+            )
+            .await
+            .unwrap();
+    }
+    assert!(lifecycle.park_for_backend().await.unwrap());
+    assert_eq!(
+        lifecycle.resumed_turn_index().await.unwrap(),
+        2,
+        "a resumed request must not get its turn allowance back"
+    );
+}
+
+#[tokio::test]
+async fn parked_head_keeps_its_session_closed_to_later_work() {
+    let (_node, _db, identity, _agent, access, mut lifecycle) = parked_fixture().await;
+    let request = lifecycle.request().clone();
+    assert!(lifecycle.park_for_backend().await.unwrap());
+
+    let input = crate::request::lifecycle::queue::prepare_user_message_input(
+        &access,
+        &request.node_did,
+        &request.session_id,
+        gents_protocol::request_input::RequestInput::default(),
+        gents_protocol::request_input::QueueDelivery::Queue,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        input.queue.unwrap().queued_after_request_id.as_deref(),
+        Some(request.request_id.as_str()),
+        "a message sent during parking queues behind the parked head"
+    );
+
+    let (node_did, session_id) = (&request.node_did, &request.session_id);
+    let identity = identity.as_ref();
+    let resume = access
+        .transact_write("test.resume_over_parked_head", move |txn| {
+            Box::pin(async move {
+                crate::session::stage_session_resume_in_txn(txn, identity, node_did, session_id)
+                    .await
+            })
+        })
+        .await;
+    assert!(resume
+        .unwrap_err()
+        .to_string()
+        .contains("session work is still settling"));
+}
+
+#[tokio::test]
+async fn parked_request_can_be_interrupted_once_without_a_live_lease() {
+    let (_node, _db, _identity, _agent, access, mut lifecycle) = parked_fixture().await;
+    let doc_id = lifecycle.request().doc_id.clone();
+    let generation = lifecycle.execution_generation().unwrap().to_owned();
+    assert!(lifecycle.park_for_backend().await.unwrap());
+    assert_eq!(
+        terminalize_parked_request(&access, &doc_id, &generation, true)
+            .await
+            .unwrap(),
+        TerminalizeResult::Lost
+    );
+    let interrupted_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+    agent_update_request(
+        &access,
+        &doc_id,
+        &format!(r#"interrupt_requested_at: "{interrupted_at}""#),
+    )
+    .await;
+    assert_eq!(
+        terminalize_parked_request(&access, &doc_id, &generation, true)
+            .await
+            .unwrap(),
+        TerminalizeResult::Won
+    );
+    assert_eq!(
+        terminalize_parked_request(&access, &doc_id, &generation, true)
+            .await
+            .unwrap(),
+        TerminalizeResult::Lost
+    );
+    assert_eq!(
+        request_row(&access, &doc_id).await.lifecycle_state,
+        Some(RequestLifecycleState::Interrupted)
+    );
+}
+
+#[tokio::test]
+async fn watcher_settles_interrupted_parked_work() {
+    use crate::request::watcher::Watcher;
+    let (node, _db, identity, agent, access, mut lifecycle) = parked_fixture().await;
+    let request = lifecycle.request().clone();
+    assert!(lifecycle.park_for_backend().await.unwrap());
+    let interrupted_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+    agent_update_request(
+        &access,
+        &request.doc_id,
+        &format!(r#"interrupt_requested_at: "{interrupted_at}""#),
+    )
+    .await;
+    let mut watcher = crate::request::watcher::DefraWatcher::for_agents(
+        node.clone(),
+        &request.node_did,
+        vec![agent_identity(&identity, &agent)],
+    )
+    .unwrap();
+    let _ = tokio::time::timeout(Duration::from_secs(2), watcher.next_request()).await;
+    assert_eq!(
+        request_row(&access, &request.doc_id).await.lifecycle_state,
+        Some(RequestLifecycleState::Interrupted)
+    );
+}
+
+#[tokio::test]
+async fn watcher_finds_due_parked_work_after_recreation() {
+    use crate::request::watcher::Watcher;
+    let (node, _db, identity, agent, access, mut lifecycle) = parked_fixture().await;
+    let request = lifecycle.request().clone();
+    assert!(lifecycle.park_for_backend().await.unwrap());
+    agent_set_backend_retry(
+        &access,
+        &request.doc_id,
+        chrono::Utc::now() - chrono::Duration::seconds(1),
+    )
+    .await;
+    let mut watcher = crate::request::watcher::DefraWatcher::for_agents(
+        node.clone(),
+        &request.node_did,
+        vec![agent_identity(&identity, &agent)],
+    )
+    .unwrap();
+    let found = tokio::time::timeout(Duration::from_secs(3), watcher.next_request())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(found.doc_id, request.doc_id);
+}
+
+#[tokio::test]
+async fn expired_backend_resume_is_reparked_and_old_generation_is_fenced() {
+    use crate::request::lifecycle::backend_wait::{
+        repark_expired_resume, wake_parked_execution, WakeResult,
+    };
+    let (node, _db, _identity, agent, access, mut lifecycle) = parked_fixture().await;
+    let doc_id = lifecycle.request().doc_id.clone();
+    assert!(lifecycle.park_for_backend().await.unwrap());
+    let WakeResult::Resumed { generation, .. } = wake_parked_execution(
+        &access,
+        &doc_id,
+        "lease-test",
+        Some(chrono::Utc::now()),
+        chrono::Utc::now(),
+    )
+    .await
+    .unwrap() else {
+        panic!("request did not wake")
+    };
+    let expired = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
+    let expiry = escape_graphql_string(&expired);
+    agent_update_request(
+        &access,
+        &doc_id,
+        &format!(r#"execution_lease_expires_at: "{expiry}""#),
+    )
+    .await;
+    assert!(
+        !repark_expired_resume(&access, &doc_id, "wrong-generation", &expired)
+            .await
+            .unwrap()
+    );
+    assert!(
+        repark_expired_resume(&access, &doc_id, &generation, &expired)
+            .await
+            .unwrap()
+    );
+    let row = request_row(&access, &doc_id).await;
+    assert_eq!(
+        row.lifecycle_state,
+        Some(RequestLifecycleState::WaitingForBackend)
+    );
+    assert!(row.execution_lease_expires_at.is_none());
+    assert!(
+        !RequestExecutionLease::new(generation, identity::Did::new(&agent.agent_did).unwrap())
+            .owns_execution(&node, &doc_id)
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn parked_admission_requires_the_original_claimed_deadline() {
+    let (_node, _db, _identity, _agent, access, mut lifecycle) = parked_fixture().await;
+    let doc_id = lifecycle.request().doc_id.clone();
+    assert!(lifecycle.park_for_backend().await.unwrap());
+    let doc = escape_graphql_string(&doc_id);
+    let read = || async {
+        let query = format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}) {{ {} }} }}"#,
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
+        );
+        let response = access.execute(&query).await.unwrap();
+        serde_json::from_value::<AgentRequestRow>(response["data"]["AgentRequest"][0].clone())
+            .unwrap()
+    };
+    let row = read().await;
+    assert!(
+        crate::request::admission::verify_resumed_claim_version(&access, &row)
+            .await
+            .unwrap()
+    );
+    let changed =
+        escape_graphql_string(&(chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339());
+    agent_update_request(&access, &doc_id, &format!(r#"deadline: "{changed}""#)).await;
+    let changed_row = read().await;
+    assert!(
+        !crate::request::admission::verify_resumed_claim_version(&access, &changed_row)
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn backend_wake_adopts_fresh_lease_and_preserves_claim_binding() {
+    let (node, _db, identity, agent, _access, mut original) = parked_fixture().await;
+    let request = original.request().clone();
+    let old_generation = original.execution_generation().unwrap().to_owned();
+    let claim_cid = original.request_commit_cid().unwrap().to_owned();
+    let deadline = original.claimed_deadline_at();
+    assert!(original.park_for_backend().await.unwrap());
+    drop(original);
+    let managed = agent_identity(&identity, &agent);
+    let mut resumed = RequestLifecycle::new_with_execution_binding(
+        node.clone(),
+        request,
+        60,
+        ExecutionOrigin::Interactive,
+        "lease-test".to_owned(),
+    );
+    resumed.bind_managed_agent(managed.as_ref()).unwrap();
+    assert!(resumed
+        .wake_for_backend(Some(chrono::Utc::now()))
+        .await
+        .unwrap()
+        .resumed());
+    assert_ne!(resumed.execution_generation().unwrap(), old_generation);
+    assert_eq!(resumed.request_commit_cid(), Some(claim_cid.as_str()));
+    assert_eq!(resumed.claimed_deadline_at(), deadline);
+    assert!(resumed.resumed_from_backend());
+    let writer = crate::request::streaming::DefraStreamWriter::new_managed(
+        node,
+        managed.as_ref(),
+        Duration::ZERO,
+    )
+    .unwrap();
+    resumed.begin_owned_execution(&writer).await.unwrap();
+    assert!(resumed.owns_execution().await.unwrap());
+}
+
+#[tokio::test]
+async fn backend_wait_parks_once_and_fences_the_execution_generation() {
+    use crate::request::lifecycle::backend_wait::{
+        park_owned_execution, wake_parked_execution, ParkResult, WakeResult,
+    };
+    let (_node, _db, _identity, _agent, access, lifecycle) = parked_fixture().await;
+    let doc_id = lifecycle.request().doc_id.clone();
+    let generation = lifecycle.execution_generation().unwrap().to_owned();
+    let claim_cid = lifecycle.request_commit_cid().unwrap().to_owned();
+    let before = chrono::Utc::now();
+    assert_eq!(
+        park_owned_execution(&access, &doc_id, "another-generation", &claim_cid, before)
+            .await
+            .unwrap(),
+        ParkResult::Lost
+    );
+    assert_eq!(
+        park_owned_execution(&access, &doc_id, &generation, &claim_cid, before)
+            .await
+            .unwrap(),
+        ParkResult::Parked
+    );
+    assert_eq!(
+        park_owned_execution(&access, &doc_id, &generation, &claim_cid, before)
+            .await
+            .unwrap(),
+        ParkResult::AlreadyParked
+    );
+    assert_eq!(
+        park_owned_execution(&access, &doc_id, &generation, "another-claim", before)
+            .await
+            .unwrap(),
+        ParkResult::Lost
+    );
+    let data = access.execute(&format!(
+        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{0}" }} }}) {{ lifecycle_state deadline execution_lease_expires_at retry_count terminal_output }} AgentRequestBackendWait(filter: {{ request_doc_id: {{ _eq: "{0}" }} }}) {{ _docID attempts retry_at claim_cid }} }}"#,
+        escape_graphql_string(&doc_id),
+    )).await.unwrap();
+    let row = &data["data"]["AgentRequest"][0];
+    let wait = &data["data"]["AgentRequestBackendWait"][0];
+    assert_eq!(row["lifecycle_state"], "waitingForBackend");
+    assert_eq!(wait["attempts"], 1);
+    assert_eq!(row["retry_count"], 0);
+    assert!(wait["retry_at"].as_str().is_some());
+    assert_eq!(wait["claim_cid"], claim_cid);
+    assert!(row["deadline"].as_str().is_some());
+    assert!(row["execution_lease_expires_at"].is_null());
+    assert!(row["terminal_output"].is_null());
+    assert!(!lifecycle.owns_execution().await.unwrap());
+    agent_set_backend_retry(
+        &access,
+        &doc_id,
+        chrono::Utc::now() + chrono::Duration::seconds(10),
+    )
+    .await;
+    assert_eq!(
+        wake_parked_execution(
+            &access,
+            &doc_id,
+            "lease-test",
+            Some(before - chrono::Duration::seconds(1)),
+            before
+        )
+        .await
+        .unwrap(),
+        WakeResult::NotDue,
+    );
+    assert_eq!(
+        wake_parked_execution(
+            &access,
+            &doc_id,
+            "wrong-backend",
+            Some(chrono::Utc::now()),
+            before
+        )
+        .await
+        .unwrap(),
+        WakeResult::OtherBackend {
+            bound: "lease-test".to_owned()
+        }
+    );
+    let resumed = wake_parked_execution(
+        &access,
+        &doc_id,
+        "lease-test",
+        Some(chrono::Utc::now()),
+        before,
+    )
+    .await
+    .unwrap();
+    let WakeResult::Resumed {
+        generation: new_generation,
+        claim_cid: resumed_claim_cid,
+        ..
+    } = resumed
+    else {
+        panic!("expected a resumed generation");
+    };
+    assert_eq!(resumed_claim_cid, claim_cid);
+    assert_ne!(new_generation, generation);
+    let resumed_row = request_row(&access, &doc_id).await;
+    assert_eq!(
+        resumed_row.lifecycle_state,
+        Some(RequestLifecycleState::ResumingBackend)
+    );
+    assert_eq!(
+        resumed_row.execution_generation.as_deref(),
+        Some(new_generation.as_str())
+    );
+    assert!(!lifecycle.owns_execution().await.unwrap());
+}
+
+#[derive(Default)]
+struct PendingNativeOutcome(bool);
+
+impl Visit for PendingNativeOutcome {
+    fn record_str(&mut self, field: &Field, value: &str) {
+        if field.name() == "outcome" && value == "pending_native" {
+            self.0 = true;
+        }
+    }
+
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "outcome" && format!("{value:?}").trim_matches('"') == "pending_native" {
+            self.0 = true;
+        }
+    }
+}
 
