@@ -189,7 +189,7 @@ pub enum ResumeBlocker {
 impl ResumeBlocker {
     fn describe(self) -> &'static str {
         match self {
-            Self::Requests => "a request of the session is still settling",
+            Self::Requests => "session work is still settling",
             Self::ToolCalls => "a tool call of the session is still settling",
             Self::BackgroundExecutions => "a background execution of the session is still active",
             Self::Processes => "a process of the session has not been observed exited",
