@@ -2,10 +2,11 @@
 
 Gents is a Rust agent runtime with DefraDB as its control plane. Configuration,
 requests, responses, sessions, tools, triggers, and schedules are documents.
-The `gents` runtime crate is the core; the CLI, desktop app, protocol, and
-schemas operate or expose its vocabulary. Use DefraDB's DID identity and
-document ACP for database authorization. Reuse its transaction and P2P APIs
-through the existing Gents adapters.
+The runtime is a stack of layered crates with the `gents` crate as its
+composition root; the CLI, desktop app, protocol, and schemas operate or expose
+its vocabulary. Use DefraDB's DID identity and document ACP for database
+authorization. Reuse its transaction and P2P APIs through the existing Gents
+adapters.
 
 ## Finding the owner
 
@@ -15,7 +16,17 @@ Do not duplicate changing versions in instructions.
 
 | Surface | Starting point |
 | --- | --- |
-| Runtime documents, admission, tasks and recovery | `crates/gents/src/` |
+| Store access, transactions, identity and ACP | `crates/gents-store/` |
+| Configuration documents and desired state | `crates/gents-documents/` |
+| Backends, profiles, accounts and inference admission | `crates/gents-inference/` |
+| Peers, enrollment and synchronization | `crates/gents-p2p/` |
+| Packs and plugin wiring | `crates/gents-pack/` |
+| Requests, sessions, workspace, lifecycle hooks | `crates/gents-session/` |
+| Tool surface, built-in tools, self-config | `crates/gents-tools/` |
+| Tool-call execution, background jobs, plugin executor | `crates/gents-toolcalls/` |
+| Triggers, tasks, Goals | `crates/gents-automation/` |
+| Traces, timelines, UX preview | `crates/gents-observe/` |
+| Runtime, daemon, operations entry points, composition | `crates/gents/` |
 | Provider turn execution and input assembly | `crates/gents-loop/src/` |
 | Eval and optimization drivers | `crates/gents-eval/` |
 | Canonical wire types and database vocabulary | `crates/gents-protocol/`, `crates/gents-schemas/` |
@@ -23,6 +34,27 @@ Do not duplicate changing versions in instructions.
 | CLI and installed editor helpers | `crates/gents-cli/`, `crates/gents-client-host/`, `crates/gents-media-host/` |
 | Desktop application | `apps/gents-desktop/` |
 | Shared desktop client and presentation | `crates/gents-desktop-core/`, `crates/gents-desktop/`, `packages/` |
+
+## Layering
+
+The runtime crates form one order, bottom to top: `gents-protocol`,
+`gents-loop`, `gents-schemas` < `gents-store` < `gents-documents` <
+`gents-inference`, `gents-p2p` < `gents-pack` < `gents-session` < `gents-tools`
+< `gents-toolcalls` < `gents-automation` < `gents-observe` < `gents` < the
+client crates. A crate depends only on crates below it; Cargo enforces this, so
+an upward need is a design question, not a visibility problem.
+
+- Put new code in the lowest crate that owns everything it uses. Plain
+  vocabulary (constants, wire names, data types) sinks to `gents-protocol` or
+  the owning lower crate; a caller that needs a higher layer moves up.
+- When a lower layer must reach behavior that lives above it, define a small
+  trait where it is called and implement it above, handed in by the caller or
+  registered at the composition root (`gents`). Lifecycle points use the hook
+  seam below; do not add a second mechanism for them.
+- Never add an alias or re-export from an old location. A move repoints every
+  user in every crate and in `apps/`.
+- Keep crates small enough to check and test alone; split a crate at an
+  ownership seam rather than growing it.
 
 ## Working on a change
 
@@ -52,6 +84,17 @@ Do not duplicate changing versions in instructions.
   other capabilities (OCR, git and GitHub, web research, domain tools) ship as WASM
   plugins in packs (gents-ai/packs) and run as tools or workflow stages; core
   adds only the plugin seam a pack needs, not the capability.
+- Lifecycle points (request admission, creation, claim, terminal; session halt
+  and resume; tool-call dispatch and terminal) are owned by `gents-session`'s
+  hook seam, specified in `Proofs/Session/Hooks`. A hook declares what it reads,
+  receives rows and returns effects as data: writes to collections it owns or a
+  named core operation. No transaction handle crosses that interface and a hook
+  narrows authority, never widens it. A plugin may refuse work from starting or
+  continuing and may request a stop; it can never prevent an interrupt, a stop
+  or a terminal, where a failed staging is recorded as owed and redriven.
+  Bundled plugins (Goals; Mailbox to follow) are compiled in, always on and
+  registered per node at the composition root in a fixed order. The interface
+  stays internal until both have shipped on it. Triggers are core.
 - Request state is only `lifecycle_state`, using
   `gents_protocol::request_lifecycle::RequestLifecycleState`. Claimed work runs
   through the owned completion loop; reuse its lifecycle and terminal owners.
@@ -70,6 +113,29 @@ Do not duplicate changing versions in instructions.
 - Tools, MCP services, agent targets, skills, tasks, callbacks, schedules,
   and event sources are documents. Tool groups are nested settings within Tools.
   Extend existing reconcilers and owners instead of adding side channels.
+- Every new document type gets a deliberate place in the ACP hierarchy before
+  it is written: its policy resource, its relation to its parent, and who may
+  create, read, update and delete it, modelled in the Household policy first.
+  State whose it is (node-owned operational state or agent-owned data) and show
+  it cannot widen what a plugin or an Agent can read. Policy changes that land
+  together are regenerated once.
+- Agent operations (create, clone, edit, disable, choose the default) have one
+  admission for every actor and front end, specified in `Proofs/Tools/SelfConfig`
+  and decided from the actor's ACP grants alone. A permission category is a
+  named grouping of ACP grants, not a second layer. No Agent is protected by
+  name, tag or role; the only lockout rules are that the default Agent stays
+  enabled and an actor cannot disable itself. The Engineer administers its
+  Node; the narrow `agent_manager` relation is for actors who should manage the
+  Agent catalog and nothing else. The default Agent is its own document.
+- Client surfaces (CLI, desktop bridge, editor host, the Engineer's tools, HTTP)
+  are adapters over shared handlers: an operation's contract (typed input,
+  receipt, errors that name the next call) lives in
+  `gents_protocol::operations`, its handler in the crate that owns the
+  documents. A surface does not re-implement validation, defaults or permission
+  decisions and does not build GraphQL; use `gents_protocol::document_query`.
+  An edit is a patch, never a whole-document replace. A busy session queues by
+  default and steers on request. Surfaces may keep their own verbs and
+  rendering.
 - Task hooks are explicitly configured host commands on Task. Reuse existing
   host process execution and request completion owners for ordering, timeouts,
   errors, and cancellation; do not introduce a TaskRun lifecycle. Hook state lives
@@ -108,6 +174,9 @@ For changes to legal transitions, invariants, or provider input, work in this
 order:
 
 1. Update the Lean model in `crates/gents/proofs/` and keep it free of `sorry`.
+   Models live under `Proofs/<Layer>/` matching the crate layering; assign each
+   new file a layer in `.github/scripts/lean-import-layers.json`. Imports point
+   only downward and the `importLayers` target fails otherwise.
 2. Update the generated or model-driven conformance tests.
 3. Make the Rust implementation satisfy the contract.
 
@@ -119,6 +188,29 @@ modeled inputs/actions and derive expectations through those owners; do not keep
 separate fixture constants or test-only Rust policy machines that mirror their behavior.
 Explicit regression expectations must be checked against model execution. Wire
 decoders and native adapters translate representations, not redefine policy.
+A conformance consumer lives in the crate that owns the production function it
+drives. Decoders, coverage and registries are generated or checked mechanically;
+do not hand-maintain a list that a scan can derive.
+
+## Tests
+
+Behavior is specified by the models and checked by tests they drive. Prefer a
+model-driven test to a hand-written one, and delete a hand-written test once
+generated cases cover the same situation against the same production owner;
+when the model covers the area but not the situation, deepen the model.
+
+- Keep: model-driven conformance; end-to-end tests through real owners; tests
+  that pin model-facing or user-facing text; tests that are the evidence for a
+  premise the models assume (database, filesystem, process and wire behavior);
+  a minimal set for pure functions.
+- Do not add tests that assert how something is done (query text, call counts,
+  internal step order, a fake's interactions) when the outcome can be asserted.
+- A test lives in the lowest crate that owns everything it uses. Shared
+  fixtures sit in that crate's `test_support`, behind the `test-fixtures`
+  feature when crates above need them. A test that needs a higher layer is a
+  test of that layer and moves there.
+- Fakes that match on query text break when queries change spelling; assert on
+  variables or on stored results.
 
 ## Repository rules
 
@@ -288,11 +380,14 @@ repeat broad suites, dependency installation or native/shared builds on every
 edit. Recheck when the source, dependency inputs or a concrete failure warrants
 it. Keep test, browser and installed-editor evidence distinct.
 
-Before pushing native implementation changes, run `cargo test -p gents`,
-`make test-eval-drivers` (`cargo test -p gents-eval`),
-`cargo check --workspace --all-targets` and `make lint` (clippy, `-D warnings`).
-Run `lake build` for proof changes and the relevant CLI or desktop suites for
-affected consumers. The named intentionally red specification layers above
+While iterating, check and test the crate you changed and the crates that
+depend on it (`cargo check -p <crate>`, `cargo test -p <crate>`); the crates
+are small so that this loop is fast. Before merging native implementation
+changes, run `cargo fmt --all --check`, `cargo check --workspace --all-targets`,
+`make lint` (clippy, `-D warnings`) and the tests of every crate from the one
+you changed upward, including the CLI and desktop crates: a change to a lower
+crate is not verified until its consumers pass. Run `lake build` for proof
+changes. The named intentionally red specification layers above
 retain their own validation and integration constraints.
 
 In worktrees, select `PROFILE=fast-dev` for Make recipes or `--profile fast-dev`
