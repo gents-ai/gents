@@ -11,7 +11,7 @@ pub struct NativeExecutorStatus {
 }
 
 pub fn active_native_executors() -> Vec<NativeExecutorStatus> {
-    crate::tools::exec::active_executor_snapshots()
+    crate::exec::active_executor_snapshots()
         .into_iter()
         .map(|snapshot| NativeExecutorStatus {
             id: snapshot.id,

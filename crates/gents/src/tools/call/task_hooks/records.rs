@@ -12,7 +12,7 @@ use super::{
     run_finally, HookAttempt, HookCommandResult, ManagedTaskHookExec, TaskHookCancellation,
 };
 use crate::documents::{TaskHook, TaskHookPhase};
-use crate::tools::exec::ownership::{
+use crate::exec::ownership::{
     HostRecord, HostRecordStore, ProcessIdentity, ProcessRecorder,
 };
 
@@ -365,7 +365,7 @@ async fn recover_record(
             tracing::info!(
                 request_id = %record.request_id,
                 hook_id = %attempt.hook_id,
-                outcome = crate::tools::exec::ProcessStopOutcome::from_observations(before, after).as_str(),
+                outcome = crate::exec::ProcessStopOutcome::from_observations(before, after).as_str(),
                 "stopped task hook command left by an interrupted execution"
             );
         }

@@ -9,7 +9,7 @@ pub(crate) async fn flush_workspace_docs(
     access: &crate::ConfigAccess,
     docs: &MemoryWorkspaceDocuments,
     agent_did: &str,
-    action: &crate::tools::workspace::CreateWorkspaceAction,
+    action: &crate::workspace::CreateWorkspaceAction,
 ) -> Result<()> {
     anyhow::ensure!(
         !agent_did.is_empty() && access.actor_did().as_deref() == Some(agent_did),

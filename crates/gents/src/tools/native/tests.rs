@@ -2706,7 +2706,7 @@ async fn artifact_command_without_runtime_grant_never_dispatches() {
 #[tokio::test]
 async fn generated_artifact_spawn_cases_drive_live_foreground_and_background_launches() {
     let cases = &gents_lean_vocab::lean_contract_snapshot().artifact_spawn_cases;
-    let fx = crate::tools::workspace::artifact_test_fixture(&[]).await;
+    let fx = crate::workspace::artifact_test_fixture(&[]).await;
     assert_eq!(cases.len(), 5);
     let mut exercised = 0;
     for case in cases {
@@ -2797,7 +2797,7 @@ async fn generated_artifact_spawn_cases_drive_live_foreground_and_background_lau
 async fn artifact_managed_command_enforces_source_inode_and_network_boundaries() {
     use std::os::unix::fs::PermissionsExt;
     let fx =
-        crate::tools::workspace::artifact_test_fixture(&[("protected.txt", "source sentinel\n")])
+        crate::workspace::artifact_test_fixture(&[("protected.txt", "source sentinel\n")])
             .await;
     let outside = tempfile::tempdir().unwrap();
     let sentinel = outside.path().join("external.txt");
@@ -2873,7 +2873,7 @@ with socket.socket() as connection:
                     command.environment["TMPDIR"],
                     fx.grant.root().join("tmp").to_string_lossy()
                 );
-                crate::tools::exec::run_managed_exec(crate::tools::exec::ManagedExecRequest {
+                crate::exec::run_managed_exec(crate::exec::ManagedExecRequest {
                     argv: std::iter::once(command.program.to_string_lossy().into_owned())
                         .chain(command.args)
                         .collect(),
@@ -2891,7 +2891,7 @@ with socket.socket() as connection:
         )
         .await;
     match result {
-        crate::tools::exec::ManagedExecOutcome::Exited { code, stderr, .. } => {
+        crate::exec::ManagedExecOutcome::Exited { code, stderr, .. } => {
             assert_eq!(code, Some(0), "{}", String::from_utf8_lossy(&stderr));
         }
         other => panic!("artifact syscall probe failed: {other:?}"),
@@ -2931,7 +2931,7 @@ async fn run_artifact_compiler_fixture(build_script: Option<&str>) {
     if let Some(build) = build_script {
         files.push(("build.rs", build));
     }
-    let fx = crate::tools::workspace::artifact_test_fixture(&files).await;
+    let fx = crate::workspace::artifact_test_fixture(&files).await;
     let root = fx.grant.source_root().to_path_buf();
     let before: Vec<_> = files
         .iter()

@@ -11,7 +11,7 @@ use crate::documents::{Task, TaskHook, TaskHookPhase};
 use crate::request::lifecycle::RequestTerminalOutcome;
 use crate::store::collection::Collection;
 use crate::store::graphql::escape_graphql_string;
-use crate::tools::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
+use crate::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
 use gents_protocol::row::AgentRequest;
 
 #[cfg(test)]
@@ -496,7 +496,7 @@ impl TaskHookExec for ManagedTaskHookExec {
         });
         let outcome = match &self.record {
             Some(record) => {
-                crate::tools::exec::ownership::scope_process_recorder(
+                crate::exec::ownership::scope_process_recorder(
                     record.process_recorder(&hook.hook_id),
                     execution,
                 )

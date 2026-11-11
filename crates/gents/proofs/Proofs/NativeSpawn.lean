@@ -4,7 +4,7 @@
 Every production child-process spawn tries posix_spawn first and takes
 std's fork+exec path at most once, only after macOS reported the
 posix_spawn descriptor bound. Rust owner:
-`crates/gents/src/tools/exec/native_spawn.rs` (`spawn_with_fork_fallback`,
+`crates/gents/src/exec/native_spawn.rs` (`spawn_with_fork_fallback`,
 decision `fork_fallback_applies`).
 -/
 

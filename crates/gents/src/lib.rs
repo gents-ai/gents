@@ -39,11 +39,13 @@ pub use request::admission::final_claim_admission_disposition;
 pub use request::admission::{
     sign_agent_request_create, sign_agent_request_create_as_registered_target,
 };
+pub mod exec;
 pub mod session;
 pub mod tools;
 pub mod triggers;
 pub mod truncation;
 pub mod turn;
+pub mod workspace;
 
 pub use defra_node;
 pub use documents::automation::{
@@ -178,7 +180,7 @@ pub use tools::call::control::{cancel_background_tool_call, CancelBackgroundTool
 pub use tools::call::hook::{
     BackgroundExecutionRegistry, BackgroundToolRegistry, DefraSessionHook, FailurePolicy, HookStats,
 };
-pub use tools::exec::status::{active_native_executors, NativeExecutorStatus};
+pub use exec::status::{active_native_executors, NativeExecutorStatus};
 pub use tools::mcp::health::{
     run_health_check_cycle, run_health_check_cycle_for_actor, spawn_health_checker,
     HealthCheckerOptions, HealthPersistenceContext, HealthStatus, MCPServiceHealthSnapshot,

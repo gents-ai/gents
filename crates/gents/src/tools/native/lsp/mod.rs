@@ -162,7 +162,7 @@ impl LspTool {
             .map(|authority| {
                 self.config
                     .file
-                    .meet(crate::tools::workspace::workspace_authority_file_mode(
+                    .meet(crate::workspace::workspace_authority_file_mode(
                         authority,
                     ))
             })

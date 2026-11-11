@@ -359,14 +359,14 @@ fn empty_bound_overlay_does_not_live_walk_writer_tree() {
     .unwrap();
     let frozen = super::frozen_instruction_manifest_from_overlay(Some(&overlay));
     assert_eq!(frozen, Some("{}"));
-    assert!(crate::tools::workspace::instruction_body_for_request(
+    assert!(crate::workspace::instruction_body_for_request(
         frozen,
         Some(&nested),
         Some(&placement_path)
     )
     .is_none());
 
-    let live = crate::tools::workspace::instruction_body_for_request(
+    let live = crate::workspace::instruction_body_for_request(
         super::frozen_instruction_manifest_from_overlay(None),
         Some(&nested),
         Some(&placement_path),
@@ -518,7 +518,7 @@ fn principal_and_placement_identity_mismatches_fail_closed() {
 
 /// Source files are authored before sealing; consumers must not mutate source.
 pub(crate) struct ArtifactTestFixture {
-    pub grant: crate::tools::workspace::ArtifactGrant,
+    pub grant: crate::workspace::ArtifactGrant,
     pub owner: crate::request::lifecycle::RequestLifecycle,
     pub node: std::sync::Arc<defra_node::Node>,
     pub _dir: tempfile::TempDir,
@@ -526,10 +526,10 @@ pub(crate) struct ArtifactTestFixture {
 
 pub(crate) async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTestFixture {
     use crate::store::identity::NodeIdentity;
-    use crate::tools::workspace::*;
+    use crate::workspace::*;
     use std::{collections::BTreeSet, sync::Arc};
     fn git(root: &std::path::Path, args: &[&str]) -> String {
-        let output = crate::tools::exec::native_spawn::output_std(
+        let output = crate::exec::native_spawn::output_std(
             std::process::Command::new("git")
                 .args(args)
                 .current_dir(root)
@@ -697,7 +697,7 @@ pub(crate) async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTes
     )
     .await
     .unwrap();
-    let grant = crate::tools::workspace::ArtifactGrant::create(
+    let grant = crate::workspace::ArtifactGrant::create(
         node.clone(),
         owner.request(),
         owner.execution_generation().unwrap(),
@@ -814,7 +814,7 @@ async fn artifact_grant_rechecks_binding_generation_and_sealed_bytes() {
 #[tokio::test]
 async fn artifact_grant_rejects_source_drift_and_allocates_disjoint_outputs() {
     let fx = artifact_test_fixture(&[]).await;
-    let second = crate::tools::workspace::ArtifactGrant::create(
+    let second = crate::workspace::ArtifactGrant::create(
         fx.node.clone(),
         fx.owner.request(),
         fx.owner.execution_generation().unwrap(),
@@ -1016,7 +1016,7 @@ async fn existing_workspace_cleanup_removes_artifacts_without_grant_drop_authori
         "dropping the last grant must not become another cleanup owner"
     );
     let root = std::fs::canonicalize(_dir.path()).unwrap();
-    let repository = crate::tools::workspace::RepositoryPlacementRef {
+    let repository = crate::workspace::RepositoryPlacementRef {
         repository_id: "artifact-repo".into(),
         owner_node_did: owner.request().workspace_owner_node_did.clone().unwrap(),
         host_path: root.join("repo"),
@@ -1024,7 +1024,7 @@ async fn existing_workspace_cleanup_removes_artifacts_without_grant_drop_authori
     };
     let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let mutation =
-        crate::tools::workspace::repository_placement_upsert_mutation(&repository, &timestamp)
+        crate::workspace::repository_placement_upsert_mutation(&repository, &timestamp)
             .unwrap();
     let result = node.execute(&mutation).await;
     assert!(!result.has_errors(), "{:?}", result.errors);
@@ -1032,7 +1032,7 @@ async fn existing_workspace_cleanup_removes_artifacts_without_grant_drop_authori
         node.clone(),
         node.node_identity_did().unwrap().parse().unwrap(),
     );
-    let error = crate::tools::workspace::cleanup_workspace(
+    let error = crate::workspace::cleanup_workspace(
         &admin,
         owner.request().workspace_owner_node_did.as_deref().unwrap(),
         "artifact-workspace",
@@ -1064,7 +1064,7 @@ async fn existing_workspace_cleanup_removes_artifacts_without_grant_drop_authori
         })
         .await
         .unwrap();
-    crate::tools::workspace::cleanup_workspace(
+    crate::workspace::cleanup_workspace(
         &admin,
         owner.request().workspace_owner_node_did.as_deref().unwrap(),
         "artifact-workspace",

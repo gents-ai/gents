@@ -491,7 +491,7 @@ impl DefraSessionHook {
                     )
                 })?;
 
-            if crate::tools::exec::ownership::native_terminal_needs_confirmation(Some(outcome))
+            if crate::exec::ownership::native_terminal_needs_confirmation(Some(outcome))
                 && !self.foreground_stop_confirmed(&lc, RetainedStopReceipt::Failure(outcome.clone())).await {
                 self.in_flight_lifecycles.lock().await.insert(internal_call_id.to_owned(), lc);
                 return Ok(HookAction::Terminate { reason: "tool process exit could not be confirmed".to_owned() });
@@ -504,7 +504,7 @@ impl DefraSessionHook {
                 self.background_live_outputs.registry.deferred_writes(&tool_call_doc_id).await
             );
 
-            if crate::tools::exec::ownership::native_terminal_needs_confirmation(Some(outcome))
+            if crate::exec::ownership::native_terminal_needs_confirmation(Some(outcome))
                 && self.background_executions.settle_retained_stop(&mut lc).await? {
                 self.release_live_output(&tool_call_doc_id).await;
                 return Ok(HookAction::Continue);

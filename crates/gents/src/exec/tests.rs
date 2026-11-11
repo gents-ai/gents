@@ -469,7 +469,7 @@ async fn assert_bounded_capture_drain(retained_stream: &str) {
             .args([
                 "--exact",
                 &format!(
-                    "tools::exec::tests::managed_exec_bounds_{retained_stream}_drain_after_direct_child_exit"
+                    "exec::tests::managed_exec_bounds_{retained_stream}_drain_after_direct_child_exit"
                 ),
                 "--nocapture",
             ])
@@ -827,7 +827,7 @@ fn concurrent_managed_commands_retain_complete_output() {
         let status = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
-                "tools::exec::tests::concurrent_managed_commands_retain_complete_output",
+                "exec::tests::concurrent_managed_commands_retain_complete_output",
                 "--nocapture",
             ])
             .env(FIXTURE, "1")

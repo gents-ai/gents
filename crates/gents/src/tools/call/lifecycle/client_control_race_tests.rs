@@ -114,7 +114,7 @@ async fn client_cancel_races_completion_without_replacing_terminal_state() {
             token,
         )
         .unwrap();
-    let process = crate::tools::exec::ownership::test_support::OwnedTestProcess::spawn(Some(
+    let process = crate::exec::ownership::test_support::OwnedTestProcess::spawn(Some(
         registry.process_recorder(&request.tool_call_id, &request.tool_call_doc_id),
     ))
     .await;
@@ -198,7 +198,7 @@ async fn client_cancel_and_completion_preserve_each_winning_terminal() {
             )
             .unwrap();
         if cancel_first {
-            let process = crate::tools::exec::ownership::test_support::OwnedTestProcess::spawn(
+            let process = crate::exec::ownership::test_support::OwnedTestProcess::spawn(
                 Some(registry.process_recorder(&request.tool_call_id, &request.tool_call_doc_id)),
             )
             .await;

@@ -6,7 +6,7 @@ use crate::support::{
 };
 use gents::documents::{BashTools, FileTools, HostTools, Tools};
 use gents::{
-    tools::workspace::*, BashMode, CommandExecutionMode, CommandNetworkMode,
+    workspace::*, BashMode, CommandExecutionMode, CommandNetworkMode,
     DocumentRuntimeOptions, FileToolMode, Gents, NodeIdentity, ToolCeiling,
 };
 use serde_json::{json, Value};
@@ -156,7 +156,7 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
     // seals the read-only workspace through the production provisioning owner,
     // which publishes the workspace documents as that Agent.
     let workspace_id = uuid::Uuid::new_v4().to_string();
-    let sealed = gents::tools::workspace::provision_read_only_workspace(
+    let sealed = gents::workspace::provision_read_only_workspace(
         &access,
         &actors.agent_access,
         &repo,

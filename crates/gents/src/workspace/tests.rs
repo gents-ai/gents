@@ -52,7 +52,7 @@ fn cleanup_caps() -> BTreeSet<String> {
 }
 
 fn git(cwd: &Path, args: &[&str]) -> String {
-    let output = gents::tools::exec::native_spawn::output_std(
+    let output = gents::exec::native_spawn::output_std(
         std::process::Command::new("git")
             .args(args)
             .current_dir(cwd)
@@ -2503,7 +2503,7 @@ fn generated_noncanonical_git_delta_is_rejected_without_filesystem_traversal() {
     for byte in blob.as_bytes().as_chunks::<2>().0 {
         tree.push(u8::from_str_radix(std::str::from_utf8(byte).unwrap(), 16).unwrap());
     }
-    let mut child = gents::tools::exec::native_spawn::spawn_std(
+    let mut child = gents::exec::native_spawn::spawn_std(
         std::process::Command::new("git")
             .args(["hash-object", "--literally", "-t", "tree", "-w", "--stdin"])
             .current_dir(&fx.repo)

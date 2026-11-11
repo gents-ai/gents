@@ -1737,8 +1737,8 @@ async fn publish_workspace_for_agent(
     owner: &str,
     agent_did: &str,
 ) {
-    let workspace = crate::tools::workspace::IsolatedWorkspaceDoc {
-        path_capability: crate::tools::workspace::WorkspacePathCapability::exact_paths(vec![])
+    let workspace = crate::workspace::IsolatedWorkspaceDoc {
+        path_capability: crate::workspace::WorkspacePathCapability::exact_paths(vec![])
             .unwrap(),
         workspace_id: workspace_id.into(),
         work_unit_id: "unit-1".into(),
@@ -1772,7 +1772,7 @@ async fn publish_workspace_for_agent(
                 let agent_doc = agents[0]["_docID"].as_str().unwrap();
                 let result = txn
                     .execute(
-                        &crate::tools::workspace::isolated_workspace_upsert_mutation(workspace),
+                        &crate::workspace::isolated_workspace_upsert_mutation(workspace),
                     )
                     .await?;
                 let rows = result["data"]["upsert_IsolatedWorkspace"]

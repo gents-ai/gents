@@ -305,7 +305,7 @@ impl DefraSessionHook {
         let process_recorder =
             executions.process_recorder(&execution_call_id, &execution_tool_doc_id);
         tokio::spawn(crate::plugin::approval::carry_interactive(async move {
-            let execution = AssertUnwindSafe(crate::tools::exec::ownership::scope_process_recorder(
+            let execution = AssertUnwindSafe(crate::exec::ownership::scope_process_recorder(
                 process_recorder,
                 crate::tools::runtime_context::scope_tool_request_identity(
                     requester_did,
@@ -326,11 +326,11 @@ impl DefraSessionHook {
                                 if process_tool {
                                     crate::tools::runtime_context::call_tool_managed_with_cleanup(
                                         target_tool.as_ref(), target_args, |outcome| {
-                                            if let Some(outcome) = outcome.filter(|outcome| crate::tools::exec::ownership::native_terminal_needs_confirmation(Some(outcome))) {
+                                            if let Some(outcome) = outcome.filter(|outcome| crate::exec::ownership::native_terminal_needs_confirmation(Some(outcome))) {
                                                 executions.set_stop_receipt(&execution_call_id, &execution_tool_doc_id, crate::tools::call::hook::RetainedStopReceipt::from_outcome(outcome));
                                             }
                                             executions.live_process_evidence(&execution_call_id, &execution_tool_doc_id)
-                                                != crate::tools::exec::ownership::LiveProcessEvidence::NeverSpawned
+                                                != crate::exec::ownership::LiveProcessEvidence::NeverSpawned
                                         },
                                     ).await
                                 } else {

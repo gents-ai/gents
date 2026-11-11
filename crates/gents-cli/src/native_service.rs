@@ -293,7 +293,7 @@ impl CommandRunner for ProcessCommandRunner {
             .stdin(Stdio::null())
             .stdout(stdout.try_clone()?)
             .stderr(stderr.try_clone()?);
-        let mut child = gents::tools::exec::native_spawn::spawn_std(&mut command)
+        let mut child = gents::exec::native_spawn::spawn_std(&mut command)
             .with_context(|| format!("executing {}", Path::new(program).display()))?;
         let timeout = command_timeout(program, args);
         let waited = match child.wait_timeout(timeout) {

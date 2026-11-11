@@ -3,7 +3,7 @@ use rapidhash::RapidHashMap;
 use crate::inference::llm::tool::BoxFuture;
 use crate::inference::llm::tool::ToolDefinition;
 use crate::inference::llm::tool::{ToolDyn, ToolError};
-use crate::tools::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
+use crate::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
 use crate::tools::runtime_context::tool_execution_bounds;
 use anyhow::{bail, Context, Result};
 
@@ -292,7 +292,7 @@ mod tests {
 
     #[tokio::test]
     async fn artifact_scope_denies_cli_tool_before_direct_launch() {
-        let fixture = crate::tools::workspace::artifact_test_fixture(&[]).await;
+        let fixture = crate::workspace::artifact_test_fixture(&[]).await;
         let source = fixture.grant.source_root().to_path_buf();
         let sentinel = source.join("cli-must-not-launch");
         let mut config = config(5);

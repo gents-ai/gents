@@ -3,7 +3,7 @@ use super::*;
 #[cfg(unix)]
 #[tokio::test]
 async fn unowned_live_process_group_keeps_the_retained_owner_record() {
-    use crate::tools::exec::ownership::{ProcessIdentity, ProcessObservation, ProcessRecord};
+    use crate::exec::ownership::{ProcessIdentity, ProcessObservation, ProcessRecord};
     use gents_lean_vocab::lean_process_stop_cases;
 
     // The current test process proves the group is live; the impossible pid

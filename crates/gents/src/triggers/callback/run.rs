@@ -5,8 +5,8 @@ use anyhow::{anyhow, Context, Result};
 use defra_node::Node as EmbeddedNode;
 use serde_json::Value;
 
-use crate::tools::workspace::journal::{advance, current_state};
-use crate::tools::workspace::{
+use crate::workspace::journal::{advance, current_state};
+use crate::workspace::{
     action_plan_canonical_json, emit_create_workspace_plan, execute_create_workspace_plan,
     parse_action_plan_json, ActionJournalEntry, ActionJournalState, ActionPlan,
     CreateWorkspaceAction, CreationPolicy, HostAction, HostExecuteError, HostExecutorContext,
@@ -31,7 +31,7 @@ use crate::plugin::executor::PluginExecutor;
 
 /// Action N+1 must not enter Executing until N is ResultDocsWritten.
 pub fn can_start_executing(journal: &[ActionJournalEntry], index: u32) -> bool {
-    crate::tools::workspace::action_journal_prefix_legal(journal)
+    crate::workspace::action_journal_prefix_legal(journal)
         && (index == 0
             || matches!(
                 current_state(journal, index - 1),
@@ -45,7 +45,7 @@ pub fn result_docs_ready(
     placement: Option<&WorkspacePlacementDoc>,
 ) -> bool {
     !journal.is_empty()
-        && crate::tools::workspace::action_journal_prefix_legal(journal)
+        && crate::workspace::action_journal_prefix_legal(journal)
         && journal
             .iter()
             .all(|entry| matches!(entry.state, ActionJournalState::ResultDocsWritten))
@@ -154,7 +154,7 @@ pub fn plan_from_callback(
                 identity::Did::new(did).map_err(|error| error.to_string())?;
                 action
                     .readers
-                    .push(crate::tools::workspace::WorkspaceReaderBinding {
+                    .push(crate::workspace::WorkspaceReaderBinding {
                         agent_did: did.clone(),
                         agent_doc_id: None,
                     });
@@ -326,8 +326,8 @@ fn emit_create_workspace_from_source(source: &Value) -> Result<ActionPlan, Strin
 
 fn workspace_path_capability_from_source(
     source: &Value,
-) -> Result<crate::tools::workspace::WorkspacePathCapability, String> {
-    use crate::tools::workspace::WorkspacePathCapability;
+) -> Result<crate::workspace::WorkspacePathCapability, String> {
+    use crate::workspace::WorkspacePathCapability;
     let decode = |value: &Value| -> Result<Value, String> {
         match value {
             Value::String(raw) => serde_json::from_str(raw)
@@ -438,7 +438,7 @@ pub fn resolve_action_plan_with_module(
 /// marked interrupted and never retried.
 pub(crate) fn apply_planner_deny(invocation: &mut CallbackInvocationDoc, reason: &str) {
     let journal = decode_journal(invocation.action_journal.as_deref()).unwrap_or_default();
-    if let Some(failed) = crate::tools::workspace::recover_running(&journal) {
+    if let Some(failed) = crate::workspace::recover_running(&journal) {
         invocation.action_journal = Some(encode_journal(&failed));
         invocation.lifecycle_state = LIFECYCLE_FAILED.to_string();
         invocation.error = Some(reason.to_string());
@@ -590,7 +590,7 @@ async fn execute_running_invocation(
     }
 
     let mut journal = decode_journal(invocation.action_journal.as_deref())?;
-    if !crate::tools::workspace::action_journal_prefix_legal(&journal) {
+    if !crate::workspace::action_journal_prefix_legal(&journal) {
         return deny(node, access, invocation, "illegal action journal prefix").await;
     }
     if let crate::documents::CallbackHandler::Plugin {
@@ -823,7 +823,7 @@ async fn execute_running_invocation(
         let correlation = correlation_from_source(source);
         let route = gents_protocol::trigger_delivery::HandoffRoute::from_fields(&invocation.input);
         let reservation = tokio::task::spawn_blocking(move || {
-            crate::tools::workspace::prepare_workspace_reservation(
+            crate::workspace::prepare_workspace_reservation(
                 &action_for_reservation,
                 &repository_for_reservation,
                 ceiling_for_reservation.as_deref(),
@@ -918,7 +918,7 @@ async fn execute_running_invocation(
 }
 
 fn memory_from_outcome(
-    outcome: &crate::tools::workspace::CreateWorkspaceOutcome,
+    outcome: &crate::workspace::CreateWorkspaceOutcome,
 ) -> MemoryWorkspaceDocuments {
     let mut docs = MemoryWorkspaceDocuments::default();
     let _ = docs.write_isolated_workspace(outcome.workspace.clone());
@@ -1152,7 +1152,7 @@ async fn retry_failed_plugin_invocations(
         };
         let attempts = u32::try_from(failed.attempts.unwrap_or(0)).unwrap_or(0);
         let journal = decode_journal(failed.action_journal.as_deref())?;
-        if !crate::tools::workspace::retry_allowed(
+        if !crate::workspace::retry_allowed(
             &failed.lifecycle_state,
             &journal,
             attempts,
@@ -1300,7 +1300,7 @@ mod path_capability_tests {
         let empty = workspace_path_capability_from_source(&json!({"owned_files": "[]"})).unwrap();
         assert_eq!(
             empty,
-            crate::tools::workspace::WorkspacePathCapability::exact_paths(Vec::new()).unwrap()
+            crate::workspace::WorkspacePathCapability::exact_paths(Vec::new()).unwrap()
         );
         let paths = workspace_path_capability_from_source(
             &json!({"owned_files": "[\"src/b.rs\",\"src/a.rs\"]"}),
@@ -1308,7 +1308,7 @@ mod path_capability_tests {
         .unwrap();
         assert_eq!(
             paths,
-            crate::tools::workspace::WorkspacePathCapability::exact_paths(vec![
+            crate::workspace::WorkspacePathCapability::exact_paths(vec![
                 "src/a.rs".into(),
                 "src/b.rs".into()
             ])
@@ -1331,7 +1331,7 @@ mod path_capability_tests {
         };
         assert_eq!(
             action.path_capability,
-            crate::tools::workspace::WorkspacePathCapability::exact_paths(vec!["src/a.rs".into()])
+            crate::workspace::WorkspacePathCapability::exact_paths(vec!["src/a.rs".into()])
                 .unwrap()
         );
         assert!(plan_from_callback(&callback, &json!({}), None).is_err());

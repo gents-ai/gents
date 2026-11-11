@@ -640,7 +640,7 @@ mod platform {
 #[cfg(all(test, unix))]
 pub(crate) mod test_support {
     use super::{scope_process_recorder, ProcessIdentity, ProcessRecorder};
-    use crate::tools::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
+    use crate::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
     use tokio_util::sync::CancellationToken;
 
     pub(crate) struct OwnedTestProcess {

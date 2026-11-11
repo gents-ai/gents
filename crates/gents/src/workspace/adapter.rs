@@ -6,7 +6,7 @@ use std::process::{Command, Stdio};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::tools::exec::native_spawn::{output_std, spawn_std, status_std};
+use crate::exec::native_spawn::{output_std, spawn_std, status_std};
 
 use super::action_plan::CreateWorkspaceAction;
 use super::documents::ProvisioningObservation;
@@ -189,7 +189,7 @@ pub(crate) async fn working_tree_hash(dest: &Path) -> Result<String> {
 const MANAGED_GIT_OUTPUT_BYTE_CAP: usize = 64 * 1024;
 
 async fn managed_git_with_index(cwd: &Path, index: &Path, args: &[&str]) -> Result<String> {
-    use crate::tools::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
+    use crate::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
 
     let index = index
         .to_str()

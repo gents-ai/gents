@@ -3155,7 +3155,7 @@ pub(crate) async fn assert_artifact_scope_denies_lsp_before_pool_or_linter_dispa
         assert_eq!(case["binding"][key], true);
     }
     assert!(case["expected_mode"].is_null());
-    let fixture = crate::tools::workspace::artifact_test_fixture(&[]).await;
+    let fixture = crate::workspace::artifact_test_fixture(&[]).await;
     let source = fixture.grant.source_root().to_path_buf();
     let mut server = rust_analyzer_server(1);
     server.command = "/artifact-denial-must-not-resolve-this-executable".into();

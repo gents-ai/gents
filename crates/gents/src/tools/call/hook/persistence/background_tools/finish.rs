@@ -62,7 +62,7 @@ fn resolve_execution(
     };
     if crate::tools::native::is_bash_tool_name(lifecycle.tool_name()) {
         let outcome = execution.as_ref().ok();
-        if crate::tools::exec::ownership::native_terminal_needs_confirmation(outcome) {
+        if crate::exec::ownership::native_terminal_needs_confirmation(outcome) {
             let receipt = match outcome {
                 Some(outcome) => {
                     crate::tools::call::hook::RetainedStopReceipt::from_outcome(outcome)
@@ -99,13 +99,13 @@ async fn settle_native_terminal(
         Some(record) => matches!(
             record
                 .identity
-                .await_signalled_group_exit(crate::tools::exec::ownership::KILL_GRACE)
+                .await_signalled_group_exit(crate::exec::ownership::KILL_GRACE)
                 .await,
-            crate::tools::exec::ownership::ProcessObservation::Exited
+            crate::exec::ownership::ProcessObservation::Exited
         ),
         None => !matches!(
             executions.live_process_evidence(execution_call_id, execution_tool_doc_id),
-            crate::tools::exec::ownership::LiveProcessEvidence::SpawnedUnverified
+            crate::exec::ownership::LiveProcessEvidence::SpawnedUnverified
         ),
     };
     let receipt = match execution.as_ref().ok() {
@@ -519,7 +519,7 @@ pub(in crate::tools::call::hook::persistence) async fn finish_background_executi
         ids: &identity,
     };
     if crate::tools::native::is_bash_tool_name(execution_tool_name)
-        && crate::tools::exec::ownership::native_terminal_needs_confirmation(
+        && crate::exec::ownership::native_terminal_needs_confirmation(
             execution.as_ref().ok(),
         )
     {

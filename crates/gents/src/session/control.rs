@@ -238,7 +238,7 @@ async fn ensure_session_executions_settled_in_txn(
                 .into_iter()
                 .filter(|record| {
                     record.identity.observe()
-                        != crate::tools::exec::ownership::ProcessObservation::Exited
+                        != crate::exec::ownership::ProcessObservation::Exited
                 })
                 .map(|record| record.tool_call_doc_id)
                 .collect::<Vec<_>>(),

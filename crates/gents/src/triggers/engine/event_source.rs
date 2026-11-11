@@ -2185,7 +2185,7 @@ mod native_route_tests {
             let name = case["name"].as_str().unwrap();
             let stamped = HandoffRoute::from_fields(&case["input"]);
             assert_eq!(route_json(&stamped), case["stamped"], "{name}");
-            let receipt = crate::tools::workspace::WorkspaceReceiptDoc {
+            let receipt = crate::workspace::WorkspaceReceiptDoc {
                 path_capability_digest: "digest".into(),
                 receipt_id: "receipt".into(),
                 workspace_id: "workspace".into(),
@@ -2203,9 +2203,9 @@ mod native_route_tests {
                 integration_instructions: None,
                 route: stamped.clone(),
             };
-            let mutation = crate::tools::workspace::workspace_receipt_create_mutation(&receipt);
+            let mutation = crate::workspace::workspace_receipt_create_mutation(&receipt);
             assert!(
-                mutation.contains(&crate::tools::workspace::handoff_route_fields(&stamped)),
+                mutation.contains(&crate::workspace::handoff_route_fields(&stamped)),
                 "{name}: {mutation}"
             );
             let observed = route_json(&stamped);

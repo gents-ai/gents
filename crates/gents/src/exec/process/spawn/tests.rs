@@ -63,7 +63,7 @@ async fn supplied_path_preserves_relative_cwd_argv_zero_and_environment() {
         let mut environment = std::env::vars().collect::<RapidHashMap<_, _>>();
         environment.insert(FIXTURE.into(), root.path().to_string_lossy().into_owned());
         run_isolated_capture_test(
-            "tools::exec::process::spawn::tests::supplied_path_preserves_relative_cwd_argv_zero_and_environment",
+            "exec::process::spawn::tests::supplied_path_preserves_relative_cwd_argv_zero_and_environment",
             root.path(),
             environment,
         )
@@ -207,9 +207,9 @@ async fn concurrent_spawn_fixture(permission_search: bool) {
     );
     run_isolated_capture_test(
         if permission_search {
-            "tools::exec::process::spawn::tests::permission_search_releases_unrelated_output_writers"
+            "exec::process::spawn::tests::permission_search_releases_unrelated_output_writers"
         } else {
-            "tools::exec::process::spawn::tests::concurrent_spawns_release_unrelated_output_writers"
+            "exec::process::spawn::tests::concurrent_spawns_release_unrelated_output_writers"
         },
         root.path(),
         environment,
@@ -373,7 +373,7 @@ async fn spawn_succeeds_when_pipes_exceed_open_max() {
         let mut environment = std::env::vars().collect::<RapidHashMap<_, _>>();
         environment.insert(FIXTURE.into(), root.path().to_string_lossy().into_owned());
         run_isolated_capture_test(
-            "tools::exec::process::spawn::tests::spawn_succeeds_when_pipes_exceed_open_max",
+            "exec::process::spawn::tests::spawn_succeeds_when_pipes_exceed_open_max",
             root.path(),
             environment,
         )

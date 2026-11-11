@@ -489,8 +489,8 @@ fn generated(hook_id: &str, phase: &str) -> LeanTaskHook {
 #[cfg(unix)]
 #[tokio::test]
 async fn recovery_stops_a_surviving_hook_command_before_cleanup() {
-    use crate::tools::exec::ownership::test_support::OwnedTestProcess;
-    use crate::tools::exec::ownership::ProcessObservation;
+    use crate::exec::ownership::test_support::OwnedTestProcess;
+    use crate::exec::ownership::ProcessObservation;
 
     let fixture = Fixture::new().await;
     let dir = tempfile::tempdir().expect("case directory");

@@ -2915,7 +2915,7 @@ async fn interruption_leaves_background_workers_running() {
     let name = process_name.clone();
     let token = tokens[0].clone();
     let worker = tokio::spawn(async move {
-        crate::tools::exec::run_managed_exec(crate::tools::exec::ManagedExecRequest {
+        crate::exec::run_managed_exec(crate::exec::ManagedExecRequest {
             argv: vec!["/bin/sh".into(), "-c".into(), "sleep 30".into()],
             cwd: std::env::temp_dir(),
             deadline_at: Some(Utc::now() + chrono::Duration::seconds(10)),
@@ -2960,7 +2960,7 @@ async fn interruption_leaves_background_workers_running() {
             .await
             .unwrap()
             .unwrap(),
-        crate::tools::exec::ManagedExecOutcome::Cancelled { .. }
+        crate::exec::ManagedExecOutcome::Cancelled { .. }
     ));
 }
 
@@ -4828,7 +4828,7 @@ async fn generated_background_process_identity_cases_cancel_only_the_physical_in
             .await;
         assert_eq!(token.is_cancelled(), expected, "{case}");
         assert_eq!(
-            outcome == crate::tools::exec::ProcessStopOutcome::Stopped,
+            outcome == crate::exec::ProcessStopOutcome::Stopped,
             expected,
             "{case}"
         );

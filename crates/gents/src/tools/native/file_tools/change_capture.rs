@@ -68,7 +68,7 @@ impl FileChanges {
                 !change.root.is_empty() && paths.insert((&change.root, &change.path)),
                 "ambiguous retained file path"
             );
-            crate::tools::workspace::WorkspacePathCapability::exact_paths(vec![change
+            crate::workspace::WorkspacePathCapability::exact_paths(vec![change
                 .path
                 .clone()])?;
             for image in [&change.before, &change.after] {
@@ -231,7 +231,7 @@ impl FileChangeCapture {
             .ok()?
             .to_str()?
             .replace(std::path::MAIN_SEPARATOR, "/");
-        crate::tools::workspace::WorkspacePathCapability::exact_paths(vec![relative.clone()])
+        crate::workspace::WorkspacePathCapability::exact_paths(vec![relative.clone()])
             .ok()?;
         let capture = Self {
             writer,

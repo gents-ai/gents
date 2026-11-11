@@ -1011,7 +1011,7 @@ async fn verify_request_input(
         .and_then(|bash| bash.execution_mode)
         == Some(crate::tools::native::CommandExecutionMode::ArtifactWrite);
     if let Some(agent_identity) = agent_identity {
-        crate::tools::workspace::validate_request_workspace_input_with_identity(
+        crate::workspace::validate_request_workspace_input_with_identity(
             node,
             agent_identity,
             &request,
@@ -1028,7 +1028,7 @@ async fn verify_request_input(
             "workspace admission requires the selected held Agent"
         )));
     } else {
-        crate::tools::workspace::validate_unbound_request_workspace_input(
+        crate::workspace::validate_unbound_request_workspace_input(
             &request,
             artifact_requested,
         )

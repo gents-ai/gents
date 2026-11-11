@@ -379,7 +379,7 @@ jobs:
         run: |
           cargo test -p gents --lib runtime::status::tests::
           cargo test -p gents --lib tools::native::tests::read_only_bash
-          cargo test -p gents --lib tools::exec::
+          cargo test -p gents --lib exec::
           cargo test -p gents --lib artifact_
           # Live-output byte evidence for background tools must fail the PR
           # that breaks it, not the post-merge main run (#2686).

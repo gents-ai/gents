@@ -155,7 +155,7 @@ impl DefraSessionHook {
             let check_doc = doc.clone();
             let cleanup: gents_loop::session_hook::NativeCleanupCheck = Arc::new(move |outcome| {
                 if let Some(outcome) = outcome.filter(|outcome| {
-                    crate::tools::exec::ownership::native_terminal_needs_confirmation(Some(outcome))
+                    crate::exec::ownership::native_terminal_needs_confirmation(Some(outcome))
                 }) {
                     check_registry.set_stop_receipt(
                         &check_call,
@@ -164,7 +164,7 @@ impl DefraSessionHook {
                     );
                 }
                 check_registry.live_process_evidence(&check_call, &check_doc)
-                    != crate::tools::exec::ownership::LiveProcessEvidence::NeverSpawned
+                    != crate::exec::ownership::LiveProcessEvidence::NeverSpawned
             });
             let workspace = ToolWorkspaceScope {
                 runtime_home: context.runtime_home,
@@ -174,7 +174,7 @@ impl DefraSessionHook {
                 workspace_artifact: context.workspace_artifact,
             };
             let execution =
-                AssertUnwindSafe(crate::tools::exec::ownership::scope_process_recorder(
+                AssertUnwindSafe(crate::exec::ownership::scope_process_recorder(
                     recorder,
                     scope_request_tool_execution_with_workspace_overlay(
                         context.deadline_at,
@@ -264,7 +264,7 @@ impl DefraSessionHook {
                             gents_loop::tool_call_lifecycle::ToolOutcome::tool_returned_error("native command panicked")
                         });
                         let outcome = hook.background_executions.finalize_pending_failure(lifecycle.tool_call_id(), &doc).unwrap_or(outcome);
-                        if crate::tools::exec::ownership::native_terminal_needs_confirmation(Some(&outcome))
+                        if crate::exec::ownership::native_terminal_needs_confirmation(Some(&outcome))
                             && !hook.background_executions.process_exit_confirmed(lifecycle.tool_call_id(), &doc).await {
                             hook.background_executions.set_stop_receipt(lifecycle.tool_call_id(), &doc, crate::tools::call::hook::RetainedStopReceipt::from_outcome(&outcome));
                             match hook.handoff_unverified_process(&mut lifecycle, &internal_id, &doc).await {
@@ -280,7 +280,7 @@ impl DefraSessionHook {
                             }
                             return;
                         }
-                        if crate::tools::exec::ownership::native_terminal_needs_confirmation(Some(&outcome)) {
+                        if crate::exec::ownership::native_terminal_needs_confirmation(Some(&outcome)) {
                             let receipt = crate::tools::call::hook::RetainedStopReceipt::from_outcome(&outcome);
                             hook.background_executions.retain_confirmed_worker(lifecycle, reservation, receipt);
                             if let Some(answer) = answer.take() { let _ = answer.send(ForegroundResult::Settled(outcome)); }
@@ -306,7 +306,7 @@ impl DefraSessionHook {
                                 gents_loop::tool_call_lifecycle::ToolOutcome::tool_returned_error("native command panicked")
                             });
                             let outcome = hook.background_executions.finalize_pending_failure(lifecycle.tool_call_id(), &doc).unwrap_or(outcome);
-                            let needs_confirmation = crate::tools::exec::ownership::native_terminal_needs_confirmation(Some(&outcome));
+                            let needs_confirmation = crate::exec::ownership::native_terminal_needs_confirmation(Some(&outcome));
                             if needs_confirmation && !hook.background_executions.process_exit_confirmed(lifecycle.tool_call_id(), &doc).await {
                                 hook.background_executions.set_stop_receipt(lifecycle.tool_call_id(), &doc, crate::tools::call::hook::RetainedStopReceipt::from_outcome(&outcome));
                                 match hook.handoff_unverified_process(&mut lifecycle, &internal_id, &doc).await {

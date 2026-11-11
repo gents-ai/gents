@@ -117,7 +117,7 @@ pub(crate) async fn run_linter_diagnostics(
     // live_output, which would interleave per-file linter noise into the
     // enclosing tool call's live output.
     let bounds = crate::tools::runtime_context::tool_execution_bounds(timeout);
-    let outcome = crate::tools::exec::run_managed_exec(crate::tools::exec::ManagedExecRequest {
+    let outcome = crate::exec::run_managed_exec(crate::exec::ManagedExecRequest {
         argv: full,
         cwd: workspace,
         deadline_at: bounds.deadline_at,
@@ -130,7 +130,7 @@ pub(crate) async fn run_linter_diagnostics(
     })
     .await;
     match outcome {
-        crate::tools::exec::ManagedExecOutcome::Exited { stdout, .. } => {
+        crate::exec::ManagedExecOutcome::Exited { stdout, .. } => {
             let text = String::from_utf8_lossy(&stdout);
             let trimmed = text.trim();
             if trimmed.is_empty() {

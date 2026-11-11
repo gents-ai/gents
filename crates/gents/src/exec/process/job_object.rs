@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use tokio::process::{Child, Command};
 
-use crate::tools::exec::output::KillReport;
+use crate::exec::output::KillReport;
 
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{

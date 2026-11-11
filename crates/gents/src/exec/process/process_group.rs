@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use tokio::process::Child;
 
-use crate::tools::exec::output::KillReport;
+use crate::exec::output::KillReport;
 
 const TERM_GRACE: Duration = Duration::from_millis(100);
 const KILL_GRACE: Duration = Duration::from_millis(250);
@@ -140,9 +140,9 @@ mod tests {
             .stderr(std::process::Stdio::null())
             .kill_on_drop(true);
         let mut child =
-            ManagedChild::new(crate::tools::exec::native_spawn::spawn_tokio(&mut command).unwrap());
+            ManagedChild::new(crate::exec::native_spawn::spawn_tokio(&mut command).unwrap());
         let identity =
-            crate::tools::exec::ownership::ProcessIdentity::of_live(child.pgid().unwrap()).unwrap();
+            crate::exec::ownership::ProcessIdentity::of_live(child.pgid().unwrap()).unwrap();
         let stdout = child.inner.stdout.take().unwrap();
         let mut line = String::new();
         tokio::time::timeout(
@@ -158,9 +158,9 @@ mod tests {
         assert!(report.term_signal_sent && report.kill_signal_sent && report.reaped);
         assert_eq!(
             identity
-                .await_signalled_group_exit(crate::tools::exec::ownership::KILL_GRACE)
+                .await_signalled_group_exit(crate::exec::ownership::KILL_GRACE)
                 .await,
-            crate::tools::exec::ownership::ProcessObservation::Exited
+            crate::exec::ownership::ProcessObservation::Exited
         );
     }
 }

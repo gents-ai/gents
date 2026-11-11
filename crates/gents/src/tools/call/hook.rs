@@ -140,8 +140,8 @@ struct BackgroundExecution {
     completion_tx: watch::Sender<bool>,
     worker_release_tx: watch::Sender<bool>,
     tool_call_doc_id: String,
-    process_evidence: Arc<crate::tools::exec::ownership::LiveProcessEvidenceOwner>,
-    process_identity: Arc<std::sync::Mutex<Option<crate::tools::exec::ownership::ProcessIdentity>>>,
+    process_evidence: Arc<crate::exec::ownership::LiveProcessEvidenceOwner>,
+    process_identity: Arc<std::sync::Mutex<Option<crate::exec::ownership::ProcessIdentity>>>,
     cancellation_reason: Arc<std::sync::Mutex<Option<String>>>,
     recovery_lifecycle: Arc<std::sync::Mutex<Option<ToolCallLifecycle>>>,
     retained: Arc<std::sync::atomic::AtomicBool>,
@@ -183,13 +183,13 @@ impl BackgroundLiveOutputState {
 pub struct BackgroundExecutionRegistry {
     inner: Arc<std::sync::Mutex<RapidHashMap<String, BackgroundExecution>>>,
     live_outputs: BackgroundLiveOutputState,
-    process_records: crate::tools::exec::ownership::ProcessRecordStore,
+    process_records: crate::exec::ownership::ProcessRecordStore,
     // Recovery revisits a retained record on every sweep, so a group that
     // outlives its leader warns once per record and then logs at debug.
     unproven_record_warnings: Arc<std::sync::Mutex<rapidhash::RapidHashSet<String>>>,
     #[cfg(windows)]
     failed_jobs: Arc<
-        std::sync::Mutex<RapidHashMap<String, (String, Arc<crate::tools::exec::FailedJobOwner>)>>,
+        std::sync::Mutex<RapidHashMap<String, (String, Arc<crate::exec::FailedJobOwner>)>>,
     >,
     task_hook_records: crate::tools::call::task_hooks::TaskHookRecordStore,
     service_admission: crate::store::service::RuntimeServiceAdmission,
@@ -214,7 +214,7 @@ impl BackgroundExecutionRegistry {
     /// which must belong to this runtime's exclusively locked store; a
     /// restarted runtime otherwise cannot prove it owns a surviving process.
     pub fn with_process_records(mut self, dir: PathBuf) -> Self {
-        self.process_records = crate::tools::exec::ownership::ProcessRecordStore::Durable(dir);
+        self.process_records = crate::exec::ownership::ProcessRecordStore::Durable(dir);
         self
     }
 
@@ -231,7 +231,7 @@ impl BackgroundExecutionRegistry {
         &self,
         tool_call_id: &str,
         tool_call_doc_id: &str,
-    ) -> crate::tools::exec::ownership::ProcessRecorder {
+    ) -> crate::exec::ownership::ProcessRecorder {
         let store = self.process_records.clone();
         #[cfg(windows)]
         let failed_jobs = self.failed_jobs.clone();
@@ -257,13 +257,13 @@ impl BackgroundExecutionRegistry {
             .as_ref()
             .map(|execution| execution.process_identity.clone());
         let failure_owner = execution.map(|execution| execution.requested_stop);
-        let recorder = crate::tools::exec::ownership::ProcessRecorder::new(move |identity| {
+        let recorder = crate::exec::ownership::ProcessRecorder::new(move |identity| {
             if let Some(owner) = &identity_owner {
                 *owner
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(identity.clone());
             }
-            let record = crate::tools::exec::ownership::ProcessRecord {
+            let record = crate::exec::ownership::ProcessRecord {
                 tool_call_id: tool_call_id.clone(),
                 tool_call_doc_id: tool_call_doc_id.clone(),
                 identity,
@@ -311,7 +311,7 @@ impl BackgroundExecutionRegistry {
         &self,
         tool_call_id: &str,
         tool_call_doc_id: &str,
-    ) -> Option<crate::tools::exec::ownership::ProcessRecord> {
+    ) -> Option<crate::exec::ownership::ProcessRecord> {
         [tool_call_doc_id, tool_call_id]
             .into_iter()
             .find_map(|key| {
@@ -331,7 +331,7 @@ impl BackgroundExecutionRegistry {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .clone()?;
-                Some(crate::tools::exec::ownership::ProcessRecord {
+                Some(crate::exec::ownership::ProcessRecord {
                     tool_call_id: tool_call_id.to_owned(),
                     tool_call_doc_id: tool_call_doc_id.to_owned(),
                     identity,
@@ -343,19 +343,19 @@ impl BackgroundExecutionRegistry {
         &self,
         tool_call_id: &str,
         tool_call_doc_id: &str,
-    ) -> crate::tools::exec::ownership::LiveProcessEvidence {
+    ) -> crate::exec::ownership::LiveProcessEvidence {
         self.lock_executions()
             .get(tool_call_doc_id)
             .filter(|execution| execution.tool_call_id == tool_call_id)
             .map(|execution| execution.process_evidence.get())
-            .unwrap_or(crate::tools::exec::ownership::LiveProcessEvidence::SpawnedUnverified)
+            .unwrap_or(crate::exec::ownership::LiveProcessEvidence::SpawnedUnverified)
     }
 
     fn live_process_evidence_owner(
         &self,
         tool_call_id: &str,
         tool_call_doc_id: &str,
-    ) -> Option<Arc<crate::tools::exec::ownership::LiveProcessEvidenceOwner>> {
+    ) -> Option<Arc<crate::exec::ownership::LiveProcessEvidenceOwner>> {
         self.lock_executions()
             .get(tool_call_doc_id)
             .filter(|execution| execution.tool_call_id == tool_call_id)
@@ -367,13 +367,13 @@ impl BackgroundExecutionRegistry {
             matches!(
                 record
                     .identity
-                    .await_signalled_group_exit(crate::tools::exec::ownership::KILL_GRACE)
+                    .await_signalled_group_exit(crate::exec::ownership::KILL_GRACE)
                     .await,
-                crate::tools::exec::ownership::ProcessObservation::Exited
+                crate::exec::ownership::ProcessObservation::Exited
             )
         } else {
             self.live_process_evidence(tool_call_id, tool_call_doc_id)
-                != crate::tools::exec::ownership::LiveProcessEvidence::SpawnedUnverified
+                != crate::exec::ownership::LiveProcessEvidence::SpawnedUnverified
         }
     }
 
@@ -504,7 +504,7 @@ impl BackgroundExecutionRegistry {
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .is_some()
         });
-        if retire && crate::tools::exec::ownership::retire_stop_receipt(terminal_committed) {
+        if retire && crate::exec::ownership::retire_stop_receipt(terminal_committed) {
             self.remove_now(doc);
         }
     }
@@ -523,13 +523,13 @@ impl BackgroundExecutionRegistry {
             .unwrap_or_else(|| "explicit_cancel".to_owned())
     }
 
-    pub(crate) fn process_record_list(&self) -> Vec<crate::tools::exec::ownership::ProcessRecord> {
+    pub(crate) fn process_record_list(&self) -> Vec<crate::exec::ownership::ProcessRecord> {
         self.process_records.list()
     }
 
     pub(crate) fn try_process_record_list(
         &self,
-    ) -> anyhow::Result<Vec<crate::tools::exec::ownership::ProcessRecord>> {
+    ) -> anyhow::Result<Vec<crate::exec::ownership::ProcessRecord>> {
         self.process_records.try_list()
     }
 
@@ -537,7 +537,7 @@ impl BackgroundExecutionRegistry {
         if let Some(record) = self.process_record(tool_call_id, tool_call_doc_id) {
             let observed = record
                 .identity
-                .await_leader_exit(crate::tools::exec::ownership::KILL_GRACE)
+                .await_leader_exit(crate::exec::ownership::KILL_GRACE)
                 .await;
             if observed.retain_process_record() {
                 self.note_retained_process_record(&record, observed);
@@ -560,8 +560,8 @@ impl BackgroundExecutionRegistry {
 
     fn note_retained_process_record(
         &self,
-        record: &crate::tools::exec::ownership::ProcessRecord,
-        observed: crate::tools::exec::ownership::ProcessObservation,
+        record: &crate::exec::ownership::ProcessRecord,
+        observed: crate::exec::ownership::ProcessObservation,
     ) {
         let first = self
             .unproven_record_warnings
@@ -607,7 +607,7 @@ impl BackgroundExecutionRegistry {
         &self,
         tool_call_id: &str,
         tool_call_doc_id: &str,
-    ) -> crate::tools::exec::ProcessStopOutcome {
+    ) -> crate::exec::ProcessStopOutcome {
         self.stop_execution_inner(tool_call_id, tool_call_doc_id, false)
             .await
     }
@@ -616,7 +616,7 @@ impl BackgroundExecutionRegistry {
         &self,
         tool_call_id: &str,
         tool_call_doc_id: &str,
-    ) -> crate::tools::exec::ProcessStopOutcome {
+    ) -> crate::exec::ProcessStopOutcome {
         self.stop_execution_inner(tool_call_id, tool_call_doc_id, true)
             .await
     }
@@ -651,9 +651,9 @@ impl BackgroundExecutionRegistry {
         tool_call_id: &str,
         tool_call_doc_id: &str,
         require_record: bool,
-    ) -> crate::tools::exec::ProcessStopOutcome {
-        use crate::tools::exec::ownership::ProcessObservation;
-        use crate::tools::exec::ProcessStopOutcome;
+    ) -> crate::exec::ProcessStopOutcome {
+        use crate::exec::ownership::ProcessObservation;
+        use crate::exec::ProcessStopOutcome;
         let record = self.process_record(tool_call_id, tool_call_doc_id);
         let execution = self
             .lock_executions()
@@ -710,24 +710,24 @@ impl BackgroundExecutionRegistry {
                 }
             }
             let evidence = if !released {
-                crate::tools::exec::ownership::LiveProcessEvidence::SpawnedUnverified
+                crate::exec::ownership::LiveProcessEvidence::SpawnedUnverified
             } else if let Some(record) = self.process_record(tool_call_id, tool_call_doc_id) {
                 match record
                     .identity
-                    .await_signalled_group_exit(crate::tools::exec::ownership::KILL_GRACE)
+                    .await_signalled_group_exit(crate::exec::ownership::KILL_GRACE)
                     .await
                 {
                     ProcessObservation::Exited => {
-                        crate::tools::exec::ownership::LiveProcessEvidence::Exited
+                        crate::exec::ownership::LiveProcessEvidence::Exited
                     }
-                    _ => crate::tools::exec::ownership::LiveProcessEvidence::SpawnedUnverified,
+                    _ => crate::exec::ownership::LiveProcessEvidence::SpawnedUnverified,
                 }
             } else if require_record {
                 execution.process_evidence.get()
             } else {
-                crate::tools::exec::ownership::LiveProcessEvidence::Exited
+                crate::exec::ownership::LiveProcessEvidence::Exited
             };
-            let outcome = crate::tools::exec::ownership::settle_live_cancel(released, evidence);
+            let outcome = crate::exec::ownership::settle_live_cancel(released, evidence);
             if outcome == ProcessStopOutcome::Stopped
                 && execution.retained.load(std::sync::atomic::Ordering::SeqCst)
             {
@@ -1065,7 +1065,7 @@ impl BackgroundExecutionRegistry {
                     .process_record(lifecycle.tool_call_id(), &doc)
                     .is_some_and(|record| {
                         record.identity.observe()
-                            == crate::tools::exec::ownership::ProcessObservation::Exited
+                            == crate::exec::ownership::ProcessObservation::Exited
                     });
                 #[cfg(windows)]
                 let observed_exit = observed_exit
@@ -1276,7 +1276,7 @@ pub struct DefraSessionHook {
     state: Arc<Mutex<SessionState>>,
     in_flight_lifecycles: Arc<Mutex<RapidHashMap<String, ToolCallLifecycle>>>,
     foreground_process_evidence: Arc<
-        Mutex<RapidHashMap<String, Arc<crate::tools::exec::ownership::LiveProcessEvidenceOwner>>>,
+        Mutex<RapidHashMap<String, Arc<crate::exec::ownership::LiveProcessEvidenceOwner>>>,
     >,
     accepted_tool_calls:
         Arc<Mutex<RapidHashMap<String, crate::request::streaming::AcceptedToolCall>>>,
@@ -1855,12 +1855,12 @@ impl DefraSessionHook {
             .stop_native_process(lifecycle.tool_call_id(), doc)
             .await
         {
-            crate::tools::exec::ProcessStopOutcome::Stopped
-            | crate::tools::exec::ProcessStopOutcome::AlreadyExited => true,
-            crate::tools::exec::ProcessStopOutcome::StillRunning => false,
-            crate::tools::exec::ProcessStopOutcome::NotOwned => !matches!(
+            crate::exec::ProcessStopOutcome::Stopped
+            | crate::exec::ProcessStopOutcome::AlreadyExited => true,
+            crate::exec::ProcessStopOutcome::StillRunning => false,
+            crate::exec::ProcessStopOutcome::NotOwned => !matches!(
                 evidence.get(),
-                crate::tools::exec::ownership::LiveProcessEvidence::SpawnedUnverified
+                crate::exec::ownership::LiveProcessEvidence::SpawnedUnverified
             ),
         }
     }

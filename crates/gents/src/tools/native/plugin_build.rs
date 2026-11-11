@@ -9,7 +9,7 @@ use super::native_runner::self_runner_binary;
 use super::shared::{
     prepare_managed_command, CommandConstraints, CommandExecutionMode, CommandNetworkMode,
 };
-use crate::tools::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
+use crate::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
 use crate::tools::runtime_context::tool_execution_bounds;
 
 /// Path to a binary that takes [`PLUGIN_BUILD_COMMAND`]; unset means this one.

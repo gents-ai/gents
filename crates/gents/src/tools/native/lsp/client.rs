@@ -9,7 +9,7 @@ use tokio::process::{ChildStdin, ChildStdout};
 use tokio::sync::{oneshot, Mutex};
 
 use crate::store::drop_cleanup::DropCleanup;
-use crate::tools::exec::ManagedProcess;
+use crate::exec::ManagedProcess;
 
 /// Language servers are subprocesses outside the runtime's trust boundary;
 /// bound each frame before allocating or retaining its payload.
