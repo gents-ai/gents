@@ -224,8 +224,11 @@ def defaultAfter (c : AgentCatalog) (r : AgentRequest) : Option String :=
   if r.makeDefault then some r.target else c.defaultId
 
 /-- Which documents the request writes, and so which categories it needs: a
-new Agent and the Node's default need the catalog; an edit of an existing
-Agent's fields needs the agent category on that Agent. -/
+new Agent and the default need the catalog; an edit of an existing Agent's
+fields needs the agent category on that Agent. Choosing the default writes the
+Node's `DefaultAgentSelection` document (`SelfConfig.initDefaultSelection`),
+whose update is exactly the catalog
+(`SelfConfig.default_selection_write_is_the_catalog`). -/
 def AgentRequest.needsCatalog (r : AgentRequest) : Bool :=
   r.makeDefault || match r.operation.normalize with
     | .create _ => true

@@ -57,7 +57,15 @@ inherits `manage_agents` through a parent, so it confers none of
 `administrator`'s Node read, update or delete, nor the Agent, configuration and
 session permissions those confer through `parent`
 (`SelfConfig.agent_manager_is_catalog_only`). An administrator or the Node owner
-manages it. Decision (maintainer, 2026-11-11, #3656). -/
+manages it. Decision (maintainer, 2026-11-11, #3656).
+
+`default_agent_selections` holds a Node's default Agent selection, one document
+per Node (`SelfConfig.initDefaultSelection`). Its update is its parent Node's
+`manage_agents`, so choosing the default is authorized by document ACP itself;
+its read is the Node's read or `manage_agents`, so a catalog holder sees the
+selection it changes; its delete is the Node's delete. Decision
+(maintainer, 2026-11-11, #3656): the selection leaves the Node document, so the
+catalog never needs Node update. -/
 def policy : List ResourceDefinition :=
   [ { name := "nodes"
       relations := [⟨"administrator", ["actor"], ["administrator", "runtime_reader", "agent_manager"]⟩,
@@ -65,6 +73,11 @@ def policy : List ResourceDefinition :=
       permissions := [permission "read" ["administrator", "runtime_reader"] [],
         permission "update" ["administrator"] [], permission "delete" ["administrator"] [],
         permission "manage_agents" ["administrator", "agent_manager"] []] }
+  , { name := "default_agent_selections"
+      relations := [⟨"parent", ["nodes"], []⟩]
+      permissions := [permission "read" [] [("parent", "read"), ("parent", "manage_agents")],
+        permission "update" [] [("parent", "manage_agents")],
+        permission "delete" [] [("parent", "delete")]] }
   , { name := "operations"
       relations := [⟨"parent", ["nodes"], []⟩]
       permissions := [permission "read" [] [("parent", "read")],

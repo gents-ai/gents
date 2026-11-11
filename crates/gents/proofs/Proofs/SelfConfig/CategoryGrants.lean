@@ -63,8 +63,11 @@ the rule is evaluated by ACP.
   catalog carries none of `administrator`'s Node update and delete, and none of
   the Agent, configuration and session permissions `parent` derives from them
   (`agent_manager_is_catalog_only`). The Engineer receives it at node
-  initialisation (`engineerInitRelations`). The catalog therefore does not
-  reach another Agent's documents: editing one is the agent category on it.
+  initialisation (`engineerInitRelations`). Choosing the default writes the
+  Node's `DefaultAgentSelection` document, whose update is its parent Node's
+  `manage_agents` (`default_selection_write_is_the_catalog`), so document ACP
+  authorizes it directly. The catalog does not reach another Agent's
+  documents: editing one is the agent category on it.
 * `agent`, own: `agents update` through `config_writer` on the actor's own
   Agent document, and `configuration update` through the `writer` userset
   `agents#config_writer` on its selected Context. Both are issued by
@@ -186,18 +189,55 @@ theorem creation_grants_no_category (child childDid node : String) :
 
 /-! ## The catalog relation -/
 
-/-- `agent_manager` is named only by `nodes manage_agents`, `manage_agents` is
-inherited by no permission, and no relation type reaches `nodes->agent_manager`:
-the relation cannot flow into any other permission. -/
+/-- `agent_manager` is named only by `nodes manage_agents`; `manage_agents` is
+inherited only by `default_agent_selections` read and update; no resource names
+`default_agent_selections` as a parent or userset type; and no relation type
+reaches `nodes->agent_manager`. The relation flows into the default selection
+write and nothing else. -/
 theorem agent_manager_is_catalog_only :
     (policy.flatMap fun r => r.permissions.filterMap fun p =>
         if p.relations.contains "agent_manager" then some (r.name, p.name) else none) =
       [("nodes", "manage_agents")] ∧
-    policy.all (fun r => r.permissions.all (fun p => p.parents.all (·.2 != "manage_agents")))
-      = true ∧
+    (policy.flatMap fun r => r.permissions.filterMap fun p =>
+        if p.parents.any (·.2 == "manage_agents") then some (r.name, p.name) else none) =
+      [("default_agent_selections", "read"), ("default_agent_selections", "update")] ∧
+    policy.all (fun r => r.relations.all (fun rel =>
+      rel.types.all (fun t => !(t == "default_agent_selections" ||
+        t.startsWith "default_agent_selections->")))) = true ∧
     policy.all (fun r => r.relations.all (fun rel => !rel.types.contains "nodes->agent_manager"))
       = true := by
   native_decide
+
+/-- The Node's default Agent selection document. Its ID is the Node's DID: it
+is keyed by `node_did` (`ConfigDocuments.Collection.defaultAgentSelection`), so
+a Node has at most one.
+
+Premise: node initialisation creates it, as the init User (the Node's owner,
+whose key signs user configuration), in the transaction that publishes the
+Node, with its `parent` relation to the Node; nothing else creates or deletes
+it while the Node exists. A Node therefore has exactly one, from init on
+(`initialised_node_has_one_default_selection`).
+
+Rust and SDL work this implies: a new SDL type `DefaultAgentSelection`
+(`node_did`, `default_agent_did`, `updated_at`) bound to the
+`default_agent_selections` policy resource; `default_agent_did` removed from the
+Node SDL and `Node` struct; `gents init` creating the document as the init
+User; every reader of `Node.default_agent_did` (runtime default resolution,
+agent catalog and list, desktop, CLI, desired-state apply and publication
+validation, node readiness) repointed to it; a migration moving each existing
+Node's value into a new selection document; and the policy ID change
+(`AGENT_OWNERSHIP_POLICY_ID`, the generated
+`agent_ownership_policy.yaml`) with its registration upgrade. -/
+def initDefaultSelection (s : State) (node initUser : String) : State :=
+  { s with
+    objects := ⟨"default_agent_selections", node, initUser⟩ :: s.objects
+    relations := ⟨"default_agent_selections", node, "parent", .object "nodes" node⟩ ::
+      s.relations }
+
+/-- The permission an actor needs to choose the default: update of the Node's
+selection document. -/
+def defaultSelectionWrite (s : State) (actor node : String) : Bool :=
+  allowed 8 s actor "default_agent_selections" node "update"
 
 /-- The grants node initialisation gives the Engineer: the catalog relation on
 the Node, and `config_writer` on its own Agent document.
@@ -217,17 +257,44 @@ def engineerInitRelations (engineer node : String) : List Relation :=
    ⟨"agents", engineer, "config_writer", .actor engineer⟩]
 
 /-- A Node with one Agent `a`, a configuration document and a session under it;
-`admin` is its administrator and `manager` holds only `agent_manager`. -/
+`admin` is its administrator, `manager` holds only `agent_manager`, `runtime`
+holds `runtime_reader`. Init has created the default selection. -/
 def catalogRelationFixture : State :=
   let base : State :=
     { objects := [⟨"nodes", "node", "user"⟩, ⟨"configuration", "cfg", "user"⟩,
         ⟨"sessions", "s", "a"⟩]
     , relations := [⟨"nodes", "node", "administrator", .actor "admin"⟩,
         ⟨"nodes", "node", "agent_manager", .actor "manager"⟩,
+        ⟨"nodes", "node", "runtime_reader", .actor "runtime"⟩,
         ⟨"configuration", "cfg", "parent", .object "nodes" "node"⟩,
         ⟨"sessions", "s", "parent", .object "agents" "a"⟩]
     , enrolled := [] }
-  commitAgentCreation base "a" "user" "a" "node" true
+  initDefaultSelection (commitAgentCreation base "a" "user" "a" "node" true) "node" "user"
+
+theorem initialised_node_has_one_default_selection :
+    (catalogRelationFixture.objects.filter fun o =>
+      o.resource == "default_agent_selections" && o.id == "node").length = 1 := by
+  native_decide
+
+/-- Choosing the default is authorized by the policy itself: whoever holds the
+catalog (`nodes manage_agents`: owner, administrator, `agent_manager`) may
+update the selection, and nobody else may; whoever reads the Node or holds the
+catalog reads it.
+
+Premise: the lockout rule (`SelfConfig.lockoutChecks`) reads the current
+default authoritatively, as the runtime reads the Node, not through the acting
+actor's read grants; an actor that may update an Agent but cannot read the
+selection must still be refused disabling the default. -/
+theorem default_selection_write_is_the_catalog :
+    ["user", "admin", "manager", "runtime", "a", "stranger"].map (fun actor =>
+      (allowed 8 catalogRelationFixture actor "nodes" "node" "manage_agents",
+       defaultSelectionWrite catalogRelationFixture actor "node",
+       allowed 8 catalogRelationFixture actor "default_agent_selections" "node" "read",
+       allowed 8 catalogRelationFixture actor "nodes" "node" "read")) =
+      [(true, true, true, true), (true, true, true, true), (true, true, true, false),
+       (false, false, true, true), (false, false, false, false),
+       (false, false, false, false)] := by
+  native_decide
 
 /-- The permissions `administrator` holds over the Node and everything under it. -/
 def administratorPermissions : List (String × String × String) :=
