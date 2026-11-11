@@ -54,23 +54,28 @@ async fn relinquish_execution_lease(
     generation: &str,
     now: DateTime<Utc>,
 ) -> Result<()> {
-    let doc_id = escape_graphql_string(request_doc_id);
-    let generation = escape_graphql_string(generation);
-    let expired = escape_graphql_string(&(now - chrono::Duration::milliseconds(1)).to_rfc3339());
-    let now = escape_graphql_string(&now.to_rfc3339());
-    let active = RequestLifecycleState::graphql_list([
-        RequestLifecycleState::Claimed,
-        RequestLifecycleState::Processing,
-    ]);
-    access.write(
-        "lifecycle.relinquish_execution_lease",
-        &format!(r#"mutation {{ update_AgentRequest(
-            docID: "{doc_id}", filter: {{ _docID: {{ _eq: "{doc_id}" }}, execution_generation: {{ _eq: "{generation}" }},
-                lifecycle_state: {{ _in: {active} }}, execution_lease_expires_at: {{ _gt: "{now}" }} }},
-            input: {{ execution_lease_expires_at: "{expired}" }}
-        ) {{ _docID }} }}"#),
+    use gents_protocol::document_query::{fields::agent_request as request, Filter, Input, Update};
+    let expired = (now - chrono::Duration::milliseconds(1)).to_rfc3339();
+    let now = now.to_rfc3339();
+    let rendered = Update::doc(
+        request_doc_id,
+        Input::new().set(request::EXECUTION_LEASE_EXPIRES_AT, expired),
     )
-    .await?;
+    .filter(Filter::eq(request::DOC_ID, request_doc_id))
+    .filter(Filter::eq(request::EXECUTION_GENERATION, generation))
+    .filter(Filter::any_of(
+        request::LIFECYCLE_STATE,
+        [
+            RequestLifecycleState::Claimed,
+            RequestLifecycleState::Processing,
+        ]
+        .map(RequestLifecycleState::as_str),
+    ))
+    .filter(Filter::gt(request::EXECUTION_LEASE_EXPIRES_AT, now))
+    .render();
+    access
+        .write_rendered("lifecycle.relinquish_execution_lease", &rendered)
+        .await?;
     Ok(())
 }
 
@@ -533,11 +538,28 @@ async fn terminalize_execution_in_txn(
         crate::store::graphql::fence_arrivals(txn, "AgentRequest").await?;
     }
     let doc_id = escape_graphql_string(request_doc_id);
-    let result = txn.execute_local_response(&format!(r#"{{ AgentRequest(
-                filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
-                _docID request_id purpose node_did requester_did session_id lifecycle_state
-                execution_generation execution_lease_expires_at interrupt_requested_at terminal_output
-            }} }}"#)).await?;
+    let result = {
+        use gents_protocol::document_query::{
+            fields::agent_request as request, Filter, Query, Selection,
+        };
+        let rendered = Query::select(
+            Selection::doc_id()
+                .field(request::REQUEST_ID)
+                .field(request::PURPOSE)
+                .field(request::NODE_DID)
+                .field(request::REQUESTER_DID)
+                .field(request::SESSION_ID)
+                .field(request::LIFECYCLE_STATE)
+                .field(request::EXECUTION_GENERATION)
+                .field(request::EXECUTION_LEASE_EXPIRES_AT)
+                .field(request::INTERRUPT_REQUESTED_AT)
+                .field(request::TERMINAL_OUTPUT),
+        )
+        .filter(Filter::eq(request::DOC_ID, request_doc_id))
+        .limit(1)
+        .render();
+        txn.run_local_response(&rendered).await?
+    };
     let row = crate::store::graphql::first_row::<AgentRequestRow>(&result, "AgentRequest")?
         .context("execution request disappeared")?;
     let purpose = row.purpose.context("execution request purpose missing")?;

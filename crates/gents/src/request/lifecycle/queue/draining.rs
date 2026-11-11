@@ -54,24 +54,24 @@ async fn drain_pending_session_requests_where_in_txn(
     should_drain: fn(&AgentRequestRow) -> bool,
 ) -> Result<Vec<String>> {
     let scope = gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{
-                    {scope},
-                    lifecycle_state: {{ _eq: "{pending}" }}
-                }}
-            ) {{
-                _docID
-                request_id
-                execution_origin
-                input
-            }}
-        }}"#,
-        pending = RequestLifecycleState::Pending.as_str()
-    );
-
-    let response = txn.execute(&query).await?;
+    let response = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, session_scope, Filter, Query, Selection,
+        };
+        let rendered = Query::select(
+            Selection::doc_id()
+                .field(fields::REQUEST_ID)
+                .field(fields::EXECUTION_ORIGIN)
+                .field(fields::INPUT),
+        )
+        .filter(session_scope(node_did, session_id, requester_did))
+        .filter(Filter::eq(
+            fields::LIFECYCLE_STATE,
+            RequestLifecycleState::Pending.as_str(),
+        ))
+        .render();
+        txn.run(&rendered).await?
+    };
     let pending = &response["data"]["AgentRequest"];
     anyhow::ensure!(
         pending.is_array(),

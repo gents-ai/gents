@@ -220,27 +220,26 @@ pub(crate) async fn load_prompt_compaction_state_with_access(
     requester_did: Option<&str>,
     through_sequence: Option<u32>,
 ) -> Result<PromptCompactionState> {
-    let scope = gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
+    use gents_protocol::document_query::{
+        fields::compaction_entry as fields, session_scope, Direction, Query, Selection,
+    };
     // A background request is claimed against an immutable transcript high
     // water mark. A compaction produced later may only shape that request when
     // its cumulative canonical cursor is itself inside the claimed snapshot.
-    let query = format!(
-        r#"{{
-            CompactionEntry(
-                filter: {{ {scope} }},
-                order: {{ sequence: ASC }}
-            ) {{
-                compaction_key
-                sequence
-                summary
-                messages_compacted
-                compacted_through_sequence
-            }}
-        }}"#
-    );
+    let query = Query::select(
+        Selection::new()
+            .field(fields::COMPACTION_KEY)
+            .field(fields::SEQUENCE)
+            .field(fields::SUMMARY)
+            .field(fields::MESSAGES_COMPACTED)
+            .field(fields::COMPACTED_THROUGH_SEQUENCE),
+    )
+    .filter(session_scope(node_did, session_id, requester_did))
+    .order_by(fields::SEQUENCE, Direction::Asc)
+    .render();
     let resp = access
         .transact_readonly("session.load_prompt_compaction_state", |txn| {
-            Box::pin(txn.execute(&query))
+            Box::pin(txn.run(&query))
         })
         .await?;
     let rows: Vec<PromptCompactionRow> = match resp.pointer("/data/CompactionEntry") {
@@ -286,31 +285,30 @@ pub async fn load_compaction_entries(
     node_did: &str,
     requester_did: Option<&str>,
 ) -> Result<Vec<CompactionEntry>> {
-    let scope = gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
-    let query = format!(
-        r#"{{
-            CompactionEntry(
-                filter: {{ {scope} }},
-                order: {{ sequence: ASC }}
-            ) {{
-                compaction_key
-                session_id
-                node_did
-                requester_did
-                sequence
-                summary
-                files_read
-                files_modified
-                messages_compacted
-                compacted_through_sequence
-                original_tokens
-                compacted_tokens
-                created_at
-            }}
-        }}"#
-    );
+    use gents_protocol::document_query::{
+        fields::compaction_entry as fields, session_scope, Direction, Query, Selection,
+    };
+    let query = Query::select(
+        Selection::new()
+            .field(fields::COMPACTION_KEY)
+            .field(fields::SESSION_ID)
+            .field(fields::NODE_DID)
+            .field(fields::REQUESTER_DID)
+            .field(fields::SEQUENCE)
+            .field(fields::SUMMARY)
+            .field(fields::FILES_READ)
+            .field(fields::FILES_MODIFIED)
+            .field(fields::MESSAGES_COMPACTED)
+            .field(fields::COMPACTED_THROUGH_SEQUENCE)
+            .field(fields::ORIGINAL_TOKENS)
+            .field(fields::COMPACTED_TOKENS)
+            .field(fields::CREATED_AT),
+    )
+    .filter(session_scope(node_did, session_id, requester_did))
+    .order_by(fields::SEQUENCE, Direction::Asc)
+    .render();
 
-    let resp = access.execute(&query).await?;
+    let resp = access.read(&query).await?;
 
     let rows: Vec<CompactionGenerationRow> = match resp
         .get("data")
@@ -419,19 +417,7 @@ pub(super) async fn save_compaction_entry_with_access(
 ) -> Result<CompactionEntry> {
     let compacted_through_sequence = Some(compacted_through_sequence);
     let summary = summary.trim().to_string();
-    let escaped_session_id = escape_graphql_string(session_id);
-    let scope = gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
-    let escaped_node_did = escape_graphql_string(node_did);
-    let escaped_request_id = escape_graphql_string(request_id);
-    let escaped_request_doc_id = escape_graphql_string(request_doc_id);
-    let requester_did_field = super::requester_did_create_field(requester_did);
     let summary = &summary;
-    let scope = &scope;
-    let escaped_session_id = &escaped_session_id;
-    let escaped_node_did = &escaped_node_did;
-    let escaped_request_id = &escaped_request_id;
-    let escaped_request_doc_id = &escaped_request_doc_id;
-    let requester_did_field = &requester_did_field;
     access
         .transact_idempotent(
             crate::store::config_client::IdempotentTransactionRetry::Standard,
@@ -450,20 +436,31 @@ pub(super) async fn save_compaction_entry_with_access(
                         selected_agent == agent_did,
                         "compaction agent differs from session agent"
                     );
-                    let query = format!(
-                        r#"{{
-                    CompactionEntry(
-                        filter: {{ {scope} }},
-                        order: {{ sequence: ASC }}
-                    ) {{
-                        compaction_key sequence summary messages_compacted
-                        compacted_through_sequence files_read files_modified
-                        node_did requester_did request_id request_doc_id
-                        original_tokens compacted_tokens created_at
-                    }}
-                }}"#
-                    );
-                    let value = txn.execute(&query).await?;
+                    use gents_protocol::document_query::{
+                        fields::compaction_entry as fields, session_scope, Direction, Query,
+                        Selection,
+                    };
+                    let query = Query::select(
+                        Selection::new()
+                            .field(fields::COMPACTION_KEY)
+                            .field(fields::SEQUENCE)
+                            .field(fields::SUMMARY)
+                            .field(fields::MESSAGES_COMPACTED)
+                            .field(fields::COMPACTED_THROUGH_SEQUENCE)
+                            .field(fields::FILES_READ)
+                            .field(fields::FILES_MODIFIED)
+                            .field(fields::NODE_DID)
+                            .field(fields::REQUESTER_DID)
+                            .field(fields::REQUEST_ID)
+                            .field(fields::REQUEST_DOC_ID)
+                            .field(fields::ORIGINAL_TOKENS)
+                            .field(fields::COMPACTED_TOKENS)
+                            .field(fields::CREATED_AT),
+                    )
+                    .filter(session_scope(node_did, session_id, requester_did))
+                    .order_by(fields::SEQUENCE, Direction::Asc)
+                    .render();
+                    let value = txn.run(&query).await?;
                     let rows: Vec<CompactionGenerationRow> = serde_json::from_value(
                         value
                             .get("data")
@@ -528,38 +525,34 @@ pub(super) async fn save_compaction_entry_with_access(
                         compaction_key(node_did, session_id, requester_did, sequence);
                     let created_at =
                         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-                    let cursor_field = compacted_through_sequence
-                        .map(|cursor| cursor.to_string())
-                        .unwrap_or_else(|| "null".to_string());
-                    let mutation = format!(
-                        r#"mutation {{
-                    create_CompactionEntry(input: {{
-                        compaction_key: "{compaction_key}"
-                        session_id: "{escaped_session_id}"
-                        node_did: "{escaped_node_did}"
-                        {requester_did_field}
-                        request_id: "{escaped_request_id}"
-                        request_doc_id: "{escaped_request_doc_id}"
-                        sequence: {sequence}
-                        summary: "{summary}"
-                        files_read: "{files_read_json}"
-                        files_modified: "{files_modified_json}"
-                        messages_compacted: {messages_compacted}
-                        compacted_through_sequence: {cursor_field}
-                        original_tokens: {original_tokens}
-                        compacted_tokens: {compacted_tokens}
-                        created_at: "{created_at}"
-                    }}) {{ _docID }}
-                }}"#,
-                        compaction_key = escape_graphql_string(&compaction_key),
-                        summary = escape_graphql_string(summary),
-                        files_read_json =
-                            escape_graphql_string(&encode_file_path_delta(&file_read_delta)?),
-                        files_modified_json =
-                            escape_graphql_string(&encode_file_path_delta(&file_modified_delta)?),
-                        created_at = escape_graphql_string(&created_at),
-                    );
-                    let response = txn.execute(&mutation).await?;
+                    use gents_protocol::document_query::{Create, Input};
+                    let input = Input::new()
+                        .set(fields::COMPACTION_KEY, &compaction_key)
+                        .set(fields::SESSION_ID, session_id)
+                        .set(fields::NODE_DID, node_did)
+                        .set(fields::REQUEST_ID, request_id)
+                        .set(fields::REQUEST_DOC_ID, request_doc_id)
+                        .set(fields::SEQUENCE, sequence)
+                        .set(fields::SUMMARY, summary)
+                        .set(fields::FILES_READ, encode_file_path_delta(&file_read_delta)?)
+                        .set(
+                            fields::FILES_MODIFIED,
+                            encode_file_path_delta(&file_modified_delta)?,
+                        )
+                        .set(fields::MESSAGES_COMPACTED, messages_compacted)
+                        .set_optional(
+                            fields::COMPACTED_THROUGH_SEQUENCE,
+                            compacted_through_sequence,
+                        )
+                        .set(fields::ORIGINAL_TOKENS, original_tokens)
+                        .set(fields::COMPACTED_TOKENS, compacted_tokens)
+                        .set(fields::CREATED_AT, &created_at);
+                    let input = match requester_did.map(str::trim).filter(|did| !did.is_empty()) {
+                        Some(did) => input.set(fields::REQUESTER_DID, did),
+                        None => input,
+                    };
+                    let mutation = Create::new(input).render();
+                    let response = txn.run(&mutation).await?;
                     let doc_id =
                         crate::store::graphql::created_doc_id(&response, "CompactionEntry")?;
                     txn.add_resource_relationship(

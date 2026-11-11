@@ -55,12 +55,20 @@ pub(super) async fn claim_in_txn(
             update_required_by(txn, &doc_id, &required_by).await?;
         }
     }
-    let response = txn
-        .execute(&format!(
-            r#"{{ {RECORD}(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ _docID coordinate required_by explicit }} }}"#,
-            escape_graphql_string(owner)
-        ))
-        .await?;
+    let response = {
+        use gents_protocol::document_query::{
+            fields::pack_installation as fields, Filter, Query, Selection,
+        };
+        let query = Query::select(
+            Selection::doc_id()
+                .field(fields::COORDINATE)
+                .field(fields::REQUIRED_BY)
+                .field(fields::EXPLICIT),
+        )
+        .filter(Filter::eq(fields::NODE_DID, owner))
+        .render();
+        txn.run(&query).await?
+    };
     for row in response["data"][RECORD]
         .as_array()
         .context("reading the pack installation records")?
@@ -110,12 +118,20 @@ pub(super) async fn release_in_txn(
     dependent: &str,
     policy: DriftPolicy,
 ) -> Result<Vec<RemoveReport>> {
-    let response = txn
-        .execute(&format!(
-            r#"{{ {RECORD}(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ _docID coordinate required_by explicit }} }}"#,
-            escape_graphql_string(owner)
-        ))
-        .await?;
+    let response = {
+        use gents_protocol::document_query::{
+            fields::pack_installation as fields, Filter, Query, Selection,
+        };
+        let query = Query::select(
+            Selection::doc_id()
+                .field(fields::COORDINATE)
+                .field(fields::REQUIRED_BY)
+                .field(fields::EXPLICIT),
+        )
+        .filter(Filter::eq(fields::NODE_DID, owner))
+        .render();
+        txn.run(&query).await?
+    };
     let rows = response["data"][RECORD]
         .as_array()
         .context("reading the pack installation records")?

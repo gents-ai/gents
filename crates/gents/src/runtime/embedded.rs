@@ -9,7 +9,6 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::defra_node::{Node as EmbeddedNode, P2PConfig, QueryResponse};
-use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::{ensure_runtime_schemas, DocumentRuntimeOptions, Gents, KeyIdentity, NodeIdentity};
 
 // A full conformance run starts many embedded DefraDB nodes in parallel. On a
@@ -638,29 +637,31 @@ async fn fetch_runtime_snapshot(
     node: &EmbeddedNode,
     node_did: &str,
 ) -> Result<Option<RuntimeSnapshot>> {
-    let escaped_did = escape_graphql_string(node_did);
-    let query = format!(
-        r#"{{
-            NodeReadiness(
-                filter: {{ node_did: {{ _eq: "{escaped_did}" }} }},
-                limit: 1
-            ) {{
-                node_did
-                snapshot_json
-                updated_at
-            }}
-            NodeRuntime(
-                filter: {{ node_did: {{ _eq: "{escaped_did}" }} }},
-                limit: 1
-            ) {{
-                node_did
-                reconcile_phase
-                last_reconcile_result
-                last_reconcile_error
-            }}
-        }}"#
-    );
-    let response = graphql_with_transaction_retry(node, &query, "runtime snapshot").await?;
+    let query = {
+        use gents_protocol::document_query::{
+            fields::{node_readiness, node_runtime},
+            Filter, Query, QuerySet, Selection,
+        };
+        let readiness = Query::select(
+            Selection::new()
+                .field(node_readiness::NODE_DID)
+                .field(node_readiness::SNAPSHOT_JSON)
+                .field(node_readiness::UPDATED_AT),
+        )
+        .filter(Filter::eq(node_readiness::NODE_DID, node_did))
+        .limit(1);
+        let runtime = Query::select(
+            Selection::new()
+                .field(node_runtime::NODE_DID)
+                .field(node_runtime::RECONCILE_PHASE)
+                .field(node_runtime::LAST_RECONCILE_RESULT)
+                .field(node_runtime::LAST_RECONCILE_ERROR),
+        )
+        .filter(Filter::eq(node_runtime::NODE_DID, node_did))
+        .limit(1);
+        QuerySet::new().plain(&readiness).plain(&runtime).render()
+    };
+    let response = crate::store::graphql::read_rendered(node, &query, "runtime snapshot").await?;
     let Some(diagnostic) =
         optional_row::<gents_protocol::row::NodeRuntimeRow>(&response, "NodeRuntime")?
     else {
@@ -690,18 +691,15 @@ pub async fn fetch_node_readiness_snapshot(
     node: &EmbeddedNode,
     node_did: &str,
 ) -> Result<Option<gents_protocol::node_readiness::NodeReadinessSnapshot>> {
-    let escaped_did = escape_graphql_string(node_did);
-    let query = format!(
-        r#"{{
-            NodeReadiness(
-                filter: {{ node_did: {{ _eq: "{escaped_did}" }} }},
-                limit: 1
-            ) {{
-                snapshot_json
-            }}
-        }}"#
-    );
-    let response = graphql_with_transaction_retry(node, &query, "agent readiness snapshot").await?;
+    let query = {
+        use gents_protocol::document_query::{fields::node_readiness, Filter, Query, Selection};
+        Query::select(Selection::new().field(node_readiness::SNAPSHOT_JSON))
+            .filter(Filter::eq(node_readiness::NODE_DID, node_did))
+            .limit(1)
+            .render()
+    };
+    let response =
+        crate::store::graphql::read_rendered(node, &query, "agent readiness snapshot").await?;
     Ok(response
         .data
         .as_ref()

@@ -18,7 +18,6 @@ use super::admit::{
 use super::driver::{read_step_row_in_txn, settle_plugin_job_in_txn, Settlement};
 use super::input::chain_of;
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::store::graphql::{escape_graphql_string, graphql_string_list_literal};
 use crate::tools::background::job::keys::job_spawn_key;
 use crate::tools::background::status::ProcessControlScope;
 use crate::tools::call::lifecycle::{PluginJobTerminal, ToolCallLifecycle, ToolRowKind};
@@ -192,11 +191,21 @@ async fn caused_requests(
     if keys.is_empty() {
         return Ok(RapidHashMap::new());
     }
+    use gents_protocol::document_query::{
+        fields::agent_request as fields, Filter, Query, Selection,
+    };
     let response = txn
-        .execute(&format!(
-            "{{ AgentRequest(filter: {{ retry_key: {{ _in: {} }} }}) {{ _docID retry_key node_did requester_did lifecycle_state }} }}",
-            graphql_string_list_literal(keys)
-        ))
+        .run(
+            &Query::select(
+                Selection::doc_id()
+                    .field(fields::RETRY_KEY)
+                    .field(fields::NODE_DID)
+                    .field(fields::REQUESTER_DID)
+                    .field(fields::LIFECYCLE_STATE),
+            )
+            .filter(Filter::any_of(fields::RETRY_KEY, keys))
+            .render(),
+        )
         .await?;
     let rows: Vec<CausedRequest> = serde_json::from_value(
         response
@@ -554,11 +563,20 @@ pub(crate) async fn resume_target_in_txn(
     plugin: &str,
     row_doc_id: &str,
 ) -> Result<(super::admit::ResumeTarget, Option<String>)> {
+    use gents_protocol::document_query::{
+        fields::agent_tool_call as fields, Filter, Query, Selection,
+    };
     let response = txn
-        .execute(&format!(
-            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ session_id node_did requester_did }} }}"#,
-            escape_graphql_string(row_doc_id)
-        ))
+        .run(
+            &Query::select(
+                Selection::new()
+                    .field(fields::SESSION_ID)
+                    .field(fields::NODE_DID)
+                    .field(fields::REQUESTER_DID),
+            )
+            .filter(Filter::eq(fields::DOC_ID, row_doc_id))
+            .render(),
+        )
         .await?;
     let Some(owner) = response.pointer("/data/AgentToolCall/0") else {
         return Ok(((row_doc_id.to_owned(), false, None), None));
@@ -576,10 +594,15 @@ pub(crate) async fn resume_target_in_txn(
         .as_ref()
         .is_some_and(|pin| pin.plugin_ref == plugin);
     let session = txn
-        .execute(&format!(
-            r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID tool_call_id job_pin }} }}"#,
-            escape_graphql_string(&owner.session_id)
-        ))
+        .run(
+            &Query::select(
+                Selection::doc_id()
+                    .field(fields::TOOL_CALL_ID)
+                    .field(fields::JOB_PIN),
+            )
+            .filter(Filter::eq(fields::SESSION_ID, &owner.session_id))
+            .render(),
+        )
         .await?;
     let rows: Vec<SessionPin> = serde_json::from_value(
         session

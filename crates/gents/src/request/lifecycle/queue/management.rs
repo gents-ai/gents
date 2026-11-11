@@ -740,10 +740,19 @@ pub(crate) async fn persisted_replacements_in_txn(
     let mut exact = Vec::new();
     let mut missing = 0;
     for (index, create) in creates.iter().enumerate() {
-        let response = txn.execute(&format!(
-            r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, request_id: {{ _eq: "{}" }} }}, limit: 2) {{ _docID admission_signature }} }}"#,
-            escape_graphql_string(node_did), escape_graphql_string(&create.request_id)
-        )).await?;
+        let response = {
+            use gents_protocol::document_query::{
+                fields::agent_request as fields, Filter, Query, Selection,
+            };
+            txn.run(
+                &Query::select(Selection::doc_id().field(fields::ADMISSION_SIGNATURE))
+                    .filter(Filter::eq(fields::NODE_DID, node_did))
+                    .filter(Filter::eq(fields::REQUEST_ID, &create.request_id))
+                    .limit(2)
+                    .render(),
+            )
+            .await?
+        };
         let existing = response["data"]["AgentRequest"]
             .as_array()
             .context("replacement identity lookup missing")?;
