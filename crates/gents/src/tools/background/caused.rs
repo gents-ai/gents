@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use defra_node::Node as EmbeddedNode;
 
-use super::commit::load_receipt;
+use crate::session::message::load_receipt;
 
 pub(crate) enum CausedObservation {
     Bound(Box<gents_protocol::row::AgentRequestRow>),

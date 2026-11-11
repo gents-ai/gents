@@ -23,6 +23,7 @@ pub mod local;
 mod manifest_validation;
 pub mod materialize;
 mod plugin;
+mod plugin_wiring;
 pub mod plugin_lifecycle;
 mod plugin_validation;
 mod provenance;
@@ -81,6 +82,7 @@ pub use plugin::{
     tool_instructions, BindAccess, HostImport, PackPlugin, PluginDirBinding, PluginLimits,
     PluginService, MAX_TOOL_INSTRUCTIONS_BYTES, PLUGIN_ARTIFACT_PREFIX, SUPPORTED_PLUGIN_LANGUAGES,
 };
+pub use plugin_wiring::{unwire_plugin, wire_plugin, WireReport};
 pub(crate) use provenance::pack_artifact_document_digest;
 pub use provenance::{
     pack_document_digests, pack_origin_from_tags, pack_origin_tag, PackOriginError,

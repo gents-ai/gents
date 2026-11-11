@@ -20,7 +20,7 @@ where
     ) -> Result<(
         Vec<crate::documents::TaskHook>,
         PathBuf,
-        Option<crate::request::task_hooks::TaskHookRecordHandle>,
+        Option<crate::tools::call::task_hooks::TaskHookRecordHandle>,
         bool,
     )> {
         let access = crate::ConfigAccess::local_managed_agent(
@@ -29,7 +29,7 @@ where
             self.agent_config.agent_identity.as_ref(),
         )?;
         let (hooks, task_owned) =
-            crate::request::task_hooks::resolve_request_task_hooks(&access, request).await?;
+            crate::tools::call::task_hooks::resolve_request_task_hooks(&access, request).await?;
         if hooks.is_empty() {
             return Ok((hooks, PathBuf::new(), None, task_owned));
         }
@@ -41,7 +41,7 @@ where
         let record = self
             .background_execution_registry
             .task_hook_records()
-            .begin(crate::request::task_hooks::TaskHookRecord {
+            .begin(crate::tools::call::task_hooks::TaskHookRecord {
                 request_doc_id: request.doc_id.clone(),
                 request_id: request.request_id.clone(),
                 node_did: request.node_did.clone(),
@@ -82,7 +82,7 @@ where
             Option<crate::request::interrupt::InterruptIntent>,
         >,
     ) -> OwnedWorkOutcome {
-        use crate::request::task_hooks::TaskAgentResult;
+        use crate::tools::call::task_hooks::TaskAgentResult;
 
         let result =
             Box::pin(self.handle_request(lifecycle, stream_writer, shutdown, interrupt_rx)).await;
@@ -214,7 +214,7 @@ async fn lost_execution_ownership(lifecycle: &RequestLifecycle, error: &anyhow::
 pub(super) enum OwnedWorkOutcome {
     Interrupted(RequestInterruptionSource),
     Observed {
-        observation: crate::request::task_hooks::TaskAgentResult,
+        observation: crate::tools::call::task_hooks::TaskAgentResult,
         reason: Option<String>,
         release_writer_binding: bool,
     },
@@ -224,7 +224,7 @@ pub(super) enum OwnedWorkOutcome {
 
 impl OwnedWorkOutcome {
     pub(super) fn observed(
-        observation: crate::request::task_hooks::TaskAgentResult,
+        observation: crate::tools::call::task_hooks::TaskAgentResult,
         reason: Option<String>,
         release_writer_binding: bool,
     ) -> Self {
@@ -235,12 +235,12 @@ impl OwnedWorkOutcome {
         }
     }
 
-    pub(super) fn observation(&self) -> crate::request::task_hooks::TaskAgentResult {
+    pub(super) fn observation(&self) -> crate::tools::call::task_hooks::TaskAgentResult {
         match self {
-            Self::Interrupted(_) => crate::request::task_hooks::TaskAgentResult::Cancelled,
+            Self::Interrupted(_) => crate::tools::call::task_hooks::TaskAgentResult::Cancelled,
             Self::Observed { observation, .. } => *observation,
             Self::OwnershipLost | Self::DrainFailed(_) => {
-                crate::request::task_hooks::TaskAgentResult::Interrupted
+                crate::tools::call::task_hooks::TaskAgentResult::Interrupted
             }
         }
     }

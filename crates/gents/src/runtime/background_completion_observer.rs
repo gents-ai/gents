@@ -1,5 +1,14 @@
-use super::*;
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use anyhow::Result;
+use defra_node::Node as EmbeddedNode;
+use tokio_util::sync::CancellationToken;
+
 use crate::store::agent_identity_watch::AgentIdentityWatch;
+
+const AGENT_REQUEST_COLLECTION: &str = "AgentRequest";
 
 pub(crate) async fn run_background_completion_observer(
     node: Arc<EmbeddedNode>,
@@ -88,7 +97,7 @@ impl BackgroundCompletionObserver {
 
             for change in batch.changes {
                 for (actor, access) in self.selected_agents() {
-                    if let Err(error) = super::session_message::settle_rows_after_request_update(
+                    if let Err(error) = crate::tools::background::completion::settle_rows_after_request_update(
                         &self.node,
                         &access,
                         &self.local_did,

@@ -7,7 +7,7 @@ use crate::lean_vocab_test::{
     lean_recovery_sweep_cases, lean_task_hook_recovery_cases, LeanCommandResult, LeanTaskHook,
 };
 use crate::request::lifecycle::{ExecutionOrigin, RequestLifecycle, TriggerLineage};
-use crate::request::task_hooks::{
+use crate::tools::call::task_hooks::{
     recover_task_hook_records, HookCommandResult, RecordedHookAttempt, TaskHookRecord,
     TaskHookRecordStore,
 };

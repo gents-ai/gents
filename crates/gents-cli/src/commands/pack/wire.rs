@@ -7,12 +7,14 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use gents::documents::apply_desired_state_plan;
-use gents::documents::{load_agent_context_and_tools_in_txn, unwire_plugin, wire_plugin, Tools};
+use gents::documents::{load_agent_context_and_tools_in_txn, Tools};
 use gents::documents::{
     read_desired_state_records_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 use gents::pack::home_install::recorded_provenance;
-use gents::pack::{installed_pack_documents, read_home_install, PackKind};
+use gents::pack::{
+    installed_pack_documents, read_home_install, unwire_plugin, wire_plugin, PackKind, WireReport,
+};
 use gents::plugin::authority::describe_plugin_authority;
 use gents::plugin::store::read_record;
 use gents::store::collection::Collection;
@@ -213,7 +215,7 @@ struct WirePlan<'a> {
 }
 
 impl WirePlan<'_> {
-    async fn apply(&self, txn: &ConfigApplyTxn<'_>) -> Result<gents::documents::WireReport> {
+    async fn apply(&self, txn: &ConfigApplyTxn<'_>) -> Result<WireReport> {
         let agent_did = &self.request.agent;
         let missing =
             |link: &str| format!("{link}. Next: gents config tools explain --agent {agent_did}");

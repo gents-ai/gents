@@ -115,8 +115,8 @@ mod task_hook_vocab {
     }
 
     impl LeanCommandResult {
-        pub(crate) fn to_native(&self) -> crate::request::task_hooks::HookCommandResult {
-            use crate::request::task_hooks::HookCommandResult;
+        pub(crate) fn to_native(&self) -> crate::tools::call::task_hooks::HookCommandResult {
+            use crate::tools::call::task_hooks::HookCommandResult;
             match self {
                 Self::Exited { code } => HookCommandResult::Exited { code: Some(*code) },
                 Self::LaunchFailed => HookCommandResult::LaunchFailed,

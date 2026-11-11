@@ -6,7 +6,7 @@ use crate::lean_vocab_test::{
     lean_task_hook_run_cases, LeanCommandResult, LeanHookAttempt, LeanHookInvocation,
     LeanTaskHookRunCase, LeanTaskOutcome, LeanTaskPrimaryError,
 };
-use crate::request::task_hooks::{
+use crate::tools::call::task_hooks::{
     effective_timeout_secs, run_task_hooks, HookAttempt, HookPrimaryError, ManagedTaskHookExec,
     TaskAgentResult, TaskHookCancellation, TaskHookExec, TaskHookOutcome,
 };

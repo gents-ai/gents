@@ -38,7 +38,7 @@ pub async fn run_startup_recovery_with_executions_and_identities(
     let requests = RequestLifecycle::recover_all_with_identities(node, node_did, identities).await;
     let inference_calls =
         InferenceCall::recover_all_with_identities(node, node_did, identities).await;
-    let task_hooks = crate::request::task_hooks::recover_task_hook_records(
+    let task_hooks = crate::tools::call::task_hooks::recover_task_hook_records(
         node,
         node_did,
         identities,

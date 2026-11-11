@@ -138,7 +138,7 @@ pub(crate) use surface_tool::{
     validate_datastore_surface, DatastoreSurfaceScope, DatastoreToolSource,
 };
 pub use tools::{load_agent_context_and_tools_in_txn, load_agent_tools_in_txn};
-pub use tools::{unwire_plugin, wire_plugin, write_tools_document, WireReport};
+pub use tools::write_tools_document;
 pub use tools::{
     AgentTools, BashTools, BuiltInTools, CliTool, DatastoreTools, FileTools, HostTools,
     IntegrationTools, LspTools, PluginToolRef, RemoteServiceTools, RemoteToolStyle, RemoteTools,

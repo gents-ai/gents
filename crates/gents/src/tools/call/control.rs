@@ -141,14 +141,14 @@ pub(crate) async fn cancel_loaded_background_tool_call(
 
     if lifecycle.kind() == crate::tools::call::lifecycle::ToolRowKind::SessionMessage {
         return Ok(
-            match crate::session::message::kill(&node, &mut lifecycle).await? {
-                crate::session::message::KillOutcome::Settled => {
+            match crate::tools::background::caused::kill(&node, &mut lifecycle).await? {
+                crate::tools::background::caused::KillOutcome::Settled => {
                     CancelBackgroundToolCallOutcome::AlreadyTerminal {
                         state: lifecycle.state().as_str().to_string(),
                     }
                 }
-                crate::session::message::KillOutcome::Interrupting { .. }
-                | crate::session::message::KillOutcome::Cancelled => {
+                crate::tools::background::caused::KillOutcome::Interrupting { .. }
+                | crate::tools::background::caused::KillOutcome::Cancelled => {
                     CancelBackgroundToolCallOutcome::Cancelled {
                         live_execution_cancelled: false,
                     }

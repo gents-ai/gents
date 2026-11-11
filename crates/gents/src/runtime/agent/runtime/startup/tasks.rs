@@ -347,7 +347,7 @@ pub(super) fn spawn_node_tasks(
     let completion_cancel = cancel.child_token();
     background_tasks.spawn(async move {
         BackgroundTaskResult::BackgroundCompletion(
-            crate::tools::background::completion::run_background_completion_observer(
+            crate::runtime::background_completion_observer::run_background_completion_observer(
                 completion_node,
                 completion_node_did,
                 completion_background_executions,

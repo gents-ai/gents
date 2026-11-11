@@ -189,7 +189,7 @@ pub struct BackgroundExecutionRegistry {
     failed_jobs: Arc<
         std::sync::Mutex<RapidHashMap<String, (String, Arc<crate::tools::exec::FailedJobOwner>)>>,
     >,
-    task_hook_records: crate::request::task_hooks::TaskHookRecordStore,
+    task_hook_records: crate::tools::call::task_hooks::TaskHookRecordStore,
     service_admission: crate::store::service::RuntimeServiceAdmission,
     #[cfg(test)]
     stop_release_observer: Option<Arc<tokio::sync::Notify>>,
@@ -217,11 +217,11 @@ impl BackgroundExecutionRegistry {
     }
 
     pub fn with_task_hook_records(mut self, dir: PathBuf) -> Self {
-        self.task_hook_records = crate::request::task_hooks::TaskHookRecordStore::durable(dir);
+        self.task_hook_records = crate::tools::call::task_hooks::TaskHookRecordStore::durable(dir);
         self
     }
 
-    pub(crate) fn task_hook_records(&self) -> &crate::request::task_hooks::TaskHookRecordStore {
+    pub(crate) fn task_hook_records(&self) -> &crate::tools::call::task_hooks::TaskHookRecordStore {
         &self.task_hook_records
     }
 

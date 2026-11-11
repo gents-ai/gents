@@ -6,7 +6,7 @@ use super::{
     RequestInterruptionSource, RequestLifecycle,
 };
 use crate::observe::runtime_trace::{record_current_failure_class, record_current_request_outcome};
-use crate::request::task_hooks::TaskHookRun;
+use crate::tools::call::task_hooks::TaskHookRun;
 
 pub(super) struct OwnedWorkEnd {
     pub(super) reason: Option<String>,
@@ -35,8 +35,8 @@ where
         } = work;
         let final_outcome = run.final_outcome();
         let mut reason = match &final_outcome {
-            crate::request::task_hooks::TaskHookOutcome::Failure(
-                crate::request::task_hooks::HookPrimaryError::Hook(hook_id),
+            crate::tools::call::task_hooks::TaskHookOutcome::Failure(
+                crate::tools::call::task_hooks::HookPrimaryError::Hook(hook_id),
             ) => Some(run.hook_failure_reason(hook_id)),
             _ => work_reason,
         };
@@ -54,7 +54,7 @@ where
 
         let terminal = final_outcome.terminal_outcome();
         match final_outcome {
-            crate::request::task_hooks::TaskHookOutcome::Success => {
+            crate::tools::call::task_hooks::TaskHookOutcome::Success => {
                 if skipped_before_work {
                     if let Err(error) = lifecycle.begin_owned_execution(stream_writer).await {
                         self.finalize_failure_before_work(
@@ -90,7 +90,7 @@ where
                     }
                 }
             }
-            crate::request::task_hooks::TaskHookOutcome::Failure(_) => {
+            crate::tools::call::task_hooks::TaskHookOutcome::Failure(_) => {
                 let reason = reason.unwrap_or_else(|| "request failed".to_string());
                 if finalize_request_failure(lifecycle, stream_writer, &reason, &request.request_id)
                     .await
@@ -99,7 +99,7 @@ where
                     self.release_failed_writer_binding(request).await;
                 }
             }
-            crate::request::task_hooks::TaskHookOutcome::Interrupted => {
+            crate::tools::call::task_hooks::TaskHookOutcome::Interrupted => {
                 record_current_request_outcome("interrupted");
                 let reason = reason.unwrap_or_else(|| "interrupted".to_string());
                 match terminalize_request(lifecycle, stream_writer, terminal, Some(&reason)).await {

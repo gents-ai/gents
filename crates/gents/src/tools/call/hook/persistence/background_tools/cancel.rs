@@ -117,12 +117,12 @@ impl DefraSessionHook {
         if lifecycle.kind() == crate::tools::call::lifecycle::ToolRowKind::SessionMessage {
             let mut lifecycle = lifecycle;
             let (status, request_id) =
-                match crate::session::message::kill(&self.node, &mut lifecycle).await? {
-                    crate::session::message::KillOutcome::Interrupting { request_id } => {
+                match crate::tools::background::caused::kill(&self.node, &mut lifecycle).await? {
+                    crate::tools::background::caused::KillOutcome::Interrupting { request_id } => {
                         ("interrupting", Some(request_id))
                     }
-                    crate::session::message::KillOutcome::Cancelled => ("cancelled", None),
-                    crate::session::message::KillOutcome::Settled => ("already_terminal", None),
+                    crate::tools::background::caused::KillOutcome::Cancelled => ("cancelled", None),
+                    crate::tools::background::caused::KillOutcome::Settled => ("already_terminal", None),
                 };
             let result = json_string(json!({
                 "ok": true,

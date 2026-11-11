@@ -447,7 +447,7 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
         .await;
     assert_eq!(
         outcome.observation(),
-        crate::request::task_hooks::TaskAgentResult::Cancelled
+        crate::tools::call::task_hooks::TaskAgentResult::Cancelled
     );
     let crate::runtime::agent::daemon::owned_work::OwnedWorkOutcome::Interrupted(
         crate::runtime::agent::daemon::RequestInterruptionSource::Claimed,

@@ -21,7 +21,6 @@ mod goal_input_tests;
 mod hop_tests;
 
 mod body;
-mod caused;
 mod commit;
 mod discovery;
 mod inspection;
@@ -30,12 +29,9 @@ mod plan;
 mod target;
 
 pub(crate) use body::{load_configured_task, render_body, render_task_body};
-pub(crate) use caused::{kill, observe_caused_request, CausedObservation, KillOutcome};
-#[cfg(test)]
-pub(crate) use commit::load_receipt;
 pub(crate) use commit::{
-    commit, stage_planned_write_in_txn, CommitError, SessionMessageCall, SessionMessageReceipt,
-    ToolCallTerminal,
+    commit, load_receipt, stage_planned_write_in_txn, CommitError, SessionMessageCall,
+    SessionMessageReceipt, ToolCallTerminal,
 };
 pub(crate) use discovery::{agent_session_list, AgentSessionListArgs};
 pub(crate) use inspection::{agent_session_read, AgentSessionReadArgs};

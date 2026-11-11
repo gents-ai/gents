@@ -186,7 +186,7 @@ where
         lifecycle.allow_natural_finish(permits_natural_finish(&request, task_owned));
 
         let ownership_lost = lifecycle.ownership_lost();
-        let hook_cancellation = crate::request::task_hooks::TaskHookCancellation::default();
+        let hook_cancellation = crate::tools::call::task_hooks::TaskHookCancellation::default();
         let hook_cancellation_follower = (!hooks.is_empty()).then(|| {
             hook_cancellation.follow(
                 interrupt_rx.clone(),
@@ -195,7 +195,7 @@ where
             )
         });
         let hook_exec =
-            crate::request::task_hooks::ManagedTaskHookExec::new(hook_cwd, hook_cancellation)
+            crate::tools::call::task_hooks::ManagedTaskHookExec::new(hook_cwd, hook_cancellation)
                 .with_record(hook_record.clone())
                 .with_execution_lease(
                     self.node.clone(),
@@ -207,11 +207,11 @@ where
                 );
 
         let mut owned_work = None;
-        let run = crate::request::task_hooks::run_task_hooks(&hooks, &hook_exec, || async {
+        let run = crate::tools::call::task_hooks::run_task_hooks(&hooks, &hook_exec, || async {
             if let Some(record) = &hook_record {
                 if let Err(error) = record.work_started().await {
                     let outcome = OwnedWorkOutcome::observed(
-                        crate::request::task_hooks::TaskAgentResult::Failure,
+                        crate::tools::call::task_hooks::TaskAgentResult::Failure,
                         Some(format!("could not record task hook state: {error}")),
                         true,
                     );

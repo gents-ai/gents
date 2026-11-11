@@ -674,7 +674,7 @@ mod tests {
             node_did: NODE.into(),
             ..Tools::default()
         };
-        let (wired, _, report) = gents::documents::wire_plugin(
+        let (wired, _, report) = gents::pack::wire_plugin(
             &empty,
             &context,
             &plugin,
