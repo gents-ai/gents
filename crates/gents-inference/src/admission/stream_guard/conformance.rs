@@ -2,22 +2,12 @@ use std::{sync::Arc, time::Duration};
 
 use futures::{future::BoxFuture, StreamExt};
 use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
-use serde::Deserialize;
 use tokio::sync::{oneshot, Mutex};
 
 use super::StreamGuardLifecycle;
 use crate::llm::rig_compat::hold_stream_guard;
+use gents_lean_vocab::families::storage_write_gate_contracts_stream_finalization as family;
 use gents_store::config_client::ConfigAccess;
-
-#[derive(Deserialize)]
-struct Case {
-    name: String,
-    independently_scheduled: bool,
-    storage_returns: bool,
-    rollback_owner_scheduled: bool,
-    cleanup_times_out: bool,
-    expected_gate_held: bool,
-}
 
 struct Finalizer {
     gate: Arc<Mutex<()>>,
@@ -36,65 +26,43 @@ impl StreamGuardLifecycle for Finalizer {
     }
 }
 
-#[tokio::test]
-async fn lean_storage_gate_scenarios_drive_stream_finalization() {
-    let cases: Vec<Case> = serde_json::from_value(serde_json::Value::from(
-        tokio::task::spawn_blocking(|| {
-            gents_lean_vocab::lean_contract_snapshot()
-                .storage_write_gate_cases
-                .clone()
+async fn stream_guard_gate_held(case: &family::Input) -> bool {
+    let gate = Arc::new(Mutex::new(()));
+    let (entered_tx, mut entered_rx) = oneshot::channel();
+    let (return_tx, return_rx) = oneshot::channel();
+    let finalizer = Finalizer {
+        gate: gate.clone(),
+        entered: entered_tx,
+        storage_return: return_rx,
+    };
+    let mut owner: BoxFuture<'static, ()> = if case.independently_scheduled {
+        Box::pin(async move {
+            let inner = StreamingCompletionResponse::stream(Box::pin(futures::stream::iter(
+                vec![Ok(RawStreamingChoice::FinalResponse(()))],
+            )));
+            let mut guarded = hold_stream_guard(inner, finalizer);
+            assert!(guarded.next().await.is_some());
         })
-        .await
-        .expect("Lean snapshot load"),
-    ))
-    .expect("Lean storage write-gate fixtures");
-    assert_eq!(cases.len(), 4);
-    for case in cases
-        .into_iter()
-        .filter(|case| !case.rollback_owner_scheduled)
-    {
-        assert!(!case.cleanup_times_out);
-        let gate = Arc::new(Mutex::new(()));
-        let (entered_tx, mut entered_rx) = oneshot::channel();
-        let (return_tx, return_rx) = oneshot::channel();
-        let finalizer = Finalizer {
-            gate: gate.clone(),
-            entered: entered_tx,
-            storage_return: return_rx,
-        };
-        let mut owner: BoxFuture<'static, ()> = if case.independently_scheduled {
-            Box::pin(async move {
-                let inner = StreamingCompletionResponse::stream(Box::pin(futures::stream::iter(
-                    vec![Ok(RawStreamingChoice::FinalResponse(()))],
-                )));
-                let mut guarded = hold_stream_guard(inner, finalizer);
-                assert!(guarded.next().await.is_some());
-            })
-        } else {
-            Box::pin(async move { finalizer.finish_stream().await.unwrap() })
-        };
-        tokio::select! {
-            result = &mut entered_rx => result.expect("finalizer entered"),
-            () = &mut owner => panic!("{}: finalizer completed before storage return", case.name),
-            () = tokio::time::sleep(Duration::from_secs(5)) => panic!("{}: finalizer never started", case.name),
-        }
-        let pending_return = if case.storage_returns {
-            return_tx.send(()).unwrap();
-            None
-        } else {
-            Some(return_tx)
-        };
-        let sibling = tokio::time::timeout(Duration::from_millis(250), gate.lock()).await;
-        assert_eq!(
-            sibling.is_err(),
-            case.expected_gate_held,
-            "{}: unexpected gate ownership while consumer polling is suspended",
-            case.name,
-        );
-        drop(sibling);
-        drop(owner);
-        drop(pending_return);
+    } else {
+        Box::pin(async move { finalizer.finish_stream().await.unwrap() })
+    };
+    tokio::select! {
+        result = &mut entered_rx => result.expect("finalizer entered"),
+        () = &mut owner => panic!("{}: finalizer completed before storage return", case.name),
+        () = tokio::time::sleep(Duration::from_secs(5)) => panic!("{}: finalizer never started", case.name),
     }
+    let pending_return = if case.storage_returns {
+        return_tx.send(()).unwrap();
+        None
+    } else {
+        Some(return_tx)
+    };
+    let sibling = tokio::time::timeout(Duration::from_millis(250), gate.lock()).await;
+    let gate_held = sibling.is_err();
+    drop(sibling);
+    drop(owner);
+    drop(pending_return);
+    gate_held
 }
 
 struct NativeFinalizer {
@@ -130,25 +98,7 @@ impl StreamGuardLifecycle for NativeFinalizer {
     }
 }
 
-#[tokio::test]
-async fn lean_independent_completion_releases_native_canonical_gate() {
-    let cases: Vec<Case> = serde_json::from_value(serde_json::Value::from(
-        tokio::task::spawn_blocking(|| {
-            gents_lean_vocab::lean_contract_snapshot()
-                .storage_write_gate_cases
-                .clone()
-        })
-        .await
-        .expect("Lean snapshot load"),
-    ))
-    .unwrap();
-    let scenario = cases
-        .iter()
-        .find(|case| case.name == "independent_completion")
-        .expect("generated positive scheduling scenario");
-    assert!(scenario.independently_scheduled && scenario.storage_returns);
-    assert!(!scenario.expected_gate_held);
-
+async fn native_gate_held_after_independent_completion() -> bool {
     let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
     node.add_collection("type StreamGateFact { value: String }")
         .await
@@ -172,7 +122,7 @@ async fn lean_independent_completion_releases_native_canonical_gate() {
         () = tokio::time::sleep(Duration::from_secs(10)) => panic!("native finalizer never entered"),
     }
     storage_return.notify_one();
-    tokio::time::timeout(
+    let sibling = tokio::time::timeout(
         Duration::from_secs(10),
         ConfigAccess::write_local_response(
             &node,
@@ -180,9 +130,11 @@ async fn lean_independent_completion_releases_native_canonical_gate() {
             "mutation { create_StreamGateFact(input: {value: \"sibling\"}) { _docID } }",
         ),
     )
-    .await
-    .expect("native gate must release without consumer stream polls")
-    .expect("sibling canonical write");
+    .await;
+    let Ok(sibling) = sibling else {
+        return true;
+    };
+    sibling.expect("sibling canonical write");
     assert!(matches!(
         guarded.next().await,
         Some(Ok(rig::streaming::StreamedAssistantContent::Final(_)))
@@ -200,4 +152,15 @@ async fn lean_independent_completion_releases_native_canonical_gate() {
     assert_eq!(values, ["finalizer", "sibling"]);
     drop(guarded);
     node.shutdown().await.expect("node shutdown");
+    false
+}
+
+#[tokio::test]
+async fn lean_storage_gate_scenarios_drive_stream_finalization() {
+    for case in family::cases() {
+        case.check(stream_guard_gate_held(&case.input).await);
+        if case.input.independently_scheduled && case.input.storage_returns {
+            case.check(native_gate_held_after_independent_completion().await);
+        }
+    }
 }
