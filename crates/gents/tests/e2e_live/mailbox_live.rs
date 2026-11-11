@@ -61,7 +61,7 @@ async fn real_model_files_a_stamped_mailbox_item_through_granted_surface() {
     assert_eq!(item.source_kind, "agent");
     assert_eq!(
         item.source_id,
-        gents::session::mailbox::NotificationIdentity::Event
+        gents::documents::mailbox_write_decl::NotificationIdentity::Event
             .source_id(
                 &turn.node_did,
                 turn.user.did(),

@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
 use gents::defra_node::Node as EmbeddedNode;
+use gents::documents::mailbox_write_decl::{MailboxAction, MailboxKind};
 use gents::session::mailbox::{
-    dismiss_mailbox_item_on, stamp_create_with_access, FileMailboxItemArgs, MailboxAction,
-    MailboxKind, MailboxSourceKind, MailboxStampContext, MailboxStatus, MAILBOX_CLOSE_COLLECTIONS,
+    dismiss_mailbox_item_on, stamp_create_with_access, FileMailboxItemArgs, MailboxSourceKind,
+    MailboxStampContext, MailboxStatus, MAILBOX_CLOSE_COLLECTIONS,
 };
 
 use crate::lean_vocab_test::{

@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::documents::mailbox_write_decl::{
-    canonical_mailbox_write_decl, FILE_MAILBOX_ITEM_TOOL_NAME,
+    canonical_mailbox_write_decl, MailboxAction, MailboxKind, MailboxNotificationPolicy,
+    MailboxWriteOutcome, NotificationIdentity, FILE_MAILBOX_ITEM_TOOL_NAME,
 };
 use crate::inference::llm::tool::ToolDefinition;
 use crate::store::graphql::{
@@ -34,10 +35,7 @@ pub use waiting::awaiting_question_ids;
 pub(crate) use waiting::required_question_in_txn;
 #[cfg(test)]
 mod reply_tests;
-pub use notification::{
-    MailboxContentArgs, MailboxNotificationPolicy, MailboxWriteOutcome, MailboxWriteReceipt,
-    NotificationIdentity,
-};
+pub use notification::{MailboxContentArgs, MailboxWriteReceipt};
 #[cfg(test)]
 mod notification_tests;
 
@@ -97,64 +95,6 @@ impl MailboxStatus {
 
     pub const fn is_terminal(self) -> bool {
         !matches!(self, Self::Open)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-pub enum MailboxKind {
-    Ask,
-    Gate,
-    Finished,
-    Failed,
-    Flag,
-}
-
-impl MailboxKind {
-    pub const ALL: [Self; 5] = [
-        Self::Ask,
-        Self::Gate,
-        Self::Finished,
-        Self::Failed,
-        Self::Flag,
-    ];
-
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Ask => "ask",
-            Self::Gate => "gate",
-            Self::Finished => "finished",
-            Self::Failed => "failed",
-            Self::Flag => "flag",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-pub enum MailboxAction {
-    Ack,
-    StartRequest,
-    WriteDocument,
-}
-
-impl MailboxAction {
-    pub const ALL: [Self; 3] = [Self::Ack, Self::StartRequest, Self::WriteDocument];
-
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Ack => "ack",
-            Self::StartRequest => "start_request",
-            Self::WriteDocument => "write_document",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|action| action.as_str() == value)
     }
 }
 

@@ -3141,7 +3141,7 @@ async fn a_subagent_waiting_on_a_question_says_so_in_its_parents_row() {
 
 #[tokio::test]
 async fn dismissing_sends_the_mailbox_dismiss_and_shows_the_rest() {
-    use gents::session::mailbox::{MailboxAction, MailboxKind};
+    use gents::documents::mailbox_write_decl::{MailboxAction, MailboxKind};
     let (node, work, _home) = served_settings().await;
     let gate = filed(
         &node,
@@ -3227,7 +3227,7 @@ async fn a_reply_to_a_closed_item_is_a_notice_in_the_owners_words() {
 /// shows like any other request.
 #[tokio::test]
 async fn a_reply_is_a_request_caused_by_its_item() {
-    use gents::session::mailbox::{MailboxAction, MailboxKind};
+    use gents::documents::mailbox_write_decl::{MailboxAction, MailboxKind};
     let (node, work, _home) = served_settings().await;
     let ask = MailboxAction::StartRequest;
     let question = filed(&node, &work, "i1 title", MailboxKind::Ask, ask).await;
@@ -3388,8 +3388,8 @@ async fn filed(
     node: &Arc<defra_node::Node>,
     work: &Work,
     title: &str,
-    kind: gents::session::mailbox::MailboxKind,
-    action: gents::session::mailbox::MailboxAction,
+    kind: gents::documents::mailbox_write_decl::MailboxKind,
+    action: gents::documents::mailbox_write_decl::MailboxAction,
 ) -> String {
     use gents::session::mailbox::{FileMailboxItemArgs, MailboxSourceKind, MailboxStampContext};
     let context = MailboxStampContext {
@@ -3447,7 +3447,7 @@ async fn shell_on_served(node: &Arc<defra_node::Node>, work: Work) -> Shell {
 
 #[tokio::test]
 async fn an_act_notices_and_rereads_its_menu() {
-    use gents::session::mailbox::{MailboxAction, MailboxKind};
+    use gents::documents::mailbox_write_decl::{MailboxAction, MailboxKind};
     let (node, work, _home) = served_settings().await;
     let item = filed(
         &node,

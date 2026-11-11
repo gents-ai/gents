@@ -3,9 +3,8 @@ mod support;
 use gents::runtime::agent::p2p_reconcile::{
     EmbeddedRemoteP2pAdmin, PairingFilters, RemoteP2pAdmin,
 };
-use gents::session::mailbox::{
-    FileMailboxItemArgs, MailboxAction, MailboxKind, MailboxSourceKind, MailboxStampContext,
-};
+use gents::documents::mailbox_write_decl::{MailboxAction, MailboxKind};
+use gents::session::mailbox::{FileMailboxItemArgs, MailboxSourceKind, MailboxStampContext};
 use gents::store::config_client::{ConfigAccess, NodePermission};
 use gents::{KeyIdentity, NodeIdentity};
 use std::{sync::Arc, time::Duration};
