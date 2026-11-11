@@ -368,5 +368,5 @@ pub async fn delete(
         commit,
     )
     .await
-    .map_err(|failure| failure.map(SkillOperationError::Document))
+    .map_err(|failure| failure.map(|error| SkillOperationError::Document(error.into())))
 }

@@ -287,5 +287,5 @@ pub async fn delete(
         commit,
     )
     .await
-    .map_err(|failure| failure.map(McpServiceOperationError::Document))
+    .map_err(|failure| failure.map(|error| McpServiceOperationError::Document(error.into())))
 }

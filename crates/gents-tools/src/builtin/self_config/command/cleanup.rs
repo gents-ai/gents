@@ -151,27 +151,28 @@ impl ConfigCommandTool {
 /// A refused delete as the model reads it; a kept reference passes on as the
 /// reference owner's error for `failure_guidance`.
 fn delete_refused(failure: gents_documents::operations::delete::DeleteFailure) -> anyhow::Error {
+    use gents_documents::operations::delete::DeleteError;
     use gents_documents::operations::OperationFailure;
     use gents_protocol::operations::document::DocumentOperationError;
     match failure {
         OperationFailure::Other(error) => error,
-        OperationFailure::Operation(DocumentOperationError::Missing { collection, id, .. }) => {
+        OperationFailure::Operation(DeleteError::Referenced { reference, .. }) => reference.into(),
+        OperationFailure::Operation(DeleteError::Document(DocumentOperationError::Missing {
+            collection,
+            id,
+            ..
+        })) => {
             anyhow!(
                 "no owned {collection} with ID {id:?}; list or inspect exact IDs before cleanup"
             )
         }
-        OperationFailure::Operation(DocumentOperationError::Changed { expected, current }) => {
+        OperationFailure::Operation(DeleteError::Document(DocumentOperationError::Changed {
+            expected,
+            current,
+        })) => {
             anyhow!("cleanup target content changed: preview authorized {expected:?}, current plan is {current:?}; preview again")
         }
-        OperationFailure::Operation(DocumentOperationError::Referenced { source, .. }) => {
-            match gents_protocol::error_chain::find_map_source(source.as_ref(), |cause| {
-                cause.downcast_ref::<gents_documents::MissingReference>()
-            }) {
-                Some(missing) => anyhow::Error::new(missing.clone()),
-                None => anyhow!(source),
-            }
-        }
-        OperationFailure::Operation(error) => error.into(),
+        OperationFailure::Operation(DeleteError::Document(error)) => error.into(),
     }
 }
 

@@ -1,4 +1,3 @@
-use gents_protocol::error_chain::find_map_source;
 use gents_protocol::operations::document::{
     Confirmation, DeleteOutcome, DeleteReceipt, DeleteTarget, DocumentOperationError,
     OperationActor, OwnerCount, OwnerResolution,
@@ -15,7 +14,45 @@ use crate::{
     validate_desired_state_plan, DesiredStateApplyPlan, MissingReference,
 };
 
-pub type DeleteFailure = OperationFailure<DocumentOperationError>;
+/// A refused delete. The reference that keeps a document stays typed so a
+/// client can name the document that still selects it.
+#[derive(Debug, thiserror::Error)]
+pub enum DeleteError {
+    #[error("{collection} {id:?} is still selected by another document; remove or redirect that reference, then delete")]
+    Referenced {
+        collection: &'static str,
+        id: String,
+        #[source]
+        reference: MissingReference,
+    },
+    #[error(transparent)]
+    Document(#[from] DocumentOperationError),
+}
+
+impl From<DeleteError> for DocumentOperationError {
+    fn from(error: DeleteError) -> Self {
+        match error {
+            DeleteError::Referenced {
+                collection,
+                id,
+                reference,
+            } => Self::Referenced {
+                collection,
+                id,
+                source: Box::new(reference),
+            },
+            DeleteError::Document(error) => error,
+        }
+    }
+}
+
+pub type DeleteFailure = OperationFailure<DeleteError>;
+
+pub fn finish(failure: DeleteFailure) -> DocumentOperationError {
+    failure
+        .map(DocumentOperationError::from)
+        .finish(DocumentOperationError::Passthrough)
+}
 
 /// Lean `DocumentOperations.deleteOutcome`.
 pub fn decide_delete(
@@ -80,31 +117,39 @@ fn refusal(
     id: &str,
     delete: &DocumentDelete<'_>,
     current: &str,
-    reference: Option<anyhow::Error>,
-) -> Option<DocumentOperationError> {
+    reference: Option<MissingReference>,
+) -> Option<DeleteError> {
     let collection = target.collection_name();
-    match outcome {
-        DeleteOutcome::Deleted => None,
-        DeleteOutcome::RefusedNeedsPreview => Some(DocumentOperationError::NeedsPreview {
-            collection,
-            id: id.to_owned(),
+    let id = id.to_owned();
+    match (outcome, reference) {
+        (DeleteOutcome::Deleted, _) => None,
+        (DeleteOutcome::RefusedNeedsPreview, _) => {
+            Some(DocumentOperationError::NeedsPreview { collection, id }.into())
+        }
+        (DeleteOutcome::RefusedMissing, _) => Some(
+            DocumentOperationError::Missing {
+                collection,
+                id,
+                node_did: delete.owner.to_owned(),
+            }
+            .into(),
+        ),
+        (DeleteOutcome::RefusedChanged, _) => Some(
+            DocumentOperationError::Changed {
+                expected: delete.digest.unwrap_or_default().to_owned(),
+                current: current.to_owned(),
+            }
+            .into(),
+        ),
+        (DeleteOutcome::RefusedReferenced, Some(reference)) => Some(DeleteError::Referenced {
+            collection: reference.target.graphql_type(),
+            id: reference.target_id.clone(),
+            reference,
         }),
-        DeleteOutcome::RefusedMissing => Some(DocumentOperationError::Missing {
-            collection,
-            id: id.to_owned(),
-            node_did: delete.owner.to_owned(),
-        }),
-        DeleteOutcome::RefusedChanged => Some(DocumentOperationError::Changed {
-            expected: delete.digest.unwrap_or_default().to_owned(),
-            current: current.to_owned(),
-        }),
-        DeleteOutcome::RefusedReferenced => Some(DocumentOperationError::Referenced {
-            collection,
-            id: id.to_owned(),
-            source: reference
-                .map(anyhow::Error::reallocate_into_boxed_dyn_error_without_backtrace)
-                .unwrap_or_else(|| "a reference to it remains".into()),
-        }),
+        (DeleteOutcome::RefusedReferenced, None) => Some(
+            DocumentOperationError::Passthrough("a reference to the document remains".into())
+                .into(),
+        ),
     }
 }
 
@@ -141,7 +186,7 @@ pub async fn delete_in_txn(
         .first()
         .map(|(target, id)| (*target, id.as_str()));
     let (subject, id) = missing.or(first).ok_or_else(|| {
-        OperationFailure::Other(anyhow::anyhow!("a delete names at least one document"))
+        DeleteFailure::Other(anyhow::anyhow!("a delete names at least one document"))
     })?;
     let current = plan_digest(delete.owner, &targets)?;
     let confirmation = match delete.digest {
@@ -153,29 +198,16 @@ pub async fn delete_in_txn(
     } else {
         Confirmation::Current
     };
-    let plan = DesiredStateApplyPlan::new(Vec::new())?.with_removals(
-        delete
-            .targets
-            .iter()
-            .map(|(target, id)| (target.collection(), delete.owner.to_owned(), id.clone()))
-            .collect(),
-    )?;
+    let removed = delete
+        .targets
+        .iter()
+        .map(|(target, id)| (target.collection(), id.clone()))
+        .collect::<Vec<_>>();
     let stored = missing.is_none();
-    let reference = if stored
-        && decide_delete(delete.actor, confirmation, stored, false) == DeleteOutcome::Deleted
-    {
-        match validate_desired_state_plan(txn, &plan, policy).await {
-            Ok(()) => None,
-            Err(error)
-                if find_map_source(error.as_ref(), |cause| {
-                    cause.downcast_ref::<MissingReference>()
-                })
-                .is_some() =>
-            {
-                Some(error)
-            }
-            Err(error) => return Err(error.into()),
-        }
+    let reference = if stored {
+        crate::ConfigReferences::load_in_txn(txn, delete.owner)
+            .await?
+            .retained_reference_to(&removed)?
     } else {
         None
     };
@@ -183,6 +215,13 @@ pub async fn delete_in_txn(
     if let Some(error) = refusal(outcome, subject, id, delete, &current, reference) {
         return Err(OperationFailure::Operation(error));
     }
+    let plan = DesiredStateApplyPlan::new(Vec::new())?.with_removals(
+        removed
+            .into_iter()
+            .map(|(collection, id)| (collection, delete.owner.to_owned(), id))
+            .collect(),
+    )?;
+    validate_desired_state_plan(txn, &plan, policy).await?;
     if commit {
         apply_desired_state_plan(txn, &plan, policy).await?;
     }

@@ -287,6 +287,299 @@
       },
       "output": "bool"
     },
+    "document_operations_defaults_path": {
+      "input": {
+        "fields": [
+          [
+            "scheme",
+            {
+              "enum": "EndpointScheme",
+              "values": [
+                "http",
+                "https"
+              ]
+            }
+          ],
+          [
+            "path_is_root",
+            "bool"
+          ]
+        ],
+        "struct": "Input"
+      },
+      "output": "bool"
+    },
+    "document_operations_delete_outcome": {
+      "input": {
+        "fields": [
+          [
+            "actor",
+            {
+              "enum": "Actor",
+              "values": [
+                "user",
+                "agent"
+              ]
+            }
+          ],
+          [
+            "confirmation",
+            {
+              "enum": "Confirmation",
+              "values": [
+                "absent",
+                "current",
+                "stale"
+              ]
+            }
+          ],
+          [
+            "stored",
+            "bool"
+          ],
+          [
+            "referenced",
+            "bool"
+          ]
+        ],
+        "struct": "Input"
+      },
+      "output": {
+        "enum": "DeleteOutcome",
+        "values": [
+          "deleted",
+          "refused_needs_preview",
+          "refused_missing",
+          "refused_changed",
+          "refused_referenced"
+        ]
+      }
+    },
+    "document_operations_enabled_after_register": {
+      "input": {
+        "fields": [
+          [
+            "stored",
+            {
+              "enum": "StoredToggle",
+              "values": [
+                "absent",
+                "on",
+                "off"
+              ]
+            }
+          ],
+          [
+            "requested",
+            {
+              "enum": "Toggle",
+              "values": [
+                "omitted",
+                "on",
+                "off"
+              ]
+            }
+          ]
+        ],
+        "struct": "Input"
+      },
+      "output": "bool"
+    },
+    "document_operations_endpoint_storage": {
+      "input": {
+        "fields": [
+          [
+            "scheme",
+            {
+              "enum": "EndpointScheme",
+              "values": [
+                "http",
+                "https"
+              ]
+            }
+          ],
+          [
+            "host",
+            {
+              "enum": "EndpointHost",
+              "values": [
+                "ipv4",
+                "name"
+              ]
+            }
+          ]
+        ],
+        "struct": "Input"
+      },
+      "output": {
+        "enum": "EndpointStorage",
+        "values": [
+          "verbatim_url",
+          "lan_ip",
+          "hostname"
+        ]
+      }
+    },
+    "document_operations_field_after": {
+      "input": {
+        "fields": [
+          [
+            "update",
+            {
+              "enum": "FieldUpdate",
+              "values": [
+                "omitted",
+                "clear",
+                "set"
+              ]
+            }
+          ],
+          [
+            "stored_present",
+            "bool"
+          ]
+        ],
+        "struct": "Input"
+      },
+      "output": {
+        "enum": "FieldAfter",
+        "values": [
+          "absent",
+          "stored",
+          "requested"
+        ]
+      }
+    },
+    "document_operations_import_outcome": {
+      "input": {
+        "fields": [
+          [
+            "actor",
+            {
+              "enum": "Actor",
+              "values": [
+                "user",
+                "agent"
+              ]
+            }
+          ],
+          [
+            "inside_tool_root",
+            "bool"
+          ],
+          [
+            "stored",
+            "bool"
+          ],
+          [
+            "overwrite",
+            "bool"
+          ]
+        ],
+        "struct": "Input"
+      },
+      "output": {
+        "enum": "ImportOutcome",
+        "values": [
+          "created",
+          "replaced",
+          "refused_outside_root",
+          "refused_exists"
+        ]
+      }
+    },
+    "document_operations_owner_resolution": {
+      "input": {
+        "fields": [
+          [
+            "owner_named",
+            "bool"
+          ],
+          [
+            "owners",
+            {
+              "enum": "OwnerCount",
+              "values": [
+                "none",
+                "one",
+                "several"
+              ]
+            }
+          ]
+        ],
+        "struct": "Input"
+      },
+      "output": {
+        "enum": "OwnerResolution",
+        "values": [
+          "named",
+          "sole",
+          "refused_missing",
+          "refused_ambiguous"
+        ]
+      }
+    },
+    "document_operations_send_node_did_after_register": {
+      "input": {
+        "fields": [
+          [
+            "stored",
+            {
+              "enum": "StoredToggle",
+              "values": [
+                "absent",
+                "on",
+                "off"
+              ]
+            }
+          ],
+          [
+            "requested",
+            {
+              "enum": "Toggle",
+              "values": [
+                "omitted",
+                "on",
+                "off"
+              ]
+            }
+          ]
+        ],
+        "struct": "Input"
+      },
+      "output": "bool"
+    },
+    "document_operations_write_outcome": {
+      "input": {
+        "fields": [
+          [
+            "mode",
+            {
+              "enum": "WriteMode",
+              "values": [
+                "create",
+                "update",
+                "save"
+              ]
+            }
+          ],
+          [
+            "stored",
+            "bool"
+          ]
+        ],
+        "struct": "Input"
+      },
+      "output": {
+        "enum": "WriteOutcome",
+        "values": [
+          "created",
+          "updated",
+          "refused_exists",
+          "refused_missing"
+        ]
+      }
+    },
     "durable_lineage_deferred_creation_allowed": {
       "input": {
         "fields": [
@@ -940,6 +1233,156 @@
         "values": [
           "claim",
           "await_newer_generation"
+        ]
+      }
+    },
+    "self_config_tools_save_drop_refused": {
+      "input": {
+        "fields": [
+          [
+            "change",
+            {
+              "enum": "SettingChange",
+              "values": [
+                "kept",
+                "changed",
+                "removed"
+              ]
+            }
+          ],
+          [
+            "group_allowed",
+            "bool"
+          ]
+        ],
+        "struct": "Input"
+      },
+      "output": "bool"
+    },
+    "self_config_tools_save_holds_operator_grant": {
+      "input": {
+        "fields": [
+          [
+            "actor",
+            {
+              "enum": "Actor",
+              "values": [
+                "user",
+                "agent"
+              ]
+            }
+          ],
+          [
+            "agent_holds",
+            "bool"
+          ]
+        ],
+        "struct": "Input"
+      },
+      "output": "bool"
+    },
+    "self_config_tools_save_outcome": {
+      "input": {
+        "fields": [
+          [
+            "shared",
+            {
+              "enum": "SharedOutcome",
+              "values": [
+                "proceed",
+                "refused_unacknowledged",
+                "refused_without_catalog"
+              ]
+            }
+          ],
+          [
+            "grants_held",
+            "bool"
+          ],
+          [
+            "drops_allowed",
+            "bool"
+          ],
+          [
+            "plugins_installed",
+            "bool"
+          ],
+          [
+            "keeps_own_control",
+            "bool"
+          ]
+        ],
+        "struct": "Input"
+      },
+      "output": {
+        "enum": "Outcome",
+        "values": [
+          "saved",
+          "refused_shared",
+          "refused_grant_not_held",
+          "refused_drops_settings",
+          "refused_plugin_not_installed",
+          "refused_loses_own_control"
+        ]
+      }
+    },
+    "self_config_tools_save_own_control_binds": {
+      "input": {
+        "fields": [
+          [
+            "actor",
+            {
+              "enum": "Actor",
+              "values": [
+                "user",
+                "agent"
+              ]
+            }
+          ],
+          [
+            "own_tools",
+            "bool"
+          ],
+          [
+            "no_lockout",
+            "bool"
+          ]
+        ],
+        "struct": "Input"
+      },
+      "output": "bool"
+    },
+    "self_config_tools_save_shared_outcome": {
+      "input": {
+        "fields": [
+          [
+            "reach",
+            {
+              "enum": "Reach",
+              "values": [
+                "unselected",
+                "one",
+                "several"
+              ]
+            }
+          ],
+          [
+            "acknowledged",
+            "bool"
+          ],
+          [
+            "holds_catalog",
+            "bool"
+          ]
+        ],
+        "struct": "Input"
+      },
+      "output": {
+        "enum": "SharedOutcome",
+        "values": [
+          "proceed",
+          "refused_unacknowledged",
+          "refused_without_catalog"
         ]
       }
     },

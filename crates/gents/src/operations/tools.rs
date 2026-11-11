@@ -95,6 +95,6 @@ pub async fn delete(
         true,
     )
     .await
-    .map_err(|failure| failure.map(ToolsOperationError::Document))
+    .map_err(|failure| failure.map(|error| ToolsOperationError::Document(error.into())))
     .map_err(finish)
 }

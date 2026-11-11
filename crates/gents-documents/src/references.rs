@@ -13,7 +13,7 @@ use gents_store::graphql::escape_graphql_string;
 
 use super::*;
 
-#[derive(Debug, Clone, thiserror::Error)]
+#[derive(Debug, thiserror::Error)]
 #[error(
     "{} {id} field {field} references missing {} {target_id:?} within node_did {node_did}",
     collection.graphql_type(),
@@ -285,6 +285,31 @@ impl ConfigReferences {
         value: &Value,
     ) -> Result<Vec<RequiredReference>> {
         references_of(collection, value, &self.node_did)
+    }
+
+    /// The first retained document that still selects one of `removed`.
+    pub fn retained_reference_to(
+        &self,
+        removed: &[(Collection, String)],
+    ) -> Result<Option<MissingReference>> {
+        for ((collection, id), document) in &self.documents {
+            if removed.contains(&(*collection, id.clone())) {
+                continue;
+            }
+            for reference in self.required_references(*collection, document)? {
+                if removed.contains(&(reference.collection, reference.id.clone())) {
+                    return Ok(Some(MissingReference {
+                        collection: *collection,
+                        id: id.clone(),
+                        field: reference.field.to_owned(),
+                        target: reference.collection,
+                        target_id: reference.id,
+                        node_did: self.node_did.clone(),
+                    }));
+                }
+            }
+        }
+        Ok(None)
     }
 
     pub fn validate_removal(&self, collection: Collection, id: &str) -> Result<()> {
