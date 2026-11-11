@@ -107,6 +107,7 @@ impl TestDb {
             &self.store_key,
             self.store_lock.as_ref().context("store lock released")?,
             self.node_identity.clone(),
+            None,
         )
         .await?;
         self.node = node;
@@ -154,6 +155,7 @@ async fn start(
     key: &StoreKey,
     lock: &gents_store::local::home::StoreLock,
     identity: Arc<dyn NodeIdentity>,
+    p2p: Option<defra_node::P2PConfig>,
 ) -> Result<(Arc<EmbeddedNode>, String)> {
     let did = identity.did().to_string();
     let protected = gents_store::local::backend_protection::ProtectedBackendStore::open(
@@ -172,7 +174,7 @@ async fn start(
             key,
             identity.clone(),
             Some(http),
-            None,
+            p2p,
             Arc::new(NoToolSources),
             Vec::new(),
         )
@@ -251,42 +253,51 @@ pub async fn test_db(name: &str) -> TestDb {
         .prefix(&format!("gents-{name}-"))
         .tempdir()
         .expect("tempdir");
-    let path = tempdir.path().to_path_buf();
+    let mut db = test_db_at(tempdir.path(), None).await.expect("test node");
+    db.tempdir = Some(tempdir);
+    db
+}
+
+/// Starts the node over the home at `path`, creating it when absent and
+/// reopening it when a previous `TestDb` left it there. The home is retained
+/// after the node stops.
+pub async fn test_db_at(path: &Path, p2p: Option<defra_node::P2PConfig>) -> Result<TestDb> {
+    let path = path.to_path_buf();
     let identity_path = path.join("node.key");
     let identity: Arc<dyn NodeIdentity> = Arc::new(
         tokio::task::spawn_blocking(move || KeyIdentity::load_or_create(identity_path, None))
-            .await
-            .unwrap()
-            .expect("node identity"),
+            .await??,
     );
     let did = identity.did().to_string();
     let data_path = path.join("data");
-    tokio::fs::create_dir_all(&data_path).await.unwrap();
+    tokio::fs::create_dir_all(&data_path).await?;
     let (lock_home, lock_data) = (path.clone(), data_path.clone());
     let store_lock = tokio::task::spawn_blocking(move || {
         gents_store::local::home::lock_store(&lock_home, &lock_data)
     })
-    .await
-    .unwrap()
-    .expect("store lock");
-    let fresh = gents_store::local::backend_protection::FreshBackendStore::observe(
-        &data_path,
-        &store_lock,
-    )
-    .await
-    .expect("fresh store");
-    let key = store_key(&path, &data_path).await.expect("store key");
-    fresh
-        .initialize(&key, Some(&did))
-        .await
-        .expect("initialize store");
-    let (node, endpoint) = start(&data_path, &key, &store_lock, identity.clone())
-        .await
-        .expect("start node");
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .expect("runtime schemas");
-    TestDb {
+    .await??;
+    let key = if data_path.join("MANIFEST").exists() {
+        use gents_store::local::store_key::{
+            StoreEncryption, StoreKeyCustody, STORE_ENCRYPTION_VERSION,
+        };
+        StoreEncryption {
+            version: STORE_ENCRYPTION_VERSION,
+            custody: StoreKeyCustody::File,
+        }
+        .load(&path.join("store.key"), &data_path)?
+    } else {
+        let fresh = gents_store::local::backend_protection::FreshBackendStore::observe(
+            &data_path,
+            &store_lock,
+        )
+        .await?;
+        let key = store_key(&path, &data_path).await?;
+        fresh.initialize(&key, Some(&did)).await?;
+        key
+    };
+    let (node, endpoint) = start(&data_path, &key, &store_lock, identity.clone(), p2p).await?;
+    gents_store::schema::ensure_runtime_schemas(&node).await?;
+    Ok(TestDb {
         node,
         node_identity: identity,
         process_generation: 0,
@@ -294,8 +305,8 @@ pub async fn test_db(name: &str) -> TestDb {
         data_path,
         store_key: key,
         store_lock: Some(store_lock),
-        tempdir: Some(tempdir),
-    }
+        tempdir: None,
+    })
 }
 
 pub async fn signed_test_node(
