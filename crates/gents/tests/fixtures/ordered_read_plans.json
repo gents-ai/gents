@@ -22,7 +22,7 @@
   },
   {
     "read": {
-      "path": "crates/gents-cli/src/http/prometheus.rs",
+      "path": "crates/gents-host/src/http/prometheus.rs",
       "collection": "$GENTS_collection$",
       "arguments": "filter: { request_doc_id: { _eq: \"$GENTS_request_doc_id$\" }, node_did: { _eq: \"$GENTS_node_did$\" }, $GENTS_field$: { _ne: null } }, order: { $GENTS_field$: DESC }, limit: 1"
     },
@@ -55,7 +55,7 @@
   },
   {
     "read": {
-      "path": "crates/gents-cli/src/http/prometheus.rs",
+      "path": "crates/gents-host/src/http/prometheus.rs",
       "collection": "InferenceCall",
       "arguments": "filter: { call_kind: { _in: [\"inference\", \"compaction\", \"scheduled\", \"oneoff\"] }, call_state: { _in: [\"completed\", \"failed\", \"cancelled\"] }, ended_at: { _ge: \"$GENTS_ended_after$\" } }, order: [{ ended_at: DESC }, { call_id: DESC }], limit: $GENTS_limit$, offset: $GENTS_offset$"
     },
@@ -69,7 +69,7 @@
   },
   {
     "read": {
-      "path": "crates/gents-cli/src/http/self_view.rs",
+      "path": "crates/gents-host/src/http/self_view.rs",
       "collection": "AgentRequest",
       "arguments": "filter: { node_did: { _eq: \"$GENTS_node_did$\" } }, order: { created_at: DESC }, limit: $GENTS_RECENT_REQUEST_SCAN$"
     },

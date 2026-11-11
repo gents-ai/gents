@@ -73,7 +73,7 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
         let user_home = tempfile::tempdir()?;
         let user = KeyIdentity::load_or_create(user_home.path().join("user.key"), None)?;
         let binding = provision_fresh_home(&node, identity.as_ref(), user.did()).await?;
-        let access = crate::shared::test_support::user_access(graphql, &user);
+        let access = gents_host::test_support::user_access(graphql, &user);
         let initialized = initialize_runtime_home(
             &access,
             &node,
@@ -216,7 +216,7 @@ async fn provider_selection_after_unconfigured_init_uses_the_discovered_limits()
     let user_home = tempfile::tempdir()?;
     let user = KeyIdentity::load_or_create(user_home.path().join("user.key"), None)?;
     let binding = provision_fresh_home(&node, identity.as_ref(), user.did()).await?;
-    let access = crate::shared::test_support::user_access(
+    let access = gents_host::test_support::user_access(
         home.graphql_endpoint().context("served init home")?,
         &user,
     );

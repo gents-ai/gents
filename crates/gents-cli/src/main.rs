@@ -27,7 +27,7 @@ fn main() -> anyhow::Result<()> {
             std::path::Path::new(""),
         ) {
             eprintln!("Error: {error:#}");
-            std::process::exit(gents_server::native_service::incompatible_store_exit_code(
+            std::process::exit(gents_service::native_service::incompatible_store_exit_code(
                 store.kind,
             ));
         }

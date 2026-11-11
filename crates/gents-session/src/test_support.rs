@@ -1,3 +1,5 @@
+pub mod lineage_fixtures;
+
 use crate::request::watcher::DefraWatcher;
 
 pub struct ScopedWatcherFixture {

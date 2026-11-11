@@ -50,15 +50,16 @@ pub(super) async fn resolve_scenario_dir(
         let distribution = read_distribution_manifest(&direct)?;
         return Ok((direct, None, distribution));
     }
-    let home = crate::home_state::resolve_home_dir(None);
-    let pack = super::super::resolve_pack_source(target, registry, &home).await?;
+    let home = gents_service::home_state::resolve_home_dir(None);
+    let pack =
+        gents_pack::pack::resolved_pack::resolve_pack_source(target, registry, &home).await?;
     anyhow::ensure!(
         gents_pack::pack::declared_paths(pack.manifest())
             .iter()
             .any(|path| path == "experiment.json"),
         "pack {target} has no scenario (experiment.json)"
     );
-    let (root, lease) = super::super::materialize_cached_pack(&home, &pack)?;
+    let (root, lease) = gents_pack::pack::resolved_pack::materialize_cached_pack(&home, &pack)?;
     Ok((root, Some(lease), pack.manifest().clone()))
 }
 

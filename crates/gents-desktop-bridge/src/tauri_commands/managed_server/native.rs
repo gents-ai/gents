@@ -22,7 +22,7 @@ where
 pub(super) fn native_service<R>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
-) -> Result<gents_server::native_service::NativeServiceManager, BridgeError>
+) -> Result<gents_service::native_service::NativeServiceManager, BridgeError>
 where
     R: Runtime,
 {
@@ -32,7 +32,7 @@ where
 pub(super) fn launchable_native_service<R>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
-) -> Result<gents_server::native_service::NativeServiceManager, BridgeError>
+) -> Result<gents_service::native_service::NativeServiceManager, BridgeError>
 where
     R: Runtime,
 {
@@ -168,7 +168,7 @@ fn build_native_service<R>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
     install_runtime: bool,
-) -> Result<gents_server::native_service::NativeServiceManager, BridgeError>
+) -> Result<gents_service::native_service::NativeServiceManager, BridgeError>
 where
     R: Runtime,
 {
@@ -183,7 +183,7 @@ where
         ensure_installable_location(executable.service_path())?;
         executable.install()?;
     }
-    let mut config = gents_server::native_service::NativeServiceConfig::new(
+    let mut config = gents_service::native_service::NativeServiceConfig::new(
         home,
         executable.service_path().to_path_buf(),
     )
@@ -195,12 +195,12 @@ where
     if !bundle_id.trim().is_empty() {
         config.associated_bundle_id = Some(bundle_id);
     }
-    gents_server::native_service::NativeServiceManager::new(config).map_err(native_error)
+    gents_service::native_service::NativeServiceManager::new(config).map_err(native_error)
 }
 
 pub(super) fn native_error(error: anyhow::Error) -> BridgeError {
     let code = if gents_protocol::error_chain::find_source::<
-        gents_server::native_service::UnsupportedNativeServicePlatform,
+        gents_service::native_service::UnsupportedNativeServicePlatform,
     >(error.as_ref())
     .is_some()
     {
@@ -212,12 +212,12 @@ pub(super) fn native_error(error: anyhow::Error) -> BridgeError {
 }
 
 pub(super) async fn run_native<T, F>(
-    service: gents_server::native_service::NativeServiceManager,
+    service: gents_service::native_service::NativeServiceManager,
     operation: F,
 ) -> Result<T, BridgeError>
 where
     T: Send + 'static,
-    F: FnOnce(gents_server::native_service::NativeServiceManager) -> anyhow::Result<T>
+    F: FnOnce(gents_service::native_service::NativeServiceManager) -> anyhow::Result<T>
         + Send
         + 'static,
 {

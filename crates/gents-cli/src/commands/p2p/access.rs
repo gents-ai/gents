@@ -2,9 +2,13 @@ use anyhow::Result;
 use serde_json::{json, Value};
 
 use crate::cli::args::P2pAccessArgs;
-use crate::{print_json, resolve_graphql_endpoint, resolve_home_dir};
+use crate::print_json;
+use gents_service::home_state::resolve_graphql_endpoint;
+use gents_service::home_state::resolve_home_dir;
 
-use super::output::{fetch_connected_peer_ids, fetch_live_http_p2p_status, flatten_p2p_fields};
+use gents_host::p2p_status::fetch_connected_peer_ids;
+use gents_host::p2p_status::fetch_live_http_p2p_status;
+use gents_host::p2p_status::flatten_p2p_fields;
 
 pub(super) async fn p2p_status(args: P2pAccessArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;

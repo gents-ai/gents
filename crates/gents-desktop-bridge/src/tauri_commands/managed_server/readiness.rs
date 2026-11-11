@@ -32,8 +32,8 @@ pub(super) enum NativeProgress {
     Loaded,
     Stopped,
     AwaitingApproval,
-    Exited(gents_server::native_service::ServiceExit),
-    Failed(gents_server::native_service::ServiceExit),
+    Exited(gents_service::native_service::ServiceExit),
+    Failed(gents_service::native_service::ServiceExit),
 }
 
 async fn observe_native_progress<R>(

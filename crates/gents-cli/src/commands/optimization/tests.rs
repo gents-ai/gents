@@ -4,8 +4,8 @@ use gents_eval::checks::CheckRegistry;
 use tokio_util::sync::CancellationToken;
 
 use super::testing::{
-    accepted_job, delete_definition, optimization, optimization_command, optimization_with,
-    proposer_file,
+    accepted_job, delete_definition, optimization, optimization_command, optimization_scripted,
+    optimization_with, proposer_file, scripted_proposer, with_proposer,
 };
 use super::{
     ensure_tool_less, execute, pack_config, proposer_agent_slot, subject_preamble, JobTarget,
@@ -23,7 +23,7 @@ async fn run_refuses_without_a_proposer_and_an_unknown_proposer_is_a_usage_error
         .unwrap_err();
     assert_eq!(
         error.to_string(),
-        "optimization run needs a proposer: pass --proposer scripted:<file> or --proposer agent:<pack>[:<agent>]"
+        "optimization run needs a proposer: pass --proposer agent:<pack>[:<agent>]"
     );
     let usage = match Cli::try_parse_from([
         "gents",
@@ -42,7 +42,7 @@ async fn run_refuses_without_a_proposer_and_an_unknown_proposer_is_a_usage_error
     assert!(
         usage
             .to_string()
-            .contains("pass --proposer scripted:<file> or --proposer agent:<pack>[:<agent>]"),
+            .contains("pass --proposer agent:<pack>[:<agent>]"),
         "{usage}"
     );
     assert_eq!(usage.exit_code(), 2);
@@ -357,15 +357,8 @@ async fn policy_defaults_is_sized_to_rounds_and_a_policy_file_is_taken_as_writte
 
     let fixture = Fixture::new().await;
     let pack = fixture.pack_arg();
-    let proposer = proposer_file(&fixture);
     let scripted = executor(&VALIDATION_CASES);
-    let registry = CheckRegistry::builtin();
-    fn argv<'a>(
-        pack: &'a str,
-        proposer: &'a str,
-        job_id: &'a str,
-        policy: &'a str,
-    ) -> Vec<&'a str> {
+    fn argv<'a>(pack: &'a str, job_id: &'a str, policy: &'a str) -> Vec<&'a str> {
         vec![
             "run",
             DEFINITION,
@@ -373,8 +366,6 @@ async fn policy_defaults_is_sized_to_rounds_and_a_policy_file_is_taken_as_writte
             pack,
             "--profile",
             "local",
-            "--proposer",
-            proposer,
             "--rounds",
             "2",
             "--policy",
@@ -383,10 +374,11 @@ async fn policy_defaults_is_sized_to_rounds_and_a_policy_file_is_taken_as_writte
             job_id,
         ]
     }
-    let output = optimization_with(
+    let output = optimization_scripted(
         &fixture,
-        &argv(&pack, &proposer, "defaults-2", "defaults"),
-        &deps(&scripted, &registry, CancellationToken::new()),
+        &argv(&pack, "defaults-2", "defaults"),
+        &scripted,
+        CancellationToken::new(),
     )
     .await
     .unwrap();
@@ -407,10 +399,11 @@ async fn policy_defaults_is_sized_to_rounds_and_a_policy_file_is_taken_as_writte
     )
     .unwrap();
     let path = path.display().to_string();
-    let error = optimization_with(
+    let error = optimization_scripted(
         &fixture,
-        &argv(&pack, &proposer, "file-2", &path),
-        &deps(&scripted, &registry, CancellationToken::new()),
+        &argv(&pack, "file-2", &path),
+        &scripted,
+        CancellationToken::new(),
     )
     .await
     .unwrap_err();
@@ -430,10 +423,11 @@ async fn policy_defaults_is_sized_to_rounds_and_a_policy_file_is_taken_as_writte
         .unwrap(),
     )
     .unwrap();
-    let output = optimization_with(
+    let output = optimization_scripted(
         &fixture,
-        &argv(&pack, &proposer, "calibrated-2", &path),
-        &deps(&scripted, &registry, CancellationToken::new()),
+        &argv(&pack, "calibrated-2", &path),
+        &scripted,
+        CancellationToken::new(),
     )
     .await
     .unwrap();
@@ -445,8 +439,7 @@ async fn policy_defaults_is_sized_to_rounds_and_a_policy_file_is_taken_as_writte
 async fn a_job_id_that_is_not_one_path_component_is_refused_verbatim() {
     let fixture = Fixture::new().await;
     let pack = fixture.pack_arg();
-    let proposer = super::testing::proposer_file(&fixture);
-    let error = optimization(
+    let error = optimization_scripted(
         &fixture,
         &[
             "run",
@@ -455,11 +448,11 @@ async fn a_job_id_that_is_not_one_path_component_is_refused_verbatim() {
             pack.as_str(),
             "--profile",
             "local",
-            "--proposer",
-            proposer.as_str(),
             "--job-id",
             "a/b",
         ],
+        &executor(&[]),
+        CancellationToken::new(),
     )
     .await
     .unwrap_err();
@@ -481,8 +474,6 @@ async fn an_interrupted_job_says_how_to_resume_and_the_same_command_finishes_it(
 
     let fixture = Fixture::new().await;
     let pack = fixture.pack_arg();
-    let proposer = proposer_file(&fixture);
-    let registry = CheckRegistry::builtin();
     let argv = |job_id: &'static str, json: bool| {
         let mut argv = vec![
             "run".to_owned(),
@@ -491,8 +482,6 @@ async fn an_interrupted_job_says_how_to_resume_and_the_same_command_finishes_it(
             pack.clone(),
             "--profile".to_owned(),
             "local".to_owned(),
-            "--proposer".to_owned(),
-            proposer.clone(),
             "--job-id".to_owned(),
             job_id.to_owned(),
         ];
@@ -511,11 +500,13 @@ async fn an_interrupted_job_says_how_to_resume_and_the_same_command_finishes_it(
     }
 
     let stopped = executor(&[]);
+    let proposer = super::testing::proposer(&fixture);
+    let registry = CheckRegistry::builtin();
     let mut out = Vec::new();
     let error = execute(
         &fixture.ctx,
         optimization_command(&refs(&argv("job-stop", false))),
-        &deps(&stopped, &registry, interrupted()),
+        &with_proposer(deps(&stopped, &registry, interrupted()), &proposer),
         &mut out,
     )
     .await
@@ -534,7 +525,10 @@ async fn an_interrupted_job_says_how_to_resume_and_the_same_command_finishes_it(
     let output = optimization_with(
         &fixture,
         &refs(&argv("job-stop", false)),
-        &deps(&scripted, &registry, CancellationToken::new()),
+        &with_proposer(
+            deps(&scripted, &registry, CancellationToken::new()),
+            &proposer,
+        ),
     )
     .await
     .unwrap();
@@ -562,7 +556,7 @@ async fn an_interrupted_job_says_how_to_resume_and_the_same_command_finishes_it(
     let error = execute(
         &fixture.ctx,
         optimization_command(&refs(&argv("job-json", true))),
-        &deps(&stopped, &registry, interrupted()),
+        &with_proposer(deps(&stopped, &registry, interrupted()), &proposer),
         &mut out,
     )
     .await
@@ -584,8 +578,7 @@ async fn an_interrupted_job_says_how_to_resume_and_the_same_command_finishes_it(
 async fn a_failure_before_the_freeze_does_not_say_resume() {
     let fixture = Fixture::new().await;
     let subject = format!("{}:no-such-agent", fixture.pack_arg());
-    let proposer = proposer_file(&fixture);
-    let error = optimization(
+    let error = optimization_scripted(
         &fixture,
         &[
             "run",
@@ -594,11 +587,11 @@ async fn a_failure_before_the_freeze_does_not_say_resume() {
             subject.as_str(),
             "--profile",
             "local",
-            "--proposer",
-            proposer.as_str(),
             "--job-id",
             "pre-freeze",
         ],
+        &executor(&[]),
+        CancellationToken::new(),
     )
     .await
     .unwrap_err();
@@ -616,28 +609,12 @@ async fn a_failure_before_the_freeze_does_not_say_resume() {
 #[tokio::test]
 async fn a_script_with_fewer_proposals_than_rounds_is_refused_before_the_freeze() {
     let fixture = Fixture::new().await;
-    let pack = fixture.pack_arg();
-    let proposer = proposer_file(&fixture);
-    let error = optimization(
-        &fixture,
-        &[
-            "run",
-            DEFINITION,
-            "--subject",
-            pack.as_str(),
-            "--profile",
-            "local",
-            "--proposer",
-            proposer.as_str(),
-            "--rounds",
-            "4",
-            "--job-id",
-            "short-script",
-        ],
-    )
-    .await
-    .unwrap_err();
-    let path = proposer.trim_start_matches("scripted:");
+    let path = proposer_file(&fixture);
+    let error = match scripted_proposer(&path, 4) {
+        Ok(_) => panic!("a script of 3 proposals must not serve 4 rounds"),
+        Err(error) => error,
+    };
+    let path = path.display();
     assert_eq!(
         error.to_string(),
         format!("proposer script {path} holds 3 proposals, fewer than --rounds 4")
@@ -728,12 +705,10 @@ async fn promote_refuses_a_wrong_digest_then_promotes_and_revert_closes_the_job(
 async fn rm_keeps_running_and_ready_jobs_and_removes_a_reverted_one() {
     let fixture = Fixture::new().await;
     let pack = fixture.pack_arg();
-    let proposer = proposer_file(&fixture);
     let scripted = executor(&[]);
-    let registry = CheckRegistry::builtin();
     let interrupted = CancellationToken::new();
     interrupted.cancel();
-    optimization_with(
+    optimization_scripted(
         &fixture,
         &[
             "run",
@@ -742,12 +717,11 @@ async fn rm_keeps_running_and_ready_jobs_and_removes_a_reverted_one() {
             pack.as_str(),
             "--profile",
             "local",
-            "--proposer",
-            proposer.as_str(),
             "--job-id",
             "job-running",
         ],
-        &deps(&scripted, &registry, interrupted),
+        &scripted,
+        interrupted,
     )
     .await
     .unwrap_err();

@@ -6,7 +6,6 @@ use gents_p2p::p2p_reconcile::registry::{
     registry_upsert_mutation, validate_offered_templates, RegistryEntry, UpsertKind,
 };
 use gents_p2p::p2p_reconcile::{heartbeat_is_fresh, REGISTRY_STALE_AFTER};
-use gents_store::graphql::escape_graphql_string;
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -14,7 +13,7 @@ use crate::cli::args::{P2pAccessArgs, P2pNetworkListArgs, P2pNetworkRegisterArgs
 use crate::cli::output_format::OutputFormat;
 use crate::{graphql_rows, print_json, resolve_config_access};
 
-use super::output::load_live_http_p2p_status;
+use gents_host::p2p_status::load_live_http_p2p_status;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct PeerRegistryRow {
@@ -35,7 +34,10 @@ struct PeerRegistryRow {
 }
 
 pub(super) async fn p2p_network_register(args: P2pNetworkRegisterArgs) -> Result<()> {
-    let graphql = crate::resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let graphql = gents_service::home_state::resolve_graphql_endpoint(
+        args.graphql.as_deref(),
+        args.home.as_deref(),
+    )?;
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
 
@@ -68,8 +70,8 @@ pub(super) async fn p2p_network_register(args: P2pNetworkRegisterArgs) -> Result
         })
         .unwrap_or_default();
 
-    let node_did =
-        crate::resolve_node_did(args.home.as_deref(), None).context("resolving local node DID")?;
+    let node_did = gents_service::home_state::resolve_node_did(args.home.as_deref(), None)
+        .context("resolving local node DID")?;
 
     let templates = validate_offered_templates(args.templates.iter().map(String::as_str))?;
     let network_id = args.network_id.as_deref().unwrap_or("default").to_string();
@@ -162,7 +164,10 @@ pub(super) async fn p2p_network_list(args: P2pNetworkListArgs) -> Result<()> {
 }
 
 pub(super) async fn p2p_network_rm(args: P2pAccessArgs) -> Result<()> {
-    let graphql = crate::resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let graphql = gents_service::home_state::resolve_graphql_endpoint(
+        args.graphql.as_deref(),
+        args.home.as_deref(),
+    )?;
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
 
@@ -179,7 +184,7 @@ pub(super) async fn p2p_network_rm(args: P2pAccessArgs) -> Result<()> {
 
     let mutation = delete_registry_mutation(&peer_id);
     let response = access
-        .write("cli.p2p.network.delete", &mutation)
+        .write_rendered("cli.p2p.network.delete", &mutation)
         .await
         .context("deleting PeerRegistry row")?;
     let removed_count = count_deleted(&response, "delete_PeerRegistry");
@@ -222,15 +227,9 @@ fn pairing_desired_peer_ids_query() -> &'static str {
     }"#
 }
 
-fn delete_registry_mutation(peer_id: &str) -> String {
-    let peer_id = escape_graphql_string(peer_id);
-    format!(
-        r#"mutation {{
-            delete_PeerRegistry(
-                filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}
-            ) {{ _docID }}
-        }}"#
-    )
+fn delete_registry_mutation(peer_id: &str) -> gents_protocol::document_query::Rendered {
+    use gents_protocol::document_query::{fields::peer_registry as fields, Delete, Filter};
+    Delete::matching(Filter::eq(fields::PEER_ID, peer_id)).render()
 }
 
 fn parse_registry_rows(
@@ -500,8 +499,9 @@ mod tests {
     #[test]
     fn delete_registry_mutation_uses_peer_id_filter() {
         let mutation = delete_registry_mutation(r#"peer"one"#);
-        assert!(mutation.contains(r#"filter: { peer_id: { _eq: "peer\"one" } }"#));
-        assert!(mutation.contains("delete_PeerRegistry"));
+        assert!(mutation.document.contains("filter: {peer_id: {_eq: $v0}}"));
+        assert!(mutation.document.contains("delete_PeerRegistry"));
+        assert_eq!(mutation.variables, json!({ "v0": r#"peer"one"# }));
     }
 
     #[test]

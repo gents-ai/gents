@@ -1,0 +1,28 @@
+pub mod access;
+mod agent_identity;
+pub mod enrollment;
+pub mod explorer;
+pub mod file_inventory;
+pub mod fleet;
+pub mod fleet_slots;
+pub mod healthz;
+pub mod identity_decide;
+pub mod inference;
+pub mod inference_activity;
+pub mod liveness;
+pub mod mcp_pool;
+pub mod mcp_server;
+pub mod metrics_scrape;
+pub mod pack_install;
+pub mod pack_install_client;
+mod pack_watch;
+pub mod private_reader;
+pub mod prometheus;
+pub mod router;
+pub mod runtime_control;
+pub mod self_view;
+pub mod sessions;
+pub mod shutdown_streams;
+pub mod version;
+
+pub use router::runtime_contract_router;

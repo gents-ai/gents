@@ -1,5 +1,6 @@
 use std::io::{self, Write};
 
+use crate::shared::wire;
 use gents::eval::TrialUsage;
 use gents_eval::optimization::Decision;
 use gents_eval::report::{
@@ -12,6 +13,7 @@ use gents_eval::runner::{
 };
 use serde::Serialize;
 
+use super::frame::{compact, duration, short_id};
 use super::inspect::{ListRow, TrialView};
 
 pub(crate) fn percent(bp: Option<u32>) -> String {
@@ -19,17 +21,6 @@ pub(crate) fn percent(bp: Option<u32>) -> String {
         || "-".to_owned(),
         |bp| format!("{}.{:02}%", bp / 100, bp % 100),
     )
-}
-
-pub(crate) fn wire<T>(value: &T) -> String
-where
-    T: Serialize,
-{
-    match serde_json::to_value(value) {
-        Ok(serde_json::Value::String(text)) => text,
-        Ok(other) => other.to_string(),
-        Err(_) => "?".to_owned(),
-    }
 }
 
 fn count(value: Option<u64>) -> String {
@@ -826,25 +817,4 @@ fn wrapped(out: &mut dyn Write, label: &str, items: Vec<String>) -> io::Result<(
         first = false;
     }
     writeln!(out, "{line}")
-}
-
-fn compact(value: Option<u64>) -> String {
-    match value {
-        None => "-".to_owned(),
-        Some(value @ 0..=9_999) => value.to_string(),
-        Some(value @ 10_000..=999_999) => format!("{:.1}k", value as f64 / 1_000.0),
-        Some(value) => format!("{:.2}M", value as f64 / 1_000_000.0),
-    }
-}
-
-fn duration(seconds: u64) -> String {
-    match seconds {
-        0..=99 => format!("{seconds}s"),
-        100..=3599 => format!("{}m{:02}s", seconds / 60, seconds % 60),
-        _ => format!("{}h{:02}m", seconds / 3600, seconds % 3600 / 60),
-    }
-}
-
-fn short_id(trial_id: &str) -> &str {
-    trial_id.get(..12).unwrap_or(trial_id)
 }

@@ -1274,10 +1274,10 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "an_unexercised_task_target_is_refused_before_any_job_or_trial_is_created",
         },
         ConformanceConsumer::RustTest {
-            id: "caused_sessions::tests::generated_plugin_job_lineage_cases_drive_caused_session_readers",
-            package: "gents-cli",
-            source_path: "crates/gents-cli/src/caused_sessions.rs",
-            module_path: "caused_sessions::tests",
+            id: "session::caused::tests::generated_plugin_job_lineage_cases_drive_caused_session_readers",
+            package: "gents-session",
+            source_path: "crates/gents-session/src/session/caused.rs",
+            module_path: "session::caused::tests",
             function: "generated_plugin_job_lineage_cases_drive_caused_session_readers",
         },
         ConformanceConsumer::RustTest {
@@ -2318,8 +2318,8 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
         },
         ConformanceConsumer::RustTest {
             id: "http::prometheus::tests::backend_probe_status_metric_reflects_measured_health",
-            package: "gents-cli",
-            source_path: "crates/gents-cli/src/http/prometheus.rs",
+            package: "gents-host",
+            source_path: "crates/gents-host/src/http/prometheus.rs",
             module_path: "http::prometheus::tests",
             function: "backend_probe_status_metric_reflects_measured_health",
         },
@@ -2472,8 +2472,8 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
         },
         ConformanceConsumer::RustTest {
             id: "http::identity_decide::tests::identity_decide_endpoint_matches_resolved_lean_permission_cases",
-            package: "gents-cli",
-            source_path: "crates/gents-cli/src/http/identity_decide.rs",
+            package: "gents-host",
+            source_path: "crates/gents-host/src/http/identity_decide.rs",
             module_path: "http::identity_decide::tests",
             function: "identity_decide_endpoint_matches_resolved_lean_permission_cases",
         },

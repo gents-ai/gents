@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{Subcommand, ValueEnum};
-use serde::{Deserialize, Serialize};
+use clap::Subcommand;
 
 use super::{
     BackendDiscoverModelsArgs, BackendPoolArgs, BackendSetArgs, ConfigApplyArgs, ConfigDiffArgs,
@@ -71,22 +70,6 @@ pub(crate) enum ConfigCommand {
         #[command(subcommand)]
         command: PackCommand,
     },
-}
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, ValueEnum, PartialEq, Eq)]
-pub enum ToolCeilingArg {
-    MetaOnly,
-    Readonly,
-    Readwrite,
-}
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, ValueEnum, PartialEq, Eq)]
-pub(crate) enum ToolPackageArg {
-    Minimal,
-    Introspection,
-    Readonly,
-    Write,
-    Yolo,
 }
 
 #[derive(Subcommand)]

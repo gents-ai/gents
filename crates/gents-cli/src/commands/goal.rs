@@ -11,7 +11,8 @@ use crate::cli::args::{
     GoalStatusArg,
 };
 use crate::cli::output_format::OutputFormat;
-use crate::{print_json, resolve_config_access, resolve_node_did};
+use crate::{print_json, resolve_config_access};
+use gents_service::home_state::resolve_node_did;
 
 pub(crate) async fn dispatch(command: GoalCommand) -> Result<()> {
     match command {

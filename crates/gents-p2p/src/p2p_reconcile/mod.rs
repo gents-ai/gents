@@ -8,7 +8,9 @@ pub mod enrollment_candidate;
 mod enrollment_exchange;
 pub mod enrollment_member_authority;
 mod enrollment_member_renewal;
+pub mod enrollment_network;
 pub mod enrollment_offer;
+pub mod enrollment_operator;
 pub mod enrollment_projection;
 pub mod enrollment_reconcile;
 mod enrollment_renewal;
@@ -39,7 +41,12 @@ pub use engine::{
 };
 pub use enrollment_exchange::consume_renewal_offer;
 pub use enrollment_member_renewal::run_client_member_renewals;
+pub use enrollment_network::ensure_enrollment_network;
 pub use enrollment_offer::{EnrollmentOfferIssuer, EnrollmentOfferStatus};
+pub use enrollment_operator::{
+    authenticate_operator_command, authenticate_operator_query, consume_operator_nonce,
+    operator_query_view,
+};
 pub use enrollment_reconcile::{
     enrollment_authority_channel, run_enrollment_reconciler, EnrollmentAuthorityHandle,
     EnrollmentAuthorityOwner, EnrollmentAuthorizationFence, PeerAdmissionAuthority,

@@ -3,10 +3,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 
-use super::super::cli_process::path_arg;
 use super::super::server::spawn_server_with_args_and_env;
 use super::manifest::{PackSeed, ScenarioManifest};
 use super::validate::tool_package_needs_root;
+use gents_host::cli_process::path_arg;
 use gents_store::graphql::validate_collection_identifier;
 
 pub(super) struct DependencyInstall<'a> {
@@ -45,12 +45,13 @@ pub(super) async fn install_dependencies(
             args.push("--grant-authority".to_owned());
         }
         let dependency_pack =
-            super::super::resolve_pack_source(package, ctx.registry, ctx.home).await?;
+            gents_pack::pack::resolved_pack::resolve_pack_source(package, ctx.registry, ctx.home)
+                .await?;
         for slot in &dependency_pack.manifest().metadata.inference_slots {
             args.push("--inference-slot".to_owned());
             args.push(format!("{}={}", slot.name, ctx.inference_profile_id));
         }
-        super::super::cli_process::run_cli_json_with_env(
+        gents_host::cli_process::run_cli_json_with_env(
             ctx.bin,
             &args,
             environments.get(package).cloned().unwrap_or_default(),

@@ -1,12 +1,14 @@
-use super::install::{
-    check_expected_digest, check_wire_target, install_documents_command_with_local,
-};
+use super::install::install_documents_command_with_local;
 use super::scope::resolve_plugin_slot_owner;
 use super::source::names_a_directory;
 use super::*;
 use crate::packs::EditedDocuments;
+use anyhow::Context;
+use gents_pack::pack::install_flow::check_wire_target;
+use gents_pack::pack::resolved_pack::{materialize_cached_pack, resolve_pack_source, ResolvedPack};
 use gents_pack::pack::{PackChangeError, PackKind, PackManifest};
 use gents_pack::plugin::authority::GrantError;
+use std::collections::BTreeMap;
 
 #[tokio::test]
 async fn a_bare_subject_spec_is_a_pack_name_even_when_the_cwd_has_that_directory() {
@@ -93,28 +95,6 @@ async fn resolution_prefers_the_home_store_without_the_registry() {
 }
 
 #[tokio::test]
-async fn resolution_falls_back_to_the_registry_and_reports_the_offline_sentence() {
-    let result = resolve_pack_source(
-        "definitely_not_a_stored_pack",
-        Some("http://127.0.0.1:1"),
-        tempfile::tempdir().unwrap().path(),
-    )
-    .await;
-    let Err(error) = result else {
-        panic!("neither the store nor the registry has this pack");
-    };
-    let message = format!("{error:#}");
-    assert!(
-        message.contains("is not in the pack store of") && message.contains("could not be reached"),
-        "{message}"
-    );
-    assert!(
-        message.contains("definitely_not_a_stored_pack"),
-        "{message}"
-    );
-}
-
-#[tokio::test]
 async fn plugin_slot_bindings_need_a_declared_slot_and_open_no_store_without_one() {
     let manifest: PackManifest = serde_json::from_value(json!({
         "manifest_version": 1, "name": "ocr", "version": "1.0.0", "description": "d",
@@ -194,10 +174,9 @@ fn document_pack_preview_shows_the_install_variable_and_its_target() {
     std::fs::write(config_path, serde_json::to_vec(&config).unwrap()).unwrap();
     let (bytes, _) = gents_pack::pack::archive::pack_dir(dir.path()).unwrap();
     let archive = gents_pack::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
-    let source =
-        super::source::PackSource::received(archive, gents_pack::pack::PackSource::Installed)
-            .unwrap();
-    let preview = super::install::install_variable_preview(&source, "did:key:node").unwrap();
+    let source = ResolvedPack::received(archive, gents_pack::pack::PackSource::Installed).unwrap();
+    let preview =
+        gents_pack::pack::install_flow::install_variable_preview(&source, "did:key:node").unwrap();
     assert_eq!(preview["kind"], "install_literal");
     assert_eq!(preview["uses"][0]["path"], "/node/node_did");
     assert_eq!(
@@ -236,7 +215,7 @@ fn dependency_preview_reads_installed_literals_instead_of_the_current_environmen
     authored["tools"][0]["display_name"] = json!("${DISPLAY_LABEL:-fallback}");
     std::fs::write(config_path, serde_json::to_vec(&authored).unwrap()).unwrap();
     let (bytes, _) = gents_pack::pack::archive::pack_dir(dir.path()).unwrap();
-    let source = super::source::PackSource::received(
+    let source = ResolvedPack::received(
         gents_pack::pack::archive::PackArchive::from_bytes(&bytes).unwrap(),
         gents_pack::pack::PackSource::Installed,
     )
@@ -245,7 +224,8 @@ fn dependency_preview_reads_installed_literals_instead_of_the_current_environmen
         "node": {"node_did": "did:key:node"},
         "tools": [{"node_did": "did:key:node", "tools_id": "demo-tools", "display_name": "installed value"}]
     })).unwrap();
-    let preview = super::install::reused_variable_preview(&source, &config).unwrap();
+    let preview =
+        gents_pack::pack::install_flow::reused_variable_preview(&source, &config).unwrap();
     let node = preview["uses"]
         .as_array()
         .unwrap()
@@ -271,25 +251,6 @@ fn dependency_preview_reads_installed_literals_instead_of_the_current_environmen
         target["document"],
         json!({"collection": "Tools", "id": "demo-tools"})
     );
-}
-
-#[test]
-fn dependency_variable_overrides_are_scoped_and_reject_duplicates() {
-    let parse = super::install::parse_dependency_variables;
-    let values = parse(&["acme/alpha:HOST=one=two".into(), "acme/beta:HOST=".into()]).unwrap();
-    assert_eq!(values["acme/alpha"]["HOST"].as_deref(), Some("one=two"));
-    assert_eq!(values["acme/beta"]["HOST"].as_deref(), Some(""));
-    assert!(parse(&["acme/alpha:HOST=one".into(), "acme/alpha:HOST=two".into()]).is_err());
-    assert!(parse(&["HOST=one".into()]).is_err());
-}
-
-#[test]
-fn remote_plugin_routing_does_not_resolve_install_variables() {
-    let config = json!({"tools": [{"integrations": {"plugins": [{"plugin": "${UNSET_PLUGIN}"}]}}]});
-    assert!(super::install::has_plugin_references(&config));
-    assert!(!super::install::has_plugin_references(
-        &json!({"tools": [{"integrations": {"plugins": []}}]})
-    ));
 }
 
 async fn initialized_home() -> tempfile::TempDir {
@@ -784,23 +745,6 @@ fn local_publication_failure_restores_exactly_the_previous_records() {
     );
     assert!(error.is_err());
     assert!(super::super::plugin::store::read_record(home.path(), "acme", "brandnew").is_err());
-}
-
-#[test]
-fn expect_digest_match_passes() {
-    check_expected_digest(Some("sha256:abc"), "sha256:abc").unwrap();
-    check_expected_digest(None, "sha256:abc").unwrap();
-}
-
-#[test]
-fn expect_digest_mismatch_names_both_digests_and_pack_show() {
-    let error = format!(
-        "{:#}",
-        check_expected_digest(Some("sha256:expected"), "sha256:actual").unwrap_err()
-    );
-    for needle in ["sha256:expected", "sha256:actual", "gents config pack show"] {
-        assert!(error.contains(needle), "{needle} missing from {error}");
-    }
 }
 
 #[test]

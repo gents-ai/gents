@@ -131,7 +131,7 @@ fn classify_with_package(
     app_dir: Option<&Path>,
     app_image: Option<&Path>,
 ) -> ServiceExecutable {
-    if gents_server::native_service::inside_temporary_package(&executable, app_dir, app_image) {
+    if gents_service::native_service::inside_temporary_package(&executable, app_dir, app_image) {
         return ServiceExecutable::Packaged {
             installed: desktop_home.join(RUNTIME_DIR).join(gents_executable_name()),
             source: executable,

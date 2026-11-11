@@ -5,12 +5,14 @@ use clap::Parser as _;
 use gents_store::local::home::remember_home;
 use gents_tools::surface::refuse_too_broad_root;
 
-use crate::cli::args::{InitArgs, StoreKeyCustodyArg};
+use crate::cli::args::InitArgs;
 use crate::cli::{Cli, Command};
 use crate::commands::eval::terminal_size;
 use crate::commands::init::init_home;
-use crate::home_state::{read_finished_init_config, resolve_home_dir};
 use crate::interactive_backend::{confirm, prompt_line_default, resolve_backend_interactively};
+use gents_host::args::StoreKeyCustodyArg;
+use gents_service::home_state::read_finished_init_config;
+use gents_service::home_state::resolve_home_dir;
 
 /// The app icon's bars sit exactly on this grid, measured from
 /// `apps/gents-desktop/src-tauri/icons/icon.png`.
@@ -235,7 +237,8 @@ fn next_step_lines(initialized: &serde_json::Value, home: &Path) -> Vec<String> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::args::{ToolCeilingArg, ToolPackageArg};
+    use gents_service::args::ToolCeilingArg;
+    use gents_service::args::ToolPackageArg;
 
     #[test]
     fn logo_keeps_the_app_icon_grid_at_its_size() {
@@ -375,7 +378,9 @@ mod tests {
         args.no_default_packs = true;
         crate::commands::init::init_home(args).await.unwrap();
 
-        let config = crate::home_state::read_init_config(&home).unwrap().unwrap();
+        let config = gents_service::home_state::read_init_config(&home)
+            .unwrap()
+            .unwrap();
         assert_eq!(config.tool_package, Some(ToolPackageArg::Yolo));
         assert_eq!(config.tool_ceiling, ToolCeilingArg::Readwrite);
         assert_eq!(config.tool_root.as_deref(), root.to_str());

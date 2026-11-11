@@ -2,8 +2,8 @@ use std::path::Path;
 
 use serde_json::{json, Value};
 
-use crate::cli::args::ToolCeilingArg;
-use crate::shared::StoredInitConfig;
+use gents_service::args::ToolCeilingArg;
+use gents_service::state::StoredInitConfig;
 
 pub(super) fn diagnose_tool_ceiling(init_config: Option<&StoredInitConfig>) -> Value {
     match init_config {
@@ -26,7 +26,7 @@ pub(super) fn diagnose_tool_ceiling(init_config: Option<&StoredInitConfig>) -> V
             };
             json!({
                 "ok": ok,
-                "tool_ceiling": crate::format_tool_ceiling(config.tool_ceiling),
+                "tool_ceiling": gents_host::tool_ceiling::format_tool_ceiling(config.tool_ceiling),
                 "tool_root": config.tool_root,
                 "error": error,
             })

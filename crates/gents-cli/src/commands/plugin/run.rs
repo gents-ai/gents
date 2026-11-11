@@ -11,8 +11,8 @@ use crate::cli::args::PluginRunArgs;
 use super::store::{self, InstalledPlugin};
 
 pub(crate) async fn run(args: PluginRunArgs) -> Result<()> {
-    let (namespace, name) = crate::commands::pack::split_namespace(&args.name);
-    let home = crate::home_state::resolve_home_dir(args.home.as_deref());
+    let (namespace, name) = gents_pack::pack::registry::split_pack_coordinate(&args.name);
+    let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
     let record = store::read_record(&home, namespace, name).with_context(|| {
         format!(
             "{namespace}/{name} is not installed under {}; run `gents config pack plugin install {name}` \
@@ -232,7 +232,7 @@ mod tests {
     #[tokio::test]
     async fn ux_plugin_writes_are_scoped_and_atomic() {
         // The operator is the home's enrolled User, writing as itself.
-        let client = crate::shared::test_support::ClientHome::new().await;
+        let client = gents_host::test_support::ClientHome::new().await;
         client
             .node()
             .add_collection("type UxNote { body: String }")
