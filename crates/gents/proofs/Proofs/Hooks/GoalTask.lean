@@ -52,7 +52,16 @@ collection, so the plugin reports the bindings it holds and core classifies
 against that report. The cleaner end state is for Goals to request an outcome
 when a Goal ends, so core never needs the view; the existing model's
 `recoverOutcomes` is a sweep over every request and does not allow that
-narrowing without changing its statement. -/
+narrowing without changing its statement.
+
+Decision 2026-11-11, maintainer-approved: both are core operations registered
+by triggers (`trigger.goal_assignment.apply`, `trigger.goal_outcomes.settle`).
+The native plugin additionally asks core to supersede the session's pending
+continuations the new assignment makes stale (`Hooks.supersedeAll`), creates
+the first Goal with its session-child grants (`Hooks.sessionChildGrants`), and
+reads the session token-usage baseline as a named core read
+(`Hooks.Read.core`). The Durable model has no pending continuations, request
+ACP or usage, so this slice is unchanged by them. -/
 inductive TaskOp where
   | settleOutcomes (goals : List GoalBinding)
   | assignmentApplied (fire : Identity)
