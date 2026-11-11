@@ -52,7 +52,7 @@ impl PackChange {
         let coordinate = self.package.trim();
         anyhow::ensure!(!coordinate.is_empty(), "pack name must not be blank");
         if local::classify(coordinate).is_none() {
-            resolve::parse_pack_spec(coordinate)?;
+            crate::documents::pack_spec::parse_pack_spec(coordinate)?;
         }
         anyhow::ensure!(
             self.variables.len() <= 32,
@@ -104,7 +104,7 @@ pub fn edited_policy(word: Option<&str>) -> Result<DriftPolicy> {
 
 /// `NAMESPACE/NAME` of `package`, whose version a removal does not take.
 pub fn coordinate_of(package: &str, removal: bool) -> Result<String> {
-    let spec = resolve::parse_pack_spec(package.trim())?;
+    let spec = crate::documents::pack_spec::parse_pack_spec(package.trim())?;
     anyhow::ensure!(
         !removal || spec.version.is_none(),
         "pack remove takes a coordinate without a version; remove {}/{}",
@@ -169,7 +169,7 @@ impl Distribution {
             return self.digest().to_owned();
         }
         let manifest = self.manifest();
-        if super::store::is_valid_index_version(&manifest.version) {
+        if crate::documents::pack_spec::is_valid_index_version(&manifest.version) {
             format!(
                 "{}/{}@{}",
                 manifest.metadata.namespace, manifest.name, manifest.version
@@ -292,7 +292,7 @@ impl NodePacks<'_> {
             None => {}
         }
         let registry_url = registry::resolve_registry_url(None);
-        let spec = match resolve::parse_pack_spec(coordinate)? {
+        let spec = match crate::documents::pack_spec::parse_pack_spec(coordinate)? {
             parsed if operation == "update" && parsed.version.is_none() => {
                 let client = registry::RegistryClient::new(registry_url.clone());
                 let latest = registry::resolve_pack_coordinate(

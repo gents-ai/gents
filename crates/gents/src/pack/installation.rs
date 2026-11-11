@@ -131,11 +131,11 @@ impl PackSource {
         } = self
         {
             anyhow::ensure!(
-                super::is_valid_pack_name(namespace) && super::is_valid_pack_name(name),
+                crate::documents::pack_spec::is_valid_pack_name(namespace) && crate::documents::pack_spec::is_valid_pack_name(name),
                 "invalid registry pack coordinate"
             );
             anyhow::ensure!(
-                super::store::is_valid_index_version(version),
+                crate::documents::pack_spec::is_valid_index_version(version),
                 "invalid registry pack version"
             );
             anyhow::ensure!(

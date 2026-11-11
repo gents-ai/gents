@@ -126,7 +126,7 @@ fn dev_root(home: &Path) -> PathBuf {
 /// A dev plugin's folder name doubles as its listing id and lands in a
 /// path, so it is held to the same rule as a pack name.
 fn is_dev_id(name: &str) -> bool {
-    crate::pack::is_valid_pack_name(name)
+    crate::documents::pack_spec::is_valid_pack_name(name)
 }
 
 /// Every UX plugin on disk under `home`, dev door then pack door, each

@@ -64,7 +64,7 @@ impl PackInstaller {
         // A shipped job block is granted by this install under pack authority
         // (Lean `packJobBlockAdmissible`); the receipt records the grant and
         // what `check` leaves refused.
-        let job_blocks = crate::tools::background::job::settings::dynamic_check_notices(
+        let job_blocks = crate::documents::plugin_job_settings::dynamic_check_notices(
             prepared
                 .config
                 .tools

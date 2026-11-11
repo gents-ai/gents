@@ -2,7 +2,7 @@ use super::*;
 use crate::documents::{AgentContext, AgentTools, BuiltInTools};
 use crate::pack::InstalledVia;
 use crate::plugin::store::InstalledPlugin;
-use crate::tools::background::job::settings;
+use crate::documents::plugin_job_settings;
 use gents_protocol::job::{DynamicMode, JobPolicy, PluginJobSettings};
 use serde_json::json;
 use std::collections::BTreeSet;
@@ -131,7 +131,7 @@ fn targets_from_without_reviewed_block_builds_a_valid_block() {
         block.max_wall_secs,
         PluginJobSettings::DEFAULT_MAX_WALL_SECS
     );
-    assert!(settings::validate(block).is_empty());
+    assert!(plugin_job_settings::validate(block).is_empty());
     assert_eq!(report.job.as_ref(), Some(block));
     assert!(report.next_call.is_none());
     // A block left at check says what that refuses and the call that
@@ -190,7 +190,7 @@ fn engine_reviewed_block_with_wf_read_only_passes() {
     .unwrap();
     let block = block(&tools).unwrap();
     assert_eq!(block, &reviewed);
-    assert!(settings::validate(block).is_empty());
+    assert!(plugin_job_settings::validate(block).is_empty());
 }
 
 #[test]
@@ -481,7 +481,7 @@ fn targets_from_removal_keeps_the_plugin() {
         set(&block.policy.trusted_packs),
         BTreeSet::from(["acme/engine", "acme/extra"])
     );
-    assert!(settings::validate(block).is_empty());
+    assert!(plugin_job_settings::validate(block).is_empty());
     assert_eq!(
         set(&tools.agents.as_ref().unwrap().target_ids),
         BTreeSet::from(["wf-c"])

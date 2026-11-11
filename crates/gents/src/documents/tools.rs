@@ -940,7 +940,7 @@ impl Tools {
                     ));
                 }
                 if let Some(job) = &plugin.job {
-                    for error in crate::tools::background::job::settings::validate(job) {
+                    for error in crate::documents::plugin_job_settings::validate(job) {
                         errors.push(format!("integrations.plugins[{}].{error}", plugin.plugin));
                     }
                 }

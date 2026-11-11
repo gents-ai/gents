@@ -98,7 +98,7 @@ pub fn refusal_code(error: &PromotionError) -> Option<&'static str> {
 
 /// The run's handle as the tool name, when it is a pack name.
 pub fn default_name(handle: &str) -> Option<String> {
-    gents::pack::is_valid_pack_name(handle).then(|| handle.to_owned())
+    gents::documents::pack_spec::is_valid_pack_name(handle).then(|| handle.to_owned())
 }
 
 /// Refuses an agent with no Tools document: wiring into it would fail after

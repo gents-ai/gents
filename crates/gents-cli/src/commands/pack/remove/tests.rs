@@ -259,7 +259,7 @@ async fn removing_a_materialized_pack_preserves_a_digest_named_namespace() {
             let dir = assets_pack_dir("fixture", "materialized", &format!("1.0.{version}"));
             let pack = super::super::test_support::local_pack_source(dir.path(), home.path());
             let namespace = gents::pack::archive::digest_hex(pack.digest()).unwrap();
-            gents::pack::is_valid_pack_name(namespace).then_some(dir)
+            gents::documents::pack_spec::is_valid_pack_name(namespace).then_some(dir)
         })
         .expect("a pack digest beginning with a letter");
     let record =

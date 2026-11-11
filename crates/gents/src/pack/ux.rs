@@ -2,7 +2,8 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-use super::{is_distributable_asset_path, is_valid_pack_name};
+use super::is_distributable_asset_path;
+use crate::documents::pack_spec::is_valid_pack_name;
 
 /// Where a UX plugin's files must live inside a pack, by convention
 /// (`ux/<name>/plugin.js`). Checked in [`PackUxPlugin::validate`].

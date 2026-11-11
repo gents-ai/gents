@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use super::{is_valid_pack_name, InstalledPackPlugin, PackKind, PackSource, PackSourceHistory};
+use super::{InstalledPackPlugin, PackKind, PackSource, PackSourceHistory};
+use crate::documents::pack_spec::is_valid_pack_name;
 use crate::pack::archive::PackArchive;
 use crate::store::local::file_lock::FileLock;
 

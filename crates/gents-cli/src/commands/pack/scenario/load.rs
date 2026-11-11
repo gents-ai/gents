@@ -22,7 +22,7 @@ pub(super) fn validate_source_pack_path(path: &Path) -> Result<()> {
         .and_then(|name| name.to_str())
         .context("source pack path needs a UTF-8 directory name")?;
     anyhow::ensure!(
-        gents::pack::is_valid_pack_name(name),
+        gents::documents::pack_spec::is_valid_pack_name(name),
         "source pack directory name must be snake_case"
     );
     Ok(())

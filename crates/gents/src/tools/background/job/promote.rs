@@ -259,7 +259,7 @@ pub fn target_owners(targets: &[String], shipped: &[(String, Vec<String>)]) -> O
 /// `name` is `^[a-z][a-z0-9_]*$` and not yet `gents/<name>` as an installed
 /// pack or plugin. A leftover `packs/promoted/<name>` directory does not take it.
 pub fn validate_name(home: &Path, name: &str) -> Result<(), PromoteRefusal> {
-    if !crate::pack::is_valid_pack_name(name) {
+    if !crate::documents::pack_spec::is_valid_pack_name(name) {
         return Err(PromoteRefusal::BadName(name.to_owned()));
     }
     let coordinate = format!("{NAMESPACE}/{name}");
@@ -759,9 +759,9 @@ mod tests {
         let job = &config["tools"][0]["integrations"]["plugins"][0]["job"];
         assert_eq!(job["agent_targets"], json!(["wf-read-only"]));
         // `check_dir` stops at an unbuilt pack; this is the validation it runs once built.
-        let settings = crate::tools::background::job::settings::parse(job.clone()).unwrap();
+        let settings = crate::documents::plugin_job_settings::parse(job.clone()).unwrap();
         assert_eq!(
-            crate::tools::background::job::settings::validate(&settings),
+            crate::documents::plugin_job_settings::validate(&settings),
             Vec::<String>::new()
         );
     }

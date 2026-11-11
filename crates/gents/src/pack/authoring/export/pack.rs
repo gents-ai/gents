@@ -12,9 +12,9 @@ use crate::pack::authoring::{
     add_plugin_source, check_dir, pack_name, scaffold, to_snake_case, CheckReport, Names, PackEdit,
     ScaffoldInput, Template,
 };
+use crate::documents::pack_spec::is_valid_pack_name;
 use crate::pack::{
-    agent_did_variable, agent_slot_reference, inference_slot_reference, is_valid_pack_name,
-    pack_origin_from_tags,
+    agent_did_variable, agent_slot_reference, inference_slot_reference, pack_origin_from_tags,
 };
 use crate::store::config_client::ConfigAccess;
 use crate::Collection;
