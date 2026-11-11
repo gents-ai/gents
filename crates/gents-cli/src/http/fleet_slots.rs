@@ -3,9 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use gents::tools::call::lifecycle::deadline_is_expired;
 use gents::call_state_holds_backend_slot;
 use gents::documents::inference_backend::UNKNOWN_PROBE_STATUS;
+use gents::tools::call::lifecycle::deadline_is_expired;
 use gents_protocol::row::{
     project_node_readiness_summary, AgentReadinessState, AgentRequestRow, NodeReadinessRow,
     ProjectedNodeReadinessSummary,

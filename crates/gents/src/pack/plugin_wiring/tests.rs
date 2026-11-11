@@ -1,8 +1,8 @@
 use super::*;
+use crate::documents::plugin_job_settings;
 use crate::documents::{AgentContext, AgentTools, BuiltInTools};
 use crate::pack::InstalledVia;
 use crate::plugin::store::InstalledPlugin;
-use crate::documents::plugin_job_settings;
 use gents_protocol::job::{DynamicMode, JobPolicy, PluginJobSettings};
 use serde_json::json;
 use std::collections::BTreeSet;

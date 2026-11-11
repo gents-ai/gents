@@ -23,9 +23,9 @@ use super::output::{guest_state_of, progress_of, scratch_of, settlement_of, writ
 use super::rows::{load_lifecycle, read_lifecycle_state, read_step_row, read_step_row_in_txn};
 use super::settle::settle_plugin_job_in_txn;
 use super::{step_failure, JobRuntime, StepFailure};
+use crate::documents::plugin_coordinate::parse_coordinate;
 use crate::plugin::data::{DataCaller, StampContext};
 use crate::plugin::job_calls::JobCaller;
-use crate::documents::plugin_coordinate::parse_coordinate;
 use crate::plugin::store::{read_published_record, InstalledPlugin, PublishedPluginReadError};
 use crate::plugin::GuestTrap;
 use crate::session::tool_call_state::ToolCallState;

@@ -1,9 +1,9 @@
 mod support;
 
+use gents::documents::mailbox_write_decl::{MailboxAction, MailboxKind};
 use gents::runtime::agent::p2p_reconcile::{
     EmbeddedRemoteP2pAdmin, PairingFilters, RemoteP2pAdmin,
 };
-use gents::documents::mailbox_write_decl::{MailboxAction, MailboxKind};
 use gents::session::mailbox::{FileMailboxItemArgs, MailboxSourceKind, MailboxStampContext};
 use gents::store::config_client::{ConfigAccess, NodePermission};
 use gents::{KeyIdentity, NodeIdentity};

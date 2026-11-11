@@ -131,7 +131,8 @@ impl PackSource {
         } = self
         {
             anyhow::ensure!(
-                crate::documents::pack_spec::is_valid_pack_name(namespace) && crate::documents::pack_spec::is_valid_pack_name(name),
+                crate::documents::pack_spec::is_valid_pack_name(namespace)
+                    && crate::documents::pack_spec::is_valid_pack_name(name),
                 "invalid registry pack coordinate"
             );
             anyhow::ensure!(

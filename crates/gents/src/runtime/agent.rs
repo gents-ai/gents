@@ -7,12 +7,12 @@ use anyhow::Context as _;
 use defra_node::Node as EmbeddedNode;
 use tokio::sync::watch;
 
-use crate::inference::backends::registry::backend_fields;
 use crate::documents::inference_defaults::{
     DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
 use crate::documents::AgentToolConfig;
 use crate::inference::backends::health::{BackendHealthMap, BackendProberOptions};
+use crate::inference::backends::registry::backend_fields;
 use crate::inference::resolved::{
     ResolvedAgent, DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS, DEFAULT_STREAM_BATCH_MS,
 };

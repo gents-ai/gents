@@ -17,8 +17,8 @@ use super::documents::{
     create_pending_invocation, list_enabled_bindings, load_event_source, CallbackBindingDoc,
     CallbackInvocationDoc,
 };
-use crate::documents::callback::validate_callback_binding;
 use super::{CallbackEngine, LIFECYCLE_PENDING};
+use crate::documents::callback::validate_callback_binding;
 use crate::documents::callback_secret_fields::{
     reject_secret_bearing_callback_fields, strip_secret_fields,
 };

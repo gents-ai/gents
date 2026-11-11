@@ -99,9 +99,7 @@ impl BackendPresetArg {
             Self::ClaudeCliSubscription => {
                 Some(gents::inference::clients::claude_subscription::default_backend_endpoint())
             }
-            Self::Anthropic => {
-                Some(gents::documents::inference_defaults::ANTHROPIC_API_ENDPOINT)
-            }
+            Self::Anthropic => Some(gents::documents::inference_defaults::ANTHROPIC_API_ENDPOINT),
             Self::Ollama => Some(crate::DEFAULT_OLLAMA_ENDPOINT),
             Self::Vllm => Some("http://127.0.0.1:8000/v1"),
             Self::LlamaCpp => Some("http://127.0.0.1:8080/v1"),

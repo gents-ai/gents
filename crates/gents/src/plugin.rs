@@ -693,8 +693,8 @@ fn narrow_manifold(declared: &Manifold, ceiling: &Manifold) -> Manifold {
 pub mod allowed;
 pub mod application_write;
 pub mod approval;
-pub mod authority;
 pub mod authoring_test;
+pub mod authority;
 mod bound;
 pub use bound::{BoundDir, InvocationConsent};
 

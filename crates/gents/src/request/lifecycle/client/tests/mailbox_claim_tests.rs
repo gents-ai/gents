@@ -1,10 +1,10 @@
 use super::*;
+use crate::documents::mailbox_write_decl::{
+    MailboxAction, MailboxKind, MailboxNotificationPolicy, MailboxWriteOutcome,
+};
 use crate::request::admission::AgentRequestAdmissionVerifier;
 use crate::request::lifecycle::{
     ClaimOutcome, ExecutionOrigin, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult,
-};
-use crate::documents::mailbox_write_decl::{
-    MailboxAction, MailboxKind, MailboxNotificationPolicy, MailboxWriteOutcome,
 };
 use crate::session::mailbox::{MailboxCreateTool, MailboxStatus};
 use crate::store::config_client::{GraphqlEndpoint, NodePermission};

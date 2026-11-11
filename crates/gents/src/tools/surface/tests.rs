@@ -2057,7 +2057,10 @@ fn tools_document_and_resolved_selection_agree_on_needing_a_filesystem_root() {
             serde_json::json!({"host": {"bash": {"mode": "ReadOnly"}}}),
             true,
         ),
-        (serde_json::json!({"host": {"cli": [{"name": "git"}]}}), true),
+        (
+            serde_json::json!({"host": {"cli": [{"name": "git"}]}}),
+            true,
+        ),
         (serde_json::json!({"integrations": {"lsp": {}}}), true),
     ] {
         let tools = tools_document(groups.clone());

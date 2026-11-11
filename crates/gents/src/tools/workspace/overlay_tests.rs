@@ -1052,13 +1052,15 @@ async fn existing_workspace_cleanup_removes_artifacts_without_grant_drop_authori
         .unwrap();
     admin
         .transact_write("test.workspace.release", |txn| {
-            Box::pin(crate::request::workspace_binding::release_writer_binding_in_txn(
-                txn,
-                &owner.request().doc_id,
-                &owner.request().request_id,
-                "artifact-workspace",
-                owner.request().workspace_owner_node_did.as_deref().unwrap(),
-            ))
+            Box::pin(
+                crate::request::workspace_binding::release_writer_binding_in_txn(
+                    txn,
+                    &owner.request().doc_id,
+                    &owner.request().request_id,
+                    "artifact-workspace",
+                    owner.request().workspace_owner_node_did.as_deref().unwrap(),
+                ),
+            )
         })
         .await
         .unwrap();

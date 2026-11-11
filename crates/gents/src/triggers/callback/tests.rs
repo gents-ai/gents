@@ -22,7 +22,6 @@ use super::documents::{
     update_invocation_mutation, CallbackBindingDoc, CallbackInvocationDoc, CallbackModuleDoc,
     CallbackResultDoc, CallbackResultInvocationRow,
 };
-use crate::documents::callback::validate_callback_binding;
 use super::planner::{
     compute_module_id, fixture_create_workspace_artifact, invoke_plugin_planner, plan_from_module,
     validate_callback_module, CallbackModuleLimits, MAX_ARTIFACT_BYTES,
@@ -35,6 +34,7 @@ use super::run::{
 use super::{
     LIFECYCLE_DENIED, LIFECYCLE_FAILED, LIFECYCLE_PENDING, LIFECYCLE_RUNNING, LIFECYCLE_SUCCEEDED,
 };
+use crate::documents::callback::validate_callback_binding;
 use crate::documents::callback_secret_fields::{
     reject_secret_bearing_callback_fields, strip_secret_fields,
 };

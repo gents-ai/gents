@@ -82,7 +82,8 @@ async fn reject_pending_admission_in_txn(
     if updated {
         if let Some(rows) = response["data"]["update_AgentRequest"].as_array() {
             for row in rows {
-                crate::request::workspace_binding::release_terminal_writer_binding(txn, row).await?;
+                crate::request::workspace_binding::release_terminal_writer_binding(txn, row)
+                    .await?;
             }
         }
         crate::triggers::engine::durable::publish_request_outcome(
@@ -611,8 +612,10 @@ impl RequestLifecycle {
                             .filter(|rows| !rows.is_empty())
                         {
                             for row in rows {
-                                crate::request::workspace_binding::release_terminal_writer_binding(txn, row)
-                                    .await?;
+                                crate::request::workspace_binding::release_terminal_writer_binding(
+                                    txn, row,
+                                )
+                                .await?;
                             }
                             crate::triggers::engine::durable::publish_request_outcome(
                                 txn,
@@ -705,8 +708,10 @@ impl RequestLifecycle {
                             .filter(|rows| !rows.is_empty())
                         {
                             for row in rows {
-                                crate::request::workspace_binding::release_terminal_writer_binding(txn, row)
-                                    .await?;
+                                crate::request::workspace_binding::release_terminal_writer_binding(
+                                    txn, row,
+                                )
+                                .await?;
                             }
                             crate::triggers::engine::durable::publish_request_outcome(
                                 txn,

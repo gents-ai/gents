@@ -794,13 +794,15 @@ pub async fn release_writer_binding(
             crate::store::config_client::IdempotentTransactionRetry::Standard,
             "workspace.release_writer_binding",
             |txn| {
-                Box::pin(crate::request::workspace_binding::release_writer_binding_in_txn(
-                    txn,
-                    &request.doc_id,
-                    &request.request_id,
-                    workspace_id,
-                    owner,
-                ))
+                Box::pin(
+                    crate::request::workspace_binding::release_writer_binding_in_txn(
+                        txn,
+                        &request.doc_id,
+                        &request.request_id,
+                        workspace_id,
+                        owner,
+                    ),
+                )
             },
         )
         .await

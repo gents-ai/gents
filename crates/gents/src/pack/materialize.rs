@@ -167,7 +167,8 @@ pub fn cache_root(
     digest: &str,
 ) -> Result<std::path::PathBuf> {
     anyhow::ensure!(
-        crate::documents::pack_spec::is_valid_pack_name(namespace) && crate::documents::pack_spec::is_valid_pack_name(name),
+        crate::documents::pack_spec::is_valid_pack_name(namespace)
+            && crate::documents::pack_spec::is_valid_pack_name(name),
         "invalid pack coordinate {namespace}/{name}"
     );
     Ok(home

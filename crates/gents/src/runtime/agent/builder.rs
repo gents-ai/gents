@@ -10,7 +10,6 @@ pub(crate) type AgentFactory =
     Box<dyn FnOnce(Arc<RuntimeNode>) -> std::result::Result<ResolvedAgent, AgentBuildError> + Send>;
 
 use super::{assemble_node_and_agents, runtime, AgentBuildError, Gents, ProcessLifecycleObserver};
-use crate::inference::backends::registry::backend_fields;
 use crate::documents::inference_defaults::{
     DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
@@ -18,6 +17,7 @@ use crate::documents::{BashMode, FileToolMode};
 use crate::inference::admission::BackendAdmissionConfig;
 #[cfg(test)]
 use crate::inference::backends::provider::BackendProviderKind;
+use crate::inference::backends::registry::backend_fields;
 use crate::inference::backends::registry::lookup_backend;
 use crate::inference::compaction::CompactionStrategy;
 use crate::inference::resolved::{

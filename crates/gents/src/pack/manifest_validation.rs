@@ -26,9 +26,10 @@ pub fn validate_pack_manifest(manifest: &PackManifest) -> Result<()> {
             !dependency.contains('@'),
             "dependency {dependency:?} must be a coordinate (name or ns/name), not a pinned version"
         );
-        let (namespace, name) = dependency
-            .split_once('/')
-            .unwrap_or((crate::documents::pack_spec::DEFAULT_NAMESPACE, dependency.as_str()));
+        let (namespace, name) = dependency.split_once('/').unwrap_or((
+            crate::documents::pack_spec::DEFAULT_NAMESPACE,
+            dependency.as_str(),
+        ));
         anyhow::ensure!(
             is_valid_pack_name(namespace) && is_valid_pack_name(name),
             "dependency {dependency:?} is not a valid pack coordinate"

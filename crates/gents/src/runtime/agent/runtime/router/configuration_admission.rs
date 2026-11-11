@@ -3,8 +3,8 @@
 //! Agent before a claim, and defers a request whose selection that generation
 //! no longer holds until a newer generation is active.
 
-use crate::inference::resolved::ResolvedConfiguration;
 use crate::inference::resolved::visibility::ConfigurationVisibilityError;
+use crate::inference::resolved::ResolvedConfiguration;
 use gents_protocol::row::AgentRequest;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

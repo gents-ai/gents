@@ -2,10 +2,10 @@
 
 use std::sync::Arc;
 
+use crate::inference::backends::registry::backend_fields;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::Node as EmbeddedNode;
-use crate::inference::backends::registry::backend_fields;
 pub use gents_loop::account_usage;
 use gents_loop::account_usage::{
     usage_from_headers, UsagePlan, UsageReport, UsageSource, READ_SKIP_WINDOW,

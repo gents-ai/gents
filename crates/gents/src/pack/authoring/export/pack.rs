@@ -8,11 +8,11 @@ use serde_json::{json, Map, Value};
 use super::root::extract_sidecars;
 pub use super::select::PulledByReference;
 use super::select::{built_here, close, pack_part, Closure, ExportSelection, PackPart};
+use crate::documents::pack_spec::is_valid_pack_name;
 use crate::pack::authoring::{
     add_plugin_source, check_dir, pack_name, scaffold, to_snake_case, CheckReport, Names, PackEdit,
     ScaffoldInput, Template,
 };
-use crate::documents::pack_spec::is_valid_pack_name;
 use crate::pack::{
     agent_did_variable, agent_slot_reference, inference_slot_reference, pack_origin_from_tags,
 };

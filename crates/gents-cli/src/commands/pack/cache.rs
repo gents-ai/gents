@@ -159,7 +159,9 @@ mod tests {
     #[test]
     fn infrastructure_names_materialize_outside_store_and_unpack_directories() {
         let home = tempfile::tempdir().unwrap();
-        assert!(!gents::documents::pack_spec::is_valid_pack_name(".materialized"));
+        assert!(!gents::documents::pack_spec::is_valid_pack_name(
+            ".materialized"
+        ));
         for name in ["store", "unpacked", "materialized"] {
             let dir = assets_pack_dir("acme", name, "1.0.0");
             let pack = local_pack_source(dir.path(), home.path());

@@ -1,17 +1,14 @@
 use std::collections::BTreeSet;
 use std::sync::{Arc, LazyLock};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use anyhow::{Context, Result};
-use futures::future::BoxFuture;
 use futures::StreamExt;
 use serde_json::{json, Map, Value};
 use tokio::sync::Semaphore;
 
 use super::model_binding::{ModelEndpoint, ModelProfileVisibility};
-use crate::documents::{InferenceBackend, InferenceProfile};
-use crate::openai_wire::OpenAiWireApi;
-use crate::store::config_client::ConfigAccess;
+use crate::documents::InferenceBackend;
 use crate::Collection;
 
 pub const MAX_REQUESTS_PER_ROUND: usize = 64;

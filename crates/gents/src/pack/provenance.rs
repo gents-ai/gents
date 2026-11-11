@@ -9,7 +9,8 @@ const PACK_ORIGIN_PREFIX: &str = "gents:pack:";
 
 fn is_coordinate(value: &str) -> bool {
     value.split_once('/').is_some_and(|(namespace, name)| {
-        crate::documents::pack_spec::is_valid_pack_name(namespace) && crate::documents::pack_spec::is_valid_pack_name(name)
+        crate::documents::pack_spec::is_valid_pack_name(namespace)
+            && crate::documents::pack_spec::is_valid_pack_name(name)
     })
 }
 

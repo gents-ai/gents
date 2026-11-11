@@ -931,7 +931,9 @@ impl Tools {
                         ));
                     }
                 }
-                if let Err(error) = crate::documents::plugin_coordinate::parse_coordinate(&plugin.plugin) {
+                if let Err(error) =
+                    crate::documents::plugin_coordinate::parse_coordinate(&plugin.plugin)
+                {
                     errors.push(format!("integrations.plugins: {error}"));
                 } else if !plugin_tool_names.insert(plugin.tool_name()) {
                     errors.push(format!(

@@ -283,7 +283,8 @@ impl PreparedDocumentPackInstall {
             })
         {
             if !shipped.contains(&reference.plugin) {
-                let (namespace, name) = crate::documents::plugin_coordinate::parse_coordinate(&reference.plugin)?;
+                let (namespace, name) =
+                    crate::documents::plugin_coordinate::parse_coordinate(&reference.plugin)?;
                 let record = installed_plugin_record(home, namespace, name)?;
                 plugin_digests.insert(reference.plugin.clone(), record.digest);
             }
@@ -1366,7 +1367,8 @@ fn ensure_plugin_references_resolve_with_inventory(
                     }
                     continue;
                 }
-                let (namespace, name) = crate::documents::plugin_coordinate::parse_coordinate(&reference.plugin)?;
+                let (namespace, name) =
+                    crate::documents::plugin_coordinate::parse_coordinate(&reference.plugin)?;
                 if let Some(inventory) = inventory {
                     let digest = inventory.get(&reference.plugin).with_context(|| {
                         format!("hosted plugin {} is unavailable", reference.plugin)

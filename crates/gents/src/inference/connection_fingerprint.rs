@@ -20,9 +20,9 @@ pub(crate) fn agent_connection_fingerprint(agent_config: &ResolvedAgent) -> Stri
 /// key rotation is visible only through the keyed fingerprints.
 pub(crate) fn agent_slot_fingerprint(agent_config: &ResolvedAgent) -> String {
     let compaction = agent_config.compaction_inference.as_ref().map(|inference| {
-        crate::inference::admission::backend_connection_fingerprint(
-            &backend_fields(&inference.backend),
-        )
+        crate::inference::admission::backend_connection_fingerprint(&backend_fields(
+            &inference.backend,
+        ))
     });
     format!(
         "{agent_config:?}|connection={}|compaction_connection={compaction:?}",

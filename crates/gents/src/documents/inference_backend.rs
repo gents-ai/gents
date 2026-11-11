@@ -427,7 +427,7 @@ pub struct InferenceBackend {
 }
 
 impl InferenceBackend {
-    fn metadata_from_value(value: &serde_json::Value) -> anyhow::Result<Self> {
+    pub fn metadata_from_value(value: &serde_json::Value) -> anyhow::Result<Self> {
         let mut config = value.clone();
         let object = config
             .as_object_mut()

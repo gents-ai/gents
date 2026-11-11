@@ -394,9 +394,9 @@ impl PluginExecutor {
                 .is_some();
         allowed::bind(&resolved, access, folder_allowed)
             .map(|bound| {
-                bound.with_consent(consent.map(|consent| {
-                    Arc::new(consent) as Arc<dyn super::InvocationConsent>
-                }))
+                bound.with_consent(
+                    consent.map(|consent| Arc::new(consent) as Arc<dyn super::InvocationConsent>),
+                )
             })
             .map(Some)
             .map_err(refuse)

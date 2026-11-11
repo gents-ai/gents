@@ -207,8 +207,7 @@ pub fn inference_setup_catalog() -> InferenceSetupCatalog {
                         method: ApiKey,
                         display_name: "Anthropic API key".into(),
                         default_endpoint:
-                            crate::documents::inference_defaults::ANTHROPIC_API_ENDPOINT
-                                .into(),
+                            crate::documents::inference_defaults::ANTHROPIC_API_ENDPOINT.into(),
                     },
                 ],
                 default_auth_method: ClaudeOauth,

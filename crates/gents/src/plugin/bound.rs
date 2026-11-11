@@ -153,10 +153,7 @@ impl BoundDir {
         Ok(())
     }
 
-    pub fn with_consent(
-        mut self,
-        consent: Option<Arc<dyn InvocationConsent>>,
-    ) -> Self {
+    pub fn with_consent(mut self, consent: Option<Arc<dyn InvocationConsent>>) -> Self {
         self.consent = consent;
         self
     }

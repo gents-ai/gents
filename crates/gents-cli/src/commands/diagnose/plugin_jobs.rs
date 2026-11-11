@@ -1,9 +1,9 @@
 use std::path::Path;
 
+use gents::documents::plugin_coordinate::parse_coordinate;
 use gents::documents::{Agent, PluginToolRef, Tools};
 use gents::pack::home_install::recorded_provenance;
 use gents::pack::{read_home_install, InstalledVia, PackKind};
-use gents::documents::plugin_coordinate::parse_coordinate;
 use gents::plugin::store::read_record;
 use gents::{BashMode, FileToolMode};
 use gents_protocol::job::PluginJobSettings;

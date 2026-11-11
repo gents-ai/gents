@@ -53,10 +53,7 @@ impl SelectedConfiguration {
 
     /// Resolve the cached Skill ID only within this generation, then read its
     /// physical document as the selected Agent before returning instructions.
-    pub async fn check_skill(
-        &self,
-        skill_id: &str,
-    ) -> Result<(), ConfigurationVisibilityError> {
+    pub async fn check_skill(&self, skill_id: &str) -> Result<(), ConfigurationVisibilityError> {
         let documents = self
             .documents
             .iter()
