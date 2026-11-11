@@ -36,8 +36,9 @@ def decode (row : Row GoalDoc Goals.Status) : GoalBinding :=
     status := row.value }
 
 /-- The core operations Task Goal application needs. Both are findings: they
-are things `goal::apply_claimed_task_goal_in_txn` does to core-owned rows
-today, and each is coupling that has to move for the contract to suffice.
+were things Task Goal application did to core-owned rows, coupling that had
+to move for the contract to suffice; the plugin is now
+`goal::lifecycle_hooks::TaskGoalAssignment` at `request.claim.applied`.
 
 `assignmentApplied` is the write of `TriggerFire.goal_assignment_applied` and
 the replacement mark on earlier fires of the session. The flag is a triggers

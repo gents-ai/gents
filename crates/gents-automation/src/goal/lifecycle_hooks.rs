@@ -11,13 +11,17 @@ use super::*;
 use gents_protocol::goal_names::GOAL_TRIGGER_KIND;
 use gents_protocol::row::AgentRequestRow;
 use gents_session::request::hooks::claim::{ClaimVerdict, Successor};
-use gents_session::request::hooks::effect::{Effect, Manifest, OwnedCollection, Row, Write};
+use gents_session::request::hooks::effect::{
+    DocRef, Effect, Grant, Manifest, OwnedCollection, Row, Subject, Write, SESSION_CHILD_GRANTS,
+};
 use gents_session::request::hooks::hook::{Hook, Outcome, Query};
 use gents_session::request::hooks::prepared::{Decide, Verdict};
 use gents_session::request::hooks::queue_scope::{ScopeAnswer, ScopeAnswers, ScopeFailure};
+use gents_session::request::hooks::operations::{supersede_pending, StaleRequest};
 use gents_session::request::hooks::registry::{
-    AdmitShown, ClaimCandidate, QueueScopeAsk, Registry, SessionHalt,
+    AdmitShown, ClaimApplied, ClaimCandidate, QueueScopeAsk, Registry, SessionHalt,
 };
+use gents_protocol::session::SessionOwnerRow;
 use gents_store::config_client::agent_session::{decode_agent_session_read, AgentSessionRowRead};
 
 pub(super) const PLUGIN: &str = "goals";
@@ -32,6 +36,7 @@ pub(super) fn manifest() -> Manifest {
         owns: vec![OwnedCollection {
             name: "Goal",
             schema: Some(gents_protocol::schemas::GOAL),
+            grants: SESSION_CHILD_GRANTS,
         }],
         bound: EFFECTS_PER_POINT,
     }
@@ -51,6 +56,18 @@ pub(super) fn canonical_goal_reads(node_did: &str, session_id: &str) -> [Query; 
     ]
 }
 
+/// The session the rows were read for, if it is visible
+/// (`load_agent_session_owner_in_txn` on the same rows).
+fn canonical_session(session_id: &str, sessions: &[Row]) -> Result<Option<SessionOwnerRow>> {
+    let response = serde_json::json!({
+        "data": { "AgentSession": sessions.iter().map(|row| &row.value).collect::<Vec<_>>() }
+    });
+    Ok(match decode_agent_session_read(&response, session_id)? {
+        AgentSessionRowRead::Present(session) => Some(*session),
+        AgentSessionRowRead::Absent => None,
+    })
+}
+
 /// The canonical Goal of the session the rows were read for, with the row it
 /// was shown as (the decision `load_canonical_goal_in_txn` makes on the same
 /// rows).
@@ -59,11 +76,7 @@ pub(super) fn canonical_goal<'a>(
     sessions: &[Row],
     goals: &'a [Row],
 ) -> Result<Option<(GoalDocument, &'a Row)>> {
-    let response = serde_json::json!({
-        "data": { "AgentSession": sessions.iter().map(|row| &row.value).collect::<Vec<_>>() }
-    });
-    let AgentSessionRowRead::Present(session) = decode_agent_session_read(&response, session_id)?
-    else {
+    let Some(session) = canonical_session(session_id, sessions)? else {
         return Ok(None);
     };
     let mut canonical = Vec::new();
@@ -276,6 +289,299 @@ impl Hook<ClaimCandidate> for ClaimFence {
     }
 }
 
+/// `request.claim.applied`: a claimed Task fire's Goal assignment replaces the
+/// session's Goal binding (Lean `Hooks.GoalTask.applyTaskGoal`): settle the
+/// previous Goal's fire outcomes, create the session's Goal with its
+/// session-child grants or move the shown one to this assignment, have core
+/// supersede the continuations the assignment makes stale, mark the fire
+/// applied, and settle again.
+struct TaskGoalAssignment {
+    manifest: Manifest,
+}
+
+#[derive(Deserialize)]
+struct TaskFire {
+    #[serde(rename = "_docID")]
+    doc_id: String,
+    session_id: String,
+    goal_id: Option<String>,
+    goal_objective: Option<String>,
+    goal_token_budget: Option<i64>,
+    #[serde(default)]
+    goal_assignment_applied: bool,
+}
+
+/// The Goal fields a move to a new assignment writes on a Goal that was not
+/// active: its accounting restarts at `baseline`.
+fn restarted_goal_fields(at: &str, baseline: i64) -> serde_json::Value {
+    serde_json::json!({
+        "tokens_used": 0,
+        "token_usage_baseline": baseline,
+        "active_time_seconds": 0,
+        "active_started_at": at,
+        "consecutive_blocked_audits": 0,
+        "last_blocked_request_id": null,
+        "last_blocked_reason": null,
+        "last_continued_from_request_id": null,
+        "wrapup_requested": false,
+        "wrapup_completed": false,
+        "infrastructure_retry_count": 0,
+        "last_failure": null,
+        "completion_evidence": null,
+    })
+}
+
+fn merge(into: &mut serde_json::Value, fields: serde_json::Value) {
+    if let (Some(into), serde_json::Value::Object(fields)) = (into.as_object_mut(), fields) {
+        into.extend(fields);
+    }
+}
+
+impl TaskGoalAssignment {
+    /// The fire whose Goal assignment this claim applies, if any.
+    fn pending(event: &ClaimApplied) -> Result<Option<TaskFire>> {
+        let Some(fire) = &event.fire else {
+            return Ok(None);
+        };
+        let fire: TaskFire =
+            serde_json::from_value(fire.clone()).context("decoding the Task fire receipt")?;
+        Ok((fire.goal_id.is_some() && !fire.goal_assignment_applied).then_some(fire))
+    }
+
+    fn effects(event: &ClaimApplied, rows: &[Vec<Row>]) -> Result<Vec<Effect>> {
+        let request = &event.request;
+        let at = event.at.as_str();
+        let Some(fire) = Self::pending(event)? else {
+            return Ok(Vec::new());
+        };
+        anyhow::ensure!(
+            fire.session_id == request.session_id,
+            "Task receipt session differs from claimed request"
+        );
+        let [sessions, goals, requests, usage] = rows else {
+            bail!("Task Goal assignment was not shown its declared rows");
+        };
+        let previous = canonical_goal(&request.session_id, sessions, goals)?;
+        let goal_id = fire
+            .goal_id
+            .as_deref()
+            .context("Task assignment lost Goal identity")?;
+        anyhow::ensure!(
+            goal_id
+                == task_assignment_goal_id(
+                    previous.as_ref().map(|(goal, _)| goal.goal_id.as_str()),
+                    &request.node_did,
+                    &request.session_id,
+                )
+                && request
+                    .input
+                    .goal_assignment
+                    .as_ref()
+                    .is_none_or(|reference| reference.goal_id == goal_id
+                        && reference.root_request_doc_id.is_none()),
+            "Task Goal assignment changed before publication or claim"
+        );
+        let objective = fire
+            .goal_objective
+            .as_deref()
+            .map(str::trim)
+            .filter(|objective| !objective.is_empty())
+            .context("Goal-backed Task has no objective")?;
+        let budget = fire.goal_token_budget;
+        anyhow::ensure!(
+            budget.is_none_or(|budget| budget > 0),
+            "Task Goal budget must be positive"
+        );
+        let baseline = || {
+            usage
+                .first()
+                .and_then(|row| row.value.get("total"))
+                .and_then(serde_json::Value::as_i64)
+                .context("the session usage read returned no total")
+        };
+        let mut effects = Vec::new();
+        if let Some((goal, _)) = &previous {
+            anyhow::ensure!(
+                goal.parsed_status().is_some(),
+                "existing Task Goal has an unknown status"
+            );
+            effects.push(crate::triggers::lifecycle_hooks::settle_goal_outcomes(
+                &goal.node_did,
+                &goal.goal_id,
+                goal.last_blocked_reason.as_deref().unwrap_or(&goal.status),
+                at,
+            ));
+        }
+        let assigned = match &previous {
+            None => {
+                let session = canonical_session(&request.session_id, sessions)?
+                    .context("goal creation requires a visible physical session")?;
+                let creator = event
+                    .actor
+                    .as_deref()
+                    .context("goal creation requires an authenticated actor")?;
+                let mut value = serde_json::json!({
+                    "goal_id": deterministic_goal_id(&request.node_did, &request.session_id),
+                    "session_id": request.session_id,
+                    "session_doc_id": session.doc_id,
+                    "agent_did": session.session.agent_did,
+                    "creator_did": creator,
+                    "parent_linked": true,
+                    "requester_did": session.session.requester_did,
+                    "node_did": request.node_did,
+                    "objective": objective,
+                    "status": GoalStatus::Active.as_str(),
+                    "token_budget": budget,
+                    "continuation_sequence": 0,
+                    "assignment_root_request_doc_id": request.doc_id,
+                    "auto_resume_at_reset": null,
+                    "created_at": at,
+                    "updated_at": at,
+                });
+                merge(&mut value, restarted_goal_fields(at, baseline()?));
+                effects.push(Effect::Write(Write::Create {
+                    doc: DocRef::new("Goal", ""),
+                    value: value.clone(),
+                    grants: vec![
+                        Grant {
+                            relation: "parent".into(),
+                            subject: Subject::Document(DocRef::new(
+                                "AgentSession",
+                                session.doc_id.clone(),
+                            )),
+                        },
+                        Grant {
+                            relation: "working_agent".into(),
+                            subject: Subject::Actor(session.session.agent_did.clone()),
+                        },
+                    ],
+                }));
+                merge(&mut value, serde_json::json!({ "_docID": "" }));
+                value
+            }
+            Some((goal, row)) => {
+                let next_sequence = goal
+                    .continuation_sequence()
+                    .checked_add(1)
+                    .context("Task Goal continuation sequence exhausted")?;
+                let mut input = if goal.parsed_status() == Some(GoalStatus::Active) {
+                    let now = DateTime::parse_from_rfc3339(at)
+                        .context("claim time is not RFC 3339")?
+                        .with_timezone(&Utc);
+                    let pre = goal
+                        .state()
+                        .context("existing Goal has an unknown status")?;
+                    let post = apply_operator_status_transition(pre, GoalStatus::Active)?;
+                    serde_json::json!({
+                        "tokens_used": goal.tokens_used.unwrap_or_default().max(0),
+                        "active_time_seconds": goal.current_active_time_seconds(now),
+                        "active_started_at": post.status.accrues_active_time().then_some(at),
+                        "consecutive_blocked_audits": post.blocked_audits,
+                        "wrapup_requested": post.wrapup_requested,
+                        "wrapup_completed": post.wrapup_completed,
+                    })
+                } else {
+                    restarted_goal_fields(at, baseline()?)
+                };
+                merge(
+                    &mut input,
+                    serde_json::json!({
+                        "objective": objective,
+                        "status": GoalStatus::Active.as_str(),
+                        "token_budget": budget,
+                        "assignment_root_request_doc_id": request.doc_id,
+                        "continuation_sequence": next_sequence,
+                        "updated_at": at,
+                    }),
+                );
+                effects.push(Effect::Write(Write::Update {
+                    doc: row.doc.clone(),
+                    expected: row.revision,
+                    value: input.clone(),
+                }));
+                let mut value = row.value.clone();
+                merge(&mut value, input);
+                value
+            }
+        };
+        let assigned: GoalDocument =
+            serde_json::from_value(assigned).context("decoding the assigned Task Goal")?;
+        let requests = requests
+            .iter()
+            .map(|row| serde_json::from_value::<AgentRequestRow>(row.value.clone()))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let stale = request_head::stale_assignment_continuations(&assigned, None, &requests)?;
+        if !stale.is_empty() {
+            effects.push(supersede_pending(
+                &assigned.node_did,
+                at,
+                stale
+                    .into_iter()
+                    .map(|stale| StaleRequest {
+                        doc_id: stale.doc_id,
+                        request_id: stale.request_id,
+                        successor: stale.survivor_request_id,
+                        successor_doc: stale.survivor_doc_id,
+                        reason: request_head::STALE_ASSIGNMENT_REASON.into(),
+                    })
+                    .collect(),
+            ));
+        }
+        effects.push(crate::triggers::lifecycle_hooks::apply_goal_assignment(
+            &fire.doc_id,
+        ));
+        effects.push(crate::triggers::lifecycle_hooks::settle_goal_outcomes(
+            &assigned.node_did,
+            &assigned.goal_id,
+            "Task Goal assignment replaced",
+            at,
+        ));
+        Ok(effects)
+    }
+}
+
+impl Hook<ClaimApplied> for TaskGoalAssignment {
+    type Value = ();
+
+    fn manifest(&self) -> &Manifest {
+        &self.manifest
+    }
+
+    /// A request without a pending Task Goal assignment declares nothing:
+    /// core already read its fire receipt for the event.
+    fn reads(&self, event: &ClaimApplied) -> Vec<Query> {
+        if !matches!(Self::pending(event), Ok(Some(_))) {
+            return Vec::new();
+        }
+        let request = &event.request;
+        let [session, goals] = canonical_goal_reads(&request.node_did, &request.session_id);
+        vec![
+            session,
+            goals,
+            Query::select(
+                "AgentRequest",
+                gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
+            )
+            .eq("node_did", request.node_did.clone())
+            .eq("session_id", request.session_id.clone()),
+            Query::core(
+                gents_tools::native::SESSION_TOKEN_USAGE,
+                serde_json::json!({
+                    "node_did": request.node_did,
+                    "session_id": request.session_id,
+                }),
+            ),
+        ]
+    }
+
+    fn decide(&self, event: &ClaimApplied, rows: &[Vec<Row>]) -> Outcome<()> {
+        match Self::effects(event, rows) {
+            Ok(effects) => Outcome::effects(effects),
+            Err(error) => Outcome::Refuse(format!("{error:#}")),
+        }
+    }
+}
+
 /// `request.admit.verify`: a Goal continuation must be the physical,
 /// signed continuation edge of its session predecessor
 /// (`verify_goal_continuation_edge`).
@@ -419,6 +725,9 @@ pub fn register(registry: &mut Registry) {
         manifest: manifest(),
     }));
     registry.session_halt.push(Arc::new(PauseOnHalt {
+        manifest: manifest(),
+    }));
+    registry.claim_applied.push(Arc::new(TaskGoalAssignment {
         manifest: manifest(),
     }));
 }

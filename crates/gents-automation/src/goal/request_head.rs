@@ -592,58 +592,6 @@ pub(super) fn stale_assignment_continuations(
     Ok(stale)
 }
 
-pub(super) async fn retire_stale_assignment_continuations_in_txn(
-    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
-    goal: &GoalDocument,
-    only_doc: Option<&str>,
-    now: &str,
-) -> Result<bool> {
-    if goal.assignment_root_request_doc_id.is_none() {
-        return Ok(true);
-    }
-    let rendered = {
-        use gents_protocol::document_query::{
-            fields::agent_request as fields, Filter, Query, Selection,
-        };
-        Query::select(Selection::owned(
-            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
-        ))
-        .filter(Filter::eq(fields::NODE_DID, &goal.node_did))
-        .filter(Filter::eq(fields::SESSION_ID, &goal.session_id))
-        .render()
-    };
-    let response = txn.run_local_response(&rendered).await?;
-    let requests: Vec<AgentRequestRow> = gents_store::graphql::rows(&response, "AgentRequest")?;
-    let stale = stale_assignment_continuations(goal, only_doc, &requests)?;
-    for continuation in &stale {
-        let mutation = gents_session::request::lifecycle::queue::supersede_pending_mutation(
-            &continuation.doc_id,
-            &goal.node_did,
-            &continuation.survivor_request_id,
-            &continuation.survivor_doc_id,
-            STALE_ASSIGNMENT_REASON,
-        );
-        let response = txn.execute_local_response(&mutation).await?;
-        if response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("update_AgentRequest"))
-            .is_some_and(gents_store::graphql::response_has_documents)
-        {
-            gents_session::request::hooks::points::request_terminal(
-                txn,
-                &goal.node_did,
-                &continuation.request_id,
-                RequestLifecycleState::Superseded,
-                STALE_ASSIGNMENT_REASON,
-                now,
-            )
-            .await?;
-        }
-    }
-    Ok(stale.is_empty())
-}
-
 pub(crate) async fn assignment_request_id_in_txn(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
     goal: &GoalDocument,
