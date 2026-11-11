@@ -241,34 +241,9 @@ pub(crate) fn tools_taking_installer_root(pack: &super::PackSource) -> Result<Ve
     })
 }
 
-/// The dependencies of an install that are not on the node yet: the ones
-/// this install installs, whose agents take the installer's root and its
-/// reader grant with the root pack's.
-pub(crate) async fn new_dependencies<'a>(
-    access: &ConfigAccess,
-    owner: &str,
-    dependencies: &'a [super::PackSource],
-) -> Result<Vec<&'a super::PackSource>> {
-    let mut new = Vec::new();
-    for dependency in dependencies {
-        let coordinate = format!(
-            "{}/{}",
-            dependency.manifest().metadata.namespace,
-            dependency.manifest().name
-        );
-        if installed_pack_documents(access, owner, &coordinate)
-            .await?
-            .is_empty()
-        {
-            new.push(dependency);
-        }
-    }
-    Ok(new)
-}
-
 /// The root an install by `installer` (the node's User when `None`) supplies
-/// to the Tools `packs` (the root pack and the dependencies it newly
-/// installs) ship without one, and the reader their agents need there: what a
+/// to the Tools `packs` (the root pack and its dependencies) ship without
+/// one, and the reader their agents need there: what a
 /// preview lists and an approval covers. `None` when they ship no such
 /// Tools, one of them did not load for the review, the installer has no
 /// root, or no reader is needed.
@@ -313,12 +288,16 @@ pub(crate) async fn supplied_tool_root(
 
 /// The pack coordinate whose reader grants a test makes fail.
 #[cfg(test)]
-pub(super) static FAIL_GRANTS_FOR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+pub(crate) static FAIL_GRANTS_FOR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
-/// Grants each agent the installed packs `coordinates` (a pack and the
-/// dependencies its install newly installed) ship with host tools reader on the published WorkspaceRoot covering its tool root, as the User
-/// holding `access`: a new agent lacks that grant, only a User makes it, and
-/// without it the runtime reports the agent unavailable.
+/// Grants each agent the installed packs `coordinates` (a pack and its
+/// dependencies) ship with host tools reader on the published WorkspaceRoot
+/// covering its tool root, as the User holding `access`: a new agent lacks
+/// that grant, only a User makes it, and without it the runtime reports the
+/// agent unavailable. Every dependency is covered, installed by this install
+/// or before it, so repeating an install whose grant failed makes the grant
+/// its first attempt missed; granting a reader that is already held changes
+/// nothing.
 ///
 /// The grant is the installer's consent to its own root and nothing else: it
 /// is made only when the install was `approved` with that folder access

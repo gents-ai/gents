@@ -667,20 +667,17 @@ async fn install_one(
     let (access, owner) = command::resolve_scope_owner(&scope(home)).await?;
     let already = gents::pack::read_home_install(home, &coordinate)?
         .is_some_and(|record| record.digest == source.digest());
-    // The pack and the dependencies this install installs with it: the
-    // agents an approval grants the Engineer's root.
-    let installing = async {
-        let mut installing = vec![coordinate.clone()];
-        for dependency in command::wire::new_dependencies(&access, &owner, &dependencies).await? {
-            installing.push(format!(
+    // The pack and its dependencies: the agents an approval grants the
+    // Engineer's root, whichever attempt installed them.
+    let installing: Vec<String> = std::iter::once(coordinate.clone())
+        .chain(dependencies.iter().map(|dependency| {
+            format!(
                 "{}/{}",
                 dependency.manifest().metadata.namespace,
                 dependency.manifest().name
-            ));
-        }
-        anyhow::Ok(installing)
-    }
-    .await;
+            )
+        }))
+        .collect();
     let installed = if already {
         Ok(())
     } else {
@@ -696,7 +693,6 @@ async fn install_one(
         .map(drop)
     };
     let attached = async {
-        let installing = installing?;
         installed?;
         // The Engineer's install resolves the dependencies again; what it
         // installed must be the archives the approval covered.
@@ -2087,6 +2083,63 @@ mod tests {
                 .contains("the folder its agents would read is unknown"),
             "{listed:?}"
         );
+    }
+
+    /// Approving again after a reader grant failed grants the agents of the
+    /// dependency the first approval installed, not only the root pack's.
+    #[tokio::test]
+    async fn approving_again_grants_the_dependency_agents_a_failed_grant_missed() {
+        let (home, initialized) = engineer_home().await;
+        let files = json!({"files": {"mode": "ReadOnly"}});
+        store_host_tools_pack(home.path(), "fixture", "regrantbase", json!([]), files);
+        let packs = tempfile::tempdir().unwrap();
+        let dir = packs.path().join("regrant");
+        write_pack(
+            &dir,
+            json!({
+                "manifest_version": 1, "name": "regrant", "namespace": "fixture",
+                "version": "1.0.0", "description": "Depends on a pack with an agent",
+                "authors": ["tests"], "tags": [], "kind": "documents",
+                "assets": ["README.md", "pack_config.json"],
+                "dependencies": ["fixture/regrantbase"], "config": "pack_config.json",
+            }),
+            &[(
+                "pack_config.json",
+                serde_json::to_vec(&json!({
+                    "node": {"node_did": "${GENTS_PACK_NODE_DID}"},
+                    "tools": [{"tools_id": "regrant-tools", "display_name": "No tools"}],
+                }))
+                .unwrap(),
+            )],
+        );
+        gents::pack::local::open(&gents::pack::local::LocalName::Path(&dir), home.path()).unwrap();
+        let names = ["fixture/regrant"];
+        let unreachable = Some("http://127.0.0.1:9");
+        let approving = vec![("fixture/regrant".to_owned(), None)];
+
+        *command::wire::FAIL_GRANTS_FOR.lock().unwrap() = Some("fixture/regrantbase".to_owned());
+        let failed = approve(home.path(), &names, &approving, unreachable).await;
+        *command::wire::FAIL_GRANTS_FOR.lock().unwrap() = None;
+        let failed = failed.unwrap();
+        assert_eq!(failed["failed"][0]["installed"], true, "{failed}");
+        assert!(
+            failed["failed"][0]["error"]
+                .as_str()
+                .unwrap()
+                .contains("simulated reader grant failure"),
+            "{failed}"
+        );
+
+        let approved = approve(home.path(), &names, &approving, unreachable)
+            .await
+            .unwrap();
+        assert_eq!(approved["failed"], json!([]), "{approved}");
+        let roots = approved["installed"][0]["host_tool_roots"]
+            .as_array()
+            .unwrap();
+        assert_eq!(roots.len(), 1, "{approved}");
+        assert_eq!(roots[0]["root"], initialized["tool_root"], "{approved}");
+        assert!(roots[0]["reader_on"].is_string(), "{approved}");
     }
 
     /// Only a terminal is asked, and only when the caller may prompt; the

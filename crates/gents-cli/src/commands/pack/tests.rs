@@ -1052,6 +1052,71 @@ async fn a_new_dependencys_agents_take_the_installers_root_and_its_grant() {
     assert!(roots[0]["reader_on"].is_string(), "{report}");
 }
 
+/// Repeating an install whose reader grant failed grants the agents of the
+/// dependency the first attempt installed, not only the root pack's.
+#[tokio::test]
+async fn a_repeated_install_grants_the_dependency_agents_a_failed_grant_missed() {
+    let (home, initialized) = engineer_home().await;
+    let engineer_root = initialized["tool_root"].as_str().unwrap().to_owned();
+    let dependency = host_tools_pack_dir("retryworker", json!({"files": {"mode": "ReadOnly"}}));
+    gents::pack::local::open(
+        &gents::pack::local::LocalName::Path(dependency.path()),
+        home.path(),
+    )
+    .unwrap();
+    let dependent = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dependent.path().join("manifest.json"),
+        serde_json::to_vec(&json!({
+            "manifest_version": 1, "name": "retrydependent", "namespace": "fixture",
+            "version": "1.0.0", "description": "Depends on a pack with an agent",
+            "authors": ["tests"], "tags": [], "kind": "documents",
+            "assets": ["README.md", "pack_config.json"],
+            "dependencies": ["fixture/retryworker"], "config": "pack_config.json",
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(dependent.path().join("README.md"), "# fixture").unwrap();
+    std::fs::write(
+        dependent.path().join("pack_config.json"),
+        serde_json::to_vec(&json!({
+            "node": { "node_did": "${GENTS_PACK_NODE_DID}" },
+            "tools": [{ "tools_id": "retrydependent-tools", "display_name": "No tools" }],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let mut args = document_install_args(home.path(), dependent.path(), Vec::new());
+    args.grant_authority = true;
+    let source = resolve_pack_source(&args.package, None, home.path())
+        .await
+        .unwrap();
+    let (access, _, local_endpoint) = crate::resolve_pack_config_access(Some(home.path()), None)
+        .await
+        .unwrap();
+    *super::wire::FAIL_GRANTS_FOR.lock().unwrap() = Some("fixture/retryworker".to_owned());
+    let outcome =
+        super::install::install_documents_report(access, &source, &args, local_endpoint).await;
+    *super::wire::FAIL_GRANTS_FOR.lock().unwrap() = None;
+    let (receipt, failed_step) = outcome.unwrap();
+    assert!(failed_step.is_some(), "{receipt}");
+    assert!(
+        receipt["host_tool_roots"][0]["failed"].is_string(),
+        "{receipt}"
+    );
+
+    let report = crate::request_helpers::capture_report(install(args))
+        .await
+        .unwrap();
+    let roots = report["host_tool_roots"].as_array().unwrap();
+    assert_eq!(roots.len(), 1, "{report}");
+    assert_eq!(roots[0]["agent"], receipt["host_tool_roots"][0]["agent"]);
+    assert_eq!(roots[0]["root"], engineer_root, "{report}");
+    assert!(roots[0]["reader_on"].is_string(), "{report}");
+}
+
 /// An agent binding is an argument of the install it is given to, and its
 /// preview lists it.
 #[tokio::test]

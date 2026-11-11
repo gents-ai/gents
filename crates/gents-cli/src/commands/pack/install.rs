@@ -841,9 +841,10 @@ pub(super) async fn install_documents_report(
             pack.manifest().name
         );
         let dependencies = resolve_dependencies(pack, args).await?;
-        // The root pack and the dependencies this install installs with it.
-        let mut installing = vec![pack];
-        installing.extend(wire::new_dependencies(&access, &owner, &dependencies).await?);
+        // The root pack and its dependencies: the agents an approved install
+        // grants its root, whichever install first put them on the node.
+        let installing: Vec<&PackSource> =
+            std::iter::once(pack).chain(&dependencies).collect();
         let coordinates: Vec<String> = installing
             .iter()
             .map(|source| {
@@ -881,7 +882,7 @@ pub(super) async fn install_documents_report(
                     .and_then(|supplied| supplied["root"].as_str())
                     .unwrap_or_default();
                 return Err(anyhow::anyhow!(
-                    "{coordinate} ships Tools ({tools}) whose agents run host tools under this node's tool root {root}, and installing it grants them reader on the published WorkspaceRoot {published}. Nothing was installed. Install it with --grant-authority to allow that"
+                    "{coordinate} installs Tools ({tools}) whose agents run host tools under this node's tool root {root}, and installing it grants them reader on the published WorkspaceRoot {published}. Nothing was installed. Install it with --grant-authority to allow that"
                 )
                 .into());
             }
