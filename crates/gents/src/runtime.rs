@@ -1,6 +1,7 @@
 pub mod agent;
 pub(crate) mod background_completion_observer;
 pub mod embedded;
+pub mod lifecycle_hooks;
 pub mod native_logging;
 pub(crate) mod node_readiness_publisher;
 pub mod node_start;

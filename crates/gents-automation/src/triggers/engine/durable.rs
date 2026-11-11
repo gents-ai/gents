@@ -425,12 +425,6 @@ pub(crate) async fn stage_outcome(
         attempt: fire.attempt,
         created_at: now.into(),
     };
-    let response = txn.execute_client_signed_create(
-        "mutation($input: FireOutcomeMutationInputArg!) { create_FireOutcome(input: $input) { _docID } }",
-        &serde_json::json!({"input":outcome}),
-        gents_protocol::schemas::FIRE_OUTCOME,
-    ).await?;
-    let doc_id = gents_store::graphql::created_doc_id(&response, "FireOutcome")?;
     let session = gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
         txn,
         &fire.identity.owner_did,
@@ -438,6 +432,13 @@ pub(crate) async fn stage_outcome(
     )
     .await?
     .context("Task outcome session is unavailable")?;
+    let readers = declared_outcome_readers(txn, &fire.identity.owner_did, &fire.task_id).await?;
+    let response = txn.execute_client_signed_create(
+        "mutation($input: FireOutcomeMutationInputArg!) { create_FireOutcome(input: $input) { _docID } }",
+        &serde_json::json!({"input":outcome}),
+        gents_protocol::schemas::FIRE_OUTCOME,
+    ).await?;
+    let doc_id = gents_store::graphql::created_doc_id(&response, "FireOutcome")?;
     stage_session_child_relationships(
         txn,
         "FireOutcome",
@@ -446,7 +447,7 @@ pub(crate) async fn stage_outcome(
         &session.session.agent_did,
     )
     .await?;
-    for reader in declared_outcome_readers(txn, &fire.identity.owner_did, &fire.task_id).await? {
+    for reader in readers {
         stage_outcome_reader(txn, &doc_id, &reader).await?;
     }
     Ok(true)
@@ -495,7 +496,7 @@ pub(crate) async fn stage_outcome_reader(
     Ok(())
 }
 
-const FIRE_FIELDS: &str = "fire_key owner_did trigger_id source_collection source_doc_id task_id request_id session_id goal_id goal_objective goal_token_budget goal_assignment_applied emit_outcome queued_serial source_handoff_id reply_session_id shard_id attempt created_at";
+pub(crate) const FIRE_FIELDS: &str = "fire_key owner_did trigger_id source_collection source_doc_id task_id request_id session_id goal_id goal_objective goal_token_budget goal_assignment_applied emit_outcome queued_serial source_handoff_id reply_session_id shard_id attempt created_at";
 
 async fn outcome_published(txn: &ConfigApplyTxn<'_>, fire: &TriggerFire) -> Result<bool> {
     let response = {

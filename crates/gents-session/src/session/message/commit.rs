@@ -578,7 +578,7 @@ pub async fn stage_planned_write_in_txn(
         )
         .await?;
         if active.is_none() && create.node_did == cause.caller_node_did {
-            crate::goal::pause_goal_for_interrupt_in_txn(txn, &create.node_did, &create.session_id)
+            crate::request::hooks::points::session_halt(txn, &create.node_did, &create.session_id)
                 .await?;
         }
     }

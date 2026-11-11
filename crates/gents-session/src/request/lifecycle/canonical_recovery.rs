@@ -576,7 +576,7 @@ async fn recover_expired_generation_with_access_and_facts(
             if !response.get("data").and_then(|data| data.get("update_AgentRequest")).is_some_and(response_has_documents) {
                 anyhow::bail!("expired-generation recovery lost request CAS");
             }
-            crate::triggers::engine::durable::publish_request_outcome(
+            crate::request::hooks::points::request_terminal(
                 txn, agent, &row.request_id, target_state, "execution lease expired", &timestamp,
             ).await?;
             if !is_auxiliary {

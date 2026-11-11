@@ -85,7 +85,7 @@ pub async fn stop_session_with_access(
                     )
                     .await?;
                 if interrupted_request_id.is_none() {
-                    crate::goal::pause_goal_for_interrupt_in_txn(txn, &node_did, &session_id)
+                    gents_session::request::hooks::points::session_halt(txn, &node_did, &session_id)
                         .await?;
                 }
                 Ok(SessionStopReceipt {

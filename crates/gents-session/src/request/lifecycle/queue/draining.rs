@@ -135,7 +135,7 @@ async fn drain_pending_session_requests_where_in_txn(
                 affected == doc_id,
                 "pending AgentRequest drain mutation updated another physical request"
             );
-            crate::triggers::engine::durable::publish_request_outcome(
+            crate::request::hooks::points::request_terminal(
                 txn,
                 node_did,
                 &row.request_id,

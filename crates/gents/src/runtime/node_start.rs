@@ -25,6 +25,7 @@ pub async fn start_node(
     ceiling: ToolCeiling,
     plugin_home: &Path,
 ) -> Result<(Arc<defra_node::Node>, BackendAdmission)> {
+    super::lifecycle_hooks::install();
     let plugin_home = plugin_home.to_owned();
     let (plugins, _plugin_guard) = tokio::task::spawn_blocking(move || {
         let guard = try_lock_store_shared(&plugin_home)?;
@@ -58,6 +59,7 @@ pub async fn start_node_under_plugin_store(
     ceiling: ToolCeiling,
     guard: &StoreGuard,
 ) -> Result<(Arc<defra_node::Node>, BackendAdmission)> {
+    super::lifecycle_hooks::install();
     let plugin_home = guard.home().to_owned();
     let plugins = tokio::task::spawn_blocking(move || list_records(&plugin_home))
         .await?

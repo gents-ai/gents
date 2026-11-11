@@ -1,6 +1,4 @@
 use super::*;
-use gents_protocol::goal::GoalClaimFence;
-use gents_protocol::goal_names::GOAL_TRIGGER_KIND;
 
 pub async fn update_goal_fields_if_status_from_access(
     access: &gents_store::config_client::ConfigAccess,
@@ -132,7 +130,7 @@ pub async fn claim_retry_continuation_from_access(
         .is_some_and(mutation_returned_rows))
 }
 
-fn client_goal_claim_binding(
+pub(super) fn client_goal_claim_binding(
     goal: Option<&GoalDocument>,
     goal_id: Option<&str>,
     opening_verified: bool,
@@ -146,92 +144,6 @@ fn client_goal_claim_binding(
                 .assignment_root_request_doc_id
                 .as_deref()
                 .is_some_and(|doc| !doc.is_empty())
-    })
-}
-
-async fn client_goal_opening_verified_in_txn(
-    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
-    goal: Option<&GoalDocument>,
-    agent_did: &str,
-) -> Result<(bool, bool)> {
-    let Some(goal) = goal else {
-        return Ok((false, false));
-    };
-    let Some(root) = goal
-        .assignment_root_request_doc_id
-        .as_deref()
-        .filter(|id| !id.is_empty())
-    else {
-        return Ok((false, false));
-    };
-    use gents_protocol::document_query::{
-        fields::agent_request as request, Filter, Query, Selection,
-    };
-    let rendered = Query::select(Selection::owned(
-        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
-    ))
-    .filter(Filter::eq(request::DOC_ID, root))
-    .filter(Filter::eq(request::NODE_DID, &goal.node_did))
-    .filter(Filter::eq(request::SESSION_ID, &goal.session_id))
-    .limit(2)
-    .render();
-    let response = txn.run(&rendered).await?;
-    let rows: Vec<gents_protocol::row::AgentRequestRow> = serde_json::from_value(
-        response
-            .pointer("/data/AgentRequest")
-            .cloned()
-            .context("Goal opening query omitted rows")?,
-    )?;
-    let [row] = rows.as_slice() else {
-        return Ok((false, false));
-    };
-    Ok((
-        row.doc_id.as_deref() == Some(root)
-            && super::request_assignment::request_belongs_to_goal(goal, row),
-        row.agent_did.as_deref() == Some(agent_did),
-    ))
-}
-
-pub(crate) async fn fence_goal_continuation_claim_in_txn(
-    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
-    request: &gents_protocol::row::AgentRequest,
-    now: &str,
-    client_goal: bool,
-) -> Result<GoalClaimFence> {
-    if request.caused_by_trigger_kind.as_deref() != Some(GOAL_TRIGGER_KIND) {
-        return Ok(if client_goal {
-            GoalClaimFence::Rejected
-        } else {
-            GoalClaimFence::Allowed
-        });
-    }
-    let goal = load_canonical_goal_in_txn(txn, &request.node_did, &request.session_id).await?;
-    if client_goal {
-        let (opening_verified, opening_agent_matches) =
-            client_goal_opening_verified_in_txn(txn, goal.as_ref(), &request.agent_did).await?;
-        if !client_goal_claim_binding(
-            goal.as_ref(),
-            request.caused_by_trigger_id.as_deref(),
-            opening_verified,
-            opening_agent_matches,
-        ) {
-            return Ok(GoalClaimFence::Rejected);
-        }
-    }
-    let Some(goal) = goal else {
-        return Ok(GoalClaimFence::Allowed);
-    };
-    let allowed = request_head::retire_stale_assignment_continuations_in_txn(
-        txn,
-        &goal,
-        Some(&request.doc_id),
-        now,
-    )
-    .await?;
-    Ok(if allowed {
-        GoalClaimFence::Allowed
-    } else {
-        GoalClaimFence::Retired
     })
 }
 

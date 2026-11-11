@@ -1,6 +1,7 @@
 pub mod callback;
 pub mod engine;
 pub mod event_delivery;
+pub mod lifecycle_hooks;
 pub mod runtime_snapshot;
 pub mod snapshot_observer;
 

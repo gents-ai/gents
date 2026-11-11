@@ -86,7 +86,7 @@ async fn reject_pending_admission_in_txn(
                     .await?;
             }
         }
-        crate::triggers::engine::durable::publish_request_outcome(
+        crate::request::hooks::points::request_terminal(
             txn,
             &request.node_did,
             &request.request_id,
@@ -99,6 +99,75 @@ async fn reject_pending_admission_in_txn(
             .await?;
     }
     Ok(updated)
+}
+
+/// What `request.claim.gate` decided for a request and what core did about
+/// it (Lean `Hooks.claimStep` before core's own claim).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClaimGate {
+    Allowed,
+    Queued,
+    /// Core superseded the pending request.
+    Retired,
+    /// Core failed the pending request; `applied` is whether its row was still pending.
+    Rejected {
+        applied: bool,
+    },
+}
+
+/// Runs `request.claim.gate` and performs the transition its combined verdict
+/// names. A plugin names the outcome; the pending-terminal writes are core's.
+pub async fn claim_gate_in_txn(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    request: &AgentRequest,
+    claimed_at: &str,
+    client: bool,
+) -> Result<ClaimGate> {
+    use crate::request::hooks::claim::ClaimVerdict;
+    let verdict = crate::request::hooks::points::claim_gate(
+        txn,
+        &crate::request::hooks::registry::ClaimCandidate {
+            request: request.clone(),
+            client,
+            at: claimed_at.to_owned(),
+        },
+    )
+    .await?;
+    match verdict {
+        ClaimVerdict::Allow => Ok(ClaimGate::Allowed),
+        ClaimVerdict::LeaveQueued => Ok(ClaimGate::Queued),
+        ClaimVerdict::Retire { reason, successor } => {
+            let successor = successor.context("claim retirement names no superseding request")?;
+            let mutation = super::queue::supersede_pending_mutation(
+                &request.doc_id,
+                &request.node_did,
+                &successor.request_id,
+                &successor.request_doc_id,
+                &reason,
+            );
+            let response = txn.execute_local_response(&mutation).await?;
+            if response
+                .data
+                .as_ref()
+                .and_then(|data| data.get("update_AgentRequest"))
+                .is_some_and(response_has_documents)
+            {
+                crate::request::hooks::points::request_terminal(
+                    txn,
+                    &request.node_did,
+                    &request.request_id,
+                    RequestLifecycleState::Superseded,
+                    &reason,
+                    claimed_at,
+                )
+                .await?;
+            }
+            Ok(ClaimGate::Retired)
+        }
+        ClaimVerdict::Reject { reason } => Ok(ClaimGate::Rejected {
+            applied: reject_pending_admission_in_txn(txn, request, &reason, claimed_at).await?,
+        }),
+    }
 }
 
 async fn claim_request_with_projection<F>(
@@ -193,17 +262,10 @@ where
                     .await?;
                     return Ok(None);
                 }
-                match crate::goal::fence_goal_continuation_claim_in_txn(
-                    txn, request, claimed_at, client && request.input.goal_continuation.is_some(),
-                ).await? {
-                    gents_protocol::goal::GoalClaimFence::Allowed => {}
-                    gents_protocol::goal::GoalClaimFence::Retired => return Ok(None),
-                    gents_protocol::goal::GoalClaimFence::Rejected => {
-                        let rejected = reject_pending_admission_in_txn(
-                            txn, request, "request authorization denied", claimed_at,
-                        ).await?;
-                        return Ok(rejected.then_some(Err(())));
-                    }
+                match claim_gate_in_txn(txn, request, claimed_at, client).await? {
+                    ClaimGate::Allowed => {}
+                    ClaimGate::Queued | ClaimGate::Retired => return Ok(None),
+                    ClaimGate::Rejected { applied } => return Ok(applied.then_some(Err(()))),
                 }
                 if request.purpose == gents_protocol::request_admission::RequestPurpose::Normal
                     && !super::query::claim_queue_allows(txn, request).await?
@@ -617,7 +679,7 @@ impl RequestLifecycle {
                                 )
                                 .await?;
                             }
-                            crate::triggers::engine::durable::publish_request_outcome(
+                            crate::request::hooks::points::request_terminal(
                                 txn,
                                 &request.node_did,
                                 &request.request_id,
@@ -713,7 +775,7 @@ impl RequestLifecycle {
                                 )
                                 .await?;
                             }
-                            crate::triggers::engine::durable::publish_request_outcome(
+                            crate::request::hooks::points::request_terminal(
                                 txn,
                                 &request.node_did,
                                 &request.request_id,

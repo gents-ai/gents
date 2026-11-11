@@ -1086,7 +1086,7 @@ async fn write_terminal_dependents(
         )
         .await?;
     }
-    crate::triggers::engine::durable::publish_request_outcome(
+    crate::request::hooks::points::request_terminal(
         txn,
         agent,
         &row.request_id,
