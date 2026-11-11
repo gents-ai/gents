@@ -15,4 +15,5 @@ import Proofs.Automation.Hooks.Mailbox
 import Proofs.Automation.Hooks.GoalFence
 import Proofs.Automation.Hooks.GoalTask
 import Proofs.Automation.Hooks.QueueScope
+import Proofs.Automation.Hooks.GoalHalt
 import Proofs.Session.Hooks.Catalog
