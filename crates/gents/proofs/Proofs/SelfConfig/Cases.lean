@@ -639,10 +639,11 @@ def agentAcpState : Identity.Household.State :=
     ("idle", "user"), ("lead", "user"), ("helper", "engineer")].foldl
     (fun s (id, creator) => Identity.Household.commitAgentCreation s id creator id "node" true)
     base
-  { created with relations :=
+  let initialised := initDefaultSelection created "node" "user"
+  { initialised with relations :=
       engineerInitRelations "engineer" "node" ++
       ⟨"agents", "lead", "config_writer", .actor "lead"⟩ ::
-      ⟨"agents", "worker", "administrator", .actor "operator"⟩ :: created.relations }
+      ⟨"agents", "worker", "administrator", .actor "operator"⟩ :: initialised.relations }
 
 def agentCatalog : AgentCatalog :=
   { agents := [⟨"default", true, []⟩, ⟨"engineer", true, ["gents:engineer"]⟩,
@@ -835,6 +836,17 @@ def agentDecisionScenarios : List AgentDecisionRow :=
 def agentDecisionCases : List AgentDecisionWitness :=
   agentDecisionScenarios.map fun r =>
     { row := r, admission := agentAdmission r.profiles r.catalog r.actor r.request }
+
+/-- Every admitted request that chooses the default is a write the policy
+itself authorizes: the actor may update the Node's default selection. -/
+theorem admitted_default_choices_are_authorized_writes :
+    (agentDecisionCases.filter (fun w => w.accepted && w.row.request.makeDefault)).all
+      (fun w => defaultSelectionWrite agentAcpState w.row.actor.did "node") = true ∧
+    (agentDecisionCases.filter (fun w => w.accepted && w.row.request.makeDefault)).length = 5 ∧
+    [userActor, adminActor, operatorActor, strangerActor, engineerActor, leadActor,
+      workerActor].all (fun a =>
+        a.grants.catalog == defaultSelectionWrite agentAcpState a.did "node") = true := by
+  native_decide
 
 theorem agent_decision_cases_regressions :
     (agentDecisionCases.filter (·.accepted)).map (·.row.name) =
