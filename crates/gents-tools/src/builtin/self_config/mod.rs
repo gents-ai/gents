@@ -58,10 +58,9 @@ pub mod test_support {
 }
 
 pub use ops::{
-    apply_tool_grant_selection, guard_agent_keeps_reach, guard_backend_auth, guard_backend_choice,
-    guard_tools_keep_control, guard_tools_keep_grants, reselection_keeps_grants,
-    validate_tool_network_selection, OperatorGrants, PatchOutcome, SelfConfigCore,
-    EFFECT_TIMING_NOTE,
+    apply_tool_grant_selection, guard_agent_keeps_reach, guard_tools_keep_control,
+    guard_tools_keep_grants, reselection_keeps_grants, validate_tool_network_selection,
+    OperatorGrants, PatchOutcome, SelfConfigCore, EFFECT_TIMING_NOTE,
 };
 
 use std::collections::{BTreeMap, BTreeSet};

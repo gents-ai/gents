@@ -6,6 +6,7 @@ use gents_lean_vocab::{
     lean_self_config_field_tables, lean_self_config_selection_cases, lean_sibling_tools_cases,
     LeanAgentCandidate, LeanAgentDecisionInputs, LeanSelfConfigCase, LeanSelfConfigPatchEntry,
 };
+use gents_protocol::operations::inference::InferenceActor;
 use gents_tools::builtin::self_config::agent::{admit_sibling_tools_target, SiblingToolsTarget};
 use gents_tools::builtin::self_config::agent::{
     decide_agent_operation, materialize_agent, AgentActor, AgentCandidate, AgentCatalogView,
@@ -15,8 +16,8 @@ use gents_tools::builtin::self_config::{
     apply_tool_grant_selection, validate_tool_network_selection,
 };
 use gents_tools::builtin::self_config::{
-    guard_agent_keeps_reach, guard_backend_auth, guard_backend_choice, guard_tools_keep_control,
-    guard_tools_keep_grants, reselection_keeps_grants, OperatorGrants,
+    guard_agent_keeps_reach, guard_tools_keep_control, guard_tools_keep_grants,
+    reselection_keeps_grants, OperatorGrants,
 };
 use gents_tools::native::CommandNetworkMode;
 use serde_json::{Map, Value};
@@ -144,7 +145,25 @@ pub(super) fn generated_self_config_cases_fence_patch_merge() {
                 match target {
                     SelfConfigTarget::Tools => guard_tools_keep_control(&stored, &candidate),
                     SelfConfigTarget::Agent => guard_agent_keeps_reach(&stored, &candidate),
-                    SelfConfigTarget::InferenceBackend => guard_backend_auth(&stored, &candidate),
+                    SelfConfigTarget::InferenceBackend => {
+                        let auth = |doc: &Map<String, Value>| {
+                            serde_json::from_value::<gents_documents::BackendAuth>(
+                                doc.get("auth").cloned().unwrap_or(Value::Null),
+                            )
+                        };
+                        match (auth(&stored), auth(&candidate)) {
+                            (Ok(stored), Ok(candidate)) => {
+                                gents_inference::operations::backend_update_decision(
+                                    InferenceActor::Agent,
+                                    &stored,
+                                    &candidate,
+                                )
+                                .admit()
+                                .map_err(anyhow::Error::from)
+                            }
+                            _ => Err(anyhow::anyhow!("{}: backend auth is not valid", case.name)),
+                        }
+                    }
                     SelfConfigTarget::InferenceProfile => {
                         let backend = |doc: &Map<String, Value>| {
                             let id = doc.get("backend_id")?;
@@ -156,9 +175,14 @@ pub(super) fn generated_self_config_cases_fence_patch_merge() {
                                 .map(typed_backend)
                         };
                         match backend(&candidate) {
-                            Some(next) => {
-                                guard_backend_choice(backend(&stored).as_ref(), &next, None)
-                            }
+                            Some(next) => gents_inference::operations::profile_choice_decision(
+                                InferenceActor::Agent,
+                                backend(&stored).as_ref(),
+                                &next,
+                                None,
+                            )
+                            .admit(&next.backend_id, &next.provider_kind.to_string())
+                            .map_err(anyhow::Error::from),
                             None => Err(anyhow::anyhow!("{}: unknown next backend", case.name)),
                         }
                     }

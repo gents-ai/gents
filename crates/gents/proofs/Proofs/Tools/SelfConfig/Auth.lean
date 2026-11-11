@@ -1,30 +1,11 @@
 import Proofs.Documents.Configuration
+import Proofs.Inference.Operations
 import Proofs.Tools.SelfConfig.Theorems
 
 namespace SelfConfig
 
 open Configuration (BackendAuth)
-
-/-- The OAuth account a backend names; a non-OAuth backend names none. -/
-def oauthRef : BackendAuth → Option String
-  | .nodeOAuth a => a
-  | _ => none
-
-/-- Preserve the raw-secret restriction while allowing environment references;
-OAuth account references are operator-managed: a node-OAuth candidate keeps the
-stored reference and a non-OAuth backend counts as the original account. A
-rotation pool and its overage choice are operator-managed too: a candidate pool
-must equal the stored one. Static cloud credentials are raw secrets like an API
-key: a patch can keep the stored value but never introduce or change one. -/
-def authPatchAllowed (stored candidate : BackendAuth) : Bool :=
-  match candidate with
-  | .apiKey _ => decide (candidate = stored)
-  | .credential .. => decide (candidate = stored)
-  | .awsCredentials .. => decide (candidate = stored)
-  | .googleCredentials _ => decide (candidate = stored)
-  | .nodeOAuth a => decide (a = oauthRef stored)
-  | .nodeOAuthPool _ => decide (candidate = stored)
-  | _ => true
+open InferenceOperations (oauthRef authPatchAllowed backendChoiceAllowed)
 
 def authGuard (decode : Doc → Option BackendAuth) (stored candidate : Doc) : Bool :=
   match decode stored, decode candidate with
@@ -112,17 +93,6 @@ theorem oauth_reference_kept_allowed (old : BackendAuth) (a : Option String)
 theorem oauth_original_introduce_allowed (old : BackendAuth)
     (h : ∀ a, old ≠ .nodeOAuth a) : authPatchAllowed old (.nodeOAuth none) = true := by
   cases old <;> simp_all [authPatchAllowed, oauthRef]
-
-def backendChoiceAllowed (dflt : String → Option String)
-    (current : Option (String × BackendAuth)) (next : String × BackendAuth) : Bool :=
-  match next.2 with
-  | .nodeOAuth r =>
-    match current with
-    | some (kind, auth) =>
-      if kind = next.1 then decide (auth = next.2) else decide (r = dflt next.1)
-    | none => decide (r = dflt next.1)
-  | .nodeOAuthPool _ => decide (current = some next)
-  | _ => true
 
 def profileGuard (backendOf : String → Option (String × BackendAuth))
     (dflt : String → Option String) (stored merged : Doc) : Bool :=

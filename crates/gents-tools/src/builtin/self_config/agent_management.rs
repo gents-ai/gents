@@ -8,8 +8,9 @@ use gents_documents::{Agent, AgentContext, BashTools, BuiltInTools, FileTools, H
 use gents_protocol::agent_identity::{AgentAdmissionFacts, AgentIdentityBinding};
 use gents_protocol::operations::agent::{
     AgentCreateInput, AgentCreateOperation, AgentOperationError, AgentOperationKind, AgentOutcome,
-    AgentReceipt, NextCall,
+    AgentReceipt,
 };
+use gents_protocol::operations::NextCall;
 use gents_session::session::output_render::Ordered;
 use gents_store::config_client::{ConfigAccess, ConfigClientError, TransactionFailure};
 

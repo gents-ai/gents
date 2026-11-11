@@ -389,6 +389,209 @@
       },
       "output": "bool"
     },
+    "inference_operations_account_operation_admitted": {
+      "input": {
+        "fields": [
+          [
+            "actor",
+            {
+              "enum": "Actor",
+              "values": [
+                "person",
+                "agent"
+              ]
+            }
+          ],
+          [
+            "operation",
+            {
+              "enum": "AccountOperation",
+              "values": [
+                "list",
+                "select_for_profile",
+                "set_pool",
+                "label",
+                "disable",
+                "remove"
+              ]
+            }
+          ]
+        ],
+        "struct": "Input"
+      },
+      "output": "bool"
+    },
+    "inference_operations_backend_create_decision": {
+      "input": {
+        "fields": [
+          [
+            "actor",
+            {
+              "enum": "Actor",
+              "values": [
+                "person",
+                "agent"
+              ]
+            }
+          ],
+          [
+            "local_server",
+            "bool"
+          ],
+          [
+            "enabled",
+            "bool"
+          ]
+        ],
+        "struct": "Input"
+      },
+      "output": {
+        "enum": "BackendDecision",
+        "values": [
+          "admitted",
+          "raw_credential",
+          "oauth_account",
+          "oauth_pool",
+          "local_server_only",
+          "starts_enabled"
+        ]
+      }
+    },
+    "inference_operations_backend_update_decision": {
+      "input": {
+        "fields": [
+          [
+            "actor",
+            {
+              "enum": "Actor",
+              "values": [
+                "person",
+                "agent"
+              ]
+            }
+          ],
+          [
+            "auth",
+            {
+              "enum": "AuthClass",
+              "values": [
+                "account_free",
+                "raw_secret",
+                "oauth_account",
+                "oauth_pool"
+              ]
+            }
+          ],
+          [
+            "keeps",
+            "bool"
+          ]
+        ],
+        "struct": "Input"
+      },
+      "output": {
+        "enum": "BackendDecision",
+        "values": [
+          "admitted",
+          "raw_credential",
+          "oauth_account",
+          "oauth_pool",
+          "local_server_only",
+          "starts_enabled"
+        ]
+      }
+    },
+    "inference_operations_discovery_answer": {
+      "input": {
+        "fields": [
+          [
+            "actor",
+            {
+              "enum": "Actor",
+              "values": [
+                "person",
+                "agent"
+              ]
+            }
+          ],
+          [
+            "credentialed",
+            "bool"
+          ]
+        ],
+        "struct": "Input"
+      },
+      "output": {
+        "enum": "DiscoveryAnswer",
+        "values": [
+          "contacts_provider",
+          "stored_observation"
+        ]
+      }
+    },
+    "inference_operations_profile_write_decision": {
+      "input": {
+        "fields": [
+          [
+            "route",
+            {
+              "enum": "ProfileRoute",
+              "values": [
+                "anchored",
+                "exact_id"
+              ]
+            }
+          ],
+          [
+            "actor",
+            {
+              "enum": "Actor",
+              "values": [
+                "person",
+                "agent"
+              ]
+            }
+          ],
+          [
+            "next",
+            {
+              "enum": "AuthClass",
+              "values": [
+                "account_free",
+                "raw_secret",
+                "oauth_account",
+                "oauth_pool"
+              ]
+            }
+          ],
+          [
+            "current",
+            {
+              "enum": "CurrentBackend",
+              "values": [
+                "absent",
+                "same",
+                "same_provider",
+                "other_provider"
+              ]
+            }
+          ],
+          [
+            "is_default",
+            "bool"
+          ]
+        ],
+        "struct": "Input"
+      },
+      "output": {
+        "enum": "ChoiceDecision",
+        "values": [
+          "admitted",
+          "other_account",
+          "other_pool"
+        ]
+      }
+    },
     "lsp_lsp_action_mutates": {
       "input": {
         "fields": [

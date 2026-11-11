@@ -3,7 +3,7 @@ use std::error::Error;
 
 use serde::Serialize;
 
-use super::agent::NextCall;
+use super::NextCall;
 use crate::session::{AgentSession, SessionRowError};
 
 pub type SessionOrderKey = (

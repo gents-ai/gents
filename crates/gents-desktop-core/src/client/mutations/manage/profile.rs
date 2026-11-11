@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
-use gents_documents::apply_desired_state_plan;
 use gents_documents::list_inference_profiles_in_txn;
 use gents_documents::read_desired_state_record_in_txn;
 use gents_documents::InferenceProfile;
-use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents_inference::operations;
+use gents_protocol::operations::inference::{InferenceDocument, WriteMode};
 use gents_store::collection::Collection;
 use gents_store::config_client::ConfigAccess;
 
@@ -24,6 +24,7 @@ pub async fn select_agent_model_on(
     use gents_protocol::operations::agent::AgentEdit;
     use gents_protocol::operations::StringUpdate;
 
+    use super::inference::{operation_failure, put_write};
     use super::principal::agent_failure;
 
     anyhow::ensure!(!model_name.trim().is_empty(), "Choose a model.");
@@ -72,17 +73,16 @@ pub async fn select_agent_model_on(
                     selected.profile_id = format!("model-{}", uuid::Uuid::new_v4());
                     selected.display_name = Some(selected.model_name.clone());
                     selected.description = None;
-                    let value = serde_json::to_value(&selected)?;
-                    apply_desired_state_plan(
-                        txn,
-                        &DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-                            collection: Collection::InferenceProfile,
-                            add: value.clone(),
-                            update: value,
-                        }])?,
-                        &gents_inference::resolved::ProviderProfilePolicy,
-                    )
-                    .await?;
+                    let (profile_node, write) = put_write(
+                        InferenceDocument::Profile,
+                        &serde_json::to_value(&selected)?,
+                        WriteMode::Create,
+                    )?;
+                    operations::write_in_txn(txn, &profile_node, &write)
+                        .await
+                        .map_err(|failure| {
+                            operation_failure(failure, InferenceDocument::Profile, "create")
+                        })?;
                 }
                 let binding = AgentEdit {
                     inference_profile_id: StringUpdate::Set(selected.profile_id.clone()),
@@ -101,13 +101,12 @@ pub async fn upsert_inference_profile_on(
     access: &ConfigAccess,
     document: &InferenceProfile,
 ) -> Result<()> {
-    let value = serde_json::to_value(document)?;
-    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: Collection::InferenceProfile,
-        add: value.clone(),
-        update: value,
-    }])?;
-    super::apply_plan(access, "desktop.profile.save", plan).await
+    super::inference::put_document(
+        access,
+        InferenceDocument::Profile,
+        &serde_json::to_value(document)?,
+    )
+    .await
 }
 
 pub async fn delete_inference_profile_on(
@@ -115,14 +114,7 @@ pub async fn delete_inference_profile_on(
     node_did: &str,
     id: &str,
 ) -> Result<usize> {
-    super::delete_scoped_document(
-        access,
-        "desktop.profile.delete",
-        Collection::InferenceProfile,
-        node_did,
-        id,
-    )
-    .await
+    super::inference::remove_document(access, InferenceDocument::Profile, node_did, id).await
 }
 
 #[cfg(test)]
@@ -343,60 +335,6 @@ mod tests {
             .await?,
             original
         );
-        runtime.shutdown().await;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn profile_save_validates_bounds_and_resolves_backend_in_exact_owner_scope() -> Result<()>
-    {
-        let runtime = ServedRuntimeHome::start().await;
-        let owner = runtime.node_did();
-        let other = runtime.publish_foreign_node().await;
-        let access = runtime.user_access();
-        let backend = serde_json::from_value(
-            json!({"node_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}),
-        )?;
-        gents_documents::write_inference_backend_document(
-            &access,
-            &backend,
-            &gents_inference::resolved::ProviderProfilePolicy,
-        )
-        .await?;
-        let mut profile: InferenceProfile = serde_json::from_value(
-            json!({"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model","reasoning_effort":"high","max_output_tokens":100}),
-        )?;
-        upsert_inference_profile_on(&access, &profile).await?;
-        profile.max_output_tokens = Some(0);
-        assert!(upsert_inference_profile_on(&access, &profile)
-            .await
-            .is_err());
-        profile.max_output_tokens = None;
-        profile.node_did = other;
-        assert!(upsert_inference_profile_on(&access, &profile)
-            .await
-            .is_err());
-        access
-            .transact_readonly("test.profile.read", |txn| {
-                Box::pin(async move {
-                    let (_, value) = read_desired_state_record_in_txn(
-                        txn,
-                        Collection::InferenceProfile,
-                        owner,
-                        "profile",
-                    )
-                    .await?
-                    .unwrap();
-                    let retained: InferenceProfile = serde_json::from_value(value)?;
-                    assert_eq!(retained.max_output_tokens, Some(100));
-                    assert_eq!(
-                        retained.reasoning_effort,
-                        Some(gents_documents::inference_defaults::ReasoningEffort::High)
-                    );
-                    Ok::<_, anyhow::Error>(())
-                })
-            })
-            .await?;
         runtime.shutdown().await;
         Ok(())
     }

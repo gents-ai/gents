@@ -88,6 +88,7 @@ impl BridgeErrorCode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum BridgeNextCallKind {
+    Verb,
     VerbHelp,
     ResourceHelp,
     Inspect,
@@ -103,10 +104,11 @@ pub struct BridgeNextCall {
     pub verb: Option<String>,
 }
 
-impl From<gents_protocol::operations::agent::NextCall> for BridgeNextCall {
-    fn from(next_call: gents_protocol::operations::agent::NextCall) -> Self {
-        use gents_protocol::operations::agent::NextCall;
+impl From<gents_protocol::operations::NextCall> for BridgeNextCall {
+    fn from(next_call: gents_protocol::operations::NextCall) -> Self {
+        use gents_protocol::operations::NextCall;
         let (kind, resource, verb) = match next_call {
+            NextCall::Verb { resource, verb } => (BridgeNextCallKind::Verb, resource, Some(verb)),
             NextCall::VerbHelp { resource, verb } => {
                 (BridgeNextCallKind::VerbHelp, resource, Some(verb))
             }
@@ -167,7 +169,7 @@ impl BridgeError {
         code: BridgeErrorCode,
         operation_code: &str,
         message: impl Into<String>,
-        next_call: gents_protocol::operations::agent::NextCall,
+        next_call: gents_protocol::operations::NextCall,
     ) -> Self {
         Self {
             operation_code: Some(operation_code.to_owned()),
@@ -252,11 +254,38 @@ impl BridgeError {
 /// for the call the operation names.
 pub fn agent_operation_failure(
     error: gents_protocol::operations::agent::AgentOperationError,
-    next_call: gents::operations::agent::NextCall,
+    next_call: gents_protocol::operations::NextCall,
 ) -> anyhow::Error {
     let message = refusal_message(
         &gents_protocol::error_chain::ErrorChain(&error).to_string(),
         next_call,
+    );
+    anyhow::Error::new(error).context(message)
+}
+
+/// An inference backend or profile write or removal the shared handler
+/// refused or failed, as the message the UI shows: what happened, then the
+/// next step in desktop terms for the call the handler names.
+pub fn inference_operation_failure(
+    error: gents_protocol::operations::inference::InferenceOperationError,
+    next_call: gents_protocol::operations::NextCall,
+) -> anyhow::Error {
+    use gents_protocol::operations::NextCall;
+    let next = match next_call {
+        NextCall::Verb {
+            verb: "accounts", ..
+        } => "Open Accounts to see the signed-in accounts and which is each provider's default.",
+        NextCall::List { .. } => "Open the list and choose an existing one.",
+        NextCall::Inspect { .. } => "Open it and review what it holds.",
+        NextCall::Verb { .. } | NextCall::VerbHelp { .. } | NextCall::ResourceHelp { .. } => {
+            "Review the fields and save again."
+        }
+    };
+    let message = format!(
+        "{}. {next}",
+        gents_protocol::error_chain::ErrorChain(&error)
+            .to_string()
+            .trim_end_matches('.')
     );
     anyhow::Error::new(error).context(message)
 }
@@ -295,7 +324,6 @@ pub fn request_operation_failure(
         | E::ReissueNotLatest { .. }
         | E::InterruptTerminal { .. }
         | E::IdentityConflict { .. }
-        | E::ReceiptMismatch { .. }
         | E::ConflictingActiveRequests { .. }
         | E::NodeUnavailable { .. }
         | E::NoDefaultAgent { .. }
@@ -304,6 +332,7 @@ pub fn request_operation_failure(
         E::WaitTimedOut { .. }
         | E::OutputUnavailable { .. }
         | E::SuccessorInvalid { .. }
+        | E::ReceiptMismatch { .. }
         | E::InterruptNotLatched { .. }
         | E::Unconfirmed { .. }
         | E::Passthrough(_) => BridgeErrorCode::Unknown,
@@ -379,8 +408,8 @@ impl std::error::Error for OperationCause {
     }
 }
 
-fn refusal_message(message: &str, next_call: gents::operations::agent::NextCall) -> String {
-    use gents::operations::agent::NextCall;
+fn refusal_message(message: &str, next_call: gents_protocol::operations::NextCall) -> String {
+    use gents_protocol::operations::NextCall;
     let next = match next_call {
         NextCall::Inspect { .. } => {
             "Ask a Node owner or administrator to grant this account access to the agent."
@@ -388,7 +417,7 @@ fn refusal_message(message: &str, next_call: gents::operations::agent::NextCall)
         NextCall::List { .. } => {
             "Open the agent list and choose an enabled agent, or enable this one in the same change."
         }
-        NextCall::VerbHelp { .. } | NextCall::ResourceHelp { .. } => {
+        NextCall::VerbHelp { .. } | NextCall::ResourceHelp { .. } | NextCall::Verb { .. } => {
             "Review the agent's fields and save again."
         }
     };

@@ -6,7 +6,11 @@ use axum::{
 };
 use defra_http::ExtractIdentity;
 use gents::runtime::agent::inference_read::InferenceObservationRead;
+use gents_inference::backends::registry::ActorBackendDiscoveryError;
 use gents_inference::inference_observation::InferenceKey;
+use gents_protocol::error_chain::find_source;
+use gents_protocol::operations::inference::{DiscoveryAnswer, InferenceOperationError};
+use gents_store::config_client::ConfigAccess;
 
 use super::router::RuntimeHttpState;
 
@@ -38,33 +42,38 @@ pub async fn discover_backend(
             "The selected runtime is unavailable.",
         );
     };
-    match gents_inference::backends::registry::discover_backend_for_actor(
-        runtime.observation_node(),
-        actor,
-        &request.node_did,
-        &request.backend_id,
-    )
-    .await
+    let access = ConfigAccess::local_as(runtime.observation_node().clone(), actor.clone());
+    match gents_inference::operations::discover(&access, &request.node_did, &request.backend_id)
+        .await
     {
-        Ok(models) => {
-            let mut response = Json(serde_json::json!({"backend_id":request.backend_id, "discovered_models":models, "catalog_written":true})).into_response();
+        Ok(discovery) => {
+            let catalog_written = discovery.answer == DiscoveryAnswer::ContactsProvider;
+            let mut response = Json(serde_json::json!({"backend_id":request.backend_id, "discovered_models":discovery.models.unwrap_or_default(), "catalog_written":catalog_written})).into_response();
             response.headers_mut().insert(
                 header::CACHE_CONTROL,
                 header::HeaderValue::from_static("no-store"),
             );
             response
         }
-        Err(gents_inference::backends::registry::ActorBackendDiscoveryError::Unavailable) => {
-            failure(
-                StatusCode::NOT_FOUND,
-                "The selected backend is unavailable.",
-            )
-        }
+        Err(error) if unavailable(&error) => failure(
+            StatusCode::NOT_FOUND,
+            "The selected backend is unavailable.",
+        ),
         Err(_) => failure(
             StatusCode::SERVICE_UNAVAILABLE,
             "Backend discovery is unavailable.",
         ),
     }
+}
+
+fn unavailable(error: &InferenceOperationError) -> bool {
+    matches!(error, InferenceOperationError::Missing { .. })
+        || error.passthrough().is_some_and(|source| {
+            matches!(
+                find_source::<ActorBackendDiscoveryError>(source),
+                Some(ActorBackendDiscoveryError::Unavailable)
+            )
+        })
 }
 
 pub async fn read(
