@@ -33,7 +33,7 @@ pub enum HookError {
         operation: String,
     },
     #[error(
-        "no lifecycle plugins are installed in this process; the runtime was composed without them"
+        "no lifecycle plugins are attached to this node, or installed for this process's GraphQL transactions; the runtime was composed without them"
     )]
     NotInstalled,
     #[error("lifecycle plugin declared an unreadable query: {0}")]
