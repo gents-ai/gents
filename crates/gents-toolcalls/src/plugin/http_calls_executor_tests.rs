@@ -9,7 +9,7 @@ use gents_pack::plugin::PluginVerdict;
 use serde_json::{json, Value};
 
 use crate::plugin::executor::PluginExecutor;
-use crate::plugin::tests::executor::{asking_plugin_wat, installed_plugin};
+use gents_pack::plugin::test_fixtures::{asking_plugin_wat, installed_plugin};
 
 fn installed_asking(
     requests: Value,

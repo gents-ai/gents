@@ -1,4 +1,4 @@
-use crate::plugin::test_fixtures::{build_plugin_pack, plugin_named, source_only_afb, ECHO_WAT};
+use crate::plugin::test_fixtures::{build_plugin_pack, create_file_wat, open_and_copy_wat, plugin_named, source_only_afb, ECHO_WAT};
 use crate::plugin::{BoundDir, PluginBudget, PluginOutcome, PluginRunner, PluginVerdict};
 
 #[test]
@@ -153,28 +153,6 @@ fn admission_refuses_a_bind_dir_plugin_whose_dispatch_path_cannot_enforce_read_o
     assert!(message.contains("read-only"), "{message}");
 }
 
-pub fn create_file_wat(path: &str) -> String {
-    format!(
-        r#"(module
-          (import "wasi_snapshot_preview1" "path_open"
-            (func $path_open (param i32 i32 i32 i32 i32 i64 i64 i32 i32) (result i32)))
-          (import "wasi_snapshot_preview1" "fd_write"
-            (func $fd_write (param i32 i32 i32 i32) (result i32)))
-          (memory (export "memory") 1)
-          (data (i32.const 512) "{path}")
-          (data (i32.const 600) "{{}}")
-          (func (export "_start")
-            (if (call $path_open (i32.const 3) (i32.const 0) (i32.const 512) (i32.const {len})
-                  (i32.const 1) (i64.const 64) (i64.const 0) (i32.const 0) (i32.const 272))
-              (then (return)))
-            i32.const 256  i32.const 600  i32.store
-            i32.const 260  i32.const 2    i32.store
-            (drop (call $fd_write (i32.load (i32.const 272)) (i32.const 256) (i32.const 1) (i32.const 268)))
-            (drop (call $fd_write (i32.const 1) (i32.const 256) (i32.const 1) (i32.const 268)))))"#,
-        len = path.len()
-    )
-}
-
 #[test]
 fn call_bound_read_write_lets_the_guest_create_a_file() {
     let dir = tempfile::tempdir().unwrap();
@@ -194,37 +172,6 @@ fn call_bound_read_write_lets_the_guest_create_a_file() {
         std::fs::read_to_string(dir.path().join("new.json")).unwrap(),
         "{}"
     );
-}
-
-pub fn open_and_copy_wat(path: &str, oflags: u32) -> String {
-    format!(
-        r#"(module
-          (import "wasi_snapshot_preview1" "path_open"
-            (func $path_open (param i32 i32 i32 i32 i32 i64 i64 i32 i32) (result i32)))
-          (import "wasi_snapshot_preview1" "fd_read"
-            (func $fd_read (param i32 i32 i32 i32) (result i32)))
-          (import "wasi_snapshot_preview1" "fd_write"
-            (func $fd_write (param i32 i32 i32 i32) (result i32)))
-          (memory (export "memory") 1)
-          (data (i32.const 512) "{path}")
-          (func (export "_start")
-            (if (call $path_open (i32.const 3) (i32.const 0) (i32.const 512) (i32.const {len})
-                  (i32.const {oflags}) (i64.const {rights}) (i64.const 0) (i32.const 0) (i32.const 272))
-              (then (return)))
-            i32.const 256  i32.const 0    i32.store
-            i32.const 260  i32.const 128  i32.store
-            (drop (call $fd_read (i32.load (i32.const 272)) (i32.const 256) (i32.const 1) (i32.const 264)))
-            i32.const 260  i32.const 264 i32.load  i32.store
-            (drop (call $fd_write (i32.const 1) (i32.const 256) (i32.const 1) (i32.const 268)))))"#,
-        len = path.len(),
-        rights = if oflags == 0 { 2 } else { 66 }
-    )
-}
-
-fn call_bound_verdict(runner: &PluginRunner, bound: &BoundDir) -> PluginOutcome {
-    runner
-        .call_bound(&serde_json::json!({}), &PluginBudget::default(), bound)
-        .expect("the call runs at the VM level")
 }
 
 #[test]
@@ -254,4 +201,10 @@ fn call_bound_reads_inside_and_never_writes_for_a_read_plugin() {
         call_bound_verdict(&outside, &bound).verdict,
         PluginVerdict::BadOutput
     );
+}
+
+fn call_bound_verdict(runner: &PluginRunner, bound: &BoundDir) -> PluginOutcome {
+    runner
+        .call_bound(&serde_json::json!({}), &PluginBudget::default(), bound)
+        .expect("the call runs at the VM level")
 }

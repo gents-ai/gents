@@ -683,7 +683,7 @@ fn job_tool_ref(job: Option<serde_json::Value>) -> gents_documents::PluginToolRe
 
 #[test]
 fn job_block_on_a_plugin_without_job_true_is_refused() {
-    let (home, record) = executor::installed_echo();
+    let (home, record) = gents_pack::plugin::test_fixtures::installed_echo();
     assert!(!record.declaration.job.0);
     let executor = std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
         home.path().to_owned(),
@@ -706,7 +706,7 @@ fn job_resolutions() -> (
         Option<gents_pack::plugin::store::InstalledPlugin>,
     )>,
 ) {
-    let (home, plain) = executor::installed_echo();
+    let (home, plain) = gents_pack::plugin::test_fixtures::installed_echo();
     let mut job_capable = plain.clone();
     job_capable.declaration.job = gents_protocol::job::PluginJobDeclaration(true);
     let mut not_job = job_tool_ref(None);
@@ -807,7 +807,7 @@ fn tool_instructions_live_beside_the_plugin_and_stay_small_text() {
     assert!(gents_pack::pack::tool_instructions("lint", &oversized).is_err());
 }
 
-pub(crate) use gents_pack::plugin::tests::call_bound::{create_file_wat, open_and_copy_wat};
+pub(crate) use gents_pack::plugin::test_fixtures::{create_file_wat, open_and_copy_wat};
 
 #[test]
 fn generated_plugin_resource_cases_bind_budget_and_consent() {
@@ -1004,7 +1004,7 @@ async fn generated_plugin_call_access_cases_drive_bind_admission() {
         let declared = access(&case["declared"]).unwrap();
         let write_fields = case["write_fields"].as_bool().unwrap();
         let sets = case["sets_write_field"].as_bool().unwrap();
-        let (home, mut record) = executor::installed_plugin(ECHO_WAT, Some(declared));
+        let (home, mut record) = gents_pack::plugin::test_fixtures::installed_plugin(ECHO_WAT, Some(declared));
         let binding = record.declaration.bind_dir.as_mut().unwrap();
         if write_fields {
             binding.write_fields = vec!["output".into()];

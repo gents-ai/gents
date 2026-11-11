@@ -2845,7 +2845,7 @@ async fn only_a_host_call_plugin_adds_the_process_tools() {
         "integrations": {"plugins": [{"plugin": "team/plugin"}]}
     }));
     for host_call in [false, true] {
-        let (home, mut record) = crate::plugin::tests::executor::installed_echo();
+        let (home, mut record) = gents_pack::plugin::test_fixtures::installed_echo();
         if host_call {
             record.declaration.host_imports = vec![gents_pack::pack::HostImport::HostCall];
             gents_pack::plugin::store::write_record(home.path(), &record).unwrap();
