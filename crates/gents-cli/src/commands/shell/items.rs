@@ -102,7 +102,7 @@ pub(super) fn agents(views: &[AgentView], ready: &[String]) -> Vec<Agent> {
         .collect()
 }
 
-fn agent_name(view: &AgentView) -> String {
+pub(super) fn agent_name(view: &AgentView) -> String {
     match clean(&view.display_name).trim() {
         "" => did_tail(&view.agent_did).to_string(),
         name => name.to_string(),

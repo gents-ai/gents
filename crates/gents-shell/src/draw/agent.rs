@@ -300,6 +300,9 @@ fn message_box(app: &App, area: Rect, focused: bool, buf: &mut Buffer) {
         return;
     }
     buf.set_stringn(text_x, y, app.placeholder(), room as usize, label);
+    if app.no_agent().is_some() {
+        return;
+    }
     if area.width > 40 {
         buf.set_string(area.right() - 12, y, "enter send", label);
     }
