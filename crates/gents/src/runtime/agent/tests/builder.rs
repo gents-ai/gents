@@ -73,7 +73,11 @@ async fn builder_includes_custom_tools_in_resolved_tool_surface() {
 
     let tool_surface = agent.agents()[0]
         .tools
-        .resolve(&node, identity.did(), &Default::default())
+        .resolve(
+            &node,
+            identity.did(),
+            &crate::tools::plugin_host::NoPluginHost,
+        )
         .await
         .unwrap();
     assert!(tool_surface

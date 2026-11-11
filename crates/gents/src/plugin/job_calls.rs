@@ -21,10 +21,11 @@ use crate::store::config_client::ConfigAccess;
 use crate::store::graphql::graphql_string_list_literal;
 use crate::tools::background::job::input::derive_children;
 use crate::tools::background::status::{
-    load_caused_request_terminals, read_tool_output_slice_with_access, LiveToolOutputRegistry,
-    ProcessControlScope, ReadToolOutputOutcome,
+    load_caused_request_terminals, read_tool_output_slice_with_access, ProcessControlScope,
+    ReadToolOutputOutcome,
 };
 use crate::tools::call::lifecycle::CausedRequestTerminal;
+use gents_loop::live_output::LiveToolOutputRegistry;
 
 const MAX_REQUESTS_PER_ROUND: usize = 16;
 

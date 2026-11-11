@@ -4210,7 +4210,7 @@ async fn agent_create_commits_and_resolves_after_restart() {
     );
     let names = runtime_agent
         .tools
-        .resolve(&node, &node_did, &Default::default())
+        .resolve(&node, &node_did, &crate::tools::plugin_host::NoPluginHost)
         .await
         .expect("new agent tool surface resolves after restart")
         .tool_names();
@@ -4829,7 +4829,7 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
     let surface = Arc::new(
         runtime_agent
             .tools
-            .resolve(&node, &owner, &Default::default())
+            .resolve(&node, &owner, &crate::tools::plugin_host::NoPluginHost)
             .await
             .expect("resolve fresh-request tool surface"),
     );
@@ -8428,7 +8428,7 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, &did, &plugins)
+    .resolve(&node, &did, &*plugins)
     .await
     .unwrap();
     let runtime =

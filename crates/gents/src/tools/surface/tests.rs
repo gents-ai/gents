@@ -964,7 +964,12 @@ async fn required_mcp_service_needs_agent_scoped_measured_availability() {
     .unwrap();
     let active = rapidhash::RapidHashSet::from_iter(["investigator".to_string()]);
     let error = config
-        .resolve_with_available_agent_targets(&node, node_did, &active, &Default::default())
+        .resolve_with_available_agent_targets(
+            &node,
+            node_did,
+            &active,
+            &crate::tools::plugin_host::NoPluginHost,
+        )
         .await
         .expect_err("missing health measurement must quarantine the agent");
     assert!(error.to_string().contains("not measured available"));
@@ -1199,7 +1204,7 @@ async fn defra_query_tool_gated_by_selection() {
     .resolve(
         &node,
         node.node_identity_did().unwrap(),
-        &Default::default(),
+        &crate::tools::plugin_host::NoPluginHost,
     )
     .await
     .unwrap();
@@ -1242,7 +1247,7 @@ async fn context_budget_tool_gated_by_selection() {
     .resolve(
         &node,
         node.node_identity_did().unwrap(),
-        &Default::default(),
+        &crate::tools::plugin_host::NoPluginHost,
     )
     .await
     .unwrap();
@@ -1297,7 +1302,11 @@ async fn write_tools_register_under_declared_names() {
             output_obligation: None,
         })],
     )
-    .resolve(&node, &runtime.node_did, &Default::default())
+    .resolve(
+        &node,
+        &runtime.node_did,
+        &crate::tools::plugin_host::NoPluginHost,
+    )
     .await
     .unwrap();
 
@@ -1346,7 +1355,11 @@ async fn write_tool_whose_count_field_resolves_no_schema_is_refused_at_registrat
             }),
         })],
     )
-    .resolve(&node, &runtime.node_did, &Default::default())
+    .resolve(
+        &node,
+        &runtime.node_did,
+        &crate::tools::plugin_host::NoPluginHost,
+    )
     .await
     .unwrap();
 
@@ -1406,7 +1419,7 @@ async fn plugin_only_bindings_are_captured_for_trigger_execution() {
     .resolve(
         &node,
         node.node_identity_did().unwrap(),
-        &Default::default(),
+        &crate::tools::plugin_host::NoPluginHost,
     )
     .await
     .unwrap();
@@ -1428,7 +1441,11 @@ async fn mailbox_surface_registers_stamped_tool_and_captures_owner_lineage() {
             crate::documents::mailbox_write_decl::canonical_mailbox_write_decl(),
         )],
     )
-    .resolve(&node, &runtime.node_did, &Default::default())
+    .resolve(
+        &node,
+        &runtime.node_did,
+        &crate::tools::plugin_host::NoPluginHost,
+    )
     .await
     .unwrap();
     assert!(granted
@@ -1483,7 +1500,7 @@ async fn query_tool_is_advertised_and_registered() {
             }],
         })],
     )
-    .resolve(&node, &node_did, &Default::default())
+    .resolve(&node, &node_did, &crate::tools::plugin_host::NoPluginHost)
     .await
     .unwrap();
 
@@ -1655,7 +1672,7 @@ async fn explicitly_disabling_goal_tools_removes_them_from_names_and_runtime() {
     .resolve(
         &node,
         node.node_identity_did().unwrap(),
-        &Default::default(),
+        &crate::tools::plugin_host::NoPluginHost,
     )
     .await
     .unwrap();
@@ -1700,7 +1717,7 @@ async fn goal_tools_are_independent_from_generic_meta_tools() {
     .resolve(
         &node,
         node.node_identity_did().unwrap(),
-        &Default::default(),
+        &crate::tools::plugin_host::NoPluginHost,
     )
     .await
     .unwrap();
@@ -1730,7 +1747,7 @@ async fn goal_creation_requires_its_separate_capability() {
     .resolve(
         &node,
         node.node_identity_did().unwrap(),
-        &Default::default(),
+        &crate::tools::plugin_host::NoPluginHost,
     )
     .await
     .unwrap();
@@ -1795,7 +1812,7 @@ async fn operator_ceiling_can_deny_goal_creation_only() {
     .resolve(
         &node,
         node.node_identity_did().unwrap(),
-        &Default::default(),
+        &crate::tools::plugin_host::NoPluginHost,
     )
     .await
     .unwrap();
@@ -1833,7 +1850,7 @@ async fn operator_ceiling_denies_all_goal_mutation_when_base_capability_is_off()
     .resolve(
         &node,
         node.node_identity_did().unwrap(),
-        &Default::default(),
+        &crate::tools::plugin_host::NoPluginHost,
     )
     .await
     .unwrap();
@@ -2040,7 +2057,7 @@ async fn session_history_tool_follows_selection() {
     .resolve(
         &node,
         node.node_identity_did().unwrap(),
-        &Default::default(),
+        &crate::tools::plugin_host::NoPluginHost,
     )
     .await
     .unwrap();
@@ -2176,7 +2193,11 @@ async fn tool_construction_rechecks_current_workspace_root_policy() {
     )
     .unwrap();
     let surface = config
-        .resolve(&node, &runtime.node_did, &Default::default())
+        .resolve(
+            &node,
+            &runtime.node_did,
+            &crate::tools::plugin_host::NoPluginHost,
+        )
         .await
         .unwrap();
     surface
@@ -2239,7 +2260,11 @@ async fn normal_load_rejects_active_blank_root_under_explicit_policy_without_cei
     )
     .unwrap();
     let surface = config
-        .resolve(&node, &runtime.node_did, &Default::default())
+        .resolve(
+            &node,
+            &runtime.node_did,
+            &crate::tools::plugin_host::NoPluginHost,
+        )
         .await
         .unwrap();
     let error = match surface.build_tools(&runtime).await {
@@ -2641,7 +2666,7 @@ async fn defra_query_is_off_by_default() {
     .resolve(
         &node,
         node.node_identity_did().unwrap(),
-        &Default::default(),
+        &crate::tools::plugin_host::NoPluginHost,
     )
     .await
     .unwrap();
@@ -2697,7 +2722,7 @@ async fn agent_config_alias_expands_to_config_scope() {
     .resolve(
         &node,
         node.node_identity_did().unwrap(),
-        &Default::default(),
+        &crate::tools::plugin_host::NoPluginHost,
     )
     .await
     .unwrap();

@@ -58,7 +58,11 @@ pub async fn run_openai_oneshot_with_tools_admitted(
         ToolRuntimeContext::oneshot_with_node_did(node.clone(), agent.node_did()).for_agent(agent);
     let tool_surface = agent
         .tools
-        .resolve(&node, agent.node_did(), &Default::default())
+        .resolve(
+            &node,
+            agent.node_did(),
+            &crate::tools::plugin_host::NoPluginHost,
+        )
         .await?;
     let allowed_targets = surface::resolve_agent_target_descriptions(&tool_surface);
     let prompt_builder = LayeredPromptBuilder::new(agent, &tool_surface, &allowed_targets);

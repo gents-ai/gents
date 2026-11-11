@@ -66,10 +66,6 @@ mod plugin_job_dispatch;
 #[cfg(all(test, unix))]
 pub(crate) mod process_records;
 
-#[path = "tests/process_records.rs"]
-#[cfg(all(test, unix))]
-pub(crate) mod process_records;
-
 struct HookExecutionFixture {
     lifecycle: crate::request::lifecycle::RequestLifecycle,
     writer: crate::request::streaming::DefraStreamWriter,

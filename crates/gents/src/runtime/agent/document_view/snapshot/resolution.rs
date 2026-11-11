@@ -216,7 +216,7 @@ pub(super) async fn resolve_behavior_surfaces(
                 node,
                 own_node_did,
                 &candidate_agent_dids,
-                &context.plugins,
+                &*context.plugins,
             )
             .await
         {

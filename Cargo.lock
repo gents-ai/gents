@@ -4702,6 +4702,7 @@ dependencies = [
  "gents",
  "gents-lean-contract",
  "gents-lean-vocab",
+ "gents-loop",
  "gents-protocol",
  "glob",
  "identity",
