@@ -8,5 +8,6 @@ pub mod effect;
 pub mod hook;
 pub(crate) mod native;
 pub mod points;
+pub mod prepared;
 pub mod registry;
 pub mod stage;

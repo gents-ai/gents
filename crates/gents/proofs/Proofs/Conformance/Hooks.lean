@@ -1,5 +1,6 @@
 import Proofs.Hooks.Claim
 import Proofs.Hooks.MustCommit
+import Proofs.Hooks.Prepared
 import Proofs.Conformance.ContractTypes
 
 namespace Conformance.HooksContracts
@@ -532,5 +533,89 @@ private def deliveryCaseJson (c : DeliveryCase) : String :=
         ",\"pending\":" ++ jsonStringArray (Delivery.pending entry.2) ++ "}") ++ "}"
 
 def deliveryCasesJson : String := jsonArray (deliveryCases.map deliveryCaseJson)
+
+/-! Prepared decisions: `Hooks.prepare` and `Hooks.admit`. -/
+
+abbrev AdmitBinding := Binding String
+abbrev AdmitPrepared := Prepared String String
+
+private def admitBinding : AdmitBinding :=
+  { actor := caller, point := "request.admit.verify", subject := "request-doc"
+  , inputs := "sha256:shown", configuration := "" }
+
+structure AdmitCase where
+  name : String
+  authorized : Bool := true
+  cancelled : Bool := false
+  current : AdmitBinding := admitBinding
+  /-- The binding the host captured when it prepared, and the plugin's
+  answer; `none` when nothing was prepared. -/
+  prepared : Option (AdmitBinding × Verdict String)
+
+def AdmitCase.decision (c : AdmitCase) : Option AdmitPrepared :=
+  c.prepared.map fun entry => Hooks.prepare entry.1 (fun (_ : Unit) => entry.2) ()
+
+def AdmitCase.result (c : AdmitCase) : Except Stale String :=
+  Hooks.admit c.authorized c.cancelled c.current c.decision
+
+def admitCases : List AdmitCase :=
+  [ { name := "matching_allow_admits_with_its_payload"
+    , prepared := some (admitBinding, .allow "sequence-1") }
+  , { name := "unauthorized_actor_never_admits", authorized := false
+    , prepared := some (admitBinding, .allow "sequence-1") }
+  , { name := "unauthorized_wins_over_cancelled", authorized := false, cancelled := true
+    , prepared := none }
+  , { name := "cancelled_step_never_admits", cancelled := true
+    , prepared := some (admitBinding, .allow "sequence-1") }
+  , { name := "missing_decision_never_admits", prepared := none }
+  , { name := "changed_inputs_are_stale"
+    , prepared := some ({ admitBinding with inputs := "sha256:earlier" }, .allow "sequence-1") }
+  , { name := "changed_subject_is_stale"
+    , prepared := some ({ admitBinding with subject := "other-doc" }, .allow "sequence-1") }
+  , { name := "changed_actor_is_stale"
+    , prepared := some ({ admitBinding with actor := "did:key:z6MkOther" }, .allow "x") }
+  , { name := "changed_configuration_is_stale"
+    , prepared := some ({ admitBinding with configuration := "v2" }, .allow "x") }
+  , { name := "stale_wins_over_deny"
+    , prepared := some ({ admitBinding with point := "request.work.complete" }, .deny "no") }
+  , { name := "deny_carries_its_reason"
+    , prepared := some (admitBinding, .deny "continuation receipt has a different physical goal edge") }
+  , { name := "unavailable_never_admits", prepared := some (admitBinding, .unavailable) } ]
+
+private def bindingJson (binding : AdmitBinding) : String :=
+  "{\"actor\":" ++ jsonString binding.actor ++
+    ",\"point\":" ++ jsonString binding.point ++
+    ",\"subject\":" ++ jsonString binding.subject ++
+    ",\"inputs\":" ++ jsonString binding.inputs ++
+    ",\"configuration\":" ++ jsonString binding.configuration ++ "}"
+
+private def preparedVerdictJson : Verdict String → String
+  | .allow payload => "{\"kind\":\"allow\",\"payload\":" ++ jsonString payload ++ "}"
+  | .deny reason => "{\"kind\":\"deny\",\"reason\":" ++ jsonString reason ++ "}"
+  | .unavailable => "{\"kind\":\"unavailable\"}"
+
+private def staleJson : Stale → String
+  | .unauthorized => "{\"kind\":\"unauthorized\"}"
+  | .cancelled => "{\"kind\":\"cancelled\"}"
+  | .missing => "{\"kind\":\"missing\"}"
+  | .stale => "{\"kind\":\"stale\"}"
+  | .denied reason => "{\"kind\":\"denied\",\"reason\":" ++ jsonString reason ++ "}"
+  | .unavailable => "{\"kind\":\"unavailable\"}"
+
+private def admitResultJson : Except Stale String → String
+  | .ok payload => "{\"kind\":\"ok\",\"payload\":" ++ jsonString payload ++ "}"
+  | .error reason => "{\"kind\":\"error\",\"stale\":" ++ staleJson reason ++ "}"
+
+private def admitCaseJson (c : AdmitCase) : String :=
+  "{\"name\":" ++ jsonString c.name ++
+    ",\"authorized\":" ++ boolJson c.authorized ++
+    ",\"cancelled\":" ++ boolJson c.cancelled ++
+    ",\"current\":" ++ bindingJson c.current ++
+    ",\"prepared\":" ++ ((c.decision.map fun decision =>
+      "{\"binding\":" ++ bindingJson decision.binding ++
+        ",\"verdict\":" ++ preparedVerdictJson decision.verdict ++ "}").getD "null") ++
+    ",\"result\":" ++ admitResultJson c.result ++ "}"
+
+def admitCasesJson : String := jsonArray (admitCases.map admitCaseJson)
 
 end Conformance.HooksContracts

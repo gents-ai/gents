@@ -13,7 +13,8 @@ use gents_protocol::row::AgentRequestRow;
 use gents_session::request::hooks::claim::{ClaimVerdict, Successor};
 use gents_session::request::hooks::effect::{Effect, Manifest, OwnedCollection, Row, Write};
 use gents_session::request::hooks::hook::{Hook, Outcome, Query};
-use gents_session::request::hooks::registry::{ClaimCandidate, Registry, SessionHalt};
+use gents_session::request::hooks::prepared::{Decide, Verdict};
+use gents_session::request::hooks::registry::{AdmitShown, ClaimCandidate, Registry, SessionHalt};
 use gents_store::config_client::agent_session::{decode_agent_session_read, AgentSessionRowRead};
 
 pub(super) const PLUGIN: &str = "goals";
@@ -272,7 +273,54 @@ impl Hook<ClaimCandidate> for ClaimFence {
     }
 }
 
+/// `request.admit.verify`: a Goal continuation must be the physical,
+/// signed continuation edge of its session predecessor
+/// (`verify_goal_continuation_edge`).
+struct ContinuationEdge;
+
+impl Decide<AgentRequestRow, AdmitShown> for ContinuationEdge {
+    type Payload = ();
+
+    fn name(&self) -> &'static str {
+        PLUGIN
+    }
+
+    fn configuration(&self) -> &str {
+        ""
+    }
+
+    fn applies(&self, request: &AgentRequestRow) -> bool {
+        request.input.as_ref().is_some_and(|input| {
+            input.goal_continuation.is_some()
+                || input.queue.as_ref().is_some_and(|queue| {
+                    queue.source == gents_protocol::request_input::QueueSource::Goal
+                })
+        })
+    }
+
+    fn decide(&self, shown: &AdmitShown) -> Verdict<()> {
+        let request = &shown.request;
+        let required = |value: Option<&str>, field: &str| {
+            value
+                .map(str::to_owned)
+                .ok_or_else(|| anyhow::anyhow!("AgentRequest is missing {field}"))
+        };
+        let verified = required(request.node_did.as_deref(), "node_did").and_then(|node_did| {
+            let session_id = required(request.session_id.as_deref(), "session_id")?;
+            let goal_id = required(request.caused_by_trigger_id.as_deref(), "goal_id")?;
+            verify_goal_continuation_edge(&node_did, &session_id, &goal_id, &shown.parent, request)
+        });
+        match verified {
+            Ok(_) => Verdict::Allow(()),
+            Err(error) => Verdict::Deny(format!("{error:#}")),
+        }
+    }
+}
+
 pub fn register(registry: &mut Registry) {
+    registry
+        .request_admit_verify
+        .push(Arc::new(ContinuationEdge));
     registry.claim_gate.push(Arc::new(ClaimFence {
         manifest: manifest(),
     }));

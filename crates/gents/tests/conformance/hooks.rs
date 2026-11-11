@@ -1,14 +1,16 @@
 use std::sync::{Arc, Mutex};
 
 use gents_lean_vocab::{
-    lean_lifecycle_hook_combine_cases, lean_lifecycle_hook_delivery_cases,
-    lean_lifecycle_hook_effect_cases, lean_lifecycle_hook_gate_cases,
-    lean_lifecycle_hook_must_commit_cases, lean_lifecycle_hook_stage_cases,
-    LeanLifecycleHookAccess, LeanLifecycleHookChoice, LeanLifecycleHookDecision,
+    lean_lifecycle_hook_admit_cases, lean_lifecycle_hook_combine_cases,
+    lean_lifecycle_hook_delivery_cases, lean_lifecycle_hook_effect_cases,
+    lean_lifecycle_hook_gate_cases, lean_lifecycle_hook_must_commit_cases,
+    lean_lifecycle_hook_stage_cases, LeanLifecycleHookAccess, LeanLifecycleHookAdmitResult,
+    LeanLifecycleHookBinding, LeanLifecycleHookChoice, LeanLifecycleHookDecision,
     LeanLifecycleHookDeliveryRecord, LeanLifecycleHookDeliveryStep, LeanLifecycleHookEffect,
-    LeanLifecycleHookGateResult, LeanLifecycleHookManifest, LeanLifecycleHookRefusal,
-    LeanLifecycleHookRow, LeanLifecycleHookScript, LeanLifecycleHookStageResult,
-    LeanLifecycleHookState, LeanLifecycleHookVerdict, LeanLifecycleHookWorld,
+    LeanLifecycleHookGateResult, LeanLifecycleHookManifest, LeanLifecycleHookPreparedVerdict,
+    LeanLifecycleHookRefusal, LeanLifecycleHookRow, LeanLifecycleHookScript,
+    LeanLifecycleHookStageResult, LeanLifecycleHookStale, LeanLifecycleHookState,
+    LeanLifecycleHookVerdict, LeanLifecycleHookWorld,
 };
 use gents_session::request::hooks::claim::{combine, ClaimVerdict};
 use gents_session::request::hooks::delivery::DeliveryRecord;
@@ -16,6 +18,7 @@ use gents_session::request::hooks::effect::{
     validate, Access, CoreOp, DocRef, Effect, Manifest, OwnedCollection, Row, Write,
 };
 use gents_session::request::hooks::hook::{Hook, Outcome, Query};
+use gents_session::request::hooks::prepared::{admit, prepare, Binding, Stale, Verdict};
 use gents_session::request::hooks::stage::{
     gate, owed, stage, stage_dropping, ApplyFailure, HookError, Host, Plugin, Staged,
 };
@@ -613,5 +616,62 @@ fn generated_lifecycle_hook_delivery_cases_drive_the_delivery_record() {
                 case.name
             );
         }
+    }
+}
+
+fn binding_of(lean: &LeanLifecycleHookBinding) -> Binding<String> {
+    Binding {
+        actor: lean.actor.clone(),
+        point: leak(&lean.point),
+        subject: lean.subject.clone(),
+        inputs: lean.inputs.clone(),
+        configuration: lean.configuration.clone(),
+    }
+}
+
+fn stale_of(lean: &LeanLifecycleHookStale) -> Stale {
+    match lean {
+        LeanLifecycleHookStale::Unauthorized => Stale::Unauthorized,
+        LeanLifecycleHookStale::Cancelled => Stale::Cancelled,
+        LeanLifecycleHookStale::Missing => Stale::Missing,
+        LeanLifecycleHookStale::Stale => Stale::Stale,
+        LeanLifecycleHookStale::Denied { reason } => Stale::Denied(reason.clone()),
+        LeanLifecycleHookStale::Unavailable => Stale::Unavailable,
+    }
+}
+
+#[test]
+fn generated_lifecycle_hook_admit_cases_drive_prepared_admission() {
+    let cases = lean_lifecycle_hook_admit_cases();
+    assert!(!cases.is_empty());
+    for case in cases {
+        let current = binding_of(&case.current);
+        let decision = case.prepared.as_ref().map(|prepared| {
+            let captured = binding_of(&prepared.binding);
+            let verdict = match &prepared.verdict {
+                LeanLifecycleHookPreparedVerdict::Allow { payload } => {
+                    Verdict::Allow(payload.clone())
+                }
+                LeanLifecycleHookPreparedVerdict::Deny { reason } => Verdict::Deny(reason.clone()),
+                LeanLifecycleHookPreparedVerdict::Unavailable => Verdict::Unavailable,
+            };
+            let decision = prepare(captured.clone(), |_: &()| verdict, &());
+            assert_eq!(
+                decision.binding, captured,
+                "{}: the host's binding is kept",
+                case.name
+            );
+            decision
+        });
+        let expected = match &case.result {
+            LeanLifecycleHookAdmitResult::Ok { payload } => Ok(payload.clone()),
+            LeanLifecycleHookAdmitResult::Error { stale } => Err(stale_of(stale)),
+        };
+        assert_eq!(
+            admit(case.authorized, case.cancelled, &current, decision),
+            expected,
+            "{}",
+            case.name
+        );
     }
 }

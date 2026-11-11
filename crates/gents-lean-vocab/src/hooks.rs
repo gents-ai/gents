@@ -246,3 +246,57 @@ pub struct LeanLifecycleHookDeliveryCase {
     pub initial: LeanLifecycleHookDeliveryRecord,
     pub trace: Vec<LeanLifecycleHookDeliveryTraceStep>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanLifecycleHookBinding {
+    pub actor: String,
+    pub point: String,
+    pub subject: String,
+    pub inputs: String,
+    pub configuration: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LeanLifecycleHookPreparedVerdict {
+    Allow { payload: String },
+    Deny { reason: String },
+    Unavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanLifecycleHookPrepared {
+    pub binding: LeanLifecycleHookBinding,
+    pub verdict: LeanLifecycleHookPreparedVerdict,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LeanLifecycleHookStale {
+    Unauthorized,
+    Cancelled,
+    Missing,
+    Stale,
+    Denied { reason: String },
+    Unavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LeanLifecycleHookAdmitResult {
+    Ok { payload: String },
+    Error { stale: LeanLifecycleHookStale },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanLifecycleHookAdmitCase {
+    pub name: String,
+    pub authorized: bool,
+    pub cancelled: bool,
+    pub current: LeanLifecycleHookBinding,
+    pub prepared: Option<LeanLifecycleHookPrepared>,
+    pub result: LeanLifecycleHookAdmitResult,
+}

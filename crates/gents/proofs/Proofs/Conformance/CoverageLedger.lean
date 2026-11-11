@@ -1470,6 +1470,11 @@ def caseCoverage : List CoverageEntry :=
       "LifecycleHookDeliveryCases"
       "conformance::hooks::generated_lifecycle_hook_delivery_cases_drive_the_delivery_record")
       "lifecycle-hooks" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "lifecycle_hook_admit_cases"
+      "LifecycleHookAdmitCases"
+      "conformance::hooks::generated_lifecycle_hook_admit_cases_drive_prepared_admission")
+      "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "fold_queue_cases"
       "FoldQueueCases"
