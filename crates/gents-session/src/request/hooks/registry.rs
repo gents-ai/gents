@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
 use gents_protocol::request_lifecycle::RequestLifecycleState;
-use gents_protocol::row::AgentRequest;
+use gents_protocol::row::{AgentRequest, AgentRequestRow};
 use serde_json::Value;
 
 use super::claim::ClaimVerdict;
+use super::prepared::Decider;
 use super::stage::Plugin;
 use gents_store::config_client::ConfigApplyTxn;
 
@@ -26,6 +27,15 @@ pub struct ClaimCandidate {
     pub request: AgentRequest,
     pub client: bool,
     pub at: String,
+}
+
+/// `request.admit.verify`: what core shows a plugin that claimed a request
+/// at admission, the signed request row and the exact parent request row it
+/// names, both read as the request's agent.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AdmitShown {
+    pub request: AgentRequestRow,
+    pub parent: AgentRequestRow,
 }
 
 /// `control.session.halt`: an interrupt or stop latch is written in this
@@ -53,6 +63,7 @@ pub trait CoreOperation: Send + Sync {
 /// registered them, and the core operations their effects may name.
 #[derive(Default)]
 pub struct Registry {
+    pub request_admit_verify: Vec<Decider<AgentRequestRow, AdmitShown, ()>>,
     pub claim_gate: Vec<Plugin<ClaimCandidate, ClaimVerdict>>,
     pub request_terminal: Vec<Plugin<RequestTerminal, ()>>,
     pub session_halt: Vec<Plugin<SessionHalt, ()>>,
@@ -82,6 +93,12 @@ impl Registry {
     pub(crate) fn for_transaction(
         _txn: &ConfigApplyTxn<'_>,
     ) -> Result<Arc<Registry>, super::stage::HookError> {
+        Self::current()
+    }
+
+    /// The registry a step outside any lifecycle transaction (admission)
+    /// prepares its decisions against, under the same composition rule.
+    pub(crate) fn current() -> Result<Arc<Registry>, super::stage::HookError> {
         if let Some(registry) = installed().get() {
             return Ok(Arc::clone(registry));
         }

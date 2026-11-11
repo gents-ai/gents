@@ -29,11 +29,11 @@ pub enum AgentRequestAdmissionError {
 }
 
 impl AgentRequestAdmissionError {
-    fn denied(error: impl Into<anyhow::Error>) -> Self {
+    pub(crate) fn denied(error: impl Into<anyhow::Error>) -> Self {
         Self::Denied(error.into())
     }
 
-    fn unavailable(error: impl Into<anyhow::Error>) -> Self {
+    pub(crate) fn unavailable(error: impl Into<anyhow::Error>) -> Self {
         Self::Unavailable(error.into())
     }
 
@@ -58,7 +58,7 @@ impl std::error::Error for AgentRequestAdmissionError {
     }
 }
 
-type AdmissionResult<T> = std::result::Result<T, AgentRequestAdmissionError>;
+pub(crate) type AdmissionResult<T> = std::result::Result<T, AgentRequestAdmissionError>;
 
 pub fn final_claim_admission_disposition(
     observation_available: bool,
@@ -1083,25 +1083,8 @@ async fn verify_request_input(
             (runtime_control || client_goal) && input.goal_continuation.is_some(),
             "goal continuation requires authenticated original issuance facts",
         )?;
-        let parent = load_exact_parent_request(
-            node,
-            required_row_string(
-                row.caused_by_parent_request_doc_id.as_deref(),
-                "parent document ID",
-            )?,
-            agent,
-        )
-        .await?;
-        crate::goal::verify_goal_continuation_edge(
-            owner,
-            required_row_string(row.session_id.as_deref(), "session_id")?,
-            required_row_string(row.caused_by_trigger_id.as_deref(), "goal_id")?,
-            &parent,
-            row,
-        )
-        .map_err(AgentRequestAdmissionError::denied)?;
     }
-    Ok(())
+    crate::request::hooks::points::request_admit_verify(node, row, agent).await
 }
 
 pub(crate) fn validate_authored_content(
@@ -1240,7 +1223,7 @@ async fn verify_runtime_source_binding(
     }
 }
 
-async fn load_exact_parent_request(
+pub(crate) async fn load_exact_parent_request(
     node: &Arc<EmbeddedNode>,
     source_doc_id: &str,
     actor: &str,
@@ -1438,7 +1421,10 @@ fn row_into_agent_request(row: AgentRequestRow, expected_doc_id: &str) -> Result
     Ok(AgentRequest::try_from(row)?)
 }
 
-fn required_row_string<'a>(value: Option<&'a str>, field: &str) -> AdmissionResult<&'a str> {
+pub(crate) fn required_row_string<'a>(
+    value: Option<&'a str>,
+    field: &str,
+) -> AdmissionResult<&'a str> {
     value.ok_or_else(|| {
         AgentRequestAdmissionError::denied(anyhow::anyhow!("AgentRequest is missing {field}"))
     })
