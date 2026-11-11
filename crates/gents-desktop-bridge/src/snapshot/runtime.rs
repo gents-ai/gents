@@ -295,7 +295,6 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 .map(|status| status.as_str().to_owned());
             let chat_refusal = peer.chat_refusal();
             let chat_safe = chat_refusal.is_none();
-            let pairing_ready = Some(peer.pairing_ready);
             let lease_expires_at = peer
                 .is_enrollment()
                 .then(|| peer.enrollment_authorization_expires_at.clone())
@@ -319,7 +318,6 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 runtime_connection,
                 chat_safe,
                 chat_refusal: chat_refusal.map(Into::into),
-                pairing_ready,
                 lease_expires_at,
                 operator_access,
                 last_error: status.and_then(|status| status.last_error.clone()),

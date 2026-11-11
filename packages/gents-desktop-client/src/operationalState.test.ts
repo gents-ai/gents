@@ -30,7 +30,6 @@ function deployment(
     runtimeConnection: "connected",
     chatSafe: true,
     chatRefusal: null,
-    pairingReady: true,
     lastError: null,
     nodeConfig: null,
     agentConfigs: [],
@@ -111,16 +110,14 @@ describe("deployment operational state", () => {
     });
   });
 
-  it("reads the route from the native chat fence, never from pairing", () => {
-    for (const pairingReady of [false, true]) {
-      const state = projectDeploymentOperationalState(deployment({ pairingReady }));
-      expect(state.admissionBlocker).toBeNull();
-      expect(state.route).toMatchObject({
-        layer: "route",
-        kind: "ready",
-        reason: "route_ready",
-      });
-    }
+  it("reads the route from the native chat fence", () => {
+    const state = projectDeploymentOperationalState(deployment());
+    expect(state.admissionBlocker).toBeNull();
+    expect(state.route).toMatchObject({
+      layer: "route",
+      kind: "ready",
+      reason: "route_ready",
+    });
   });
 
   it("blocks admission with the native chat refusal and its next action", () => {

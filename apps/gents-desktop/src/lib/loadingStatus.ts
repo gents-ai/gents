@@ -4,7 +4,6 @@ import type {
   DesktopSessionSnapshot,
   OperationalStatus,
 } from "@source-inc/gents-desktop-client";
-import type { BridgeErrorCode } from "@source-inc/gents-desktop-client/generated/BridgeErrorCode";
 
 export type DesktopStartupPhase =
   | "checking-managed-server"
@@ -160,32 +159,8 @@ export function startupSteps(
   ];
 }
 
-/** How far a message into a session the node has not returned yet has got:
-    the bridge derives it from the local request, the node's claim and the
-    pairing, and re-reads it when any of them changes. */
-export type SessionDeliveryPhase = "delivering" | "notConnected" | "accepted";
-
-const SESSION_DELIVERY_PHASES: Partial<Record<BridgeErrorCode, SessionDeliveryPhase>> =
-  {
-    sessionDelivering: "delivering",
-    sessionNotConnected: "notConnected",
-    sessionAccepted: "accepted",
-  };
-
-export function sessionDeliveryPhase(
-  code: BridgeErrorCode,
-): SessionDeliveryPhase | null {
-  return SESSION_DELIVERY_PHASES[code] ?? null;
-}
-
-export function isSessionDeliveryPhase(
-  phase: SessionLoadState["phase"],
-): phase is SessionDeliveryPhase {
-  return phase === "delivering" || phase === "notConnected" || phase === "accepted";
-}
-
 export type SessionLoadState = {
-  phase: "idle" | "loading" | "pending" | SessionDeliveryPhase | "loaded" | "failed";
+  phase: "idle" | "loading" | "pending" | "loaded" | "failed";
   sessionId: string | null;
   nodeDid: string | null;
   found: boolean | null;
@@ -253,14 +228,6 @@ export function projectSessionLoadingStatus({
       detail: "Waiting for the latest conversation update.",
       action: followUpAction(sessionLoad.reread),
     };
-  }
-
-  if (loadMatches && isSessionDeliveryPhase(sessionLoad.phase) && !sessionMatches) {
-    return sessionDeliveryStatus(
-      sessionLoad.phase,
-      sessionLoad.error,
-      sessionLoad.reread,
-    );
   }
 
   if (loadMatches && sessionLoad.phase === "loading" && sessionLoad.error) {
@@ -351,40 +318,4 @@ function sessionStatusFromOperational(
    decision. */
 function followUpAction(reread: boolean): SessionLoadingAction | null {
   return reread ? null : "retryLocal";
-}
-
-function sessionDeliveryStatus(
-  phase: SessionDeliveryPhase,
-  detail: string | null,
-  reread: boolean,
-): SessionLoadingStatus {
-  switch (phase) {
-    case "delivering":
-      return {
-        layer: "sessionSync",
-        phase: "loading",
-        title: "Sending message",
-        detail: detail ?? "Waiting for the node to pick up the message.",
-        action: followUpAction(reread),
-      };
-    case "notConnected":
-      return {
-        layer: "p2p",
-        phase: "blocked",
-        title: "Not connected to the node",
-        detail:
-          detail ??
-          "The message is saved on this computer and sends when the connection returns.",
-        action: followUpAction(reread),
-      };
-    case "accepted":
-      return {
-        layer: "sessionSync",
-        phase: "loading",
-        title: "Message picked up",
-        detail:
-          detail ?? "The node accepted the message. Its session is on the way back.",
-        action: followUpAction(reread),
-      };
-  }
 }

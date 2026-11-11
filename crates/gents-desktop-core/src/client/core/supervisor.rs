@@ -476,7 +476,6 @@ pub(super) async fn repair_saved_peer(
         addr: record.addr.clone(),
         dial_succeeded: false,
         last_error: None,
-        pairing: Vec::new(),
         routes: Vec::new(),
     });
 

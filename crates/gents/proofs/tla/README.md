@@ -199,8 +199,8 @@ See `../README.md` for how this fits the broader formal-verification model.
   load phases. A read sees the versions committed before it starts. A
   selected request that has not reached its owner answers `pending`, and the
   runtime may catch up with no store notice at all, since the desktop holds no
-  replica of a remote runtime's session. A waiting phase is `pending` or one
-  of the three delivery phases. `ViewConverges` and `NoStuckPending` hold
+  replica of a remote runtime's session. The waiting phase is `pending`.
+  `ViewConverges` and `NoStuckPending` hold
   with five guards: a read without the listener once a registration rejects
   or a deadline passes, a full read once the listener resolves, re-listening after a rejected registration,
   bounded re-reads of a waiting phase followed by the retry action (Lean

@@ -46,15 +46,7 @@ type StatusRow = {
   expected: SessionLoadingStatus | null;
 };
 
-type Reply =
-  | "found"
-  | "missing"
-  | "pending"
-  | "delivering"
-  | "notConnected"
-  | "accepted"
-  | "failed"
-  | "mismatch";
+type Reply = "found" | "missing" | "pending" | "failed" | "mismatch";
 
 type Act =
   | { kind: "select"; drop: boolean }
@@ -146,9 +138,6 @@ const STOPPED = { ...RUNNING, client: null } as unknown as DesktopClientSnapshot
 
 const WAITING_CODES: Partial<Record<Reply, string>> = {
   pending: "projectionPending",
-  delivering: "sessionDelivering",
-  notConnected: "sessionNotConnected",
-  accepted: "sessionAccepted",
 };
 
 type Fetch = {

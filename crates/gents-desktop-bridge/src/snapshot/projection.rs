@@ -116,7 +116,6 @@ fn project_deployment(mut deployment: DeploymentView, grants: SnapshotGrants) ->
         deployment.dial_succeeded = false;
         // `runtime_connection` stays: it is this client's own observation and
         // admission reads it (`RuntimeConnectionObservation.presentation`).
-        deployment.pairing_ready = None;
         deployment.last_error = None;
     }
 
@@ -285,7 +284,6 @@ mod tests {
                     runtime_connection: Some("connected".to_owned()),
                     chat_safe: true,
                     chat_refusal: None,
-                    pairing_ready: Some(true),
                     lease_expires_at: None,
                     operator_access: true,
                     last_error: None,

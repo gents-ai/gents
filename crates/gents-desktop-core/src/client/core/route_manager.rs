@@ -23,8 +23,8 @@ use super::enrollment::current_local_endpoint;
 use super::p2p_ops::{p2p_disconnect_peer, p2p_remove_replicator};
 use super::sync_state::ClientSyncStateOwner;
 use super::{
-    ClientPeerStatus, ClientRouteStatus, PairingCollectionStatus, BOOTSTRAP_OPERATION_BACKOFF,
-    P2P_OPERATION_TIMEOUT, PEER_ADD_OPERATION_TIMEOUT,
+    ClientRouteStatus, BOOTSTRAP_OPERATION_BACKOFF, P2P_OPERATION_TIMEOUT,
+    PEER_ADD_OPERATION_TIMEOUT,
 };
 use crate::remote_admin::{classify_remote_admin_error, HttpRemoteP2pAdmin};
 
@@ -349,9 +349,6 @@ impl ClientRouteManager {
                 let error_class = error
                     .downcast_ref::<RemoteP2pAdminError>()
                     .map(classify_remote_admin_error);
-                if let Some(remote_error) = error.downcast_ref::<RemoteP2pAdminError>() {
-                    record_failure(record, sync_state, &desired, remote_error);
-                }
                 record_pairing_error(record, sync_state, &error);
                 publish_route_status(
                     record,
@@ -381,7 +378,6 @@ impl ClientRouteManager {
             Ok(applied)
                 if live_route_matches && desired_route_is_applied(&desired, &applied.state) =>
             {
-                record_route_success(record, sync_state);
                 publish_route_status(
                     record,
                     sync_state,
@@ -1068,46 +1064,4 @@ fn record_pairing_error(
     sync_state.update_peer(record, |status| {
         status.last_error = Some(format!("client route reconcile failed: {error:#}"));
     });
-}
-
-fn record_failure(
-    record: &PeerRecord,
-    sync_state: &ClientSyncStateOwner,
-    desired: &PairingDesired,
-    error: &RemoteP2pAdminError,
-) {
-    let class = classify_remote_admin_error(error);
-    sync_state.update_peer(record, |status| {
-        for collection in &desired.replicator_collections {
-            let status = ensure_pairing_status(status, collection);
-            status.record_retry(class);
-            status.update_stuck_indicator(SystemTime::now());
-        }
-    });
-}
-
-fn record_route_success(record: &PeerRecord, sync_state: &ClientSyncStateOwner) {
-    sync_state.update_peer(record, |status| {
-        for collection in &mut status.pairing {
-            collection.record_success();
-        }
-    });
-}
-
-fn ensure_pairing_status<'a>(
-    status: &'a mut ClientPeerStatus,
-    collection: &str,
-) -> &'a mut PairingCollectionStatus {
-    if let Some(index) = status
-        .pairing
-        .iter()
-        .position(|existing| existing.collection_id == collection)
-    {
-        &mut status.pairing[index]
-    } else {
-        status
-            .pairing
-            .push(PairingCollectionStatus::new(collection));
-        status.pairing.last_mut().expect("pairing status inserted")
-    }
 }

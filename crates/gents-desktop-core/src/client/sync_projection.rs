@@ -221,7 +221,6 @@ mod tests {
             addr: format!("/ip4/10.0.0.{index}/tcp/1"),
             dial_succeeded,
             last_error: None,
-            pairing: Vec::new(),
             routes: Vec::new(),
         }
     }

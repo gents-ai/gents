@@ -518,7 +518,6 @@ async fn restart_clears_and_defers_persisted_enrollment_until_current_authority(
     assert!(errors.is_empty());
     assert_eq!(statuses.len(), 1);
     assert!(!statuses[0].dial_succeeded);
-    assert!(statuses[0].pairing.is_empty());
     assert!(statuses[0].routes.is_empty());
     assert!(recording.connect_calls().is_empty());
     assert!(recording.add_replicator_calls().is_empty());
@@ -643,7 +642,6 @@ async fn remove_peer_hides_deployment_and_persists_cleanup_tombstone_when_offlin
         addr: record.addr.clone(),
         dial_succeeded: true,
         last_error: None,
-        pairing: Vec::new(),
         routes: Vec::new(),
     });
     assert!(core
@@ -741,7 +739,6 @@ async fn repair_saved_peer_refreshes_network_before_redial() {
             addr: record.addr.clone(),
             dial_succeeded: false,
             last_error: Some("peer Workshop Bay dial failed".to_string()),
-            pairing: Vec::new(),
             routes: Vec::new(),
         }),
         "did:key:desktop",
@@ -778,7 +775,6 @@ async fn failed_redial_clears_stale_configured_peer_connectivity() {
             addr: record.addr.clone(),
             dial_succeeded: true,
             last_error: None,
-            pairing: Vec::new(),
             routes: Vec::new(),
         }),
         "did:key:desktop",
@@ -817,7 +813,6 @@ async fn repair_saved_graphql_peer_leaves_replicator_installation_to_route_manag
             addr: record.addr.clone(),
             dial_succeeded: true,
             last_error: None,
-            pairing: Vec::new(),
             routes: Vec::new(),
         }),
         "did:key:desktop",
@@ -856,7 +851,6 @@ async fn saved_peer_needs_repair_when_live_connection_has_dropped() {
             addr: record.addr.clone(),
             dial_succeeded: true,
             last_error: None,
-            pairing: Vec::new(),
             routes: Vec::new(),
         }),
     )
@@ -886,7 +880,6 @@ async fn saved_peer_does_not_need_repair_while_live_connection_is_healthy() {
             addr: record.addr.clone(),
             dial_succeeded: true,
             last_error: None,
-            pairing: Vec::new(),
             routes: Vec::new(),
         }),
     )

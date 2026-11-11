@@ -400,9 +400,6 @@ pub struct DeploymentView {
     pub runtime_connection: Option<String>,
     pub chat_safe: bool,
     pub chat_refusal: Option<ChatRefusalView>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub pairing_ready: Option<bool>,
     /// When this desktop's enrollment authorization on a joined node runs
     /// out, after which reconciliation removes the node from this desktop;
     /// none for a node this desktop reaches without enrollment. The node's

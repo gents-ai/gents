@@ -15,8 +15,7 @@ private def optBool : Option Bool → String
 
 def phaseName : Phase → String
   | .idle => "idle" | .loading => "loading" | .pending => "pending"
-  | .delivering => "delivering" | .notConnected => "notConnected"
-  | .accepted => "accepted" | .loaded => "loaded" | .failed => "failed"
+  | .loaded => "loaded" | .failed => "failed"
 
 def layerName : Layer → String
   | .localDatabase => "localDatabase" | .p2p => "p2p" | .sessionSync => "sessionSync"
@@ -56,7 +55,7 @@ def blockerJson : Option Blocker → String
       toString b.configureInference ++ "}"
 
 def phases : List Phase :=
-  [.idle, .loading, .pending, .delivering, .notConnected, .accepted, .loaded, .failed]
+  [.idle, .loading, .pending, .loaded, .failed]
 
 def bools : List Bool := [false, true]
 
@@ -132,26 +131,22 @@ structure Driver where
   drainBusy : Bool
 
 inductive Reply where
-  | found | missing | pending | delivering | notConnected | accepted | failed | mismatch
+  | found | missing | pending | failed | mismatch
   deriving DecidableEq, Repr
 
 def Reply.outcome : Reply → Outcome
   | .found => .found
   | .missing => .missing
   | .pending => .waiting .pending rfl
-  | .delivering => .waiting .delivering rfl
-  | .notConnected => .waiting .notConnected rfl
-  | .accepted => .waiting .accepted rfl
   | .failed => .failed
   | .mismatch => .mismatch
 
 def Reply.name : Reply → String
   | .found => "found" | .missing => "missing" | .pending => "pending"
-  | .delivering => "delivering" | .notConnected => "notConnected"
-  | .accepted => "accepted" | .failed => "failed" | .mismatch => "mismatch"
+  | .failed => "failed" | .mismatch => "mismatch"
 
 def replies : List Reply :=
-  [.found, .missing, .pending, .delivering, .notConnected, .accepted, .failed, .mismatch]
+  [.found, .missing, .pending, .failed, .mismatch]
 
 inductive Act where
   | select (drop : Bool)
@@ -343,13 +338,13 @@ def waitingStreak (r : Reply) : List Act :=
 streak a notice resets, the client stopping while a read or a re-read waits,
 a retry while it is stopped, a selection while it is stopped, and a mismatched reply. -/
 def scripted : List (List Act) :=
-  [.pending, .delivering, .notConnected, .accepted].map waitingStreak ++
+  [.pending].map waitingStreak ++
   [ [.complete .pending, .fire, .complete .pending, .notice, .complete .pending, .fire,
       .complete .pending, .fire, .complete .pending, .fire, .complete .pending, .fire,
       .complete .pending, .fire, .complete .pending],
     [.stop, .retry, .complete .found, .restart, .complete .found],
     [.complete .pending, .stop, .retry, .complete .pending, .restart, .complete .pending, .fire],
-    [.complete .notConnected, .fire, .stop, .select true, .restart, .complete .found,
+    [.complete .pending, .fire, .stop, .select true, .restart, .complete .found,
       .select false, .complete .missing],
     [.complete .mismatch, .retry, .complete .mismatch, .notice, .complete .found],
     [.complete .found, .drop, .retry, .complete .found, .select false, .complete .pending,
