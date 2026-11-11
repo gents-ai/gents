@@ -542,7 +542,7 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
         let records = tempfile::tempdir().unwrap();
         let registry = crate::BackgroundExecutionRegistry::default()
             .with_process_records(records.path().to_path_buf());
-        let process = crate::exec::ownership::test_support::process_for_generated_outcome(
+        let process = crate::tools::call::hook::tests::process_records::process_for_generated_outcome(
             &registry,
             admission.tool.tool_call_id(),
             &tool_doc_id,

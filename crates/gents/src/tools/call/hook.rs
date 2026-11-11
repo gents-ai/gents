@@ -22,7 +22,7 @@ use gents_protocol::tool_call::AwaitMode;
 
 pub(crate) mod persistence;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FailurePolicy {

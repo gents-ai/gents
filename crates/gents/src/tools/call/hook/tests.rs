@@ -62,6 +62,14 @@ mod r4c_read_tool_output;
 #[path = "tests/plugin_job_dispatch.rs"]
 mod plugin_job_dispatch;
 
+#[path = "tests/process_records.rs"]
+#[cfg(all(test, unix))]
+pub(crate) mod process_records;
+
+#[path = "tests/process_records.rs"]
+#[cfg(all(test, unix))]
+pub(crate) mod process_records;
+
 struct HookExecutionFixture {
     lifecycle: crate::request::lifecycle::RequestLifecycle,
     writer: crate::request::streaming::DefraStreamWriter,

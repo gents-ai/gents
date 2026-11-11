@@ -869,7 +869,7 @@ mod tests {
             .unwrap();
             let tool_doc = admission.tool.doc_id().unwrap().to_owned();
             let process = if recorded {
-                crate::exec::ownership::test_support::process_for_generated_outcome(
+                crate::tools::call::hook::tests::process_records::process_for_generated_outcome(
                     &registry,
                     admission.tool.tool_call_id(),
                     &tool_doc,

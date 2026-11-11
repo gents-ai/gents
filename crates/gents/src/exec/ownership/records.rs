@@ -49,7 +49,7 @@ impl<R> Default for HostRecordStore<R> {
     }
 }
 
-pub(super) fn record_path(dir: &std::path::Path, key: &str) -> PathBuf {
+pub(crate) fn record_path(dir: &std::path::Path, key: &str) -> PathBuf {
     let name = key
         .as_bytes()
         .iter()

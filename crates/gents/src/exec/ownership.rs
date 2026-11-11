@@ -301,7 +301,7 @@ pub(crate) struct ProcessRecord {
 
 mod records;
 #[cfg(test)]
-use records::record_path;
+pub(crate) use records::record_path;
 pub(crate) use records::{HostRecord, HostRecordStore};
 
 impl HostRecord for ProcessRecord {
@@ -696,25 +696,6 @@ pub(crate) mod test_support {
         }
     }
 
-    pub(crate) async fn process_for_generated_outcome(
-        registry: &crate::tools::call::hook::BackgroundExecutionRegistry,
-        tool_call_id: &str,
-        tool_call_doc_id: &str,
-        outcome: &str,
-    ) -> Option<OwnedTestProcess> {
-        let recorder = registry.process_recorder(tool_call_id, tool_call_doc_id);
-        match outcome {
-            "stopped" => Some(OwnedTestProcess::spawn(Some(recorder)).await),
-            "alreadyExited" => {
-                let process = OwnedTestProcess::spawn(Some(recorder)).await;
-                let _ = process.identity.stop().await;
-                Some(process)
-            }
-            "notOwned" => None,
-            other => panic!("a test-owned group cannot produce process outcome {other}"),
-        }
-    }
-
     #[tokio::test]
     async fn exited_unreaped_child_retains_exact_start_identity() {
         let mut child = tokio::process::Command::new("/bin/sh")
@@ -744,31 +725,6 @@ pub(crate) mod test_support {
         let identity = ProcessIdentity::of_waitable_child(pid).expect("unreaped child identity");
         assert_eq!(identity, live);
         child.wait().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn call_keyed_process_record_remains_cancellable_after_restart() {
-        let directory = tempfile::tempdir().unwrap();
-        let registry = crate::tools::call::hook::BackgroundExecutionRegistry::default()
-            .with_process_records(directory.path().into());
-        let process =
-            OwnedTestProcess::spawn(Some(registry.process_recorder("old-call", "physical-tool")))
-                .await;
-        std::fs::rename(
-            super::record_path(directory.path(), "physical-tool"),
-            super::record_path(directory.path(), "old-call"),
-        )
-        .unwrap();
-        let restarted = crate::tools::call::hook::BackgroundExecutionRegistry::default()
-            .with_process_records(directory.path().into());
-        assert!(restarted.process_record("old-call", "wrong-tool").is_none());
-        assert_eq!(
-            restarted.stop_execution("old-call", "physical-tool").await,
-            super::ProcessStopOutcome::Stopped
-        );
-        restarted.forget_process_record("old-call", "physical-tool");
-        assert!(restarted.process_record_list().is_empty());
-        process.finish().await;
     }
 
     impl Drop for OwnedTestProcess {
