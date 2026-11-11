@@ -1,7 +1,8 @@
-//! Operator switch of a subscription backend between one account and the
-//! node's account pool. Agent self-config can never introduce a pool or change
-//! its overage choice (`guard_backend_auth`), so this is the only partial write
-//! that may; it replaces `auth` alone and validates the whole backend.
+//! A person's switch of a subscription backend between one account and the
+//! node's account pool (Lean `InferenceOperations.AccountOperation.setPool`).
+//! An Agent's backend write can never introduce a pool or change its overage
+//! choice, so this is the only partial write that may; it replaces `auth`
+//! alone and validates the whole backend.
 
 use crate::backends::provider::BackendProviderOauthExt;
 use anyhow::{Context, Result};
@@ -51,6 +52,10 @@ pub async fn set_backend_rotation_in_txn(
     backend_id: &str,
     rotation: BackendRotation,
 ) -> Result<InferenceBackend> {
+    crate::operations::admit_account_operation(
+        txn,
+        gents_protocol::operations::inference::AccountOperation::SetPool,
+    )?;
     let mut backend = load_inference_backend_in_txn(txn, node_did, backend_id)
         .await?
         .with_context(|| format!("Backend {backend_id:?} does not exist on this node."))?;
