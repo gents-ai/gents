@@ -189,7 +189,10 @@ pub(super) async fn agent_self_config_permission(
 ) -> Result<()> {
     use gents_store::config_client::AgentSelfConfigPermission;
 
-    let access = ConfigAccess::Graphql(gents_service::home_state::resolve_graphql_endpoint(Some(&args.graphql), None)?);
+    let access = ConfigAccess::Graphql(gents_service::home_state::resolve_graphql_endpoint(
+        Some(&args.graphql),
+        None,
+    )?);
     let permission = if grant {
         AgentSelfConfigPermission::Grant
     } else {
@@ -210,7 +213,10 @@ pub(super) async fn agent_catalog_permission(
     args: AgentCatalogPermissionArgs,
     grant: bool,
 ) -> Result<()> {
-    let access = ConfigAccess::Graphql(gents_service::home_state::resolve_graphql_endpoint(Some(&args.graphql), None)?);
+    let access = ConfigAccess::Graphql(gents_service::home_state::resolve_graphql_endpoint(
+        Some(&args.graphql),
+        None,
+    )?);
     access
         .transact_write("config.agent.catalog_permission", |txn| {
             let (node_did, agent_did) = (&args.node_did, &args.agent_did);
@@ -276,7 +282,10 @@ pub(super) async fn agent_clone(args: AgentCloneArgs) -> Result<()> {
 
 pub(super) async fn agent_disable(args: AgentDisableArgs) -> Result<()> {
     let owner = local_node_did(args.home.as_deref())?;
-    let access = ConfigAccess::Graphql(gents_service::home_state::resolve_graphql_endpoint(Some(&args.graphql), None)?);
+    let access = ConfigAccess::Graphql(gents_service::home_state::resolve_graphql_endpoint(
+        Some(&args.graphql),
+        None,
+    )?);
     let receipt = gents::operations::agent::disable(&access, &owner, &args.agent_did)
         .await
         .map_err(AgentFailure::edit)?;
@@ -285,7 +294,10 @@ pub(super) async fn agent_disable(args: AgentDisableArgs) -> Result<()> {
 
 pub(super) async fn agent_default(args: AgentDefaultArgs) -> Result<()> {
     let owner = local_node_did(args.home.as_deref())?;
-    let access = ConfigAccess::Graphql(gents_service::home_state::resolve_graphql_endpoint(Some(&args.graphql), None)?);
+    let access = ConfigAccess::Graphql(gents_service::home_state::resolve_graphql_endpoint(
+        Some(&args.graphql),
+        None,
+    )?);
     let receipt =
         gents::operations::agent::choose_default(&access, &owner, &args.agent_did, args.enable)
             .await

@@ -11,10 +11,13 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::cli::args::{ToolExplainArgs, ToolsCommand};
-use gents_service::args::ToolCeilingArg;
 use crate::commands::status::fetch_runtime_status;
 use crate::config_writes::ConfigAccess;
-use crate::{build_config_export_bundle, format_tool_ceiling, host_tool_ceiling, parse_cli_tool_arg, print_json, resolve_config_access};
+use crate::{
+    build_config_export_bundle, format_tool_ceiling, host_tool_ceiling, parse_cli_tool_arg,
+    print_json, resolve_config_access,
+};
+use gents_service::args::ToolCeilingArg;
 use gents_service::home_state::read_init_config;
 use gents_service::home_state::resolve_node_did;
 

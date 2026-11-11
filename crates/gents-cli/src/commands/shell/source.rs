@@ -36,10 +36,10 @@ use super::sections::{self, new_id};
 use super::tree::git_changes;
 use super::work::{self, Work};
 use super::{forms, git, items, menus, packs, prefs, setup, usage};
-use gents_session::session::caused::{load_caused_sessions_as, CausedSession};
 use crate::commands::accounts::account_rows;
 use crate::commands::config::crud::{query_collection_sorted, SKILL_SPEC};
 use crate::commands::mailbox;
+use gents_session::session::caused::{load_caused_sessions_as, CausedSession};
 
 /// What the shell opens with. `work` is why the shell has no runtime when it is `Err`.
 pub(super) struct Opening {

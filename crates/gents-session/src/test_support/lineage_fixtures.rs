@@ -102,10 +102,7 @@ pub async fn create_started_session(
 }
 
 /// A fixture session with no provenance.
-pub fn fixture_session(
-    did: &str,
-    session_id: &str,
-) -> gents_protocol::session::AgentSession {
+pub fn fixture_session(did: &str, session_id: &str) -> gents_protocol::session::AgentSession {
     gents_protocol::session::AgentSession {
         session_id: session_id.into(),
         node_did: did.into(),
@@ -222,8 +219,7 @@ pub async fn seed_lineage_case(
         let group: Vec<&Value> = rows
             .iter()
             .filter(|other| {
-                other["session_id"] == row["session_id"]
-                    && other["created_at"] == row["created_at"]
+                other["session_id"] == row["session_id"] && other["created_at"] == row["created_at"]
             })
             .collect();
         let mut settled = false;
@@ -285,8 +281,7 @@ pub async fn seed_lineage_case(
                 .as_str()
         });
         // A recorded opening is creation evidence; its receipt names the starter.
-        if let (Some(parent), Some(source), Some(opening)) = (parent, source, openings.first())
-        {
+        if let (Some(parent), Some(source), Some(opening)) = (parent, source, openings.first()) {
             create_started_session(
                 node,
                 fixture_session(did, session),

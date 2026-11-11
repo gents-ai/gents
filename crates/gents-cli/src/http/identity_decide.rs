@@ -6,10 +6,10 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use serde::{Deserialize, Serialize};
 use gents_store::config_client::document_decide::{
     decide_document_access, DocumentAccessQuestion, DocumentDecideError,
 };
+use serde::{Deserialize, Serialize};
 
 use crate::http::router::RuntimeHttpState;
 
@@ -91,8 +91,9 @@ async fn decide_identity_access(
     .await
     .map_err(|error| match error {
         DocumentDecideError::Authorize(error) => IdentityDecideError::Internal(error.to_string()),
-        DocumentDecideError::Request(error)
-        | DocumentDecideError::ReadBody(error) => IdentityDecideError::Backend(error.to_string()),
+        DocumentDecideError::Request(error) | DocumentDecideError::ReadBody(error) => {
+            IdentityDecideError::Backend(error.to_string())
+        }
         DocumentDecideError::Decode(error) => IdentityDecideError::Backend(error.to_string()),
         refused @ DocumentDecideError::Refused { .. } => {
             IdentityDecideError::Backend(refused.to_string())

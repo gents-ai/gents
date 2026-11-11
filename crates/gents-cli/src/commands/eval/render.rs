@@ -1,5 +1,6 @@
 use std::io::{self, Write};
 
+use crate::shared::wire;
 use gents::eval::TrialUsage;
 use gents_eval::optimization::Decision;
 use gents_eval::report::{
@@ -10,7 +11,6 @@ use gents_eval::runner::{
     is_fresh, EvidenceRecord, GoalEntry, LiveSnapshot, Progress, RunView, ToolTally, SCHEMAS_GOAL,
     STALE_WINDOW,
 };
-use crate::shared::wire;
 use serde::Serialize;
 
 use super::frame::{compact, duration, short_id};

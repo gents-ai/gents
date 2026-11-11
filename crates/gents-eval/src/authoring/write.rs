@@ -27,8 +27,11 @@ pub use recovery::recover_output;
 pub trait WriteHost: Sync {
     /// `Ok(None)` when `home_dir` does not exist; otherwise its resolved path,
     /// refused when it is not safe to overwrite.
-    fn overwritable_home(&self, home_dir: &Path, user_home: Option<&Path>)
-        -> Result<Option<PathBuf>>;
+    fn overwritable_home(
+        &self,
+        home_dir: &Path,
+        user_home: Option<&Path>,
+    ) -> Result<Option<PathBuf>>;
 
     fn is_gents_home(&self, dir: &Path) -> Result<bool>;
 
@@ -77,11 +80,13 @@ pub async fn stage(
         pilot,
     )
     .map_err(|error| vec![format!("writing the definition pack: {error:#}")])?;
-    round_trip(dir.path(), definition, host).await.map_err(|error| {
-        vec![format!(
-            "the definition pack does not load and install: {error:#}"
-        )]
-    })?;
+    round_trip(dir.path(), definition, host)
+        .await
+        .map_err(|error| {
+            vec![format!(
+                "the definition pack does not load and install: {error:#}"
+            )]
+        })?;
     Ok(Staged { dir, pack_name })
 }
 
@@ -238,7 +243,8 @@ fn replaceable_out(
         "refusing to replace --out {}: it is a symbolic link",
         out.display()
     );
-    let resolved = host.overwritable_home(out, user_home)
+    let resolved = host
+        .overwritable_home(out, user_home)
         .map_err(|error| anyhow::anyhow!("refusing to replace --out: {error:#}"))?
         .with_context(|| format!("{} does not exist", out.display()))?;
     let contains =

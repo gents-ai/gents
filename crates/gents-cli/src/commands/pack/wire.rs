@@ -20,8 +20,8 @@ use gents_store::config_client::{
 };
 use serde_json::{json, Value};
 
-use gents_pack::pack::registry::split_pack_coordinate;
 use crate::cli::PackWireArgs;
+use gents_pack::pack::registry::split_pack_coordinate;
 
 #[derive(Clone)]
 pub(crate) struct WireRequest {

@@ -6,14 +6,14 @@ use gents_eval::checks::CheckRegistry;
 
 use self::host::CliWriteHost;
 use self::turn::Turn;
+use super::{Deps, EvalContext};
+use crate::cli::EvalInitArgs;
+use crate::commands::pack::{resolve_pack_source, single_slot_agent, PackSource};
 use gents_eval::authoring::contract::{first_turn, MAX_VALIDATION_ROUNDS, VALIDATION_PREFIX};
 use gents_eval::authoring::dossier::{self, Dossier};
 use gents_eval::authoring::draft::{self, parse_reply};
 use gents_eval::authoring::validate::{assemble, validate, Assembled, Floors};
 use gents_eval::authoring::write::{self, case_table, commit, stage, Staged, Written};
-use super::{Deps, EvalContext};
-use crate::cli::EvalInitArgs;
-use crate::commands::pack::{resolve_pack_source, single_slot_agent, PackSource};
 
 mod host;
 mod pilot;
@@ -215,7 +215,9 @@ pub(crate) async fn preflight(args: &EvalInitArgs) -> Result<()> {
         .filter(|graphql| !graphql.is_empty())
     {
         Some(graphql) => Some(graphql.to_owned()),
-        None => gents_service::home_state::read_runtime_state(&home_dir)?.map(|state| state.graphql),
+        None => {
+            gents_service::home_state::read_runtime_state(&home_dir)?.map(|state| state.graphql)
+        }
     };
     let served = match graphql {
         Some(graphql) => crate::graphql_access::graphql_endpoint_available(&graphql).await,
@@ -667,8 +669,12 @@ mod tests {
         let state = gents_service::home_state::read_runtime_state(&home_dir)
             .unwrap()
             .expect("a runtime state written by `gents runtime server`");
-        gents_service::home_state::load_client_identity().await.unwrap();
-        let graphql = gents_service::home_state::home_graphql_endpoint(&home_dir, state.graphql.clone()).unwrap();
+        gents_service::home_state::load_client_identity()
+            .await
+            .unwrap();
+        let graphql =
+            gents_service::home_state::home_graphql_endpoint(&home_dir, state.graphql.clone())
+                .unwrap();
         let access = gents_store::config_client::ConfigAccess::Graphql(graphql.clone());
         let owner = state.node_did.clone();
 

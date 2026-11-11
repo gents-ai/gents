@@ -33,7 +33,10 @@ use serde_json::{json, Value};
 use crate::cli::*;
 use crate::config_writes::ConfigAccess;
 use crate::shared::*;
-use crate::{dangerously_overwrite_home, format_tool_ceiling, format_tool_package, normalize_optional_string, print_json, BackendResolutionMode};
+use crate::{
+    dangerously_overwrite_home, format_tool_ceiling, format_tool_package,
+    normalize_optional_string, print_json, BackendResolutionMode,
+};
 use gents_service::home_state::clear_init_pending;
 use gents_service::home_state::clear_runtime_state;
 use gents_service::home_state::default_data_dir;
@@ -267,7 +270,8 @@ pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
         .await?;
         let existing =
             read_init_config(&home_dir)?.context("existing home has no initialized identity")?;
-        let identity = gents_service::home_state::load_initialized_home_identity(&home_dir, &existing)?;
+        let identity =
+            gents_service::home_state::load_initialized_home_identity(&home_dir, &existing)?;
         provenance.preflight(&key, Some(identity.did())).await?;
         None
     };
@@ -1029,7 +1033,8 @@ async fn initialize_home_store(
 
 fn load_or_create_home_identity(options: HomeIdentityOptions<'_>) -> Result<HomeIdentity> {
     if let Some(stored) = read_init_config(options.home)? {
-        let identity = gents_service::home_state::load_initialized_home_identity(options.home, &stored)?;
+        let identity =
+            gents_service::home_state::load_initialized_home_identity(options.home, &stored)?;
         let node_identity_did = identity.did().to_string();
         return Ok(HomeIdentity {
             identity,
@@ -1918,7 +1923,8 @@ mod tests {
             .await
             .unwrap();
         let config = read_init_config(&home).unwrap().unwrap();
-        let runtime = gents_service::home_state::load_initialized_home_identity(&home, &config).unwrap();
+        let runtime =
+            gents_service::home_state::load_initialized_home_identity(&home, &config).unwrap();
         let preflight =
             gents_store::local::backend_protection::ProtectedBackendStore::open(&data, &key, &lock)
                 .await
@@ -2614,7 +2620,8 @@ mod tests {
         let home = temp.path().join("home");
         let initial = initialize_disposable_home(&home, false).await.unwrap();
         let stored = read_init_config(&home).unwrap().unwrap();
-        let identity = gents_service::home_state::load_initialized_home_identity(&home, &stored).unwrap();
+        let identity =
+            gents_service::home_state::load_initialized_home_identity(&home, &stored).unwrap();
         let client = gents_desktop_core::client::PrincipalIdentity::load_or_create(
             &gents_service::home_state::cli_identity_paths().unwrap(),
         )
@@ -2833,7 +2840,8 @@ mod tests {
         let home = temp.path().join("home");
         let initial = initialize_disposable_home(&home, false).await.unwrap();
         let stored = read_init_config(&home).unwrap().unwrap();
-        let identity = gents_service::home_state::load_initialized_home_identity(&home, &stored).unwrap();
+        let identity =
+            gents_service::home_state::load_initialized_home_identity(&home, &stored).unwrap();
         let agent = identity::Did::new(initial["default_agent_did"].as_str().unwrap()).unwrap();
         let data = default_data_dir(&home);
         let _claim = lock_init_store(&home, &data, false).unwrap();

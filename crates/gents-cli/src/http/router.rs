@@ -16,10 +16,10 @@ use tokio::sync::{watch, OnceCell};
 use crate::http::enrollment::{EnrollmentDecisionServiceHandle, EnrollmentOfferIssuerHandle};
 use crate::http::prometheus::{P2pMetricsSnapshot, StoreSizeCache};
 use crate::http::version::version_response;
-use gents_service::state::P2pAdmissionState;
 use accounts::{
     account_usage_read_handler, enrollment_decision_handler, enrollment_pending_handler,
 };
+use gents_service::state::P2pAdmissionState;
 use metrics::{healthz_handler, metrics_handler};
 use status::status_route;
 pub(crate) use status::BACKEND_PROBES_STATUS_FIELD;

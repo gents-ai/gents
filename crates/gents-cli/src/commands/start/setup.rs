@@ -9,9 +9,9 @@ use crate::cli::args::{InitArgs, StoreKeyCustodyArg};
 use crate::cli::{Cli, Command};
 use crate::commands::eval::terminal_size;
 use crate::commands::init::init_home;
+use crate::interactive_backend::{confirm, prompt_line_default, resolve_backend_interactively};
 use gents_service::home_state::read_finished_init_config;
 use gents_service::home_state::resolve_home_dir;
-use crate::interactive_backend::{confirm, prompt_line_default, resolve_backend_interactively};
 
 /// The app icon's bars sit exactly on this grid, measured from
 /// `apps/gents-desktop/src-tauri/icons/icon.png`.
@@ -377,7 +377,9 @@ mod tests {
         args.no_default_packs = true;
         crate::commands::init::init_home(args).await.unwrap();
 
-        let config = gents_service::home_state::read_init_config(&home).unwrap().unwrap();
+        let config = gents_service::home_state::read_init_config(&home)
+            .unwrap()
+            .unwrap();
         assert_eq!(config.tool_package, Some(ToolPackageArg::Yolo));
         assert_eq!(config.tool_ceiling, ToolCeilingArg::Readwrite);
         assert_eq!(config.tool_root.as_deref(), root.to_str());

@@ -11,7 +11,8 @@ use gents_store::identity::NodeIdentity;
 use serde::Serialize;
 use tokio::sync::RwLock;
 
-pub(crate) type EnrollmentOfferIssuerHandle = Arc<RwLock<Option<gents_p2p::p2p_reconcile::EnrollmentOfferIssuer>>>;
+pub(crate) type EnrollmentOfferIssuerHandle =
+    Arc<RwLock<Option<gents_p2p::p2p_reconcile::EnrollmentOfferIssuer>>>;
 pub(crate) type EnrollmentDecisionServiceHandle = Arc<RwLock<Option<EnrollmentDecisionService>>>;
 
 #[derive(Clone)]
@@ -80,12 +81,8 @@ impl EnrollmentDecisionService {
         command: &EnrollmentOperatorQueryCommand,
     ) -> Result<serde_json::Value> {
         let now = Utc::now();
-        gents_p2p::p2p_reconcile::authenticate_operator_query(
-            self.identity.as_ref(),
-            command,
-            now,
-        )
-        .await?;
+        gents_p2p::p2p_reconcile::authenticate_operator_query(self.identity.as_ref(), command, now)
+            .await?;
         gents_p2p::p2p_reconcile::consume_operator_nonce(
             &self.node,
             &command.admin_did,
@@ -115,7 +112,9 @@ impl EnrollmentDecisionService {
             identity::Did::new(signer_did)?,
         );
         let rendered = {
-            use gents_protocol::document_query::{fields::node as fields, Filter, Query, Selection};
+            use gents_protocol::document_query::{
+                fields::node as fields, Filter, Query, Selection,
+            };
             Query::select(Selection::doc_id())
                 .filter(Filter::eq(fields::NODE_DID, self.identity.did()))
                 .render()

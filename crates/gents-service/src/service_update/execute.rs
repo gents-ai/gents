@@ -20,7 +20,11 @@ pub(super) fn endpoint(raw: &str, settings: &NetworkSettings) -> Result<reqwest:
         endpoint.scheme() == "http"
             && address == expected
             && endpoint.port_or_known_default()
-                == Some(settings.http_port.unwrap_or(crate::state::DEFAULT_HTTP_PORT))
+                == Some(
+                    settings
+                        .http_port
+                        .unwrap_or(crate::state::DEFAULT_HTTP_PORT)
+                )
             && endpoint.username().is_empty()
             && endpoint.password().is_none()
             && endpoint.path() == "/api/v0/graphql"

@@ -2,9 +2,9 @@ use anyhow::{anyhow, Result};
 use gents_eval::optimization::{Proposal, ProposalInput, Proposer};
 use tokio::sync::Mutex;
 
-use gents_eval::authoring::draft::json_blocks;
 use crate::commands::eval::init::turn::Turn;
 use crate::commands::eval::render::percent;
+use gents_eval::authoring::draft::json_blocks;
 
 pub(crate) struct AgentProposer<T> {
     turn: Mutex<T>,

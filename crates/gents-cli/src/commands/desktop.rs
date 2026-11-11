@@ -7,7 +7,7 @@ use gents_desktop_core::{
     },
 };
 
-use crate::{cli::DesktopCommand};
+use crate::cli::DesktopCommand;
 use gents_service::native_service::NativeServiceConfig;
 use gents_service::native_service::NativeServiceManager;
 use gents_service::native_service::NativeServicePlatform;

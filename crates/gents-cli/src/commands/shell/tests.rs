@@ -519,7 +519,8 @@ impl ChatNode {
             session_id: request.session_id.clone().unwrap(),
             requester_did: Some(OWNER.to_string()),
         };
-        let mut session = gents_session::test_support::lineage_fixtures::fixture_session(OWNER, child);
+        let mut session =
+            gents_session::test_support::lineage_fixtures::fixture_session(OWNER, child);
         session.agent_did = did(agent);
         session.created_at = self.next_at();
         let mut provenance = SessionProvenance {

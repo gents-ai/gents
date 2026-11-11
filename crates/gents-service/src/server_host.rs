@@ -123,16 +123,14 @@ pub async fn grant_managed_client_enrollment(
     client_did: &str,
 ) -> Result<bool> {
     let endpoint = crate::home_state::home_graphql_endpoint(home, graphql)?;
-    Ok(
-        crate::enrollment_admin::grant_verified_client(
-            home,
-            endpoint,
-            request_id,
-            Some((node_did, client_did)),
-        )
-        .await?
-        .is_some(),
+    Ok(crate::enrollment_admin::grant_verified_client(
+        home,
+        endpoint,
+        request_id,
+        Some((node_did, client_did)),
     )
+    .await?
+    .is_some())
 }
 
 /// Approve the already granted desktop enrollment through the runtime's
@@ -200,12 +198,10 @@ pub async fn admit_managed_enrollment_as(
     admits its route alone */
     let derives_authority = pending.profile.as_deref() == Some("client");
     if derives_authority {
-        crate::enrollment_admin::grant_verified_client(
-            home, owner, request_id, None,
-        )
-        .await
-        .context("granting the enrollment's access before approving it; nothing was approved")?
-        .ok_or_else(not_pending)?;
+        crate::enrollment_admin::grant_verified_client(home, owner, request_id, None)
+            .await
+            .context("granting the enrollment's access before approving it; nothing was approved")?
+            .ok_or_else(not_pending)?;
     }
     decide_managed_enrollment(
         home,
@@ -227,8 +223,7 @@ pub async fn pending_managed_enrollments(
     home: &Path,
     graphql: &str,
 ) -> Result<Vec<ManagedPendingEnrollment>> {
-    let body =
-        crate::enrollment_admin::load_pending_enrollments(home, graphql).await?;
+    let body = crate::enrollment_admin::load_pending_enrollments(home, graphql).await?;
     let result: ManagedPendingEnrollments =
         serde_json::from_value(body).context("decoding managed pending enrollments")?;
     Ok(result.pending)

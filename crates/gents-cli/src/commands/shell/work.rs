@@ -30,8 +30,8 @@ impl Work {
 /// Signs as this CLI's User, as `gents automation mailbox` does. Never
 /// `resolve_config_access`: with no runtime answering, it opens and claims the embedded store.
 pub(super) fn work_for(home: &Path) -> Result<Work, String> {
-    let endpoint =
-        gents_service::home_state::resolve_graphql_endpoint(None, Some(home)).map_err(|error| format!("{error:#}"))?;
+    let endpoint = gents_service::home_state::resolve_graphql_endpoint(None, Some(home))
+        .map_err(|error| format!("{error:#}"))?;
     Ok(Work {
         endpoint,
         home: home.to_path_buf(),

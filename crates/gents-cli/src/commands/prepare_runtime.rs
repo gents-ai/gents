@@ -22,8 +22,8 @@ use crate::cli::{P2pTransportArg, PrepareRuntimeArgs};
 use gents_service::home_state::load_initialized_home_identity;
 use gents_service::home_state::read_init_config;
 use gents_service::home_state::read_runtime_state;
-use gents_service::state::StoredInitConfig;
 use gents_service::runtime_control::{control, refusal, PreparationFailure};
+use gents_service::state::StoredInitConfig;
 use gents_service::state::StoredRuntimeState;
 
 /// Preparation must eventually report a busy home if its startup reservation
@@ -100,8 +100,9 @@ async fn prepare_inner(
         .change_tool_root
         .map(validate_requested_root)
         .transpose()?;
-    let _keychain_prompt_guard =
-        gents_service::process_resources::prevent_keychain_prompts(!args.keychain_startup_approval)?;
+    let _keychain_prompt_guard = gents_service::process_resources::prevent_keychain_prompts(
+        !args.keychain_startup_approval,
+    )?;
     gents_service::process_resources::prepare()?;
     anyhow::ensure!(
         args.data_dir.is_none(),
@@ -362,7 +363,10 @@ async fn ensure_requested_root_published(
     config: &StoredInitConfig,
     root: &Path,
 ) -> Result<()> {
-    if matches!(config.tool_ceiling, gents_service::args::ToolCeilingArg::MetaOnly) {
+    if matches!(
+        config.tool_ceiling,
+        gents_service::args::ToolCeilingArg::MetaOnly
+    ) {
         return Ok(());
     }
     let access = gents_store::config_client::ConfigAccess::Graphql(authorization.clone());
@@ -458,4 +462,3 @@ fn local_endpoint(raw: &str) -> Result<reqwest::Url> {
     }
     Ok(endpoint)
 }
-

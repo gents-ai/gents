@@ -28,7 +28,8 @@ impl EvalContext {
         let (access, home_dir) =
             crate::resolve_config_access(scope.home.as_deref(), scope.graphql.as_deref()).await?;
         let owner = gents_service::home_state::resolve_node_did(Some(&home_dir), None)?;
-        let evaluator = std::sync::Arc::new(gents_service::home_state::load_client_identity().await?);
+        let evaluator =
+            std::sync::Arc::new(gents_service::home_state::load_client_identity().await?);
         let client_signing = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
             evaluator.private_key_bytes(),
         )?;
@@ -242,7 +243,8 @@ async fn watch_while_held(
                     error = %format!("{error:#}"),
                     "node held, reading runner files"
                 );
-                let home_dir = gents_service::home_state::resolve_home_dir(args.scope.home.as_deref());
+                let home_dir =
+                    gents_service::home_state::resolve_home_dir(args.scope.home.as_deref());
                 watch::watch(
                     &runs_dir(&home_dir),
                     args,

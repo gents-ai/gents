@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
 use crate::cli::args::GrokAuthProbeArgs;
-use crate::{resolve_config_access};
+use crate::resolve_config_access;
 use gents_service::home_state::resolve_node_did;
 
 #[derive(Deserialize)]

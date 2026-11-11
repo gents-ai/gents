@@ -742,7 +742,8 @@ pub(super) async fn install_documents_command_with_local(
             let local = if let Some(endpoint) = local_endpoint {
                 let config = gents_service::home_state::read_init_config(&home)?
                     .context("home is not initialized")?;
-                let runtime = gents_service::home_state::load_initialized_home_identity(&home, &config)?;
+                let runtime =
+                    gents_service::home_state::load_initialized_home_identity(&home, &config)?;
                 anyhow::ensure!(
                     runtime.did() == owner,
                     "selected Node does not match the held runtime"

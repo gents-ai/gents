@@ -726,7 +726,8 @@ async fn engineer_config(
         .local_node()
         .context("a runtime is serving this home; ask its Engineer to install the pack")?
         .clone();
-    let stored = gents_service::home_state::read_init_config(home)?.context("home is not initialized")?;
+    let stored =
+        gents_service::home_state::read_init_config(home)?.context("home is not initialized")?;
     let runtime = gents_service::home_state::load_initialized_home_identity(home, &stored)?;
     let binding = agent_identity_binding(access, owner, engineer).await?;
     let agent = gents_store::identity::resolve_agent_identity(runtime.as_ref(), &binding)?;
@@ -1278,7 +1279,8 @@ mod tests {
             .unwrap()
             .unwrap();
         let runtime =
-            gents_service::home_state::load_initialized_home_identity(home.path(), &stored).unwrap();
+            gents_service::home_state::load_initialized_home_identity(home.path(), &stored)
+                .unwrap();
         let binding = agent_identity_binding(&access, &owner, &worker)
             .await
             .unwrap();

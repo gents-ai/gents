@@ -28,10 +28,9 @@ pub(super) async fn read(
     };
     let home = work.home.clone();
     let reads = async {
-        let identity = blocking(move || {
-            gents_service::enrollment_admin::resolve_home_identity(Some(&home))
-        })
-        .await?;
+        let identity =
+            blocking(move || gents_service::enrollment_admin::resolve_home_identity(Some(&home)))
+                .await?;
         crate::commands::accounts::request_usage_reads(
             identity.as_ref(),
             &work.endpoint,

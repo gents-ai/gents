@@ -1,7 +1,6 @@
 use crate::cli::*;
 use crate::shared::ResolvedBackendConfig;
-use crate::{BackendResolutionMode};
-use gents_service::home_state::resolve_node_did;
+use crate::BackendResolutionMode;
 use anyhow::{Context, Result};
 use gents_documents::apply_desired_state_plan;
 use gents_documents::{
@@ -10,6 +9,7 @@ use gents_documents::{
 use gents_documents::{BackendAuth, InferenceBackend};
 use gents_inference::backends::provider::discover_models as discover_backend_models;
 use gents_inference::backends::rotation::{set_backend_rotation, BackendRotation};
+use gents_service::home_state::resolve_node_did;
 use gents_store::collection::Collection;
 use gents_store::config_client::ConfigAccess;
 use serde_json::json;
@@ -314,7 +314,8 @@ mod tests {
         crate::shared::test_support::publish_test_node(&node).await;
         let access = ConfigAccess::local_as(
             node,
-            ::identity::Did::new(gents_session::test_support::lineage_fixtures::FIXTURE_DID).unwrap(),
+            ::identity::Did::new(gents_session::test_support::lineage_fixtures::FIXTURE_DID)
+                .unwrap(),
         );
         for (id, kind, endpoint, auth) in [
             (

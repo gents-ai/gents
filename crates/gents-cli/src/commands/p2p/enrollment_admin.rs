@@ -51,4 +51,3 @@ pub(super) async fn grant_pending_client(args: P2pEnrollmentGrantArgs) -> Result
         .context("expected one verified pending enrollment")?;
     print_json(&result)
 }
-

@@ -507,11 +507,7 @@ pub(crate) struct ProposerArg {
 }
 
 pub(crate) fn parse_proposer(raw: &str) -> Result<ProposerArg, String> {
-    let usage = || {
-        format!(
-            "unknown proposer {raw:?}; pass --proposer agent:<pack>[:<agent>]"
-        )
-    };
+    let usage = || format!("unknown proposer {raw:?}; pass --proposer agent:<pack>[:<agent>]");
     let Some(target) = raw.strip_prefix("agent:") else {
         return Err(usage());
     };

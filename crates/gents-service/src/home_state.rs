@@ -288,10 +288,7 @@ pub fn resolve_graphql_endpoint(
 
 /// Client document access retains the user's identity. Credentials remain bound to
 /// this home's endpoint or loopback; loading a runtime key never grants client access.
-pub fn home_graphql_endpoint(
-    home_dir: &Path,
-    url: impl Into<String>,
-) -> Result<GraphqlEndpoint> {
+pub fn home_graphql_endpoint(home_dir: &Path, url: impl Into<String>) -> Result<GraphqlEndpoint> {
     home_graphql_endpoint_with_paths(home_dir, url, &cli_identity_paths()?)
 }
 
@@ -352,8 +349,7 @@ pub fn held_client_identity(
     Ok(std::sync::Arc::new(identity))
 }
 
-pub async fn load_client_identity() -> Result<gents_desktop_core::client::PrincipalIdentity>
-{
+pub async fn load_client_identity() -> Result<gents_desktop_core::client::PrincipalIdentity> {
     let paths = cli_identity_paths()?;
     paths.ensure_root_dirs().await?;
     gents_desktop_core::client::PrincipalIdentity::load_or_create(&paths).await

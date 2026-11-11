@@ -194,11 +194,7 @@ where
         Ok(definition.into_bytes())
     }
 
-    pub fn install_update_definition(
-        &self,
-        expected: &[u8],
-        replacement: &[u8],
-    ) -> Result<()> {
+    pub fn install_update_definition(&self, expected: &[u8], replacement: &[u8]) -> Result<()> {
         let path = self.config.definition_path(self.platform);
         anyhow::ensure!(
             fs::read(&path)? == expected,

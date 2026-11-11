@@ -487,7 +487,9 @@ async fn service_command(command: ServiceCommand) -> Result<()> {
         ServiceCommand::UpdateRun { home, operation_id } => {
             return gents_service::service_update::run(home, operation_id).await
         }
-        ServiceCommand::UpdateCheck { home } => return gents_service::service_update::check(home).await,
+        ServiceCommand::UpdateCheck { home } => {
+            return gents_service::service_update::check(home).await
+        }
         command => command,
     };
     use gents_service::native_service::{NativeServiceConfig, NativeServiceManager};
@@ -512,8 +514,13 @@ async fn service_command(command: ServiceCommand) -> Result<()> {
                     .as_deref()
                     .map(gents_service::native_service::read_environment_file)
                     .transpose()?;
-                gents_service::network_settings::install_service(&manager, &home, &network, environment.as_ref())
-                    .map(drop)
+                gents_service::network_settings::install_service(
+                    &manager,
+                    &home,
+                    &network,
+                    environment.as_ref(),
+                )
+                .map(drop)
             }
             ServiceAction::Start { enable } => manager.start(enable),
             ServiceAction::Stop { keep_enabled } => manager.stop(!keep_enabled),
@@ -872,10 +879,10 @@ pub(crate) fn server_start_failure_hint(home_dir: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use gents_service::args::ToolCeilingArg;
     use gents_service::home_state::default_key_path;
     use gents_service::home_state::write_init_config;
-    use super::*;
     use gents_service::state::StoredInitConfig;
     use gents_store::identity::NodeIdentity as _;
 

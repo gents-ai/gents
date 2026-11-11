@@ -10,11 +10,7 @@ pub const VALIDATION_PREFIX: &str =
 
 pub const MAX_VALIDATION_ROUNDS: usize = 3;
 
-pub fn first_turn(
-    dossier: &Dossier,
-    catalog: &[CheckDescription],
-    floors: &Floors,
-) -> String {
+pub fn first_turn(dossier: &Dossier, catalog: &[CheckDescription], floors: &Floors) -> String {
     let mut text = dossier.text.trim_end().to_owned();
     text.push_str("\n\n# Runtime captures\n\nRead-only documents captures may also name these runtime collections: ");
     text.push_str(

@@ -326,7 +326,8 @@ mod tests {
         crate::commands::init::init(init_args)
             .await
             .expect("identity-only init");
-        let node_did = gents_service::home_state::resolve_node_did(Some(home.path()), None).unwrap();
+        let node_did =
+            gents_service::home_state::resolve_node_did(Some(home.path()), None).unwrap();
         let profile_id = format!("{node_did}:default-profile");
         // An identity-only init publishes no inference profile; the home's
         // client configures the one the worker slot names.

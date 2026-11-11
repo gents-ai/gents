@@ -70,9 +70,9 @@ pub use history::{load_history, sequence_message_key};
 pub use history::{load_sequenced_history_for_request, load_sequenced_history_projection_on};
 pub use history::{resumed_request_has_published_input, retry_has_published_input};
 pub use observations::load_latest_requests_in_txn;
+pub use observations::load_recent_titles_for_agent;
 pub(crate) use observations::load_session_current_hop;
 pub use observations::load_session_current_hop_in_txn;
-pub use observations::load_recent_titles_for_agent;
 pub(crate) use observations::{
     advance_refused_request_observation_in_txn, advance_session_request_observation_in_txn,
     load_scoped_request_facts_in_txn,

@@ -100,8 +100,12 @@ pub(crate) async fn served_config(mut config: Value) -> Served {
 pub(crate) async fn cli_user() -> &'static gents_desktop_core::client::PrincipalIdentity {
     static USER: tokio::sync::OnceCell<gents_desktop_core::client::PrincipalIdentity> =
         tokio::sync::OnceCell::const_new();
-    USER.get_or_init(|| async { gents_service::home_state::load_client_identity().await.unwrap() })
-        .await
+    USER.get_or_init(|| async {
+        gents_service::home_state::load_client_identity()
+            .await
+            .unwrap()
+    })
+    .await
 }
 
 /// Replaces each string under a `*_did` or `*_dids` key that `names` maps.

@@ -12,6 +12,7 @@ use crate::cli::args::{ShellArgs, StoreKeyCustodyArg};
 use crate::cli::Cli;
 use crate::config_writes::ConfigAccess;
 use crate::graphql_access::graphql_endpoint_available;
+use gents_protocol::node_readiness::{AgentReadinessState, NodeReadinessSnapshot};
 use gents_service::home_state::read_finished_init_config;
 use gents_service::home_state::read_runtime_state;
 use gents_service::home_state::resolve_home_dir;
@@ -20,7 +21,6 @@ use gents_service::native_service::NativeServiceManager;
 use gents_service::native_service::NativeServicePlatform;
 use gents_service::native_service::ServiceExit;
 use gents_service::state::StoredInitConfig;
-use gents_protocol::node_readiness::{AgentReadinessState, NodeReadinessSnapshot};
 
 mod setup;
 mod yolo;
@@ -411,8 +411,11 @@ mod tests {
             Some(older)
         );
 
-        let key = store_refusal(home, &exit(gents_service::native_service::INSECURE_KEY_EXIT_CODE))
-            .expect("an unsafe key");
+        let key = store_refusal(
+            home,
+            &exit(gents_service::native_service::INSECURE_KEY_EXIT_CODE),
+        )
+        .expect("an unsafe key");
         assert_eq!(key.kind, IncompatibleStoreKind::InsecureKey);
         assert_eq!(key.data_path, home.join("keys"));
 

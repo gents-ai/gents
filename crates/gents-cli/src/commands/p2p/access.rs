@@ -2,7 +2,7 @@ use anyhow::Result;
 use serde_json::{json, Value};
 
 use crate::cli::args::P2pAccessArgs;
-use crate::{print_json};
+use crate::print_json;
 use gents_service::home_state::resolve_graphql_endpoint;
 use gents_service::home_state::resolve_home_dir;
 

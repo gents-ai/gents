@@ -23,18 +23,21 @@ use uuid::Uuid;
 use crate::cli::*;
 use crate::http::router::{RuntimeActivationObservation, ServeLifecycleHandle};
 use crate::http::runtime_contract_router;
-use gents_service::state::P2pAdmissionState;
-use crate::{format_tool_ceiling, host_tool_ceiling, parse_cli_tool_arg, print_json, server_start_failure_hint, DEFAULT_NODE_NAME};
+use crate::{
+    format_tool_ceiling, host_tool_ceiling, parse_cli_tool_arg, print_json,
+    server_start_failure_hint, DEFAULT_NODE_NAME,
+};
+use gents_protocol::row::{
+    project_node_readiness_summary, AgentReadinessState, NodeReadinessSummary,
+    ProjectedNodeReadinessSummary,
+};
 use gents_service::home_state::default_data_dir;
 use gents_service::home_state::default_key_path;
 use gents_service::home_state::display_host;
 use gents_service::home_state::read_init_config;
 use gents_service::home_state::resolve_home_dir;
 use gents_service::home_state::write_runtime_state;
-use gents_protocol::row::{
-    project_node_readiness_summary, AgentReadinessState, NodeReadinessSummary,
-    ProjectedNodeReadinessSummary,
-};
+use gents_service::state::P2pAdmissionState;
 
 pub(crate) struct CliReadyObserver {
     pub(crate) tx: watch::Sender<ProcessLifecycleState>,
@@ -527,12 +530,16 @@ async fn serve_foreground(
         &store_lock,
     )
     .await?;
-    args.fill_unset_network(&gents_service::network_settings::NetworkSettings::read(&home_dir)?);
+    args.fill_unset_network(&gents_service::network_settings::NetworkSettings::read(
+        &home_dir,
+    )?);
     let http_ip = args
         .http_addr
         .unwrap_or(gents_service::network_settings::DEFAULT_HTTP_ADDR);
     gents_service::network_settings::validate_http_bind(http_ip)?;
-    let http_port = args.http_port.unwrap_or(gents_service::state::DEFAULT_HTTP_PORT);
+    let http_port = args
+        .http_port
+        .unwrap_or(gents_service::state::DEFAULT_HTTP_PORT);
     if args.http_port.is_none() && !gents_service::home_state::is_default_home(&home_dir) {
         tracing::warn!(
             home = %home_dir.display(),

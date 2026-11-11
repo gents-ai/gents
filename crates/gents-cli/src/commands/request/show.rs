@@ -84,12 +84,13 @@ async fn load_request_show_snapshot(
     let tool_rows = value_array(&tool_response, "/data/AgentToolCall");
 
     let access = ConfigAccess::Graphql(graphql.clone());
-    let child_requests = gents_session::session::caused::started_by_request(&access, &canonical_request)
-        .await
-        .with_context(|| format!("loading sessions started by {request_id}"))?
-        .into_iter()
-        .map(|(_, first)| serde_json::to_value(first).map(|row| child_request_view(&row)))
-        .collect::<Result<Vec<_>, _>>()?;
+    let child_requests =
+        gents_session::session::caused::started_by_request(&access, &canonical_request)
+            .await
+            .with_context(|| format!("loading sessions started by {request_id}"))?
+            .into_iter()
+            .map(|(_, first)| serde_json::to_value(first).map(|row| child_request_view(&row)))
+            .collect::<Result<Vec<_>, _>>()?;
 
     let request_terminal = canonical_request.is_terminal();
     let request_node_did = canonical_request.node_did.unwrap_or_default();

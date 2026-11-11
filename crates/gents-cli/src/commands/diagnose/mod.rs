@@ -8,7 +8,9 @@ use gents_protocol::row::{project_node_readiness_summary, ProjectedNodeReadiness
 use serde_json::{json, Value};
 
 use crate::cli::args::{DiagnoseArgs, P2pTransportArg};
-use crate::{build_config_export_bundle, graphql_endpoint_available, print_json, resolve_config_access};
+use crate::{
+    build_config_export_bundle, graphql_endpoint_available, print_json, resolve_config_access,
+};
 use gents_service::home_state::read_init_config;
 use gents_service::home_state::read_runtime_state;
 use gents_service::home_state::resolve_home_dir;
@@ -152,7 +154,10 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
     });
     let p2p_status = match graphql.as_deref().filter(|_| graphql_reachable) {
         Some(endpoint) => {
-            let endpoint = gents_service::home_state::resolve_graphql_endpoint(Some(endpoint), args.home.as_deref())?;
+            let endpoint = gents_service::home_state::resolve_graphql_endpoint(
+                Some(endpoint),
+                args.home.as_deref(),
+            )?;
             crate::commands::p2p::load_live_http_p2p_status(args.home.as_deref(), &endpoint).await
         }
         None => crate::commands::p2p::persisted_p2p_status(matching_runtime_state),

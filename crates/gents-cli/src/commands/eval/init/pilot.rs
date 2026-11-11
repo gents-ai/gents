@@ -360,9 +360,7 @@ mod tests {
     }
 
     async fn drafted(init: &InitContext<'_>) -> InitOutcome {
-        let draft = parse_reply(&block(&cases()))
-            .unwrap()
-            .unwrap();
+        let draft = parse_reply(&block(&cases())).unwrap().unwrap();
         let assembled = assemble(&draft, None, &init.owner, &init.dossier.slot).unwrap();
         validate(&assembled, init.registry, &init.dossier, &init.floors).unwrap();
         let staged = stage(&assembled, SUMMARY, &init.dossier, None, &CliWriteHost)

@@ -23,10 +23,10 @@ use crate::cli::args::{
 };
 use crate::cli::output_format::OutputFormat;
 use crate::commands::chat::streaming::sanitize_summary_text;
-use gents_service::home_state::resolve_node_did;
 use crate::request_helpers::print_ndjson;
 use crate::shared::wire;
 use crate::{print_json, resolve_config_access};
+use gents_service::home_state::resolve_node_did;
 
 pub(crate) mod promote;
 
@@ -624,11 +624,7 @@ fn show_lines(view: &JobView) -> Vec<String> {
         if !progress.phases.is_empty() {
             lines.push("phases:".to_owned());
             for phase in &progress.phases {
-                lines.push(format!(
-                    "  {}  {}",
-                    wire(&phase.state),
-                    clean(&phase.title)
-                ));
+                lines.push(format!("  {}  {}", wire(&phase.state), clean(&phase.title)));
             }
         }
     }

@@ -4,8 +4,8 @@ use anyhow::{Context, Result};
 use gents_documents::EvalCase;
 use gents_eval::checks::CheckRegistry;
 
-use gents_eval::authoring::validate::case_catalog_conformance;
 use crate::cli::EvalChecksArgs;
+use gents_eval::authoring::validate::case_catalog_conformance;
 
 pub(super) fn checks(
     registry: &CheckRegistry,

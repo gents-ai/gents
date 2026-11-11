@@ -183,8 +183,8 @@ pub fn operator_query_view(
                 })).collect::<Vec<_>>()
         })),
         EnrollmentOperatorQuery::History => {
-            let conflicts_omitted = !projection.request_conflicts.is_empty()
-                || !projection.scoped_conflicts.is_empty();
+            let conflicts_omitted =
+                !projection.request_conflicts.is_empty() || !projection.scoped_conflicts.is_empty();
             let mut history = Vec::new();
             for entry in projection.active {
                 /* a lapsed lease is no longer a member (the Members

@@ -135,7 +135,6 @@ fn server_keychain_dialog_prevention_is_opt_in() {
         assert!(!args.keychain_startup_approval);
     }
     assert!(
-        Cli::try_parse_from(["gents", "prepare-runtime", "--keychain-startup-approval"])
-            .is_err()
+        Cli::try_parse_from(["gents", "prepare-runtime", "--keychain-startup-approval"]).is_err()
     );
 }

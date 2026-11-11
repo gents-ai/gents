@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
-use gents_documents::{EvalCapture, EvalCase, EvalDefinition, EvalSplit};
 use crate::checks::CheckRegistry;
+use gents_documents::{EvalCapture, EvalCase, EvalDefinition, EvalSplit};
 use serde_json::{json, Value};
 
 use super::dossier::{runtime_collections, Dossier};
@@ -73,10 +73,7 @@ fn catalog_conformance(definition: &EvalDefinition, registry: &CheckRegistry) ->
         .collect()
 }
 
-pub fn case_catalog_conformance(
-    case: &EvalCase,
-    registry: &CheckRegistry,
-) -> BTreeSet<String> {
+pub fn case_catalog_conformance(case: &EvalCase, registry: &CheckRegistry) -> BTreeSet<String> {
     let mut messages = BTreeSet::new();
     for stage in &case.stages {
         let at = format!("case {} stage {}", case.case_id, stage.stage_id);
@@ -307,9 +304,7 @@ mod tests {
                 "cases": good().cases,
             })
         );
-        let draft = parse_reply(&reply)
-            .unwrap()
-            .unwrap();
+        let draft = parse_reply(&reply).unwrap().unwrap();
         let assembled = assemble(&draft, Some("from-flag"), OWNER, SLOT).unwrap();
         let definition = &assembled.definition;
         assert_eq!(definition.definition_id, "from-flag");

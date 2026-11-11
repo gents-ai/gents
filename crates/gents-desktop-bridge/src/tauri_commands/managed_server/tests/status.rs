@@ -289,11 +289,13 @@ fn ready_runtime_requires_live_status_to_carry_reviewed_authority() {
 fn request_visibility_race_is_retriable() {
     use gents_protocol::enrollment::EnrollmentDecisionRefusalCode;
     let rejected = |status, code| {
-        anyhow::Error::new(gents_service::enrollment_admin::EnrollmentDecisionRejected {
-            status,
-            message: "refused".into(),
-            code,
-        })
+        anyhow::Error::new(
+            gents_service::enrollment_admin::EnrollmentDecisionRejected {
+                status,
+                message: "refused".into(),
+                code,
+            },
+        )
         .context("approving desktop enrollment on managed runtime")
     };
     assert!(enrollment_request_is_not_visible_yet(&rejected(

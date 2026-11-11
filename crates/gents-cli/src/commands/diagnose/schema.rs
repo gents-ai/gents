@@ -32,7 +32,9 @@ pub(super) async fn load_runtime_row(
     access: &ConfigAccess,
     node_did: &str,
 ) -> Result<Option<Value>> {
-    use gents_protocol::document_query::{fields::node_runtime as fields, Filter, Query, Selection};
+    use gents_protocol::document_query::{
+        fields::node_runtime as fields, Filter, Query, Selection,
+    };
     let rendered = Query::select(
         Selection::new()
             .field(fields::NODE_DID)
