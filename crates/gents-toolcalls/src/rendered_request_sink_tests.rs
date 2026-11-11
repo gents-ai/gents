@@ -1,4 +1,8 @@
-use super::*;
+use std::sync::Arc;
+
+use defra_node::Node as EmbeddedNode;
+use gents_inference::rendered_request::sink::DefraRenderedRequestSink;
+use gents_inference::rendered_request::*;
 use gents_store::identity::NodeIdentity;
 use serde_json::{json, Value};
 
@@ -26,10 +30,10 @@ fn fixture_identities() -> &'static (
 }
 
 struct CaptureFixture {
-    db: crate::support::TestDb,
+    db: gents_inference::test_support::TestDb,
     _user: gents_store::identity::KeyIdentity,
     agent: Arc<dyn NodeIdentity>,
-    lifecycle: crate::request::lifecycle::RequestLifecycle,
+    lifecycle: gents_session::request::lifecycle::RequestLifecycle,
 }
 
 impl CaptureFixture {
@@ -38,7 +42,7 @@ impl CaptureFixture {
             AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
         };
         let (db, user, client, binding) =
-            crate::test_support::root::signed_test_node("rendered-capture").await;
+            gents_inference::test_support::signed_test_node("rendered-capture").await;
         let agent =
             gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
                 .unwrap();
@@ -55,7 +59,7 @@ impl CaptureFixture {
             AgentRequestAdmissionRecord::client(user.did()),
         );
         let mut lifecycle =
-            crate::tools::call::lifecycle::admission_fixture::pending_client_fixture_request(
+            crate::call::lifecycle::admission_fixture::pending_client_fixture_request(
                 &db.node,
                 &client,
                 db.node_identity.clone(),
@@ -67,9 +71,9 @@ impl CaptureFixture {
             .unwrap();
         assert_eq!(
             lifecycle.claim_with_identity().await.unwrap(),
-            crate::request::lifecycle::ClaimOutcome::Claimed
+            gents_session::request::lifecycle::ClaimOutcome::Claimed
         );
-        let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
+        let writer = gents_session::request::streaming::DefraStreamWriter::new_for_lifecycle(
             db.node.clone(),
             &lifecycle,
             std::time::Duration::ZERO,
@@ -112,7 +116,7 @@ impl CaptureFixture {
         rendered.request_doc_id = request.doc_id.clone();
         rendered.request_id = request.request_id.clone();
         rendered.request_commit_cid = self.lifecycle.request_commit_cid().unwrap().into();
-        rendered.capture_key = super::super::capture_key(
+        rendered.capture_key = gents_inference::rendered_request::capture_key(
             &rendered.node_did,
             &rendered.session_id,
             &rendered.request_doc_id,
@@ -196,7 +200,7 @@ async fn failed_capture_publication_rolls_back_bound_blocks_and_record() {
     access
         .transact_write("test.capture.session", |txn| {
             Box::pin(async move {
-                crate::session::ensure_session_in_txn(
+                gents_session::session::ensure_session_in_txn(
                     txn,
                     "session",
                     root.did(),
@@ -310,12 +314,12 @@ fn rendered_turn_for(
     request_json: Value,
 ) -> RenderedCompletionRequest {
     let capture_scope = "inference.1".to_string();
-    let assembly_trace = super::super::AssemblyTrace::from_effective_messages(
-        super::super::AssemblyBuildPath::Budgeted,
+    let assembly_trace = gents_inference::rendered_request::AssemblyTrace::from_effective_messages(
+        gents_inference::rendered_request::AssemblyBuildPath::Budgeted,
         Vec::new(),
     );
     RenderedCompletionRequest {
-        capture_key: super::super::capture_key(
+        capture_key: gents_inference::rendered_request::capture_key(
             node_did,
             "session",
             "",
@@ -336,13 +340,13 @@ fn rendered_turn_for(
         agent_did: agent_did.to_owned(),
         session_id: "session".into(),
         model_name: "model".into(),
-        source: super::super::RenderedRequestSource::OpenAiChatCompletions,
+        source: gents_inference::rendered_request::RenderedRequestSource::OpenAiChatCompletions,
         request_json,
         messages_json: json!([]),
         tools_json: json!([]),
         tool_choice_json: Value::Null,
         sampling_json: Value::Null,
-        provenance_json: serde_json::to_value(super::super::ProvenanceManifest::captured_only(
+        provenance_json: serde_json::to_value(gents_inference::rendered_request::ProvenanceManifest::captured_only(
             capture_scope,
             None,
             None,
@@ -505,7 +509,7 @@ async fn capture_writes_blocks_and_a_manifest_that_decode_back() {
         "a body spanning several blocks must be stored as blocks"
     );
 
-    let (request, provenance) = super::super::decode_capture_pair(
+    let (request, provenance) = gents_inference::rendered_request::decode_capture_pair(
         &access,
         gents_protocol::rendered_request::CAPTURE_VERSION,
         stored,
@@ -514,11 +518,11 @@ async fn capture_writes_blocks_and_a_manifest_that_decode_back() {
     .expect("decode captured pair");
     assert_eq!(
         request,
-        super::super::canonical_json(&rendered.request_json)
+        gents_inference::rendered_request::canonical_json(&rendered.request_json)
     );
     assert_eq!(
         provenance,
-        super::super::canonical_json(&rendered.provenance_payload_json)
+        gents_inference::rendered_request::canonical_json(&rendered.provenance_payload_json)
     );
     node.shutdown().await.expect("node shutdown");
 }
@@ -543,7 +547,7 @@ async fn repeated_tool_output_is_stored_once_across_wire_and_native_payloads() {
     sink.capture(rendered.clone()).await.unwrap();
     let rows = block_rows(&access).await;
     let text_chunks =
-        super::super::encoding::chunk_capture_body(&serde_json::to_string(&text).unwrap());
+        gents_inference::rendered_request::encoding::chunk_capture_body(&serde_json::to_string(&text).unwrap());
     for chunk in text_chunks {
         assert_eq!(
             rows.iter()
@@ -553,9 +557,9 @@ async fn repeated_tool_output_is_stored_once_across_wire_and_native_payloads() {
         );
     }
     let row = stored_capture(&access, &rendered.capture_key).await;
-    let decoded = super::super::decode_capture_pair(
+    let decoded = gents_inference::rendered_request::decode_capture_pair(
         &access,
-        super::super::CAPTURE_VERSION,
+        gents_inference::rendered_request::CAPTURE_VERSION,
         row["request_json"].as_str().unwrap(),
     )
     .await
@@ -623,15 +627,15 @@ async fn a_shared_prefix_writes_only_new_blocks_and_a_small_manifest() {
         prefix.len()
     );
     assert_eq!(
-        super::super::decode_capture_json(
+        gents_inference::rendered_request::decode_capture_json(
             &access,
             gents_protocol::rendered_request::CAPTURE_VERSION,
             stored,
-            super::super::CapturePayloadKind::RequestBody,
+            gents_inference::rendered_request::CapturePayloadKind::RequestBody,
         )
         .await
         .unwrap(),
-        super::super::canonical_json(&second.request_json)
+        gents_inference::rendered_request::canonical_json(&second.request_json)
     );
     node.shutdown().await.expect("node shutdown");
 }
@@ -708,17 +712,17 @@ async fn manifest_entries(
     payload: &str,
 ) -> Vec<(String, String, String)> {
     let kind = if payload == "request_body" {
-        super::super::CapturePayloadKind::RequestBody
+        gents_inference::rendered_request::CapturePayloadKind::RequestBody
     } else {
-        super::super::CapturePayloadKind::ProvenancePayload
+        gents_inference::rendered_request::CapturePayloadKind::ProvenancePayload
     };
-    let record = super::super::encoding::decode_capture_record(
+    let record = gents_inference::rendered_request::encoding::decode_capture_record(
         gents_protocol::rendered_request::CAPTURE_VERSION,
         stored,
         kind,
     )
     .unwrap();
-    super::super::manifest_leaf_entries(access, record)
+    gents_inference::rendered_request::manifest_leaf_entries(access, record)
         .await
         .unwrap()
         .into_iter()
@@ -736,13 +740,13 @@ async fn deleted_blocks_never_publish_dangling_references() {
     let first = fixture.turn(0, body.clone());
     sink.capture(first.clone()).await.unwrap();
     let row = stored_capture(&access, &first.capture_key).await;
-    let record = super::super::encoding::decode_capture_record(
-        super::super::CAPTURE_VERSION,
+    let record = gents_inference::rendered_request::encoding::decode_capture_record(
+        gents_inference::rendered_request::CAPTURE_VERSION,
         row["request_json"].as_str().unwrap(),
-        super::super::CapturePayloadKind::RequestBody,
+        gents_inference::rendered_request::CapturePayloadKind::RequestBody,
     )
     .unwrap();
-    let leaves = super::super::manifest_leaf_entries(&access, record)
+    let leaves = gents_inference::rendered_request::manifest_leaf_entries(&access, record)
         .await
         .unwrap();
     let id = escape_graphql_string(&leaves[0].doc_id);
@@ -816,12 +820,12 @@ async fn shared_manifest_roots_stay_small_and_reconstruct_after_reopen() {
         let mut cache = std::collections::BTreeMap::new();
         let mut flat = Vec::new();
         for kind in [
-            super::super::CapturePayloadKind::RequestBody,
-            super::super::CapturePayloadKind::ProvenancePayload,
+            gents_inference::rendered_request::CapturePayloadKind::RequestBody,
+            gents_inference::rendered_request::CapturePayloadKind::ProvenancePayload,
         ] {
-            let super::super::encoding::DecodedRecord::Tree(tree) =
-                super::super::encoding::decode_capture_record(
-                    super::super::CAPTURE_VERSION,
+            let gents_inference::rendered_request::encoding::DecodedRecord::Tree(tree) =
+                gents_inference::rendered_request::encoding::decode_capture_record(
+                    gents_inference::rendered_request::CAPTURE_VERSION,
                     stored,
                     kind,
                 )
@@ -829,12 +833,12 @@ async fn shared_manifest_roots_stay_small_and_reconstruct_after_reopen() {
             else {
                 panic!("expected shared manifest");
             };
-            let leaves = super::super::manifest_tree_leaves(&access, &tree, &mut cache)
+            let leaves = gents_inference::rendered_request::manifest_tree_leaves(&access, &tree, &mut cache)
                 .await
                 .unwrap();
-            flat.push(super::super::encoding::encode_manifest(&leaves).unwrap());
+            flat.push(gents_inference::rendered_request::encoding::encode_manifest(&leaves).unwrap());
         }
-        flat_bytes += super::super::encoding::encode_container(&flat[0], &flat[1])
+        flat_bytes += gents_inference::rendered_request::encoding::encode_container(&flat[0], &flat[1])
             .unwrap()
             .len();
         if turn > 0 {
@@ -857,7 +861,7 @@ async fn shared_manifest_roots_stay_small_and_reconstruct_after_reopen() {
                 "turn {turn} must retain original immutable references"
             );
         }
-        let decoded = super::super::decode_capture_pair(
+        let decoded = gents_inference::rendered_request::decode_capture_pair(
             &access,
             gents_protocol::rendered_request::CAPTURE_VERSION,
             stored,
@@ -866,11 +870,11 @@ async fn shared_manifest_roots_stay_small_and_reconstruct_after_reopen() {
         .unwrap();
         assert_eq!(
             decoded.0,
-            super::super::canonical_json(&rendered.request_json)
+            gents_inference::rendered_request::canonical_json(&rendered.request_json)
         );
         assert_eq!(
             decoded.1,
-            super::super::canonical_json(&rendered.provenance_payload_json)
+            gents_inference::rendered_request::canonical_json(&rendered.provenance_payload_json)
         );
     }
     let shared_bytes = root_bytes + shared_nodes.values().sum::<usize>();
@@ -956,8 +960,8 @@ async fn concurrent_identical_captures_store_each_block_once() {
         .map(|row| row["content_key"].as_str().unwrap().to_owned())
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(rows.len(), keys.len(), "one document per content key");
-    let layout = super::super::encoding::capture_block_layout(&request_json).unwrap();
-    let chunks = super::super::encoding::chunk_capture_layout(&layout);
+    let layout = gents_inference::rendered_request::encoding::capture_block_layout(&request_json).unwrap();
+    let chunks = gents_inference::rendered_request::encoding::chunk_capture_layout(&layout);
     assert!(chunks.len() > CAPTURE_BLOCK_CREATE_BATCH);
     for chunk in chunks {
         assert!(keys.contains(&chunk.content_key));
@@ -965,15 +969,15 @@ async fn concurrent_identical_captures_store_each_block_once() {
     for rendered in &turns {
         let row = stored_capture(&access, &rendered.capture_key).await;
         assert_eq!(
-            super::super::decode_capture_json(
+            gents_inference::rendered_request::decode_capture_json(
                 &access,
-                super::super::CAPTURE_VERSION,
+                gents_inference::rendered_request::CAPTURE_VERSION,
                 row["request_json"].as_str().unwrap(),
-                super::super::CapturePayloadKind::RequestBody,
+                gents_inference::rendered_request::CapturePayloadKind::RequestBody,
             )
             .await
             .unwrap(),
-            super::super::canonical_json(&request_json)
+            gents_inference::rendered_request::canonical_json(&request_json)
         );
     }
     node.shutdown().await.expect("node shutdown");
@@ -1140,16 +1144,16 @@ async fn a_repeated_agent_loop_request_stores_only_its_appended_turn() {
         }
         first_provenance_leaf = first_leaf;
         assert_eq!(
-            super::super::decode_capture_pair(
+            gents_inference::rendered_request::decode_capture_pair(
                 &access,
-                super::super::CAPTURE_VERSION,
+                gents_inference::rendered_request::CAPTURE_VERSION,
                 row["request_json"].as_str().unwrap(),
             )
             .await
             .unwrap(),
             (
-                super::super::canonical_json(&rendered.request_json),
-                super::super::canonical_json(&rendered.provenance_payload_json)
+                gents_inference::rendered_request::canonical_json(&rendered.request_json),
+                gents_inference::rendered_request::canonical_json(&rendered.provenance_payload_json)
             )
         );
     }
@@ -1172,7 +1176,7 @@ fn the_collection_names_are_valid_graphql_identifiers() {
 
 #[tokio::test]
 async fn title_capture_uses_parent_session_and_managed_agent_native_signatures() {
-    use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
+    use gents_session::request::lifecycle::{ClaimOutcome, RequestLifecycle};
     use gents_protocol::request_admission::RequestPurpose;
 
     let fixture = CaptureFixture::new().await;
@@ -1191,7 +1195,7 @@ async fn title_capture_uses_parent_session_and_managed_agent_native_signatures()
         .unwrap()
         .to_owned();
     let parent = fixture.lifecycle.request().clone();
-    let auxiliary = crate::request::lifecycle::materialize::write_pending_auxiliary_request(
+    let auxiliary = gents_session::request::lifecycle::materialize::write_pending_auxiliary_request(
         &node,
         &parent,
         RequestPurpose::TitleAudit,
@@ -1217,7 +1221,7 @@ async fn title_capture_uses_parent_session_and_managed_agent_native_signatures()
     rendered.request_id = auxiliary.request_id.clone();
     rendered.request_commit_cid = lifecycle.request_commit_cid().unwrap().into();
     rendered.capture_scope = "title.1".into();
-    rendered.capture_key = super::super::capture_key(
+    rendered.capture_key = gents_inference::rendered_request::capture_key(
         &rendered.node_did,
         &rendered.session_id,
         &rendered.request_doc_id,
@@ -1227,7 +1231,7 @@ async fn title_capture_uses_parent_session_and_managed_agent_native_signatures()
     )
     .unwrap();
     rendered.provenance_json =
-        serde_json::to_value(super::super::ProvenanceManifest::captured_only(
+        serde_json::to_value(gents_inference::rendered_request::ProvenanceManifest::captured_only(
             rendered.capture_scope.clone(),
             None,
             None,
@@ -1281,7 +1285,7 @@ async fn title_capture_uses_parent_session_and_managed_agent_native_signatures()
             assert_eq!(actual, agent.did());
         }
     }
-    let (request, _) = super::super::decode_capture_pair(
+    let (request, _) = gents_inference::rendered_request::decode_capture_pair(
         &agent_access,
         gents_protocol::rendered_request::CAPTURE_VERSION,
         capture["request_json"].as_str().unwrap(),
@@ -1290,7 +1294,7 @@ async fn title_capture_uses_parent_session_and_managed_agent_native_signatures()
     .unwrap();
     assert_eq!(
         request,
-        super::super::canonical_json(&rendered.request_json)
+        gents_inference::rendered_request::canonical_json(&rendered.request_json)
     );
     node.shutdown().await.unwrap();
 }

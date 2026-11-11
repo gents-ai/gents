@@ -2,8 +2,8 @@ use std::{sync::Arc, time::Duration};
 
 use tokio::sync::Notify;
 
-use super::lookup_backend_observation;
-use crate::tools::builtin::defra_query::{CollectionScope, DefraQueryTool, QueryParams};
+use gents_inference::backends::registry::lookup_backend_observation;
+use gents_tools::builtin::defra_query::{CollectionScope, DefraQueryTool, QueryParams};
 use defra_node::Node as EmbeddedNode;
 use gents_loop::tool::Tool;
 use gents_store::config_client::ConfigAccess;
@@ -67,9 +67,9 @@ async fn runtime_observation_reads_do_not_wait_for_the_mutation_gate() {
     let observations = tokio::time::timeout(OBSERVATION_TIMEOUT, async {
         tokio::join!(
             lookup_backend_observation(&node, &owner, "missing"),
-            crate::session::max_sequence(&node, "missing", &owner, None),
-            crate::session::load_session_current_hop(&node, &actor, &owner, "missing"),
-            crate::tools::background::status::load_caused_request_terminals(&access, &missing_docs),
+            gents_session::session::max_sequence(&node, "missing", &owner, None),
+            gents_session::session::load_session_current_hop(&node, &actor, &owner, "missing"),
+            crate::background::status::load_caused_request_terminals(&access, &missing_docs),
             gents_documents::load_inference_profile(&node, &owner, "missing"),
             Tool::call(&query, query_args),
         )
