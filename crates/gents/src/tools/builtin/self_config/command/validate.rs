@@ -1,8 +1,8 @@
 use super::*;
-use crate::session::output_render::ordered;
 use crate::documents::{
     validate_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
+use crate::session::output_render::ordered;
 use crate::store::config_client::ConfigAccess;
 
 impl ConfigCommandTool {

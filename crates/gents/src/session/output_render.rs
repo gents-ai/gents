@@ -138,7 +138,7 @@ macro_rules! ordered {
         $crate::session::output_render::Ordered::new(vec![$($crate::session::output_render::Ordered::entry($key, &$value)),*])
     };
 }
-pub use ordered;
+pub(crate) use ordered;
 
 pub fn terminal_output_tail(source: &str, budget: usize) -> &str {
     let mut start = source.len().saturating_sub(budget);

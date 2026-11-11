@@ -788,8 +788,10 @@ impl crate::inference::llm::tool::Tool for MailboxCreateTool {
             self.surface_source.as_ref(),
         )
         .await?;
-        Ok(crate::session::output_render::render(&receipt, &["item", "outcome"])
-            .context("serialize notification receipt")?)
+        Ok(
+            crate::session::output_render::render(&receipt, &["item", "outcome"])
+                .context("serialize notification receipt")?,
+        )
     }
 }
 

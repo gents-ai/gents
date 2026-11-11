@@ -1,9 +1,9 @@
 use super::*;
-use crate::session::output_render::{ordered, Ordered};
 use crate::documents::{
     validate_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 use crate::documents::{Agent, AgentContext, BashTools, BuiltInTools, FileTools, HostTools, Tools};
+use crate::session::output_render::{ordered, Ordered};
 use crate::store::config_client::{ConfigAccess, ConfigClientError, TransactionFailure};
 use agent::admit;
 use gents_protocol::agent_identity::AgentIdentityBinding;
