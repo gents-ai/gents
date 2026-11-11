@@ -44,8 +44,13 @@ async fn canonical_config_roundtrips_scoped_references_and_preserves_explicit_de
             owner,
             json!({
                 "node_did": owner, "display_name": "Explicit configuration",
-                "default_agent_did": agent_did, "tags": ["authored"]
+                "tags": ["authored"]
             }),
+        ),
+        (
+            Collection::DefaultAgentSelection,
+            owner,
+            json!({"node_did": owner, "default_agent_did": agent_did}),
         ),
         (
             Collection::Compaction,

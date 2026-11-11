@@ -64,27 +64,21 @@ pub async fn set_test_default_agent_as(
     runtime_did: &str,
     agent_did: &str,
 ) {
+    let selection =
+        serde_json::to_value(crate::DefaultAgentSelection::new(runtime_did, agent_did)).unwrap();
+    let plan = crate::DesiredStateApplyPlan::new(vec![crate::DesiredStateApplyDocument {
+        collection: gents_store::collection::Collection::DefaultAgentSelection,
+        add: selection.clone(),
+        update: selection,
+    }])
+    .unwrap();
     access
         .transact_write("test.set_default_agent", |txn| {
+            let plan = &plan;
             Box::pin(async move {
-                let (_, mut node) = crate::read_desired_state_record_in_txn(
-                    txn,
-                    gents_store::collection::Collection::Node,
-                    runtime_did,
-                    runtime_did,
-                )
-                .await?
-                .expect("fixture user must own one Node for its runtime");
-                node["default_agent_did"] = serde_json::json!(agent_did);
-                let plan =
-                    crate::DesiredStateApplyPlan::new(vec![crate::DesiredStateApplyDocument {
-                        collection: gents_store::collection::Collection::Node,
-                        add: node.clone(),
-                        update: node,
-                    }])?;
                 crate::apply_desired_state_plan(
                     txn,
-                    &plan,
+                    plan,
                     &AdmitAllProfiles,
                 )
                 .await

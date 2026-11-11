@@ -262,6 +262,8 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , required := [Surface.agentFacing]
     , deferred :=
         [ (Surface.api, "MCP self-config surface deferred until MCP calls carry a DID (#654)")
+        , (Surface.operatorCli, "SelfConfig.agentAdmission governs CLI agent create/clone/edit/disable/default (#3656); bind once the operations-layer CLI adapter decides through it over ACP grants (#3654)")
+        , (Surface.operatorUi, "SelfConfig.agentAdmission governs desktop agent save/patch/set-default (#3656); bind once the desktop adapter decides through it over ACP grants (#3654)")
         ]
     }
   , { feature := "recovery"

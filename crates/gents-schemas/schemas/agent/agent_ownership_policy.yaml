@@ -4,8 +4,10 @@ resources:
     relations:
       - name: administrator
         types: [actor]
-        manages: [administrator, runtime_reader]
+        manages: [administrator, runtime_reader, agent_manager]
       - name: runtime_reader
+        types: [actor]
+      - name: agent_manager
         types: [actor]
     permissions:
       - name: read
@@ -14,6 +16,19 @@ resources:
         expr: administrator
       - name: delete
         expr: administrator
+      - name: manage_agents
+        expr: administrator + agent_manager
+  - name: default_agent_selections
+    relations:
+      - name: parent
+        types: [nodes]
+    permissions:
+      - name: read
+        expr: parent->read + parent->manage_agents
+      - name: update
+        expr: parent->manage_agents
+      - name: delete
+        expr: parent->delete
   - name: operations
     relations:
       - name: parent

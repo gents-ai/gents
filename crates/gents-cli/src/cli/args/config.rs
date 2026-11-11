@@ -128,6 +128,12 @@ pub(crate) enum AgentCommand {
     )]
     Disable(AgentDisableArgs),
     #[command(
+        name = "default",
+        about = "Choose the Agent that serves requests that name none",
+        long_about = "Choose the Node's default Agent through the shared agent materializer. The acting actor needs the agent catalog (manage_agents on the Node). The default must stay enabled; pass --enable to enable a disabled Agent in the same edit."
+    )]
+    Default(AgentDefaultArgs),
+    #[command(
         name = "grant-self-config",
         about = "Grant an agent permission to update its own Agent document"
     )]
@@ -137,6 +143,18 @@ pub(crate) enum AgentCommand {
         about = "Revoke an agent's permission to update its own Agent document"
     )]
     RevokeSelfConfig(AgentSelfConfigPermissionArgs),
+    #[command(
+        name = "grant-catalog",
+        about = "Let an agent create and clone agents and choose the node's default agent",
+        long_about = "Let an agent create and clone agents and choose the node's default agent. This grants the manage_agents permission on the Node (the agent_manager relation) and nothing else."
+    )]
+    GrantCatalog(AgentCatalogPermissionArgs),
+    #[command(
+        name = "revoke-catalog",
+        about = "Withdraw an agent's permission to create and clone agents and choose the default agent",
+        long_about = "Withdraw the manage_agents permission on the Node (the agent_manager relation) from an agent: it can no longer create or clone agents or choose the node's default agent. Nothing else changes."
+    )]
+    RevokeCatalog(AgentCatalogPermissionArgs),
     #[command(name = "list", about = "List Agent documents")]
     List(ConfigListArgs),
     #[command(name = "show", about = "Show an Agent document")]
@@ -486,7 +504,32 @@ pub(crate) struct AgentDisableArgs {
 }
 
 #[derive(clap::Args)]
+pub(crate) struct AgentDefaultArgs {
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: String,
+    #[arg(
+        long,
+        help = "Enable the Agent in the same edit, so a disabled Agent can become the default"
+    )]
+    pub(crate) enable: bool,
+    #[arg(value_name = "AGENT_DID")]
+    pub(crate) agent_did: String,
+}
+
+#[derive(clap::Args)]
 pub(crate) struct AgentSelfConfigPermissionArgs {
+    #[arg(long)]
+    pub(crate) graphql: String,
+    #[arg(long)]
+    pub(crate) node_did: String,
+    #[arg(value_name = "AGENT_DID")]
+    pub(crate) agent_did: String,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct AgentCatalogPermissionArgs {
     #[arg(long)]
     pub(crate) graphql: String,
     #[arg(long)]

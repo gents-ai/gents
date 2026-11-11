@@ -58,7 +58,7 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
     )?;
     let config_path = root.join("pack_config.json");
     let mut config = read_json_file(&config_path)?;
-    let agent_did = config["node"]
+    let agent_did = config["default_agent_selection"]
         .get("default_agent_did")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("exported bundle missing default_agent_did"))?
@@ -275,7 +275,7 @@ async fn config_task_run_rejects_disabled_task() -> Result<()> {
     )?;
     let config_path = root.join("pack_config.json");
     let mut config = read_json_file(&config_path)?;
-    let agent_did = config["node"]
+    let agent_did = config["default_agent_selection"]
         .get("default_agent_did")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("exported bundle missing default_agent_did"))?

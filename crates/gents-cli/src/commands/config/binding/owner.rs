@@ -14,6 +14,9 @@ fn document_roots() -> impl Iterator<Item = &'static str> {
 pub(super) fn manifest_node_dids(config: &PackConfig) -> Result<BTreeSet<String>> {
     let value = serde_json::to_value(config)?;
     let mut owners = BTreeSet::from([config.node.node_did.clone()]);
+    if let Some(selection) = &config.default_agent_selection {
+        owners.insert(selection.node_did.clone());
+    }
     for root in document_roots() {
         for row in value[root].as_array().into_iter().flatten() {
             owners.insert(
@@ -54,6 +57,12 @@ pub(super) fn rebind_manifest_node_did(config: &mut PackConfig, target: &str) ->
     let source_owners = manifest_node_dids(config)?;
     let mut value = serde_json::to_value(&*config)?;
     value["node"]["node_did"] = Value::String(target.to_owned());
+    if let Some(selection) = value
+        .get_mut("default_agent_selection")
+        .filter(|v| v.is_object())
+    {
+        selection["node_did"] = Value::String(target.to_owned());
+    }
     for root in document_roots() {
         for row in value[root].as_array_mut().into_iter().flatten() {
             row["node_did"] = Value::String(target.to_owned());

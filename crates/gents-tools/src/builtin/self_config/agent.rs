@@ -4,13 +4,27 @@ use anyhow::{ensure, Result};
 use gents_documents::patch::SelfConfigPatch;
 use gents_documents::{Agent, AgentContext, InferenceBackend, InferenceProfile};
 use gents_protocol::operations::agent::AgentOperationError;
+use serde_json::Value;
 
+/// Lean `SelfConfig.AgentCatalog`: the node's Agents with their `enabled`
+/// value, the current default read authoritatively, and the published
+/// inference profiles.
 #[derive(Clone, Debug, Default)]
 pub struct AgentCatalogView {
     pub agents: BTreeMap<String, bool>,
-    pub protected_ids: BTreeSet<String>,
     pub default_id: Option<String>,
     pub published_profiles: BTreeSet<String>,
+}
+
+/// Lean `SelfConfig.Actor` with its `ActorGrants`, as native ACP answers for
+/// the acting DID: `catalog` is `nodes manage_agents` on the Node, and
+/// `configures` holds the Agents whose document it may update. Admission
+/// reads nothing else about the actor.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AgentActor {
+    pub did: String,
+    pub catalog: bool,
+    pub configures: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -28,6 +42,18 @@ pub enum AgentOperation {
     Disable,
 }
 
+/// Lean `SelfConfig.agentEditKeys`: every writable Agent field, and
+/// `system_prompt`, which writes the Agent's selected Context.
+pub const AGENT_EDIT_FIELDS: &[&str] = &[
+    "display_name",
+    "description",
+    "system_prompt",
+    "inference_profile_id",
+    "context_id",
+    "enabled",
+    "tags",
+];
+
 pub(super) fn admit(
     admitted: bool,
     refusal: AgentOperationError,
@@ -39,14 +65,55 @@ pub(super) fn admit(
     }
 }
 
+impl AgentOperation {
+    /// Lean `AgentOperation.normalize`: disable is the edit `enabled := false`.
+    pub fn edit_fields(&self) -> Option<SelfConfigPatch> {
+        match self {
+            Self::Create(_) => None,
+            Self::Edit(patch) => Some(patch.clone()),
+            Self::Disable => Some(vec![("enabled".to_owned(), Some(Value::Bool(false)))]),
+        }
+    }
+
+    /// Lean `AgentRequest.writesEnabled`. A cleared `enabled` stores the
+    /// field's default, which is enabled.
+    fn writes_enabled(&self) -> Option<bool> {
+        match self.edit_fields() {
+            None => Some(true),
+            Some(patch) => patch
+                .iter()
+                .rev()
+                .find(|(field, _)| field == "enabled")
+                .map(|(_, value)| value.as_ref().and_then(Value::as_bool).unwrap_or(true)),
+        }
+    }
+}
+
+/// Lean `SelfConfig.enabledAfter` for the request's target.
+fn enabled_after(view: &AgentCatalogView, op: &AgentOperation, target: &str) -> bool {
+    op.writes_enabled()
+        .unwrap_or_else(|| view.agents.get(target) == Some(&true))
+}
+
+/// Lean `SelfConfig.agentAdmission`: the one admission for create, clone,
+/// edit, disable and choosing the default, whoever asks and through whichever
+/// front end. Checks run in the model's order and the first failure is the
+/// refusal: the catalog, the target and the input, the agent category on the
+/// target, then the two lockout rules.
 pub fn decide_agent_operation(
     view: &AgentCatalogView,
+    actor: &AgentActor,
     op: &AgentOperation,
     target: &str,
     make_default: bool,
 ) -> Result<(), AgentOperationError> {
-    match op {
-        AgentOperation::Create(input) => {
+    let fields = op.edit_fields();
+    admit(
+        !(make_default || fields.is_none()) || actor.catalog,
+        AgentOperationError::CatalogNotHeld,
+    )?;
+    match (op, &fields) {
+        (AgentOperation::Create(input), _) => {
             admit(
                 !view.agents.contains_key(target),
                 AgentOperationError::AgentExists(target.to_owned()),
@@ -72,21 +139,14 @@ pub fn decide_agent_operation(
                 AgentOperationError::CloneSourceNotEnabled,
             )?;
         }
-        AgentOperation::Edit(patch) => {
+        (_, Some(patch)) => {
             admit(
                 view.agents.contains_key(target),
                 AgentOperationError::AgentMissing(target.to_owned()),
             )?;
-            admit(
-                !view.protected_ids.contains(target),
-                AgentOperationError::ProtectedAgentEdit,
-            )?;
             for (field, value) in patch {
                 admit(
-                    matches!(
-                        field.as_str(),
-                        "display_name" | "description" | "system_prompt" | "inference_profile_id"
-                    ),
+                    AGENT_EDIT_FIELDS.contains(&field.as_str()),
                     AgentOperationError::UnsupportedEditField(field.clone()),
                 )?;
                 match (field.as_str(), value) {
@@ -104,26 +164,35 @@ pub fn decide_agent_operation(
                         }),
                         AgentOperationError::ProfileNotPublished,
                     )?,
+                    ("context_id", Some(value)) => admit(
+                        value.as_str().is_some_and(|s| !s.trim().is_empty()),
+                        AgentOperationError::ContextIdBlank,
+                    )?,
                     _ => {}
                 }
             }
         }
-        AgentOperation::Disable => {
-            admit(
-                view.agents.contains_key(target),
-                AgentOperationError::AgentMissing(target.to_owned()),
-            )?;
-            admit(
-                !view.protected_ids.contains(target),
-                AgentOperationError::ProtectedAgentDisable,
-            )?;
-            admit(!make_default, AgentOperationError::DisableMakesDefault)?;
-            admit(
-                view.default_id.as_deref() != Some(target),
-                AgentOperationError::DefaultAgentDisable,
-            )?;
-        }
+        (_, None) => {}
     }
+    admit(
+        !fields.as_ref().is_some_and(|patch| !patch.is_empty())
+            || actor.configures.contains(target),
+        AgentOperationError::AgentNotHeld(target.to_owned()),
+    )?;
+    let enabled_after = enabled_after(view, op, target);
+    let default_after = if make_default {
+        Some(target)
+    } else {
+        view.default_id.as_deref()
+    };
+    admit(
+        !(default_after == Some(target) && !enabled_after),
+        AgentOperationError::DefaultAgentDisabled(target.to_owned()),
+    )?;
+    admit(
+        !(target == actor.did && !enabled_after),
+        AgentOperationError::SelfDisable,
+    )?;
     Ok(())
 }
 
@@ -147,14 +216,15 @@ pub struct MaterializedAgentSession {
 
 pub fn materialize_agent(
     view: &AgentCatalogView,
+    actor: &AgentActor,
     op: &AgentOperation,
     target: &str,
     make_default: bool,
     candidate: &AgentCandidate,
     node_did: &str,
 ) -> Option<MaterializedAgentSession> {
-    decide_agent_operation(view, op, target, make_default).ok()?;
-    if matches!(op, AgentOperation::Disable) {
+    decide_agent_operation(view, actor, op, target, make_default).ok()?;
+    if !enabled_after(view, op, target) {
         return None;
     }
     let agent = candidate
@@ -192,15 +262,14 @@ pub fn materialize_agent(
 
 pub struct SiblingToolsTarget {
     pub owner_matches: bool,
-    pub protected: bool,
     pub shared_context: bool,
     pub shared_tools: bool,
 }
 
 pub fn admit_sibling_tools_target(target: &SiblingToolsTarget) -> Result<()> {
     ensure!(
-        target.owner_matches && !target.protected && !target.shared_context && !target.shared_tools,
-        "sibling tools require an owned unprotected agent with unshared Context and Tools"
+        target.owner_matches && !target.shared_context && !target.shared_tools,
+        "sibling tools require an owned agent with unshared Context and Tools"
     );
     Ok(())
 }

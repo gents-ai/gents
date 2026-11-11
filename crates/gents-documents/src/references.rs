@@ -337,11 +337,17 @@ impl ConfigReferences {
             }
         }
         match collection {
-            Collection::Node => {
-                let doc: Node = decode(value)?;
-                if let Some(default) = doc.default_agent_did.as_deref() {
-                    let agent: Agent =
-                        decode(&self.documents[&(Collection::Agent, default.to_owned())])?;
+            Collection::Node => {}
+            Collection::DefaultAgentSelection => {
+                let doc: DefaultAgentSelection = decode(value)?;
+                if let Some(default) = doc.selected() {
+                    let agent: Agent = decode(
+                        self.documents
+                            .get(&(Collection::Agent, default.to_owned()))
+                            .with_context(|| {
+                                format!("default agent {default:?} of {} missing", self.node_did)
+                            })?,
+                    )?;
                     ensure!(
                         agent.enabled,
                         "Agent {default:?} is the default agent of {} and must be \
@@ -554,9 +560,9 @@ pub fn references_of(
         })
     };
     match collection {
-        Collection::Node => {
-            let doc: Node = decode(value)?;
-            if let Some(id) = doc.default_agent_did.as_deref() {
+        Collection::DefaultAgentSelection => {
+            let doc: DefaultAgentSelection = decode(value)?;
+            if let Some(id) = doc.selected() {
                 push(Collection::Agent, id, "default_agent_did");
             }
         }
@@ -718,7 +724,8 @@ pub fn references_of(
             );
             push(Collection::Callback, &doc.callback_id, "callback_id");
         }
-        Collection::InferenceBackend
+        Collection::Node
+        | Collection::InferenceBackend
         | Collection::InferenceSampling
         | Collection::InferenceRetryPolicy
         | Collection::DatastoreToolSurface

@@ -6,8 +6,8 @@ use gents_pack::pack::HomePackInstall;
 use serde_json::json;
 
 async fn selected_agent(access: &gents_store::config_client::ConfigAccess, owner: &str) -> String {
-    let value = access.execute(&format!("{{ Node(filter: {{ node_did: {{ _eq: \"{}\" }} }}, limit: 1) {{ default_agent_did }} }}", gents_store::graphql::escape_graphql_string(owner))).await.unwrap();
-    value["data"]["Node"][0]["default_agent_did"]
+    let value = access.execute(&format!("{{ DefaultAgentSelection(filter: {{ node_did: {{ _eq: \"{}\" }} }}, limit: 1) {{ default_agent_did }} }}", gents_store::graphql::escape_graphql_string(owner))).await.unwrap();
+    value["data"]["DefaultAgentSelection"][0]["default_agent_did"]
         .as_str()
         .expect("initialized default agent")
         .to_owned()

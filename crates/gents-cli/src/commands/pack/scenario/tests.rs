@@ -191,7 +191,7 @@ fn scenario_staging_preserves_slots_until_runtime_installation() {
         &std::fs::read(staged.path().join(distribution.config.as_ref().unwrap())).unwrap(),
     )
     .unwrap();
-    assert!(config["node"]["default_agent_did"].is_null());
+    assert!(config.get("default_agent_selection").is_none());
     assert!(staged.path().join("manifest.json").is_file());
     for agent in config["agents"].as_array().unwrap() {
         assert!(agent["agent_slot"].is_string());
@@ -223,7 +223,8 @@ fn scenario_refuses_a_pack_that_selects_the_default_agent() {
     validate_scenario_defaults(authored_pack.path()).unwrap();
     let config_path = authored_pack.path().join("pack_config.json");
     let mut config: Value = serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
-    config["node"]["default_agent_did"] = json!("fixture-worker");
+    config["default_agent_selection"] =
+        json!({"node_did": config["node"]["node_did"], "default_agent_did": "fixture-worker"});
     std::fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
 
     let error = format!(

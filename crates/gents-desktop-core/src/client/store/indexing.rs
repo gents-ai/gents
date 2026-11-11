@@ -174,6 +174,7 @@ impl ClientStore {
 
         Self {
             nodes: rows.nodes,
+            default_agent_selections: rows.default_agent_selections,
             agents: rows.agents,
             runtimes: rows.runtimes,
             node_readiness: rows.node_readiness,

@@ -10,9 +10,9 @@ open SelfConfig SelfConfig.ContractCases
 private def agentBool (b : Bool) : String :=
   if b then "true" else "false"
 
-private def agentOpName : AgentOp → String
-  | .create => "create"
-  | .edit => "edit"
+private def agentOpName : AgentOperation → String
+  | .create _ => "create"
+  | .edit _ => "edit"
   | .disable => "disable"
 
 private def agentCreateInputJson (i : AgentCreateInput) : String :=
@@ -23,35 +23,77 @@ private def agentCreateInputJson (i : AgentCreateInput) : String :=
     ++ "\"clone_from\":" ++ jsonString i.cloneFrom
   ++ "}"
 
+/-- The edit as patch entries in `agentEditKeys` order. `enabled` is the JSON
+text `true` or `false`, and `tags` a JSON array text, as in `self_config_cases`. -/
 private def agentEditPatchJson (f : AgentEditFields) : String :=
   let entries : List (FieldKey × Option PatchOp) :=
-    [("display_name", f.name), ("system_prompt", f.systemPrompt),
-     ("inference_profile_id", f.profile)]
+    [("display_name", f.name), ("description", f.description),
+     ("system_prompt", f.systemPrompt), ("inference_profile_id", f.profile),
+     ("context_id", f.contextId),
+     ("enabled", f.enabled.map fun b => .set (if b then "true" else "false")),
+     ("tags", f.tags)]
   jsonArray (entries.filterMap fun (k, op) => op.map fun op =>
     selfConfigPatchEntryJson (k, op.value))
+
+private def actorKindName : ActorKind → String
+  | .person => "person"
+  | .agent => "agent"
+
+private def frontEndName : FrontEnd → String
+  | .tool => "tool"
+  | .cli => "cli"
+  | .desktop => "desktop"
+
+def agentRefusalName : AgentRefusal → String
+  | .catalogNotHeld => "catalog_not_held"
+  | .agentNotHeld => "agent_not_held"
+  | .targetExists => "target_exists"
+  | .targetMissing => "target_missing"
+  | .invalidInput => "invalid_input"
+  | .defaultDisabled => "default_disabled"
+  | .selfLockout => "self_lockout"
+
+/-- The acting actor and the grants native ACP gives it
+(`SelfConfig.actorGrantsOf`): `catalog` is `nodes manage_agents` on the Node and
+`configures` the Agents whose document it may update. -/
+private def actorJson (a : Actor) : String :=
+  "{"
+    ++ "\"did\":" ++ jsonString a.did ++ ","
+    ++ "\"kind\":" ++ jsonString (actorKindName a.kind) ++ ","
+    ++ "\"catalog\":" ++ agentBool a.grants.catalog ++ ","
+    ++ "\"configures\":" ++ jsonStringArray a.grants.configures
+  ++ "}"
 
 private def agentDecisionRowFields (r : AgentDecisionRow) : String :=
     "\"name\":" ++ jsonString r.name ++ ","
     ++ "\"agents\":" ++ jsonArray (r.catalog.agents.map fun a =>
-        "{\"agent_did\":" ++ jsonString a.1 ++ ",\"enabled\":" ++ agentBool a.2 ++ "}") ++ ","
-    ++ "\"protected_ids\":" ++ jsonStringArray r.catalog.protectedIds ++ ","
+        "{\"agent_did\":" ++ jsonString a.id ++ ",\"enabled\":" ++ agentBool a.enabled
+          ++ ",\"tags\":" ++ jsonStringArray a.tags ++ "}") ++ ","
     ++ "\"default_id\":" ++ (match r.catalog.defaultId with
         | some id => jsonString id
         | none => "null") ++ ","
     ++ "\"published_profiles\":" ++ jsonStringArray r.profiles ++ ","
-    ++ "\"operation\":" ++ jsonString (agentOpName r.operation.op) ++ ","
-    ++ "\"target\":" ++ jsonString r.target ++ ","
-    ++ "\"make_default\":" ++ agentBool r.makeDefault ++ ","
-    ++ "\"create_input\":" ++ (match r.operation with
+    ++ "\"actor\":" ++ actorJson r.actor ++ ","
+    ++ "\"front_ends\":" ++ jsonStringArray ([FrontEnd.tool, .cli, .desktop].map frontEndName) ++ ","
+    ++ "\"operation\":" ++ jsonString (agentOpName r.request.operation) ++ ","
+    ++ "\"target\":" ++ jsonString r.request.target ++ ","
+    ++ "\"make_default\":" ++ agentBool r.request.makeDefault ++ ","
+    ++ "\"create_input\":" ++ (match r.request.operation with
         | .create i => agentCreateInputJson i
         | _ => "null") ++ ","
-    ++ "\"edit_patch\":" ++ (match r.operation with
+    ++ "\"edit_patch\":" ++ (match r.request.operation with
         | .edit f => agentEditPatchJson f
         | _ => "null")
 
+/-- `accepted` and `refusal` hold for every front end in `front_ends`
+(`SelfConfig.admission_ignores_front_end`); a refused preview reports the same
+`refusal` as a successful answer (`SelfConfig.preview_refusal_matches_commit`). -/
 private def agentDecisionCaseJson (w : AgentDecisionWitness) : String :=
   "{" ++ agentDecisionRowFields w.row ++ ","
-    ++ "\"accepted\":" ++ agentBool w.accepted
+    ++ "\"accepted\":" ++ agentBool w.accepted ++ ","
+    ++ "\"refusal\":" ++ (match w.admission with
+        | .error e => jsonString (agentRefusalName e)
+        | .ok _ => "null")
   ++ "}"
 
 def agentDecisionCasesJson : String :=
@@ -108,8 +150,8 @@ def agentMaterializationCasesJson : String :=
     "{" ++ agentDecisionRowFields { r.decision with name := r.name } ++ ","
       ++ "\"candidate\":" ++ candidateFixtureJson workerFixture ++ ","
       ++ "\"session\":" ++ resolvedSessionJson
-        (materializedAgent r.decision.profiles r.decision.catalog r.decision.operation
-          r.decision.target r.decision.makeDefault workerFixture.registry workerFixture.nodeDid)
+        (materializedAgent r.decision.profiles r.decision.catalog r.decision.actor
+          r.decision.request workerFixture.registry workerFixture.nodeDid)
     ++ "}")
 
 private def networkName : CommandPolicy.NetworkMode → String
@@ -124,21 +166,19 @@ private def optionalNetworkJson : Option CommandPolicy.NetworkMode → String
 def siblingToolsOperations : List SiblingToolsOperation := Id.run do
   let mut rows : List SiblingToolsOperation := []
   for owner in [true, false] do
-    for isProtected in [false, true] do
-      for sharedContext in [false, true] do
-        for sharedTools in [false, true] do
-          for requested in [none, some .inherit, some .disabled, some .enabled] do
-            for existing in [CommandPolicy.NetworkMode.inherit, .disabled, .enabled] do
-              rows := rows ++ [{ ownerMatches := owner, isProtected := isProtected
-                               , sharedContext := sharedContext, sharedTools := sharedTools
-                               , requestedNetwork := requested
-                               , existingNetwork := existing }]
+    for sharedContext in [false, true] do
+      for sharedTools in [false, true] do
+        for requested in [none, some .inherit, some .disabled, some .enabled] do
+          for existing in [CommandPolicy.NetworkMode.inherit, .disabled, .enabled] do
+            rows := rows ++ [{ ownerMatches := owner
+                             , sharedContext := sharedContext, sharedTools := sharedTools
+                             , requestedNetwork := requested
+                             , existingNetwork := existing }]
   return rows
 
 private def siblingToolsCaseJson (op : SiblingToolsOperation) : String :=
   "{"
     ++ "\"owner_matches\":" ++ agentBool op.ownerMatches ++ ","
-    ++ "\"protected\":" ++ agentBool op.isProtected ++ ","
     ++ "\"shared_context\":" ++ agentBool op.sharedContext ++ ","
     ++ "\"shared_tools\":" ++ agentBool op.sharedTools ++ ","
     ++ "\"requested_network\":" ++ optionalNetworkJson op.requestedNetwork ++ ","

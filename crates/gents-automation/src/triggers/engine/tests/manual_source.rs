@@ -42,7 +42,8 @@ async fn production_materializer_persists_event_source_document_lineage() {
     let owner = behavior.node_did();
     let agent_did = behavior.agent_did.clone();
     let config = serde_json::from_value(serde_json::json!({
-        "node":{"node_did":owner,"default_agent_did":agent_did},
+        "node":{"node_did":owner},
+        "default_agent_selection":{"node_did":owner,"default_agent_did":agent_did},
         "tasks":[{"node_did":owner,"task_id":"task-event","agent_did":agent_did,"prompt_template":"event body"}],
         "event_sources":[{"node_did":owner,"event_source_id":"source","source_collection":"AgentRequest","event_kind":"created"}],
         "triggers":[{"node_did":owner,"trigger_id":"event-trigger","task_id":"task-event","source":{"kind":"event","event_source_id":"source"}}]
@@ -131,7 +132,8 @@ async fn production_event_fire_into_a_paired_client_session_adopts_its_requester
     let agent_did = behavior.agent_did.clone();
     let agent = agent_access(&node, &behavior);
     let config = serde_json::from_value(serde_json::json!({
-        "node":{"node_did":owner,"default_agent_did":agent_did},
+        "node":{"node_did":owner},
+        "default_agent_selection":{"node_did":owner,"default_agent_did":agent_did},
         "tasks":[{"node_did":owner,"task_id":"task-lead","agent_did":agent_did,"prompt_template":"continue the lead"}],
         "event_sources":[{"node_did":owner,"event_source_id":"outcomes","source_collection":"AgentRequest","event_kind":"created"}],
         "triggers":[{"node_did":owner,"trigger_id":"lead-outcomes","task_id":"task-lead","source":{"kind":"event","event_source_id":"outcomes"},"session_id_template":"{{ doc.session_id }}"}]
@@ -292,7 +294,8 @@ async fn production_schedule_materialization_passes_final_exact_config_admission
     let owner = behavior.node_did();
     let agent_did = behavior.agent_did.clone();
     let config = serde_json::from_value(serde_json::json!({
-        "node":{"node_did":owner,"default_agent_did":agent_did},
+        "node":{"node_did":owner},
+        "default_agent_selection":{"node_did":owner,"default_agent_did":agent_did},
         "tasks":[{"node_did":owner,"task_id":"task-schedule","agent_did":agent_did,"prompt_template":"schedule body"}],
         "schedules":[{"node_did":owner,"schedule_id":"source","cadence":{"kind":"interval","interval_secs":60}}],
         "triggers":[{"node_did":owner,"trigger_id":"schedule-trigger","task_id":"task-schedule","source":{"kind":"schedule","schedule_id":"source"}}]

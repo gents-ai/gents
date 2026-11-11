@@ -280,16 +280,11 @@ async fn apply_pack_after_ready(
         }
     }
     let report = crate::commands::pack::cli_process::run_cli_json(&executable, &arguments).await?;
-    let access = ConfigAccess::local(node);
+    let access = ConfigAccess::local(node.clone());
     let (expected_default_agent_did, expected_agent_dids) = if manifest_pack {
-        let selected = access.execute(&format!(
-            "{{ Node(filter: {{ node_did: {{ _eq: \"{}\" }} }}, limit: 1) {{ default_agent_did }} }}",
-            gents_store::graphql::escape_graphql_string(&owner),
-        )).await?;
-        let default_agent = selected["data"]["Node"][0]["default_agent_did"]
-            .as_str()
-            .context("initialized node has no default agent")?
-            .to_owned();
+        let default_agent = gents_documents::load_default_agent_did(&node, &owner)
+            .await?
+            .context("initialized node has no default agent")?;
         let agents = report
             .pointer("/apply/agents")
             .and_then(Value::as_object)
@@ -314,12 +309,17 @@ async fn apply_pack_after_ready(
         })
         .await?
         .require_valid()?;
-        let default_agent = bound
+        let default_agent = match bound
             .manifest
-            .node
-            .default_agent_did
-            .clone()
-            .context("applied pack has no default agent")?;
+            .default_agent_selection
+            .as_ref()
+            .and_then(|selection| selection.selected())
+        {
+            Some(selected) => selected.to_owned(),
+            None => gents_documents::load_default_agent_did(&node, &owner)
+                .await?
+                .context("applied pack has no default agent")?,
+        };
         (
             default_agent,
             bound

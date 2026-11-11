@@ -1,5 +1,8 @@
 pub const NODE_NAME: &str = "Node";
 pub const NODE: &str = include_str!("../schemas/agent/node.graphql");
+pub const DEFAULT_AGENT_SELECTION_NAME: &str = "DefaultAgentSelection";
+pub const DEFAULT_AGENT_SELECTION: &str =
+    include_str!("../schemas/agent/default_agent_selection.graphql");
 pub const AGENT_NAME: &str = "Agent";
 pub const AGENT: &str = include_str!("../schemas/agent/agent.graphql");
 pub const AGENT_CONTEXT_NAME: &str = "AgentContext";
@@ -27,7 +30,7 @@ pub const AGENT_SESSION: &str = include_str!("../schemas/agent/agent_session.gra
 pub const AGENT_OWNERSHIP_POLICY: &str =
     include_str!("../schemas/agent/agent_ownership_policy.yaml");
 pub const AGENT_OWNERSHIP_POLICY_ID: &str =
-    "202ce2df1b18d27183b29b653e2c06654178b2e79d4d6b93229d0c706380e71e";
+    "ac7d6625bfe087880ab77635e5da9c48fe1ee5f9152748018a63c0d9a75ceb70";
 pub const SESSION_POLICY_RESOURCE: &str = "sessions";
 pub const GOAL_NAME: &str = "Goal";
 pub const GOAL: &str = include_str!("../schemas/agent/goal.graphql");
@@ -209,6 +212,7 @@ pub const GOAL_OBSERVATION: &str = include_str!("../schemas/agent/goal_observati
 
 pub const ALL: &[&str] = &[
     NODE,
+    DEFAULT_AGENT_SELECTION,
     AGENT,
     COMPACTION_CONFIG,
     AGENT_CONTEXT,
@@ -292,6 +296,7 @@ pub const ALL: &[&str] = &[
 
 pub const ALL_COLLECTION_NAMES: &[&str] = &[
     NODE_NAME,
+    DEFAULT_AGENT_SELECTION_NAME,
     AGENT_NAME,
     COMPACTION_CONFIG_NAME,
     AGENT_CONTEXT_NAME,

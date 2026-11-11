@@ -3133,7 +3133,11 @@ impl OwnedCaptureFixture {
         let mut docs = vec![
             (
                 gents_store::collection::Collection::Node,
-                serde_json::json!({"node_did":root.did(),"enabled":true,"default_agent_did":binding.agent_did}),
+                serde_json::json!({"node_did":root.did(),"enabled":true}),
+            ),
+            (
+                gents_store::collection::Collection::DefaultAgentSelection,
+                serde_json::json!({"node_did":root.did(),"default_agent_did":binding.agent_did}),
             ),
             (
                 gents_store::collection::Collection::InferenceBackend,

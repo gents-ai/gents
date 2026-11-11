@@ -22,9 +22,9 @@ use std::sync::Arc;
 
 use gents_documents::{
     Agent, AgentContext, AgentTargetDocument, CompactionConfig, DatastoreToolSurfaceDocument,
-    EventSource, InferenceBackend, InferenceBackendObservation, InferenceExecution,
-    InferenceProfile, InferenceSampling, Node, Schedule, ScheduleObservation, SkillDocument, Task,
-    ToolServiceRegistry, Tools, Trigger, TriggerObservation,
+    DefaultAgentSelection, EventSource, InferenceBackend, InferenceBackendObservation,
+    InferenceExecution, InferenceProfile, InferenceSampling, Node, Schedule, ScheduleObservation,
+    SkillDocument, Task, ToolServiceRegistry, Tools, Trigger, TriggerObservation,
 };
 use gents_protocol::client_protocol::ClientTurnState;
 use gents_protocol::output::rows::{OutputSegmentRow, TranscriptMessageRow};
@@ -43,6 +43,7 @@ pub(crate) use self::scope::StoreScope;
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ClientStoreRows {
     pub nodes: Vec<Node>,
+    pub default_agent_selections: Vec<DefaultAgentSelection>,
     pub agents: Vec<Agent>,
     pub runtimes: Vec<NodeRuntimeRow>,
     pub node_readiness: Vec<NodeReadinessRow>,
@@ -123,6 +124,7 @@ pub struct ClientStoreRows {
 #[derive(Debug, Clone)]
 pub struct ClientStore {
     pub nodes: Vec<Node>,
+    pub default_agent_selections: Vec<DefaultAgentSelection>,
     pub agents: Vec<Agent>,
     pub runtimes: Vec<NodeRuntimeRow>,
     pub node_readiness: Vec<NodeReadinessRow>,

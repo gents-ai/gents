@@ -293,7 +293,8 @@ mod tests {
             },
         )?;
         let served = crate::shared::test_support::served_config(json!({
-            "node": { "node_did": did, "default_agent_did": "engineer" },
+            "node": { "node_did": did },
+            "default_agent_selection": { "node_did": did, "default_agent_did": "engineer" },
             "inference_backends": [{
                 "node_did": did,
                 "backend_id": "backend",

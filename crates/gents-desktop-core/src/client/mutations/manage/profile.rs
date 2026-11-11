@@ -8,8 +8,9 @@ use gents_store::collection::Collection;
 use gents_store::config_client::ConfigAccess;
 
 /// Profiles can be shared by other agents and compaction. Selecting a model
-/// replaces only this agent's binding, preserving those consumers and all
-/// unrelated configuration in the same transaction.
+/// replaces only this agent's binding, preserving those consumers. The
+/// binding is an Agent edit admitted by the operations layer
+/// (`edit_in_txn`) in the same transaction as the profile it may create.
 pub async fn select_agent_model_on(
     access: &ConfigAccess,
     node_did: &str,
@@ -19,11 +20,21 @@ pub async fn select_agent_model_on(
     reasoning_effort: Option<gents_documents::inference_defaults::ReasoningEffort>,
     service_tier: Option<gents_inference::resolved::ServiceTier>,
 ) -> Result<InferenceProfile> {
+    use gents::operations::agent::{edit_in_txn, observe};
+    use gents_protocol::operations::agent::AgentEdit;
+    use gents_protocol::operations::StringUpdate;
+
+    use super::principal::agent_failure;
+
     anyhow::ensure!(!model_name.trim().is_empty(), "Choose a model.");
+    let admission = observe(access, node_did, &[agent_did.to_owned()])
+        .await
+        .map_err(agent_failure)?;
     access
         .transact_write("desktop.agent.model", |txn| {
+            let admission = &admission;
             Box::pin(async move {
-                let (_, mut agent) =
+                let (_, agent) =
                     read_desired_state_record_in_txn(txn, Collection::Agent, node_did, agent_did)
                         .await?
                         .context("The selected agent no longer exists.")?;
@@ -55,7 +66,6 @@ pub async fn select_agent_model_on(
                     comparable.description = candidate.description.clone();
                     comparable == *candidate
                 });
-                let mut documents = Vec::new();
                 if let Some(existing) = reusable {
                     selected = existing;
                 } else {
@@ -63,24 +73,24 @@ pub async fn select_agent_model_on(
                     selected.display_name = Some(selected.model_name.clone());
                     selected.description = None;
                     let value = serde_json::to_value(&selected)?;
-                    documents.push(DesiredStateApplyDocument {
-                        collection: Collection::InferenceProfile,
-                        add: value.clone(),
-                        update: value,
-                    });
+                    apply_desired_state_plan(
+                        txn,
+                        &DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+                            collection: Collection::InferenceProfile,
+                            add: value.clone(),
+                            update: value,
+                        }])?,
+                        &gents_inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await?;
                 }
-                agent["inference_profile_id"] = selected.profile_id.clone().into();
-                documents.push(DesiredStateApplyDocument {
-                    collection: Collection::Agent,
-                    add: agent.clone(),
-                    update: agent,
-                });
-                apply_desired_state_plan(
-                    txn,
-                    &DesiredStateApplyPlan::new(documents)?,
-                    &gents_inference::resolved::ProviderProfilePolicy,
-                )
-                .await?;
+                let binding = AgentEdit {
+                    inference_profile_id: StringUpdate::Set(selected.profile_id.clone()),
+                    ..Default::default()
+                };
+                edit_in_txn(txn, node_did, admission, agent_did, &binding)
+                    .await
+                    .map_err(agent_failure)?;
                 Ok(selected)
             })
         })
