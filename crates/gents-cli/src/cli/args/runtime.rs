@@ -52,8 +52,14 @@ pub(crate) struct McpRegisterArgs {
     pub(crate) description: Option<String>,
     #[arg(long, value_name = "VERSION", default_value = "unversioned")]
     pub(crate) version: String,
-    #[arg(long, action = ArgAction::SetTrue)]
-    pub(crate) send_node_did: bool,
+    /// Send this Node's DID to the service. Omitted, a new service does not
+    /// receive it and a registered one keeps its setting.
+    #[arg(long, num_args = 0..=1, default_missing_value = "true")]
+    pub(crate) send_node_did: Option<bool>,
+    /// Enable or disable the service. Omitted, a new service starts enabled
+    /// and a registered one keeps its state.
+    #[arg(long, num_args = 0..=1, default_missing_value = "true")]
+    pub(crate) enabled: Option<bool>,
 }
 
 #[derive(clap::Args)]

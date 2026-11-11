@@ -27,41 +27,9 @@ pub(crate) async fn dispatch(command: McpCommand) -> Result<()> {
 }
 
 async fn mcp_register(args: McpRegisterArgs) -> Result<()> {
-    let service_id = args.service.trim();
-    if service_id.is_empty() {
-        anyhow::bail!("SERVICE must be a non-empty service id");
-    }
-    let endpoint = gents_documents::ToolServiceRegistry::parse_endpoint_url(&args.endpoint)
-        .map_err(|error| anyhow::anyhow!("--endpoint: {error}"))?;
-    let host = endpoint
-        .host_str()
-        .filter(|host| !host.trim().is_empty())
-        .context("--endpoint must contain a host")?;
-    // HTTPS cannot be rebuilt from address fields (TLS names the host), so it is
-    // stored verbatim; plain HTTP keeps address selection across LAN and tailnet.
-    let endpoint_url = (endpoint.scheme() == "https").then(|| endpoint.to_string());
-    let port = match endpoint_url {
-        Some(_) => None,
-        None => Some(
-            endpoint
-                .port_or_known_default()
-                .context("--endpoint must contain a port")?,
-        ),
-    };
-    let path = match (&endpoint_url, endpoint.path().trim()) {
-        (Some(_), _) => None,
-        (None, "" | "/") => Some("/mcp"),
-        (None, path) => Some(path),
-    };
-    let (hostname, lan_ip) = if endpoint_url.is_some() {
-        (None, None)
-    } else if host.parse::<std::net::Ipv4Addr>().is_ok() {
-        (None, Some(host))
-    } else {
-        (Some(host), None)
-    };
-    let display_name = args.display_name.as_deref().unwrap_or(service_id);
-    let description = args.description.as_deref().unwrap_or("");
+    use gents_protocol::operations::mcp_service::{McpRegisterInput, Toggle};
+    use gents_protocol::operations::StringUpdate;
+
     if args.version.trim() != "unversioned" {
         anyhow::bail!("--version is not supported by the MCP service configuration");
     }
@@ -69,61 +37,35 @@ async fn mcp_register(args: McpRegisterArgs) -> Result<()> {
         args.home.as_deref(),
         args.node_did.as_deref(),
     )?;
-    let send_node_did = args.send_node_did;
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     if matches!(&access, ConfigAccess::Local(_)) {
         anyhow::bail!("MCP registration requires a running runtime or --graphql for client-signed publication");
     }
-    access
-        .transact_write("cli.mcp.register", |txn| {
-            let node_did = &node_did;
-            let endpoint_url = &endpoint_url;
-            Box::pin(async move {
-                use gents_documents::apply_desired_state_plan;
-                use gents_documents::{
-                    read_desired_state_record_in_txn, DesiredStateApplyDocument,
-                    DesiredStateApplyPlan,
-                };
-                let collection = gents_store::collection::Collection::ToolServiceRegistry;
-                let current =
-                    read_desired_state_record_in_txn(txn, collection, node_did, service_id)
-                        .await?
-                        .map(|(_, value)| value)
-                        .unwrap_or_else(
-                            || serde_json::json!({"node_did": node_did, "service_id": service_id}),
-                        );
-                let mut value = current
-                    .as_object()
-                    .context("invalid MCP service configuration")?
-                    .clone();
-                value.insert("display_name".into(), serde_json::json!(display_name));
-                value.insert("description".into(), serde_json::json!(description));
-                value.insert("hostname".into(), serde_json::json!(hostname));
-                value.insert("tailscale_ip".into(), serde_json::Value::Null);
-                value.insert("lan_ip".into(), serde_json::json!(lan_ip));
-                value.insert("mcp_port".into(), serde_json::json!(port));
-                value.insert("mcp_path".into(), serde_json::json!(path));
-                value.insert("endpoint_url".into(), serde_json::json!(endpoint_url));
-                value.insert("send_node_did".into(), serde_json::json!(send_node_did));
-                value.insert("enabled".into(), serde_json::json!(true));
-                let value = serde_json::Value::Object(value);
-                let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-                    collection,
-                    add: value.clone(),
-                    update: value,
-                }])?;
-                apply_desired_state_plan(
-                    txn,
-                    &plan,
-                    &gents_inference::resolved::ProviderProfilePolicy,
-                )
-                .await?;
-                Ok::<_, anyhow::Error>(())
-            })
-        })
+    let toggle = |flag: Option<bool>| match flag {
+        None => Toggle::Omitted,
+        Some(true) => Toggle::On,
+        Some(false) => Toggle::Off,
+    };
+    let text = |value: &Option<String>| match value {
+        Some(value) => StringUpdate::Set(value.clone()),
+        None => StringUpdate::Omitted,
+    };
+    let input = McpRegisterInput {
+        service_id: args.service.clone(),
+        endpoint: args.endpoint.clone(),
+        display_name: text(&args.display_name),
+        description: text(&args.description),
+        send_node_did: toggle(args.send_node_did),
+        enabled: toggle(args.enabled),
+    };
+    let receipt = gents::operations::mcp_service::register(&access, &node_did, &input)
         .await
+        .map_err(|error| {
+            let next = error.recovery();
+            crate::commands::config::refusal::Refusal::new(error, next)
+        })
         .context("registering MCP service")?;
-    println!("registered {service_id} -> {}", args.endpoint.trim());
+    println!("registered {} -> {}", receipt.id, args.endpoint.trim());
     Ok(())
 }
 

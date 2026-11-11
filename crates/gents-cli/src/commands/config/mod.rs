@@ -10,6 +10,7 @@ pub(crate) mod crud;
 pub(crate) mod diff;
 pub(crate) mod export;
 pub(crate) mod profile;
+pub(crate) mod refusal;
 pub(crate) mod skill;
 pub(crate) mod task_run;
 pub(crate) mod tools;
@@ -56,7 +57,7 @@ pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
             ToolsConfigCommand::Set(args) => tools::tools_set(args).await,
             ToolsConfigCommand::List(args) => crud::config_list(crud::TOOLS_SPEC, args).await,
             ToolsConfigCommand::Show(args) => crud::config_show(crud::TOOLS_SPEC, args).await,
-            ToolsConfigCommand::Rm(args) => crud::config_rm(crud::TOOLS_SPEC, args).await,
+            ToolsConfigCommand::Rm(args) => tools::tools_rm(args).await,
             ToolsConfigCommand::AgentTargetEntry(args) => tools::agent_target_entry_command(args),
             ToolsConfigCommand::Explain(command) => crate::commands::tools::dispatch(command).await,
         },
