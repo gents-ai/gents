@@ -296,7 +296,7 @@ fn collect_effect_children(
         .tool_effects
         .iter()
         .filter_map(|row| {
-            crate::tools::call::lifecycle::PluginEffectBinding::decode(
+            crate::session::plugin_effect_rows::PluginEffectBinding::decode(
                 row.plugin_parent_tool_call_doc_id.as_deref(),
                 row.plugin_effect_ordinal,
                 row.spawned,

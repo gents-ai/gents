@@ -604,7 +604,7 @@ mod tests {
             let (bounded, presentation) = bounded_tool_result_with_presentation(tool, raw, &limits);
             let presentation = presentation.expect("CRLF input should truncate");
             assert_eq!(
-                crate::tools::call::lifecycle::delivery::render_presentation(raw, &presentation)
+                crate::session::tool_presentation::render_presentation(raw, &presentation)
                     .unwrap(),
                 bounded
             );
@@ -638,7 +638,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("{tool}: selection must reference the source"));
             assert_eq!(range, limits.max_bytes as u64, "{tool}");
             assert_eq!(
-                crate::tools::call::lifecycle::delivery::render_presentation(
+                crate::session::tool_presentation::render_presentation(
                     &raw,
                     &PayloadPresentation::Composed { parts }
                 )
@@ -660,7 +660,7 @@ mod tests {
             bounded_tool_result_with_presentation("wait_process", raw, &limits);
         let presentation = presentation.expect("zero budget should truncate");
         assert_eq!(
-            crate::tools::call::lifecycle::delivery::render_presentation(raw, &presentation)
+            crate::session::tool_presentation::render_presentation(raw, &presentation)
                 .unwrap(),
             bounded
         );

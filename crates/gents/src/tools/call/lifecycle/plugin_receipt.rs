@@ -1,6 +1,6 @@
 use gents_protocol::plugin::{PluginExecutionReceipt, PluginExecutionVerdict};
 
-use super::ToolCallState;
+use crate::session::tool_call_state::ToolCallState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReceiptDecision {

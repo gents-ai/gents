@@ -2144,7 +2144,7 @@ pub(super) fn project_transcript_rows(
                     Some(pin.handle.clone()),
                     row.lifecycle_state
                         .as_deref()
-                        .and_then(gents::tools::call::lifecycle::ToolCallState::from_persisted)
+                        .and_then(gents::session::tool_call_state::ToolCallState::from_persisted)
                         .map(|lifecycle| {
                             gents::plugin::job_calls::job_state(
                                 lifecycle,

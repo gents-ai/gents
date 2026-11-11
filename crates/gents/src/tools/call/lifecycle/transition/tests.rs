@@ -2,7 +2,8 @@ use super::super::admission_fixture::{
     fixture_job_pin, published_admission, PublishedAdmission, PublishedAdmissionOptions,
 };
 use super::super::{AwaitMode, ToolRowKind};
-use super::super::{ToolCallLifecycle, ToolCallState};
+use super::super::ToolCallLifecycle;
+use crate::session::tool_call_state::ToolCallState;
 use super::IllegalToolCallTransition;
 
 async fn published_job_row(name: &str) -> PublishedAdmission {

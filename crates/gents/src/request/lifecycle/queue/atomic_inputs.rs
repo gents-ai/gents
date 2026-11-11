@@ -824,7 +824,7 @@ async fn publish_native_tool_notification(
     };
     let stream =
         gents_protocol::output::reconstruction::reconstruct_stream(&observed, &[], &[], &payload)?;
-    let rendered = crate::tools::call::lifecycle::delivery::render_presentation(
+    let rendered = crate::session::tool_presentation::render_presentation(
         &stream.text,
         &PayloadPresentation::Composed {
             parts: native.presentation.clone(),

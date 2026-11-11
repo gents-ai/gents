@@ -10,7 +10,7 @@ use gents_protocol::output::{
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::ToolCallState;
+use crate::session::tool_call_state::ToolCallState;
 
 #[derive(Clone, Copy)]
 enum ReadSource<'a, 'txn> {
@@ -415,8 +415,10 @@ async fn load_tool_call_read_source(
                 matches!(output.declaration.payload, StreamPayload::ToolOutput),
                 "plugin terminal output selects a non-tool-output stream"
             );
-            let presented =
-                super::super::delivery::render_presentation(&output.text, &payload.presentation)?;
+            let presented = crate::session::tool_presentation::render_presentation(
+                &output.text,
+                &payload.presentation,
+            )?;
             (
                 Some(Message::User {
                     content: vec![UserContent::tool_result(
@@ -724,7 +726,7 @@ async fn load_accepted_tool_call(
         requester_did,
     )
     .await?;
-    let effect = super::super::PluginEffectBinding::decode(
+    let effect = crate::session::plugin_effect_rows::PluginEffectBinding::decode(
         call.plugin_parent_tool_call_doc_id.as_deref(),
         call.plugin_effect_ordinal,
         call.spawned_by_tool_call_doc_id.is_some(),
@@ -853,7 +855,7 @@ async fn load_accepted_tool_call(
         let rows = response["data"]["AgentOutputSegment"]
             .as_array()
             .context("plugin effect arguments query omitted segments")?;
-        let (_, arguments) = super::super::plugin_effect::arguments_from_rows(
+        let (_, arguments) = crate::session::plugin_effect_rows::arguments_from_rows(
             rows,
             node_did,
             session_id,

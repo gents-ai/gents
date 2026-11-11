@@ -8,7 +8,8 @@ use super::super::records::{read_pin, read_progress, read_step_state};
 use crate::plugin::job_calls::job_state;
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::tools::call::lifecycle::query::load_tool_call_arguments_in_txn;
-use crate::tools::call::lifecycle::{ToolCallLifecycle, ToolCallState};
+use crate::tools::call::lifecycle::ToolCallLifecycle;
+use crate::session::tool_call_state::ToolCallState;
 
 pub(super) async fn read_lifecycle_state(
     txn: &ConfigApplyTxn<'_>,

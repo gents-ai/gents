@@ -1,7 +1,8 @@
 use chrono::{DateTime, Utc};
 use gents_protocol::output::PayloadPresentation;
 
-use super::{CancelCause, FailureClass, ToolCallState};
+use super::FailureClass;
+use crate::session::tool_call_state::{CancelCause, ToolCallState};
 
 mod background_receipt;
 mod dispatch;
@@ -19,7 +20,6 @@ pub(crate) use output_append::ToolOutputBinding;
 pub(crate) use output_append::{
     append_tool_output, append_tool_output_at, ToolOutputAppendRejection,
 };
-pub(crate) use presentation::render_presentation;
 
 #[cfg(test)]
 mod plugin_writes_failed_tests;

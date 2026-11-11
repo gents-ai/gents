@@ -6,9 +6,8 @@ use gents_protocol::plugin_tool_call_limits::MAX_EFFECTS;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
+use crate::session::plugin_effect_rows::MAX_PAYLOAD_BYTES;
 use crate::tools::call::lifecycle::ToolOutcome;
-
-pub(crate) const MAX_PAYLOAD_BYTES: usize = 1024 * 1024;
 
 pub(super) fn available(granted: bool, live_dispatcher: bool) -> bool {
     granted && live_dispatcher

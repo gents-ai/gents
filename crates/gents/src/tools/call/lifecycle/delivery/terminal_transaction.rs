@@ -2,7 +2,7 @@ use super::TerminalFields;
 use crate::store::config_client::session_children::output_segment_bound_variables;
 use crate::store::config_client::ConfigApplyTxn;
 use crate::store::graphql::{created_doc_id, escape_graphql_string};
-use crate::tools::call::lifecycle::ToolCallState;
+use crate::session::tool_call_state::ToolCallState;
 use anyhow::Result;
 use chrono::{DateTime, SecondsFormat, Utc};
 use gents_protocol::output::rows::CREATE_AGENT_OUTPUT_SEGMENT_MUTATION;

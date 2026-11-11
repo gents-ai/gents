@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use super::{CancelCause, ToolCallState};
+use crate::session::tool_call_state::{CancelCause, ToolCallState};
 
 impl super::ToolCallLifecycle {
     pub const CANCEL_DURING_RUN_OUTPUT: &'static str = "tool call cancelled";

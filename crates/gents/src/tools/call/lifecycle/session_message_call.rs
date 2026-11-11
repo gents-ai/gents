@@ -5,7 +5,8 @@ use chrono::{DateTime, Utc};
 use defra_node::Node as EmbeddedNode;
 
 use super::delivery::{BackgroundReceiptBinding, DispatchStart};
-use super::{ToolCallLifecycle, ToolCallState};
+use super::ToolCallLifecycle;
+use crate::session::tool_call_state::ToolCallState;
 use crate::session::message::{SessionMessageCall, ToolCallTerminal};
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 

@@ -5,7 +5,7 @@ use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole};
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use serde::Serialize;
 
-use crate::tools::call::lifecycle::ToolCallState;
+use crate::session::tool_call_state::ToolCallState;
 
 use super::SessionSelection;
 

@@ -1,5 +1,6 @@
 use super::presentation::{diagnostic_replay_matches, terminal_diagnostic_presentation};
 use super::*;
+use crate::session::tool_presentation::render_presentation;
 use crate::store::graphql::escape_graphql_string;
 use crate::tools::call::lifecycle::admission_fixture::{
     published_admission_with_owner, published_background_bridge, published_spawn_parent,

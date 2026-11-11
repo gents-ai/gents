@@ -111,7 +111,7 @@ async fn settle_native_terminal(
     let receipt = match execution.as_ref().ok() {
         Some(crate::tools::call::lifecycle::ToolOutcome::Cancelled) => {
             crate::tools::call::hook::RetainedStopReceipt::Cancel(
-                crate::tools::call::lifecycle::CancelCause::Interrupted,
+                crate::session::tool_call_state::CancelCause::Interrupted,
                 executions.cancellation_reason(execution_call_id, execution_tool_doc_id),
             )
         }

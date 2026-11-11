@@ -137,7 +137,7 @@ pub(super) async fn account_tools_in_txn(
     let timestamp = escape_graphql_string(timestamp);
     for tool in &tools {
         let spawned = tool.row.spawned_by_tool_call_doc_id.as_deref();
-        let plugin_parent = crate::tools::call::lifecycle::PluginEffectBinding::decode(
+        let plugin_parent = crate::session::plugin_effect_rows::PluginEffectBinding::decode(
             tool.row.plugin_parent_tool_call_doc_id.as_deref(),
             tool.row.plugin_effect_ordinal,
             spawned.is_some(),

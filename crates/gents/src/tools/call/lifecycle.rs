@@ -1,55 +1,3 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ToolCallState {
-    Pending,
-    Running,
-    Completed,
-    Failed,
-    TimedOut,
-    Cancelled,
-}
-
-impl ToolCallState {
-    #[cfg(test)]
-    pub(crate) const ALL: [Self; 6] = [
-        Self::Pending,
-        Self::Running,
-        Self::Completed,
-        Self::Failed,
-        Self::TimedOut,
-        Self::Cancelled,
-    ];
-
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::Pending => "pending",
-            Self::Running => "running",
-            Self::Completed => "completed",
-            Self::Failed => "failed",
-            Self::TimedOut => "timedOut",
-            Self::Cancelled => "cancelled",
-        }
-    }
-
-    pub fn from_persisted(value: &str) -> Option<Self> {
-        match value {
-            "pending" => Some(Self::Pending),
-            "running" => Some(Self::Running),
-            "completed" => Some(Self::Completed),
-            "failed" => Some(Self::Failed),
-            "timedOut" => Some(Self::TimedOut),
-            "cancelled" => Some(Self::Cancelled),
-            _ => None,
-        }
-    }
-
-    pub(crate) const fn is_terminal(self) -> bool {
-        matches!(
-            self,
-            Self::Completed | Self::Failed | Self::TimedOut | Self::Cancelled
-        )
-    }
-}
-
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum InterruptDisposition {
     Cancel,
@@ -73,38 +21,8 @@ impl InterruptDisposition {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum CancelCause {
-    Interrupted,
-    Deadline,
-    UserCancelled,
-}
-
-impl CancelCause {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            CancelCause::Interrupted => "interrupted",
-            CancelCause::Deadline => "deadline",
-            CancelCause::UserCancelled => "userCancelled",
-        }
-    }
-
-    pub fn from_persisted(s: &str) -> Option<Self> {
-        match s {
-            "interrupted" => Some(CancelCause::Interrupted),
-            "deadline" => Some(CancelCause::Deadline),
-            "userCancelled" => Some(CancelCause::UserCancelled),
-            _ => None,
-        }
-    }
-
-    pub const ALL: &'static [CancelCause] = &[
-        CancelCause::Interrupted,
-        CancelCause::Deadline,
-        CancelCause::UserCancelled,
-    ];
-}
-
+use crate::session::plugin_effect_rows::PluginEffectBinding;
+use crate::session::tool_call_state::{CancelCause, ToolCallState};
 use gents_protocol::tool_call::AwaitMode;
 use std::sync::Arc;
 
@@ -247,41 +165,6 @@ pub struct ToolCallLifecycle {
     cancel_cause: Option<CancelCause>,
     selected_tool_identity: Option<SelectedToolIdentity>,
     pub(crate) await_mode: AwaitMode,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PluginEffectBinding {
-    pub(crate) parent_tool_call_doc_id: String,
-    pub(crate) ordinal: u32,
-}
-
-impl PluginEffectBinding {
-    pub(crate) fn internal_id(parent_tool_call_doc_id: &str, ordinal: u32) -> String {
-        format!("plugin-effect:{parent_tool_call_doc_id}:{ordinal}")
-    }
-
-    pub(crate) fn decode(
-        parent_tool_call_doc_id: Option<&str>,
-        ordinal: Option<u32>,
-        spawned: bool,
-        tool_call_id: &str,
-    ) -> anyhow::Result<Option<Self>> {
-        match (parent_tool_call_doc_id, ordinal) {
-            (None, None) => Ok(None),
-            (Some(parent), Some(ordinal))
-                if !parent.is_empty()
-                    && (1..=gents_protocol::plugin_tool_call_limits::MAX_EFFECTS).contains(&ordinal)
-                    && !spawned
-                    && tool_call_id == Self::internal_id(parent, ordinal) =>
-            {
-                Ok(Some(Self {
-                    parent_tool_call_doc_id: parent.to_owned(),
-                    ordinal,
-                }))
-            }
-            _ => anyhow::bail!("invalid plugin effect provenance"),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

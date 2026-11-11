@@ -1,9 +1,10 @@
 use super::super::presentation::{
-    diagnostic_replay_matches, render_presentation, terminal_metadata_matches, terminal_output_plan,
+    diagnostic_replay_matches, terminal_metadata_matches, terminal_output_plan,
 };
+use crate::session::tool_presentation::render_presentation;
 use super::{tool_delivery_key, tool_output_identity, Terminalization};
 use crate::store::graphql::escape_graphql_string;
-use crate::tools::call::lifecycle::ToolCallState;
+use crate::session::tool_call_state::ToolCallState;
 use anyhow::{Context, Result};
 use gents_protocol::output::reconstruction::{reconstruct_stream, ObservedSegment};
 use gents_protocol::output::rows::{

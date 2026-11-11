@@ -3,7 +3,7 @@ use super::super::background_receipt::{
 };
 use super::Terminalization;
 use crate::store::graphql::escape_graphql_string;
-use crate::tools::call::lifecycle::ToolCallState;
+use crate::session::tool_call_state::ToolCallState;
 use anyhow::{Context, Result};
 use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole, OutputOutcome};
 

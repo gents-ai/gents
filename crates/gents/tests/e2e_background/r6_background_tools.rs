@@ -3,7 +3,8 @@ use gents::inference::llm::message::{
     AssistantContent, Message, Text, ToolResultContent, UserContent,
 };
 use gents::store::graphql::escape_graphql_string;
-use gents::tools::call::lifecycle::{CancelCause, ToolCallLifecycle, ToolCallState};
+use gents::tools::call::lifecycle::ToolCallLifecycle;
+use gents::session::tool_call_state::{CancelCause, ToolCallState};
 use gents::{BackgroundExecutionRegistry, NodeIdentity};
 use serde::Deserialize;
 use serde_json::Value;

@@ -37,7 +37,8 @@ use gents::pack::job_admission::job_block_admissible;
 use gents::tools::background::job::driver;
 use gents::tools::background::job::origin::call_origin;
 use gents::tools::background::status::ProcessControlScope;
-use gents::tools::call::lifecycle::{ToolCallState, ToolRowKind};
+use gents::tools::call::lifecycle::ToolRowKind;
+use gents::session::tool_call_state::ToolCallState;
 use gents::tools::surface::EndpointScope;
 use gents_protocol::job::keys::{
     decode_job_retry_key, job_message_key, job_session_id, job_spawn_key,

@@ -17,7 +17,7 @@ use crate::tools::background::job::keys::job_spawn_key;
 use crate::tools::background::status::{
     observe_canonical_tool_output_with_access, CanonicalToolOutputObservation, ProcessControlScope,
 };
-use crate::tools::call::lifecycle::ToolCallState;
+use crate::session::tool_call_state::ToolCallState;
 
 /// Which job row a view reads: by physical doc id, or by its address.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -7,7 +7,8 @@ use super::{
     TerminalizeOptions,
 };
 use crate::store::config_client::{ConfigApplyTxn, IdempotentTransactionRetry};
-use crate::tools::call::lifecycle::{FailureClass, ToolCallLifecycle, ToolCallState, ToolRowKind};
+use crate::tools::call::lifecycle::{FailureClass, ToolCallLifecycle, ToolRowKind};
+use crate::session::tool_call_state::ToolCallState;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use gents_protocol::output::PayloadPresentation;

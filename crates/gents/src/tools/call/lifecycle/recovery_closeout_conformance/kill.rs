@@ -43,8 +43,8 @@ async fn kill_fixture(observation: &str) -> (PublishedAdmission, Option<String>)
 
 #[tokio::test]
 async fn generated_kill_cases_drive_the_session_message_kill() {
+    use crate::session::tool_call_state::ToolCallState;
     use crate::tools::background::caused::KillOutcome;
-    use crate::tools::call::lifecycle::ToolCallState;
     let cases = &crate::lean_vocab_test::lean_contract_snapshot().session_message_kill_cases;
     assert_eq!(cases.len(), 3);
     for case in cases {

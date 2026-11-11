@@ -533,7 +533,7 @@ impl NativeCanonicalExecution {
             },
         };
         let rendered =
-            crate::tools::call::lifecycle::delivery::render_presentation(&raw, &presentation)?;
+            crate::session::tool_presentation::render_presentation(&raw, &presentation)?;
         let physical = self.physical_tool(document)?.to_owned();
         let mut tool = self
             .load_tool(&physical)

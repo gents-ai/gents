@@ -20,7 +20,7 @@ use gents::observe::trace_export::{
     latency_ms, raw_message_json, AmyToolCallTraceRecord,
 };
 use gents::store::graphql::escape_graphql_string;
-use gents::tools::call::lifecycle::ToolCallState;
+use gents::session::tool_call_state::ToolCallState;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};

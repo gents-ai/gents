@@ -8,7 +8,8 @@ use crate::store::config_client::{ConfigAccess, ConfigClientError};
 use crate::tools::background::job::control::control_by_doc_id;
 use crate::tools::background::status::ProcessControlScope;
 use crate::tools::call::hook::BackgroundExecutionRegistry;
-use crate::tools::call::lifecycle::{CancelCause, ToolCallLifecycle, ToolRowKind};
+use crate::tools::call::lifecycle::{ToolCallLifecycle, ToolRowKind};
+use crate::session::tool_call_state::CancelCause;
 use gents_protocol::tool_call::AwaitMode;
 
 pub mod client;
@@ -159,7 +160,7 @@ pub(crate) async fn cancel_loaded_background_tool_call(
 
     // Lean `Background.ProcessControl.stopAction`: an undispatched invocation
     // has no process, so the stop races dispatch on the durable pending row.
-    if lifecycle.state() == crate::tools::call::lifecycle::ToolCallState::Pending {
+    if lifecycle.state() == crate::session::tool_call_state::ToolCallState::Pending {
         if lifecycle
             .cancel_before_dispatch_owned(CancelCause::UserCancelled)
             .await?

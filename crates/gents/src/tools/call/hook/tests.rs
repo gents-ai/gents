@@ -1768,7 +1768,7 @@ async fn control_tool_lost_terminal_compare_replays_the_durable_winner() {
     let tool_doc_id = loser.doc_id().unwrap().to_owned();
     let mut winner = reload_tool_call_as_hook(&hook, &tool_doc_id, &session_id).await;
     assert!(winner
-        .cancel_during_run(crate::tools::call::lifecycle::CancelCause::Interrupted)
+        .cancel_during_run(crate::session::tool_call_state::CancelCause::Interrupted)
         .await
         .unwrap());
 
@@ -2942,7 +2942,8 @@ async fn interruption_leaves_background_workers_running() {
 
 #[tokio::test]
 async fn generated_interrupt_dispositions_drive_in_flight_interrupt() {
-    use crate::tools::call::lifecycle::{InterruptDisposition, ToolCallState};
+    use crate::tools::call::lifecycle::InterruptDisposition;
+    use crate::session::tool_call_state::ToolCallState;
     use gents_protocol::tool_call::AwaitMode;
     let cases = crate::lean_vocab_test::lean_interrupt_disposition_cases();
     assert!(!cases.is_empty());
@@ -3122,7 +3123,7 @@ async fn interrupt_cancels_native_tools_and_keeps_children_running() {
 
     let outer_doc_id = outer_row["_docID"].as_str().expect("outer row document");
     let mut reloaded = reload_tool_call_as_hook(&hook, outer_doc_id, &session_id).await;
-    reloaded.set_state(crate::tools::call::lifecycle::ToolCallState::Running);
+    reloaded.set_state(crate::session::tool_call_state::ToolCallState::Running);
     reloaded.set_started_at(Some(chrono::Utc::now() - chrono::Duration::seconds(1)));
     let late_completion = reloaded.complete("late success").await;
     let late_error = late_completion

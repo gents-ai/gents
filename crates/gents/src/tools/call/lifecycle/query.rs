@@ -19,9 +19,8 @@ use serde::Deserialize;
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::store::graphql::escape_graphql_string;
 
-use super::{
-    AwaitMode, CancelCause, FailureClass, SelectedToolIdentity, ToolCallLifecycle, ToolCallState,
-};
+use super::{AwaitMode, FailureClass, SelectedToolIdentity, ToolCallLifecycle};
+use crate::session::tool_call_state::{CancelCause, ToolCallState};
 
 fn decode_selected_tool_identity(
     service_id: Option<String>,
@@ -246,7 +245,7 @@ impl ToolCallLifecycle {
             .as_deref()
             .filter(|value| !value.trim().is_empty())
             .map(str::to_owned);
-        let plugin_effect = super::PluginEffectBinding::decode(
+        let plugin_effect = crate::session::plugin_effect_rows::PluginEffectBinding::decode(
             row.plugin_parent_tool_call_doc_id.as_deref(),
             row.plugin_effect_ordinal,
             spawned_by_tool_call_doc_id.is_some(),

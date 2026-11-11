@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
 use gents_protocol::output::{
-    reconstruction::{reconstruct_stream, ObservedSegment},
     MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
     OutputWriter, PayloadRef, SegmentRun, SourceClose, StreamDeclaration, StreamPayload,
 };
@@ -11,18 +10,21 @@ use crate::store::config_client::session_children::output_segment_bound_variable
 use crate::store::config_client::{ConfigApplyTxn, IdempotentTransactionRetry};
 use crate::store::graphql::{created_doc_id, escape_graphql_string};
 use gents_protocol::output::rows::{
-    decode_scoped_request_output_segments, request_output_segments_filter,
-    AGENT_OUTPUT_SEGMENT_FIELDS, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+    request_output_segments_filter, AGENT_OUTPUT_SEGMENT_FIELDS,
+    CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
 
-use super::{ToolCallLifecycle, ToolCallState};
-use crate::plugin::tool_calls::MAX_PAYLOAD_BYTES;
+use super::ToolCallLifecycle;
+use crate::session::plugin_effect_rows::{
+    arguments_from_rows, PluginEffectBinding, MAX_PAYLOAD_BYTES,
+};
+use crate::session::tool_call_state::ToolCallState;
 use gents_protocol::plugin_tool_call_limits::MAX_EFFECTS;
 
 #[derive(Clone)]
 pub(super) struct PluginEffectTerminal {
     pub parent: super::delivery::ToolOutputBinding,
-    pub effect: super::PluginEffectBinding,
+    pub effect: PluginEffectBinding,
     pub generation: String,
 }
 
@@ -79,7 +81,7 @@ impl ToolCallLifecycle {
         let deadline = gents_loop::tool_call_lifecycle::runtime::current_tool_runtime_context()
             .and_then(|context| context.deadline_at)
             .map_or(self.deadline_at, |deadline| deadline.min(self.deadline_at));
-        let key = super::PluginEffectBinding::internal_id(&binding.tool_call_doc_id, ordinal);
+        let key = PluginEffectBinding::internal_id(&binding.tool_call_doc_id, ordinal);
         let internal_id = key.clone();
         let child = self.access()?.transact_idempotent(
             IdempotentTransactionRetry::Standard, "tool_call.admit_plugin_effect",
@@ -414,76 +416,6 @@ pub(super) async fn arguments_in_txn(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn arguments_from_rows(
-    rows: &[serde_json::Value],
-    node_did: &str,
-    session_id: &str,
-    requester_did: Option<&str>,
-    request_doc_id: &str,
-    child: &str,
-    generation: &str,
-    internal_id: &str,
-    name: &str,
-) -> Result<(PayloadRef, String)> {
-    let records =
-        decode_scoped_request_output_segments(rows, node_did, Some(session_id), requester_did)?;
-    let source = OutputSource::ToolEffectArguments {
-        tool_call_doc_id: child.to_owned(),
-    };
-    let records = records
-        .iter()
-        .filter(|row| row.segment.source == source)
-        .collect::<Vec<_>>();
-    anyhow::ensure!(
-        records.len() == 1,
-        "plugin effect requires one immutable arguments source"
-    );
-    let record = records[0];
-    anyhow::ensure!(
-        record.segment.request_doc_id == request_doc_id
-            && matches!(&record.segment.writer, OutputWriter::RequestExecution { execution_generation }
-            if execution_generation == generation)
-            && matches!(&record.segment.close, Some(SourceClose::Closed { outcome: OutputOutcome::Complete,
-            segments: 1, stream_bytes }) if stream_bytes.len() == 1),
-        "invalid plugin arguments closure"
-    );
-    let reference = PayloadRef {
-        close_doc_id: record.doc_id.clone(),
-        stream: 0,
-    };
-    let reconstructed = reconstruct_stream(
-        &[ObservedSegment {
-            doc_id: &record.doc_id,
-            segment: &record.segment,
-        }],
-        &[],
-        &[],
-        &reference,
-    )?;
-    anyhow::ensure!(
-        reconstructed.declaration
-            == StreamDeclaration {
-                block_index: 0,
-                part_index: 0,
-                payload: StreamPayload::ToolArguments {
-                    id: internal_id.to_owned(),
-                    call_id: None,
-                    name: name.to_owned()
-                }
-            },
-        "plugin argument declaration changed tool identity"
-    );
-    anyhow::ensure!(
-        reconstructed.text.len() <= MAX_PAYLOAD_BYTES,
-        "plugin arguments exceed their payload bound"
-    );
-    let _: serde_json::Map<String, serde_json::Value> =
-        serde_json::from_str(&reconstructed.text)
-            .context("plugin effect arguments must be a JSON object")?;
-    Ok((reference, reconstructed.text))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -543,7 +475,7 @@ mod tests {
                     parent.session_id = "foreign-session".into();
                 }
                 if case["parent"]["provenance"].as_str() == Some("plugin_effect") {
-                    parent.plugin_effect = Some(super::super::PluginEffectBinding {
+                    parent.plugin_effect = Some(PluginEffectBinding {
                         parent_tool_call_doc_id: "ancestor".into(),
                         ordinal: 1,
                     });

@@ -1,7 +1,8 @@
 use crate::store::config_client::session_children::output_segment_bound_variables;
 use crate::store::config_client::{ConfigAccess, IdempotentTransactionRetry};
 use crate::store::graphql::created_doc_id;
-use crate::tools::call::lifecycle::{ToolCallLifecycle, ToolCallState};
+use crate::tools::call::lifecycle::ToolCallLifecycle;
+use crate::session::tool_call_state::ToolCallState;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use gents_protocol::output::reconstruction::ObservedSegment;

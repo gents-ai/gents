@@ -1,6 +1,6 @@
 use base64::Engine as _;
 use chrono::{DateTime, Local, NaiveDate};
-use gents::tools::call::lifecycle::ToolCallState;
+use gents::session::tool_call_state::ToolCallState;
 use gents_desktop_core::client::canonical_output::{
     project_canonical_message, terminal_tool_output, CanonicalMessageProjection,
 };

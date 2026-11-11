@@ -1,4 +1,5 @@
-use super::{AwaitMode, CancelCause};
+use super::AwaitMode;
+use crate::session::tool_call_state::CancelCause;
 use crate::store::config_client::ConfigAccess;
 use crate::tools::call::lifecycle::admission_fixture::{
     published_admission, PublishedAdmission, PublishedAdmissionOptions,

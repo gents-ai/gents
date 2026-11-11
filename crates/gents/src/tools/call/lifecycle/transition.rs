@@ -3,7 +3,8 @@ use anyhow::{anyhow, Context, Result};
 use crate::store::graphql::{escape_graphql_string, response_has_documents};
 use crate::tools::native::CommandPolicyDenial;
 
-use super::{AwaitMode, CancelCause, FailureClass, ToolCallLifecycle, ToolCallState, ToolRowKind};
+use super::{AwaitMode, FailureClass, ToolCallLifecycle, ToolRowKind};
+use crate::session::tool_call_state::{CancelCause, ToolCallState};
 
 #[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
 pub enum IllegalToolCallTransition {

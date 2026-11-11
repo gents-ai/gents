@@ -13,7 +13,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::session;
 use crate::tools::background::status::LiveToolOutputRegistry;
-use crate::tools::call::lifecycle::{CancelCause, InterruptDisposition, ToolCallLifecycle};
+use crate::tools::call::lifecycle::{InterruptDisposition, ToolCallLifecycle};
+use crate::session::tool_call_state::CancelCause;
 use crate::tools::mcp::meta::selected_remote_identity;
 use crate::truncation::TruncationLimits;
 use gents_protocol::tool_call::AwaitMode;
@@ -2235,16 +2236,16 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
             };
             let cause = match outcome {
                 gents_loop::tool_call_lifecycle::ToolOutcome::TimedOut { .. } => {
-                    crate::tools::call::lifecycle::CancelCause::Deadline
+                    crate::session::tool_call_state::CancelCause::Deadline
                 }
-                _ => crate::tools::call::lifecycle::CancelCause::Interrupted,
+                _ => crate::session::tool_call_state::CancelCause::Interrupted,
             };
             match current.state() {
-                crate::tools::call::lifecycle::ToolCallState::Pending => {
+                crate::session::tool_call_state::ToolCallState::Pending => {
                     current.cancel_before_dispatch(cause).await?
                 }
-                crate::tools::call::lifecycle::ToolCallState::Running => {
-                    if cause == crate::tools::call::lifecycle::CancelCause::Deadline {
+                crate::session::tool_call_state::ToolCallState::Running => {
+                    if cause == crate::session::tool_call_state::CancelCause::Deadline {
                         current.timeout().await?;
                     } else {
                         current.cancel_during_run(cause).await?;

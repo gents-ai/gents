@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::session::SequencedMessage;
-use crate::tools::call::lifecycle::ToolCallState;
+use crate::session::tool_call_state::ToolCallState;
 
 pub use crate::tools::call::lifecycle::FailureClass as ToolFailureClass;
 

@@ -8,7 +8,8 @@ use gents_protocol::row::AgentRequestRow;
 
 use crate::store::graphql::escape_graphql_string;
 
-use super::{AwaitMode, CancelCause, FailureClass, ToolCallLifecycle, ToolCallState};
+use super::{AwaitMode, FailureClass, ToolCallLifecycle};
+use crate::session::tool_call_state::{CancelCause, ToolCallState};
 
 pub type RecoveryIdentities = [std::sync::Arc<dyn crate::store::identity::NodeIdentity>];
 type RecoveryAccesses = std::collections::BTreeMap<String, crate::ConfigAccess>;

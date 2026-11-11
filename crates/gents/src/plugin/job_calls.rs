@@ -23,7 +23,8 @@ use crate::tools::background::status::{
     load_caused_request_terminals, read_tool_output_slice_with_access, LiveToolOutputRegistry,
     ProcessControlScope, ReadToolOutputOutcome,
 };
-use crate::tools::call::lifecycle::{CausedRequestTerminal, ToolCallState};
+use crate::tools::call::lifecycle::CausedRequestTerminal;
+use crate::session::tool_call_state::ToolCallState;
 
 const MAX_REQUESTS_PER_ROUND: usize = 16;
 

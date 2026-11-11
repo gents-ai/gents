@@ -1,4 +1,5 @@
 use super::*;
+use crate::session::tool_call_state::ToolCallState;
 use anyhow::Context;
 
 mod observation;
@@ -226,8 +227,7 @@ impl DefraSessionHook {
         );
         let evidence = crate::tools::background::status::OutputEvidence::from_text(&result);
         let status = lifecycle.state().as_str();
-        let error = if lifecycle.state() == crate::tools::call::lifecycle::ToolCallState::Completed
-        {
+        let error = if lifecycle.state() == ToolCallState::Completed {
             serde_json::Value::Null
         } else {
             json!({
@@ -237,7 +237,7 @@ impl DefraSessionHook {
         };
         Ok(json_envelope_with_bounded_result(
             json!({
-                "ok": lifecycle.state() == crate::tools::call::lifecycle::ToolCallState::Completed,
+                "ok": lifecycle.state() == ToolCallState::Completed,
                 "tool_call_id": lifecycle.tool_call_id(),
                 "tool_name": lifecycle.tool_name(),
                 "await_mode": "background",
