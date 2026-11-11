@@ -372,6 +372,7 @@ pub fn without_keychain_prompts<T>(operation: impl FnOnce() -> Result<T>) -> Res
 }
 
 pub fn run_cli() -> Result<()> {
+    gents::runtime::lifecycle_hooks::compose_client();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_stack_size(TOKIO_WORKER_STACK_SIZE)

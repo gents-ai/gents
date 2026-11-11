@@ -12,3 +12,10 @@ pub fn compose(node: &Arc<defra_node::Node>) -> Result<(), NodeExtensionError> {
     Registry::install_for_remote_transactions(Arc::clone(&bundled));
     Registry::attach(node, bundled)
 }
+
+/// Composes a client process that starts no node: its lifecycle transactions
+/// travel over a GraphQL endpoint and run the points in this process, so the
+/// bundled plugins are installed for them.
+pub fn compose_client() {
+    Registry::install_for_remote_transactions(gents_automation::lifecycle_hooks::bundled());
+}
