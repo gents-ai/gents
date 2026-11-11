@@ -2,9 +2,9 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 
 use super::*;
+use crate::file_contents::content_hash;
 use crate::inference::llm::tool::Tool;
 use crate::plugin::approval::{self, workspace, Answer, Request};
-use crate::file_contents::content_hash;
 use crate::tools::native::file_tools::file_mutation_lock_for;
 
 struct Fixture {

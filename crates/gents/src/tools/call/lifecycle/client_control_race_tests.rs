@@ -198,9 +198,9 @@ async fn client_cancel_and_completion_preserve_each_winning_terminal() {
             )
             .unwrap();
         if cancel_first {
-            let process = crate::exec::ownership::test_support::OwnedTestProcess::spawn(
-                Some(registry.process_recorder(&request.tool_call_id, &request.tool_call_doc_id)),
-            )
+            let process = crate::exec::ownership::test_support::OwnedTestProcess::spawn(Some(
+                registry.process_recorder(&request.tool_call_id, &request.tool_call_doc_id),
+            ))
             .await;
             let worker = tokio::spawn(async move {
                 token.cancelled().await;

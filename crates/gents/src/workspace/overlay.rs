@@ -7,13 +7,13 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 
+use super::root_resolution::resolve_configured_tool_root;
 use crate::documents::FileToolMode;
 use crate::store::graphql::escape_graphql_string;
 #[cfg(test)]
 use crate::store::graphql::{first_row, graphql_with_transaction_retry, rows};
 use crate::workspace::sandbox::workspace_write_sandbox_enforced;
 use gents_loop::tool_policy::WorkspaceAuthority;
-use super::root_resolution::resolve_configured_tool_root;
 use gents_protocol::row::AgentRequest;
 
 #[cfg(test)]
@@ -201,7 +201,7 @@ pub(crate) async fn resolve_request_workspace_overlay_with_identity(
 }
 
 #[cfg(test)]
-async fn resolve_request_workspace_overlay_on_host(
+pub(crate) async fn resolve_request_workspace_overlay_on_host(
     node: &Arc<EmbeddedNode>,
     request: &AgentRequest,
     execution_generation: &str,

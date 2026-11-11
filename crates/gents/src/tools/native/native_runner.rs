@@ -5,9 +5,9 @@ use anyhow::{anyhow, Context as _};
 use gents_fs_runner::protocol::{NativeFsRunnerRequest, NativeFsRunnerResponse};
 
 use super::shared::{ToolContext, ToolError};
-use gents_loop::tool_call_lifecycle::FailureClass;
 use crate::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
 use crate::tools::runtime_context::current_tool_runtime_context;
+use gents_loop::tool_call_lifecycle::FailureClass;
 
 const MAX_NATIVE_RUNNER_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 // The runner truncates its own results; an oversized response fails to decode.
@@ -519,8 +519,10 @@ printf '{"ok":true,"output":"sandboxed read","error":null}'"#
     fn cap_expiry_is_a_recoverable_typed_failure() {
         let now = Utc::now();
         let dispatch_error = fs_runner_timed_out_error("grep", None, now).into_dispatch_error();
-        let outcome =
-            gents_loop::tool_call_lifecycle::ToolOutcome::from_dispatch("grep", Err(dispatch_error));
+        let outcome = gents_loop::tool_call_lifecycle::ToolOutcome::from_dispatch(
+            "grep",
+            Err(dispatch_error),
+        );
         assert!(matches!(
             outcome,
             gents_loop::tool_call_lifecycle::ToolOutcome::Failed {

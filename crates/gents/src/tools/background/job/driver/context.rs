@@ -107,11 +107,8 @@ pub(in crate::tools::background::job) async fn step_context_for(
                     within.push((facts.cwd.clone(), dir.clone()));
                 }
                 if resolved.as_deref().is_some_and(|dir| {
-                    crate::workspace::require_under_ceiling(
-                        dir,
-                        runtime.tool_root.as_deref(),
-                    )
-                    .is_ok()
+                    crate::workspace::require_under_ceiling(dir, runtime.tool_root.as_deref())
+                        .is_ok()
                 }) {
                     cwd_allowed.push(dir.clone());
                 }

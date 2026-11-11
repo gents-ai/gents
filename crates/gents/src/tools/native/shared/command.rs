@@ -35,9 +35,9 @@ use command_validation::{policy_denial, validate_command_policy_with_resolved_ex
 #[cfg(all(test, target_os = "macos"))]
 #[path = "command_protection_tests.rs"]
 mod command_protection_tests;
+use crate::workspace::sandbox::workspace_write_sandbox_enforced;
 #[cfg(target_os = "macos")]
 use crate::workspace::sandbox::SANDBOX_EXEC;
-use crate::workspace::sandbox::workspace_write_sandbox_enforced;
 
 pub(crate) fn apply_workspace_authority(
     policy: &CommandExecutionPolicy,

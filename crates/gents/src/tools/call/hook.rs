@@ -13,10 +13,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::session;
 use crate::session::tool_call_state::CancelCause;
-use gents_loop::live_output::LiveToolOutputRegistry;
 use crate::tools::call::lifecycle::{InterruptDisposition, ToolCallLifecycle};
 use crate::tools::mcp::meta::selected_remote_identity;
 use crate::truncation::TruncationLimits;
+use gents_loop::live_output::LiveToolOutputRegistry;
 use gents_loop::output_obligation::OutputObligationCheck;
 use gents_protocol::tool_call::AwaitMode;
 
@@ -188,9 +188,8 @@ pub struct BackgroundExecutionRegistry {
     // outlives its leader warns once per record and then logs at debug.
     unproven_record_warnings: Arc<std::sync::Mutex<rapidhash::RapidHashSet<String>>>,
     #[cfg(windows)]
-    failed_jobs: Arc<
-        std::sync::Mutex<RapidHashMap<String, (String, Arc<crate::exec::FailedJobOwner>)>>,
-    >,
+    failed_jobs:
+        Arc<std::sync::Mutex<RapidHashMap<String, (String, Arc<crate::exec::FailedJobOwner>)>>>,
     task_hook_records: crate::tools::call::task_hooks::TaskHookRecordStore,
     service_admission: crate::store::service::RuntimeServiceAdmission,
     #[cfg(test)]
@@ -1275,9 +1274,8 @@ pub struct DefraSessionHook {
     counters: Arc<HookCounters>,
     state: Arc<Mutex<SessionState>>,
     in_flight_lifecycles: Arc<Mutex<RapidHashMap<String, ToolCallLifecycle>>>,
-    foreground_process_evidence: Arc<
-        Mutex<RapidHashMap<String, Arc<crate::exec::ownership::LiveProcessEvidenceOwner>>>,
-    >,
+    foreground_process_evidence:
+        Arc<Mutex<RapidHashMap<String, Arc<crate::exec::ownership::LiveProcessEvidenceOwner>>>>,
     accepted_tool_calls:
         Arc<Mutex<RapidHashMap<String, crate::request::streaming::AcceptedToolCall>>>,
     effect_tool_calls: Arc<Mutex<RapidHashMap<String, (ToolCallLifecycle, String)>>>,

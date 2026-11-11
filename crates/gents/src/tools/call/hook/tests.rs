@@ -227,10 +227,7 @@ async fn client_output_snapshot_reads_full_retained_window_without_widening_mode
     assert!(page.output.len() <= 4096);
     let overflow = vec![b'x'; 256 * 1024 + 17];
     writer
-        .append(
-            gents_loop::live_output::LiveOutputStream::Stdout,
-            &overflow,
-        )
+        .append(gents_loop::live_output::LiveOutputStream::Stdout, &overflow)
         .await;
     let snapshot = registry
         .read_process_output_snapshot(
@@ -3713,7 +3710,9 @@ async fn tool_result_message_dedupe_preserves_distinct_result_ids() {
                 Some(result_id.to_string()),
                 result_id,
                 "{}",
-                &gents_loop::tool_call_lifecycle::ToolOutcome::Completed("same payload".to_string()),
+                &gents_loop::tool_call_lifecycle::ToolOutcome::Completed(
+                    "same payload".to_string()
+                ),
             )
             .await,
             HookAction::Continue

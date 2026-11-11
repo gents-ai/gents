@@ -18,11 +18,10 @@ fn command_name(args: &[String]) -> String {
 }
 
 pub(super) async fn run_cli_text(bin: &Path, args: &[String]) -> Result<String> {
-    let output = gents::exec::native_spawn::output_tokio(
-        tokio::process::Command::new(bin).args(args),
-    )
-    .await
-    .context("running gents subcommand")?;
+    let output =
+        gents::exec::native_spawn::output_tokio(tokio::process::Command::new(bin).args(args))
+            .await
+            .context("running gents subcommand")?;
     if !output.status.success() {
         bail!(
             "gents {} failed: {}",

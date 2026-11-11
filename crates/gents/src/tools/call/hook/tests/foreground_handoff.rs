@@ -732,8 +732,7 @@ async fn interrupted_foreground_with_unverified_exit_remains_background_controll
         hook.background_executions
             .stop_native_process("unverified-foreground", &doc)
             .await,
-        crate::exec::ProcessStopOutcome::Stopped
-            | crate::exec::ProcessStopOutcome::AlreadyExited
+        crate::exec::ProcessStopOutcome::Stopped | crate::exec::ProcessStopOutcome::AlreadyExited
     ));
     assert!(
         hook.background_executions
@@ -846,8 +845,7 @@ async fn failed_recovery_handoff_retains_physical_owner_until_periodic_recovery(
     registry.set_cancellation_reason("failed-handoff", &doc, "operator requested stop", false);
     assert!(matches!(
         registry.stop_native_process("failed-handoff", &doc).await,
-        crate::exec::ProcessStopOutcome::Stopped
-            | crate::exec::ProcessStopOutcome::AlreadyExited
+        crate::exec::ProcessStopOutcome::Stopped | crate::exec::ProcessStopOutcome::AlreadyExited
     ));
     let (failed, count) =
         crate::store::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(

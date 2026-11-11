@@ -3,9 +3,9 @@ use std::sync::Arc;
 use defra_node::Node as EmbeddedNode;
 
 use crate::tools::mcp::health::ServiceHealthMap;
-use crate::tools::plugin_host::{NoPluginHost, PluginHost};
 use crate::tools::mcp::pool::McpPool;
 use crate::tools::native::lsp::LspPool;
+use crate::tools::plugin_host::{NoPluginHost, PluginHost};
 use crate::NodeIdentity;
 
 #[derive(Clone)]

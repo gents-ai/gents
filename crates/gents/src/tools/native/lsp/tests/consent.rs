@@ -1,6 +1,6 @@
 use super::*;
-use crate::plugin::approval::workspace::{self, Mode, Reviewer, WorkspaceKey};
 use crate::file_contents::content_hash;
+use crate::plugin::approval::workspace::{self, Mode, Reviewer, WorkspaceKey};
 use crate::tools::native::file_tools::file_mutation_lock_for;
 use std::path::{Path, PathBuf};
 use std::sync::{

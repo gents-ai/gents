@@ -1,8 +1,8 @@
 use super::{ToolContext, ToolError};
-use gents_loop::tool_call_lifecycle::FailureClass;
 use crate::tools::native::{
     CommandExecutionMode, CommandNetworkMode, CommandPolicyDenial, DenialReason,
 };
+use gents_loop::tool_call_lifecycle::FailureClass;
 
 #[test]
 fn policy_denial_reaches_dispatch_as_typed_failure() {

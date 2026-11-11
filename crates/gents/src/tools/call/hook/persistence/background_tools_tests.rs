@@ -1,11 +1,11 @@
 #![cfg(unix)]
 
 use super::*;
+use crate::exec::ownership::test_support::OwnedTestProcess;
 use crate::tools::call::hook::BackgroundExecutionRegistry;
 use crate::tools::call::lifecycle::admission_fixture::{
     published_admission_with_owner, PublishedAdmissionOptions,
 };
-use crate::exec::ownership::test_support::OwnedTestProcess;
 use tokio_util::sync::CancellationToken;
 
 /// The calling request's Agent, which owns the tool call, its transcript and
@@ -40,10 +40,7 @@ async fn stop_rechecks_a_process_record_created_after_cancellation_began() {
     token.cancelled().await;
     let process = OwnedTestProcess::spawn(Some(recorder)).await;
     let (_, after) = process.identity.stop().await;
-    assert_eq!(
-        after,
-        crate::exec::ownership::ProcessObservation::Exited
-    );
+    assert_eq!(after, crate::exec::ownership::ProcessObservation::Exited);
     process.finish().await;
     drop(reservation);
     assert_eq!(

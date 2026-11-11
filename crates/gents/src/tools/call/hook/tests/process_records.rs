@@ -26,8 +26,7 @@ async fn call_keyed_process_record_remains_cancellable_after_restart() {
     let registry = crate::tools::call::hook::BackgroundExecutionRegistry::default()
         .with_process_records(directory.path().into());
     let process =
-        OwnedTestProcess::spawn(Some(registry.process_recorder("old-call", "physical-tool")))
-            .await;
+        OwnedTestProcess::spawn(Some(registry.process_recorder("old-call", "physical-tool"))).await;
     std::fs::rename(
         crate::exec::ownership::record_path(directory.path(), "physical-tool"),
         crate::exec::ownership::record_path(directory.path(), "old-call"),

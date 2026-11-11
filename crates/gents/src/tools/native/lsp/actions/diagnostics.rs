@@ -1,8 +1,8 @@
 use anyhow::Context as _;
 use serde_json::{json, Value};
 
-use gents_loop::tool_call_lifecycle::FailureClass;
 use crate::tools::native::shared::{ToolContext, ToolError};
+use gents_loop::tool_call_lifecycle::FailureClass;
 
 use super::super::auth::LspAction;
 use super::super::catalog::{family_eligible, marker_matches};

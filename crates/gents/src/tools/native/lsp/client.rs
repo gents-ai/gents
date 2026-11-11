@@ -8,8 +8,8 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout};
 use tokio::sync::{oneshot, Mutex};
 
-use crate::store::drop_cleanup::DropCleanup;
 use crate::exec::ManagedProcess;
+use crate::store::drop_cleanup::DropCleanup;
 
 /// Language servers are subprocesses outside the runtime's trust boundary;
 /// bound each frame before allocating or retaining its payload.

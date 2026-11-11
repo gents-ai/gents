@@ -8,10 +8,10 @@ use crate::workspace::overlay::overlay_tests::artifact_alternate_owner;
 #[tokio::test]
 async fn generated_artifact_admission_cases_drive_live_binding_and_launch_policy() {
     use crate::tools::native::CommandConstraints;
-    use gents_loop::tool_policy::CommandNetworkMode;
     use crate::tools::runtime_context::{
         scope_request_tool_execution_with_workspace_overlay, ToolWorkspaceScope,
     };
+    use gents_loop::tool_policy::CommandNetworkMode;
 
     async fn execute(node: &defra_node::Node, mutation: &str) {
         let result = node.execute(mutation).await;

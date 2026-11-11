@@ -106,22 +106,18 @@ pub(crate) async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExec
     let stdout_task = spawn_optional_capped(
         stdout,
         max_output_bytes,
-        request.live_output.clone().map(|writer| {
-            (
-                writer,
-                gents_loop::live_output::LiveOutputStream::Stdout,
-            )
-        }),
+        request
+            .live_output
+            .clone()
+            .map(|writer| (writer, gents_loop::live_output::LiveOutputStream::Stdout)),
     );
     let stderr_task = spawn_optional_capped(
         stderr,
         max_output_bytes,
-        request.live_output.clone().map(|writer| {
-            (
-                writer,
-                gents_loop::live_output::LiveOutputStream::Stderr,
-            )
-        }),
+        request
+            .live_output
+            .clone()
+            .map(|writer| (writer, gents_loop::live_output::LiveOutputStream::Stderr)),
     );
 
     let mut wait = Box::pin(child.inner.wait());
@@ -300,22 +296,18 @@ pub(crate) async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExec
     let stdout_task = spawn_optional_capped(
         stdout,
         max_output_bytes,
-        request.live_output.clone().map(|writer| {
-            (
-                writer,
-                gents_loop::live_output::LiveOutputStream::Stdout,
-            )
-        }),
+        request
+            .live_output
+            .clone()
+            .map(|writer| (writer, gents_loop::live_output::LiveOutputStream::Stdout)),
     );
     let stderr_task = spawn_optional_capped(
         stderr,
         max_output_bytes,
-        request.live_output.clone().map(|writer| {
-            (
-                writer,
-                gents_loop::live_output::LiveOutputStream::Stderr,
-            )
-        }),
+        request
+            .live_output
+            .clone()
+            .map(|writer| (writer, gents_loop::live_output::LiveOutputStream::Stderr)),
     );
 
     let job = child.job();

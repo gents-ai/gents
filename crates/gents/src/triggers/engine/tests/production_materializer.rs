@@ -1738,8 +1738,7 @@ async fn publish_workspace_for_agent(
     agent_did: &str,
 ) {
     let workspace = crate::workspace::IsolatedWorkspaceDoc {
-        path_capability: crate::workspace::WorkspacePathCapability::exact_paths(vec![])
-            .unwrap(),
+        path_capability: crate::workspace::WorkspacePathCapability::exact_paths(vec![]).unwrap(),
         workspace_id: workspace_id.into(),
         work_unit_id: "unit-1".into(),
         repository_id: "repo-1".into(),
@@ -1771,9 +1770,9 @@ async fn publish_workspace_for_agent(
                 assert_eq!(agents.len(), 1, "held Agent has one physical document");
                 let agent_doc = agents[0]["_docID"].as_str().unwrap();
                 let result = txn
-                    .execute(
-                        &crate::workspace::isolated_workspace_upsert_mutation(workspace),
-                    )
+                    .execute(&crate::workspace::isolated_workspace_upsert_mutation(
+                        workspace,
+                    ))
                     .await?;
                 let rows = result["data"]["upsert_IsolatedWorkspace"]
                     .as_array()

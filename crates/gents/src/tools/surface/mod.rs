@@ -65,8 +65,7 @@ pub(crate) fn configured_plugin_refs(
 pub use root_admission::{
     admit_authored_root, canonicalize_tools_root, ensure_configured_root_published,
     ensure_root_published_for_node, load_workspace_root_policy, project_workspace_root_policy,
-    refuse_too_broad_root, TooBroadRoot, WorkspaceRootDocument,
-    WorkspaceRootPolicy,
+    refuse_too_broad_root, TooBroadRoot, WorkspaceRootDocument, WorkspaceRootPolicy,
 };
 pub use root_admission::{agent_tool_root_reader, agents_tool_root_readers, ToolRootReader};
 pub(crate) use root_admission::{
@@ -483,19 +482,21 @@ impl ToolSurface {
             ));
         }
         if !self.application_write_collections.is_empty() {
-            tools.push(runtime.plugins.application_write_tool(
-                crate::store::config_client::ConfigAccess::local_managed_agent(
-                    runtime.node.clone(),
-                    datastore_actor.clone().expect("write actor was validated"),
-                    runtime
-                        .agent_identity
-                        .as_ref()
-                        .context("write tool Agent identity missing")?
-                        .as_ref(),
+            tools.push(
+                runtime.plugins.application_write_tool(
+                    crate::store::config_client::ConfigAccess::local_managed_agent(
+                        runtime.node.clone(),
+                        datastore_actor.clone().expect("write actor was validated"),
+                        runtime
+                            .agent_identity
+                            .as_ref()
+                            .context("write tool Agent identity missing")?
+                            .as_ref(),
+                    )?,
+                    self.application_write_collections.iter().cloned().collect(),
+                    datastore_actor.clone(),
                 )?,
-                self.application_write_collections.iter().cloned().collect(),
-                datastore_actor.clone(),
-            )?);
+            );
         }
         if let Some(lsp) = &self.lsp {
             tools.push(Box::new(crate::tools::native::lsp::LspTool::new(

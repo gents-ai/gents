@@ -385,7 +385,8 @@ pub(super) async fn claim_workspace_cleanup(
                 let state = row["lifecycle_state"]
                     .as_str()
                     .context("cleanup workspace state missing")?;
-                let normalized = gents_loop::tool_policy::normalize_workspace_lifecycle_state(state);
+                let normalized =
+                    gents_loop::tool_policy::normalize_workspace_lifecycle_state(state);
                 anyhow::ensure!(
                     matches!(
                         normalized,

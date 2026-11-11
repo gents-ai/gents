@@ -89,9 +89,9 @@ impl Fixture {
                 let placement = &placement;
                 Box::pin(async move {
                     let response = txn
-                        .execute(
-                            &crate::workspace::isolated_workspace_upsert_mutation(workspace),
-                        )
+                        .execute(&crate::workspace::isolated_workspace_upsert_mutation(
+                            workspace,
+                        ))
                         .await?;
                     let doc = crate::store::graphql::mutation_documents(
                         &response,
@@ -111,12 +111,10 @@ impl Fixture {
                     )
                     .await?;
                     let response = txn
-                        .execute(
-                            &crate::workspace::workspace_placement_upsert_mutation(
-                                placement,
-                                "2026-09-01T00:00:00Z",
-                            ),
-                        )
+                        .execute(&crate::workspace::workspace_placement_upsert_mutation(
+                            placement,
+                            "2026-09-01T00:00:00Z",
+                        ))
                         .await?;
                     let placement_doc = crate::store::graphql::mutation_documents(
                         &response,

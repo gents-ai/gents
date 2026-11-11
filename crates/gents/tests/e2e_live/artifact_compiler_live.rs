@@ -6,8 +6,8 @@ use crate::support::{
 };
 use gents::documents::{BashTools, FileTools, HostTools, Tools};
 use gents::{
-    workspace::*, BashMode, CommandExecutionMode, CommandNetworkMode,
-    DocumentRuntimeOptions, FileToolMode, Gents, NodeIdentity, ToolCeiling,
+    workspace::*, BashMode, CommandExecutionMode, CommandNetworkMode, DocumentRuntimeOptions,
+    FileToolMode, Gents, NodeIdentity, ToolCeiling,
 };
 use serde_json::{json, Value};
 use std::{path::Path, process::Command, sync::Arc, time::Duration};

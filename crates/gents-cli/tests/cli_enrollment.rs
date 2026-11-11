@@ -50,8 +50,9 @@ async fn grant_configured_workspace_root_readers(
     let authored_root = init["tool_root"]
         .as_str()
         .context("init has no configured host root")?;
-    let root =
-        gents::workspace::root_resolution::resolve_configured_tool_root(std::path::Path::new(authored_root))?;
+    let root = gents::workspace::root_resolution::resolve_configured_tool_root(
+        std::path::Path::new(authored_root),
+    )?;
     let root = root.to_str().context("configured host root is not UTF-8")?;
     let bootstrap_user = gents_desktop_core::client::PrincipalIdentity::load_existing(
         &DesktopPaths::from_root(owner_home.join("cli")),

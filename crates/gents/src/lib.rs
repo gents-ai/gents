@@ -73,6 +73,7 @@ pub use documents::{
 };
 pub use documents::{BashMode, FileToolMode};
 pub use documents::{ConcurrencyMode, ScheduleCadence};
+pub use exec::status::{active_native_executors, NativeExecutorStatus};
 pub use gents_protocol::client_protocol;
 pub use gents_protocol::request_lifecycle::{
     next_request_hop, request_hop_within_bound, EnqueuedAgentRequest, RequestHopCapObservation,
@@ -149,10 +150,6 @@ pub use runtime::p2p::observability::{
     P2pPushBacklogSnapshot, P2pPushRetryMarkerSnapshot, P2pRequestDispatchSnapshot,
     P2pSyncStatusAdapter, P2pSyncStatusSnapshot,
 };
-pub use tools::call::periodic_recovery::{
-    periodic_recovery_sweep_metadata, run_periodic_recovery_sweeps_with_identities,
-    PeriodicRecoverySweepMetadata, PeriodicRecoverySweepOutcome, PeriodicRecoverySweepRun,
-};
 pub use session::load_history;
 pub use session::{ForkError, ForkOutcome, ForkParams};
 pub use store::collection::{Collection, DESIRED_STATE_APPLY_ORDER};
@@ -181,7 +178,10 @@ pub use tools::call::control::{cancel_background_tool_call, CancelBackgroundTool
 pub use tools::call::hook::{
     BackgroundExecutionRegistry, BackgroundToolRegistry, DefraSessionHook, FailurePolicy, HookStats,
 };
-pub use exec::status::{active_native_executors, NativeExecutorStatus};
+pub use tools::call::periodic_recovery::{
+    periodic_recovery_sweep_metadata, run_periodic_recovery_sweeps_with_identities,
+    PeriodicRecoverySweepMetadata, PeriodicRecoverySweepOutcome, PeriodicRecoverySweepRun,
+};
 pub use tools::mcp::health::{
     run_health_check_cycle, run_health_check_cycle_for_actor, spawn_health_checker,
     HealthCheckerOptions, HealthPersistenceContext, HealthStatus, MCPServiceHealthSnapshot,

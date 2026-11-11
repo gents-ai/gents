@@ -237,8 +237,7 @@ async fn ensure_session_executions_settled_in_txn(
                 .try_process_record_list()?
                 .into_iter()
                 .filter(|record| {
-                    record.identity.observe()
-                        != crate::exec::ownership::ProcessObservation::Exited
+                    record.identity.observe() != crate::exec::ownership::ProcessObservation::Exited
                 })
                 .map(|record| record.tool_call_doc_id)
                 .collect::<Vec<_>>(),

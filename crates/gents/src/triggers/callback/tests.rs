@@ -262,12 +262,7 @@ fn generated_recovery_and_denial_match_runtime_owners() {
         assert_eq!(state, case.post_state, "{}: recovered state", case.name);
         assert_eq!(recovered, lean_journal(&case.post_journal), "{}", case.name);
         assert_eq!(
-            crate::workspace::retry_allowed(
-                state,
-                &recovered,
-                case.attempts,
-                case.max_attempts
-            ),
+            crate::workspace::retry_allowed(state, &recovered, case.attempts, case.max_attempts),
             case.retry_allowed_after,
             "{}: retry after recovery",
             case.name,

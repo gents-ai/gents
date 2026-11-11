@@ -851,8 +851,7 @@ async fn existing_workspace_cleanup_removes_artifacts_without_grant_drop_authori
     };
     let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let mutation =
-        crate::workspace::repository_placement_upsert_mutation(&repository, &timestamp)
-            .unwrap();
+        crate::workspace::repository_placement_upsert_mutation(&repository, &timestamp).unwrap();
     let result = node.execute(&mutation).await;
     assert!(!result.has_errors(), "{:?}", result.errors);
     let admin = crate::ConfigAccess::local_as(

@@ -696,7 +696,7 @@ async fn install_workspace(harness: &Harness, host_path: &Path) {
     let owner = harness.owner().to_string();
     let workspace = crate::workspace::IsolatedWorkspaceDoc {
         path_capability: crate::workspace::WorkspacePathCapability::exact_paths(vec![
-            "patch.rs".to_string(),
+            "patch.rs".to_string()
         ])
         .unwrap(),
         workspace_id: WORKSPACE_ID.to_string(),
@@ -747,9 +747,7 @@ async fn install_workspace(harness: &Harness, host_path: &Path) {
     }
 }
 
-async fn workspace_bindings(
-    harness: &Harness,
-) -> Vec<crate::workspace::WorkspaceBindingDoc> {
+async fn workspace_bindings(harness: &Harness) -> Vec<crate::workspace::WorkspaceBindingDoc> {
     let response = harness.agent_access.execute(
         &format!(
             r#"{{ WorkspaceBinding(filter: {{ workspace_id: {{ _eq: "{}" }}, owner_node_did: {{ _eq: "{}" }} }}) {{ binding_id workspace_id request_id request_doc_id authority owner_node_did seal_hash lifecycle_state }} }}"#,

@@ -12,9 +12,7 @@ use super::{
     run_finally, HookAttempt, HookCommandResult, ManagedTaskHookExec, TaskHookCancellation,
 };
 use crate::documents::{TaskHook, TaskHookPhase};
-use crate::exec::ownership::{
-    HostRecord, HostRecordStore, ProcessIdentity, ProcessRecorder,
-};
+use crate::exec::ownership::{HostRecord, HostRecordStore, ProcessIdentity, ProcessRecorder};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct TaskHookRecord {

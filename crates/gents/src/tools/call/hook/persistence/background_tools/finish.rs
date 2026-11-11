@@ -519,9 +519,7 @@ pub(in crate::tools::call::hook::persistence) async fn finish_background_executi
         ids: &identity,
     };
     if crate::tools::native::is_bash_tool_name(execution_tool_name)
-        && crate::exec::ownership::native_terminal_needs_confirmation(
-            execution.as_ref().ok(),
-        )
+        && crate::exec::ownership::native_terminal_needs_confirmation(execution.as_ref().ok())
     {
         settle_native_terminal(ctx, lifecycle, execution_reservation, execution).await;
         return;

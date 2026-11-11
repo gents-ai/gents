@@ -336,15 +336,11 @@ fn outcome_for_process(
     live_execution_cancelled: bool,
 ) -> CancelBackgroundToolCallOutcome {
     match process.cancel_reply() {
-        crate::exec::CancelProcessReply::Cancelled => {
-            CancelBackgroundToolCallOutcome::Cancelled {
-                live_execution_cancelled,
-            }
-        }
+        crate::exec::CancelProcessReply::Cancelled => CancelBackgroundToolCallOutcome::Cancelled {
+            live_execution_cancelled,
+        },
         crate::exec::CancelProcessReply::Lost => CancelBackgroundToolCallOutcome::Lost,
-        crate::exec::CancelProcessReply::Unverified => {
-            CancelBackgroundToolCallOutcome::Unverified
-        }
+        crate::exec::CancelProcessReply::Unverified => CancelBackgroundToolCallOutcome::Unverified,
     }
 }
 

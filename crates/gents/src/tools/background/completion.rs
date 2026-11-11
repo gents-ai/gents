@@ -9,7 +9,7 @@ use serde::Deserialize;
 
 use crate::request::lifecycle::queue::{QueuePolicy, QueueSource, RequestQueue};
 use crate::store::graphql::escape_graphql_string;
-use crate::tools::call::lifecycle::{ToolCallLifecycle};
+use crate::tools::call::lifecycle::ToolCallLifecycle;
 use gents_loop::tool_call_lifecycle::FailureClass;
 
 mod datetime_fields;

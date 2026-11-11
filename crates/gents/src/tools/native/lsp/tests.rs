@@ -515,9 +515,7 @@ async fn workspace_edit_preflights_every_file_before_writing_any_file() {
         super::edits::PreparedEdit {
             path: std::fs::canonicalize(&first).unwrap(),
             new_bytes: b"fn rewritten() {}\n".to_vec(),
-            expected_hash: Some(crate::file_contents::content_hash(
-                b"fn first() {}\n",
-            )),
+            expected_hash: Some(crate::file_contents::content_hash(b"fn first() {}\n")),
             version: None,
             rename_from: None,
             rename_destination: None,

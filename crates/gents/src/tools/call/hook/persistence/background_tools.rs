@@ -123,7 +123,10 @@ impl DefraSessionHook {
                 class,
                 denial,
                 text,
-            } = gents_loop::tool_call_lifecycle::ToolOutcome::from_dispatch(target_name, Err(error))
+            } = gents_loop::tool_call_lifecycle::ToolOutcome::from_dispatch(
+                target_name,
+                Err(error),
+            )
             else {
                 anyhow::bail!("admission rejection must carry a failed outcome");
             };

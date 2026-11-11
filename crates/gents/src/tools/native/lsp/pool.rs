@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::{Mutex, Notify};
 
-use crate::store::drop_cleanup::DropCleanup;
 use crate::exec::{spawn_managed_process, ManagedExecKind, SpawnManagedProcessRequest};
+use crate::store::drop_cleanup::DropCleanup;
 use crate::tools::native::prepare_managed_command;
 
 use super::client::LspClient;

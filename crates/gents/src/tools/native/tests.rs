@@ -9,12 +9,12 @@ use std::time::{Duration, Instant};
 
 use crate::store::test_support::EnvVarGuard;
 
+#[cfg(target_os = "macos")]
+mod workspace_artifact_admission;
+mod workspace_command_policy;
 mod workspace_file_permissions;
 #[cfg(unix)]
 mod workspace_permissions;
-mod workspace_command_policy;
-#[cfg(target_os = "macos")]
-mod workspace_artifact_admission;
 
 use super::args::{
     BashArgs, EditFileArgs, GlobArgs, GrepArgs, ListFilesArgs, ReadFileArgs, WriteFileArgs,
@@ -1868,7 +1868,10 @@ async fn bash_per_call_timeout_is_a_recoverable_typed_failure_with_metadata() {
 
     match outcome {
         gents_loop::tool_call_lifecycle::ToolOutcome::Failed { class, text, .. } => {
-            assert_eq!(class, gents_loop::tool_call_lifecycle::FailureClass::External);
+            assert_eq!(
+                class,
+                gents_loop::tool_call_lifecycle::FailureClass::External
+            );
             let meta = compact_exec_meta(&text);
             assert_eq!(meta["ok"], false);
             assert_eq!(meta["status"], "timeout");
@@ -2803,8 +2806,7 @@ async fn generated_artifact_spawn_cases_drive_live_foreground_and_background_lau
 async fn artifact_managed_command_enforces_source_inode_and_network_boundaries() {
     use std::os::unix::fs::PermissionsExt;
     let fx =
-        crate::workspace::artifact_test_fixture(&[("protected.txt", "source sentinel\n")])
-            .await;
+        crate::workspace::artifact_test_fixture(&[("protected.txt", "source sentinel\n")]).await;
     let outside = tempfile::tempdir().unwrap();
     let sentinel = outside.path().join("external.txt");
     std::fs::write(&sentinel, "external sentinel\n").unwrap();

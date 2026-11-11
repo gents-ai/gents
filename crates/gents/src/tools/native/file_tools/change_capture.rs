@@ -150,8 +150,7 @@ impl FileChangeCapture {
             .ok()?
             .to_str()?
             .replace(std::path::MAIN_SEPARATOR, "/");
-        crate::workspace::WorkspacePathCapability::exact_paths(vec![relative.clone()])
-            .ok()?;
+        crate::workspace::WorkspacePathCapability::exact_paths(vec![relative.clone()]).ok()?;
         let capture = Self {
             writer,
             root: root.to_str()?.to_owned(),

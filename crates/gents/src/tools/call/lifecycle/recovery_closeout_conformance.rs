@@ -542,13 +542,14 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
         let records = tempfile::tempdir().unwrap();
         let registry = crate::BackgroundExecutionRegistry::default()
             .with_process_records(records.path().to_path_buf());
-        let process = crate::tools::call::hook::tests::process_records::process_for_generated_outcome(
-            &registry,
-            admission.tool.tool_call_id(),
-            &tool_doc_id,
-            case.process_outcome.as_deref().unwrap(),
-        )
-        .await;
+        let process =
+            crate::tools::call::hook::tests::process_records::process_for_generated_outcome(
+                &registry,
+                admission.tool.tool_call_id(),
+                &tool_doc_id,
+                case.process_outcome.as_deref().unwrap(),
+            )
+            .await;
         let report = ToolCallLifecycle::reconcile_orphaned_background_tools(
             &admission.node,
             &admission.node_did,

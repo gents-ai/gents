@@ -1,9 +1,9 @@
 use rapidhash::RapidHashMap;
 
+use crate::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
 use crate::inference::llm::tool::BoxFuture;
 use crate::inference::llm::tool::ToolDefinition;
 use crate::inference::llm::tool::{ToolDyn, ToolError};
-use crate::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
 use crate::tools::runtime_context::tool_execution_bounds;
 use anyhow::{bail, Context, Result};
 

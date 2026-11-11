@@ -105,10 +105,9 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
             let tool_call_id = tool_call_id.clone();
             let tool_doc_id = tool_doc_id.clone();
             tokio::spawn(async move {
-                let process = crate::exec::ownership::test_support::OwnedTestProcess::spawn(
-                    Some(recorder),
-                )
-                .await;
+                let process =
+                    crate::exec::ownership::test_support::OwnedTestProcess::spawn(Some(recorder))
+                        .await;
                 let _ = identity_tx.send(process.identity.clone());
                 token.cancelled().await;
                 process.finish().await;
@@ -339,10 +338,8 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
         let tool_call_id = tool_call_id.clone();
         let tool_doc_id = tool_doc_id.clone();
         tokio::spawn(async move {
-            let process = crate::exec::ownership::test_support::OwnedTestProcess::spawn(
-                Some(recorder),
-            )
-            .await;
+            let process =
+                crate::exec::ownership::test_support::OwnedTestProcess::spawn(Some(recorder)).await;
             let _ = identity_tx.send(process.identity.clone());
             let _ = release_reservation_rx.await;
             drop(reservation);

@@ -851,8 +851,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
             .as_bool()
             .unwrap()
     );
-    crate::workspace::flush_workspace_docs(&creator_access, &docs, creator.did(), &action)
-        .await?;
+    crate::workspace::flush_workspace_docs(&creator_access, &docs, creator.did(), &action).await?;
     let workspace_rows = writer_access
         .execute("{ IsolatedWorkspace { _docID } }")
         .await?;
@@ -868,8 +867,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
             &writer.did().parse()?,
         )
         .await?;
-    crate::workspace::flush_workspace_docs(&creator_access, &docs, creator.did(), &action)
-        .await?;
+    crate::workspace::flush_workspace_docs(&creator_access, &docs, creator.did(), &action).await?;
     let visible_after_retry = !writer_access
         .execute("{ IsolatedWorkspace { _docID } }")
         .await?["data"]["IsolatedWorkspace"]
@@ -900,8 +898,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
             &reader.did().parse()?,
         )
         .await?;
-    crate::workspace::flush_workspace_docs(&creator_access, &docs, creator.did(), &action)
-        .await?;
+    crate::workspace::flush_workspace_docs(&creator_access, &docs, creator.did(), &action).await?;
     let reader_access = crate::ConfigAccess::local_managed_agent(
         node.clone(),
         reader.did().parse()?,
@@ -1061,13 +1058,9 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
         state["data"]["IsolatedWorkspace"][0]["lifecycle_state"],
         "cleaning"
     );
-    let stale = crate::workspace::flush_workspace_docs(
-        &creator_access,
-        &docs,
-        creator.did(),
-        &action,
-    )
-    .await;
+    let stale =
+        crate::workspace::flush_workspace_docs(&creator_access, &docs, creator.did(), &action)
+            .await;
     assert_eq!(
         stale.is_ok(),
         gents_lean_vocab::lean_contract_snapshot().workspace_publication_cases

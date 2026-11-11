@@ -232,10 +232,7 @@ impl DefraSessionHook {
     }
 }
 
-fn cancel_process_reply(
-    tool_call_id: &str,
-    process: crate::exec::ProcessStopOutcome,
-) -> String {
+fn cancel_process_reply(tool_call_id: &str, process: crate::exec::ProcessStopOutcome) -> String {
     use crate::exec::CancelProcessReply;
     let reply = process.cancel_reply();
     let error = match reply {

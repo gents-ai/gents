@@ -20,8 +20,10 @@ fn structured_meta_tool_error_becomes_a_typed_dispatch_failure() {
         "limit must be an integer",
     );
     let dispatch_error = MetaToolError::structured(error).into_dispatch_error();
-    let outcome =
-        gents_loop::tool_call_lifecycle::ToolOutcome::from_dispatch("call_tool", Err(dispatch_error));
+    let outcome = gents_loop::tool_call_lifecycle::ToolOutcome::from_dispatch(
+        "call_tool",
+        Err(dispatch_error),
+    );
 
     match outcome {
         gents_loop::tool_call_lifecycle::ToolOutcome::Failed { class, text, .. } => {

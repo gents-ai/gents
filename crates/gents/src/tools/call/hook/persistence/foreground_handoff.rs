@@ -173,22 +173,21 @@ impl DefraSessionHook {
                 workspace_authority: context.workspace_authority,
                 workspace_artifact: context.workspace_artifact,
             };
-            let execution =
-                AssertUnwindSafe(crate::exec::ownership::scope_process_recorder(
-                    recorder,
-                    scope_request_tool_execution_with_workspace_overlay(
-                        context.deadline_at,
-                        process_token.clone(),
-                        workspace,
-                        None,
-                        context.session_id,
-                        context.correlation,
-                        context.source_fields,
-                        false,
-                        call(process_token.clone(), Some(cleanup)),
-                    ),
-                ))
-                .catch_unwind();
+            let execution = AssertUnwindSafe(crate::exec::ownership::scope_process_recorder(
+                recorder,
+                scope_request_tool_execution_with_workspace_overlay(
+                    context.deadline_at,
+                    process_token.clone(),
+                    workspace,
+                    None,
+                    context.session_id,
+                    context.correlation,
+                    context.source_fields,
+                    false,
+                    call(process_token.clone(), Some(cleanup)),
+                ),
+            ))
+            .catch_unwind();
             tokio::pin!(execution);
             let mut changes = Some(changes);
             let mut answer = Some(answer);

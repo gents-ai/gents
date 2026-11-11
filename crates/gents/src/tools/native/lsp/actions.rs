@@ -2,8 +2,8 @@ use std::path::Path;
 
 use serde_json::json;
 
-use gents_loop::tool_call_lifecycle::FailureClass;
 use crate::tools::native::shared::{ToolContext, ToolError};
+use gents_loop::tool_call_lifecycle::FailureClass;
 
 use super::auth::LspAction;
 use super::catalog::primary_for_file;
@@ -276,8 +276,7 @@ async fn run_file_action(
                     .any(|edit| edit.rename_from.as_ref() == Some(&path))
             {
                 let mut rename = prepare_rename(path.clone(), dest_path).map_err(policy)?;
-                rename.expected_hash =
-                    Some(crate::file_contents::content_hash(text.as_bytes()));
+                rename.expected_hash = Some(crate::file_contents::content_hash(text.as_bytes()));
                 prepared.push(rename);
             }
         }

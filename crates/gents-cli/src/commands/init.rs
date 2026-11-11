@@ -2610,9 +2610,9 @@ mod tests {
         .unwrap();
         let owner = ConfigAccess::local_as(node.clone(), client_did.clone());
         let worker = ConfigAccess::local_as(node.clone(), agent.clone());
-        let expected_root = gents::workspace::root_resolution::resolve_configured_tool_root(Path::new(
-            initial["tool_root"].as_str().unwrap(),
-        ))
+        let expected_root = gents::workspace::root_resolution::resolve_configured_tool_root(
+            Path::new(initial["tool_root"].as_str().unwrap()),
+        )
         .unwrap();
         let roots = worker
             .execute("{ WorkspaceRoot { _docID root_path enabled } }")
