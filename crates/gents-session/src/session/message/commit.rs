@@ -8,6 +8,7 @@ use std::sync::Arc;
 use gents_protocol::request_lifecycle::SessionMessageCause;
 
 use super::plan::{Plan, PlannedWrite};
+use super::SessionMessageGoals;
 
 /// How an accepted call ended without a result before it was dispatched.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,6 +116,7 @@ impl gents_store::config_client::TransactionFailure for CommitError {
 
 pub async fn commit<C>(
     node: &Arc<EmbeddedNode>,
+    goals: &dyn SessionMessageGoals,
     cause: &SessionMessageCause,
     lifecycle: &mut C,
     plan: Plan,
@@ -133,7 +135,16 @@ where
         .as_ref()
         .map(|_| gents_store::subscription_source::subscribe_collections(node, ["AgentToolCall"]))
         .transpose()?;
-    let error = match Box::pin(commit_once(node, cause, lifecycle, plan, report_delivery)).await {
+    let error = match Box::pin(commit_once(
+        node,
+        goals,
+        cause,
+        lifecycle,
+        plan,
+        report_delivery,
+    ))
+    .await
+    {
         Ok(receipt) => {
             if new_child.is_some() {
                 complete_new_child_relationships(node, lifecycle, &receipt).await;
@@ -388,6 +399,7 @@ async fn complete_new_child_relationships<C>(
 
 async fn commit_once<C>(
     _node: &std::sync::Arc<EmbeddedNode>,
+    goals: &dyn SessionMessageGoals,
     cause: &SessionMessageCause,
     lifecycle: &mut C,
     plan: Plan,
@@ -436,10 +448,10 @@ where
                 Box::pin(async move {
                     let started_at = start_dispatch::<C>(txn, start).await?;
                     let (enqueued, new_child) = if agent_new_create(plan).is_some() {
-                        let (enqueued, create) = stage_agent_new_in_txn(txn, cause, plan).await?;
+                        let (enqueued, create) = stage_agent_new_in_txn(txn, goals, cause, plan).await?;
                         (enqueued, Some(create))
                     } else {
-                        (stage_planned_write_in_txn(txn, cause, plan).await?, None)
+                        (stage_planned_write_in_txn(txn, goals, cause, plan).await?, None)
                     };
                     let receipt = receipt_for(&enqueued);
                     C::publish_background_receipt_in_txn(
@@ -490,6 +502,7 @@ where
 
 async fn stage_agent_new_in_txn(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    goals: &dyn SessionMessageGoals,
     cause: &SessionMessageCause,
     plan: &Plan,
 ) -> anyhow::Result<(
@@ -544,16 +557,16 @@ async fn stage_agent_new_in_txn(
             token_budget,
             ..
         } => {
-            let enqueued = crate::goal::stage_goal_backed_request_in_txn(
-                txn,
-                &create.node_did,
-                &create.session_id,
-                objective,
-                *token_budget,
-                &create,
-            )
-            .await?;
-            enqueued
+            goals
+                .stage_goal_backed_request_in_txn(
+                    txn,
+                    &create.node_did,
+                    &create.session_id,
+                    objective,
+                    *token_budget,
+                    &create,
+                )
+                .await?
         }
     };
     Ok((enqueued, create))
@@ -563,6 +576,7 @@ async fn stage_agent_new_in_txn(
 /// transaction. It writes no tool row.
 pub async fn stage_planned_write_in_txn(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    goals: &dyn SessionMessageGoals,
     cause: &SessionMessageCause,
     plan: &Plan,
 ) -> std::result::Result<gents_protocol::request_lifecycle::EnqueuedAgentRequest, CommitError> {
@@ -682,15 +696,16 @@ pub async fn stage_planned_write_in_txn(
             token_budget,
         } => {
             ensure_planned_hop_current(txn, create).await?;
-            let enqueued = crate::goal::stage_goal_backed_request_in_txn(
-                txn,
-                &create.node_did,
-                &plan.session_id,
-                objective,
-                *token_budget,
-                create,
-            )
-            .await?;
+            let enqueued = goals
+                .stage_goal_backed_request_in_txn(
+                    txn,
+                    &create.node_did,
+                    &plan.session_id,
+                    objective,
+                    *token_budget,
+                    create,
+                )
+                .await?;
             if let Some(expected_head) = &plan.steer_head {
                 validate_steer_in_txn(txn, create, &enqueued.doc_id, expected_head.as_deref())
                     .await??;

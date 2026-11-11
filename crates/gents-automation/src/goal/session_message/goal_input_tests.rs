@@ -1,10 +1,14 @@
-use super::plan::PlannedWrite;
-use super::*;
+use super::SessionGoals;
 use crate::goal::operator_resume_test_support::Fixture;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
 use gents_protocol::request_input::GoalAssignmentInput;
+use gents_protocol::request_lifecycle::{SessionMessageCause, SessionMessageTarget};
+use gents_session::session::message::plan::{plan, target_goal_assignment};
+use gents_session::session::message::{stage_planned_write_in_txn, RenderedBody};
+use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::escape_graphql_string;
 use serde_json::{json, Value};
 
 #[tokio::test]
@@ -36,7 +40,7 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
             agent_access
                 .transact_write("test.goal_input.session", |txn| {
                     Box::pin(async {
-                        crate::session::ensure_session_in_txn(
+                        gents_session::session::ensure_session_in_txn(
                             txn,
                             &session_id,
                             f.identity.did(),
@@ -52,7 +56,7 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
                 })
                 .await
                 .unwrap();
-            crate::session::recover_agent_session_relationships_with_access(
+            gents_session::session::recover_agent_session_relationships_with_access(
                 &agent_access,
                 f.identity.did(),
                 &identity::Did::new(f.agent.did()).unwrap(),
@@ -79,9 +83,12 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
                 "2026-10-21T00:00:00Z",
                 AgentRequestAdmissionRecord::local_self(f.agent.did()),
             );
-            crate::request::admission::sign_agent_request_create(f.agent.as_ref(), &mut opening)
-                .await
-                .unwrap();
+            gents_session::request::admission::sign_agent_request_create(
+                f.agent.as_ref(),
+                &mut opening,
+            )
+            .await
+            .unwrap();
             let created = agent_access
                 .write(
                     "test.goal_input.opening",
@@ -140,7 +147,7 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
             tool_call_doc_id,
             correlation: None,
         };
-        let selected = super::plan::target_goal_assignment(&f.node, &cause, &target).await;
+        let selected = target_goal_assignment(&f.node, &SessionGoals, &cause, &target).await;
         if case["expected"]["kind"] == "pending" {
             assert!(
                 selected.is_err(),
@@ -149,6 +156,7 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
             let signer = caller_agent.managed_agent_signer().unwrap();
             let planned = plan(
                 &f.node,
+                &SessionGoals,
                 &cause,
                 &target,
                 RenderedBody {
@@ -181,6 +189,7 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
             .unwrap();
             let planned = plan(
                 &f.node,
+                &SessionGoals,
                 &cause,
                 &target,
                 RenderedBody {
@@ -194,7 +203,7 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
             .await
             .unwrap()
             .unwrap_or_else(|error| panic!("{name}: local delivery must plan: {error}"));
-            let PlannedWrite::Request { create, .. } = &planned.write else {
+            let Some(create) = planned.planned_request() else {
                 panic!("{name}: expected a session message request")
             };
             assert_eq!(
@@ -229,7 +238,9 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
             }
             let staged = source_access
                 .transact_write("test.session_message_stage_goal_input", |txn| {
-                    Box::pin(async { stage_planned_write_in_txn(txn, &cause, &planned).await })
+                    Box::pin(async {
+                        stage_planned_write_in_txn(txn, &SessionGoals, &cause, &planned).await
+                    })
                 })
                 .await;
             if case["session_readable"] == false {

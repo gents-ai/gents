@@ -384,7 +384,10 @@ where
             self.agent_config.tools.goal_tools_requested(),
             self.agent_config.tools.goal_creation_requested(),
         )
-        .with_output_obligation_gate(output_obligation_gate.clone());
+        .with_output_obligation_gate(output_obligation_gate.clone())
+        .with_session_goals(Arc::new(
+            gents_automation::goal::session_message::SessionGoals,
+        ));
         // Lean `CurrentInput.answersSelection`: a resumed retry
         // publishes no authored input, so steered messages stay
         // queued for their own turn instead of folding into it.
