@@ -788,11 +788,11 @@ pub struct ProviderLimitsTool {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct ProviderLimitsArgs {}
+pub struct ProviderLimitsArgs {}
 
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
-pub(crate) struct ProviderLimitsError(#[from] anyhow::Error);
+pub struct ProviderLimitsError(#[from] anyhow::Error);
 
 impl gents_loop::tool::Tool for ProviderLimitsTool {
     const NAME: &'static str = "provider_limits";

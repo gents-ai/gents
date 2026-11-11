@@ -1,3 +1,4 @@
+mod agent_with_tools;
 mod behavior_config;
 mod build;
 mod explain;
@@ -13,6 +14,7 @@ mod source_policy;
 pub mod starter_recipes;
 mod timeouts;
 
+pub use agent_with_tools::AgentWithTools;
 pub use behavior_config::AgentToolSurfaceConfig;
 pub use build::measured_available_mcp_service_ids;
 pub use build::measured_mcp_services_for_access;
