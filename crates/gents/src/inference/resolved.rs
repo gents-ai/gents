@@ -648,6 +648,26 @@ pub fn advertised_model_for_profile(
     Ok(Some(model.clone()))
 }
 
+#[async_trait::async_trait]
+impl crate::documents::inference_backend::AdvertisedProfilePolicy for BackendProviderKind {
+    async fn validate_advertised_profile(
+        &self,
+        txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+        owner: &str,
+        backend: &crate::documents::InferenceBackend,
+        profile: &crate::documents::InferenceProfile,
+    ) -> anyhow::Result<()> {
+        let observation = crate::inference::backends::registry::lookup_backend_observation_in_txn(
+            txn,
+            owner,
+            &backend.backend_id,
+        )
+        .await?;
+        advertised_model_for_profile(backend, profile, observation.as_ref())?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

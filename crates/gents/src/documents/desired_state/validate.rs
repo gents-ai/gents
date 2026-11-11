@@ -4,6 +4,7 @@ use super::schema_fields::{
     validate_output_obligation_count_fields, IntrospectedFields,
 };
 use super::ConfigApplyTxn;
+use crate::documents::inference_backend::AdvertisedProfilePolicy as _;
 use crate::store::config_client::schema_introspection::{is_aggregate_pseudo_field, SchemaField};
 use crate::Collection;
 use anyhow::Result;
@@ -308,17 +309,10 @@ pub(super) async fn validate_advertised_profiles(
         let Some((profile, backend)) = references.profile_with_backend(&profile_id)? else {
             continue;
         };
-        let observation = crate::inference::backends::registry::lookup_backend_observation_in_txn(
-            txn,
-            owner,
-            &backend.backend_id,
-        )
-        .await?;
-        crate::inference::resolved::advertised_model_for_profile(
-            &backend,
-            &profile,
-            observation.as_ref(),
-        )?;
+        backend
+            .provider_kind
+            .validate_advertised_profile(txn, owner, &backend, &profile)
+            .await?;
     }
     Ok(())
 }

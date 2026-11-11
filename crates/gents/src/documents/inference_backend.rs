@@ -16,6 +16,21 @@ pub(crate) use metadata::{
 };
 pub use read::{list_inference_backends_in_txn, load_inference_backend_in_txn};
 
+/// Whether a provider admits an InferenceProfile on its backend, given the
+/// catalog that backend advertises on this transaction's snapshot.
+/// Configuration publication asks the backend's own provider kind, so the
+/// provider policy stays with the inference owner that implements this.
+#[async_trait::async_trait]
+pub(crate) trait AdvertisedProfilePolicy {
+    async fn validate_advertised_profile(
+        &self,
+        txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+        owner: &str,
+        backend: &InferenceBackend,
+        profile: &super::InferenceProfile,
+    ) -> anyhow::Result<()>;
+}
+
 /// Secret-free authentication selection stored in InferenceBackendMetadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BackendAuthSelection {

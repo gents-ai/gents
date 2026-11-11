@@ -2567,7 +2567,7 @@ const PEER_TIER: usize = 3;
 #[rustfmt::skip]
 const LAYER_EDGE_ALLOWLIST: &[(&str, &str, usize)] = &[
     ("documents", "goal", 4),
-    ("documents", "inference", 9),
+    ("documents", "inference", 7),
     ("documents", "observe", 1),
     ("documents", "pack", 3),
     ("documents", "plugin", 3),
