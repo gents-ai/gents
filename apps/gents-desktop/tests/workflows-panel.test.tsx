@@ -60,6 +60,8 @@ describe("WorkflowsPanel", () => {
     );
     const rows = await screen.findAllByTestId("workflow-row");
     expect(rows).toHaveLength(2);
+    expect(screen.queryByText("Running")).toBeNull();
+    expect(screen.queryByTestId("running-empty")).toBeNull();
     expect(rows[0]!.textContent).toContain("rome_debate");
     expect(rows[0]!.textContent).toContain("3 runs");
     expect(rows[0]!.textContent).toContain("agent-1");
@@ -195,7 +197,7 @@ describe("WorkflowsPanel", () => {
       />,
     );
     expect((await screen.findByTestId("running-empty")).textContent).toBe(
-      "Nothing running.",
+      "No workflows running on this node.",
     );
     expect(listJobs).toHaveBeenCalledWith({
       nodeDid: "did:test:remote",

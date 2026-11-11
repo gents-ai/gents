@@ -14,6 +14,7 @@ import { errorText } from "../../../lib/errorText";
 import { JobStatePill } from "../jobParts";
 import { runAt } from "../WorkflowRunSheet";
 import { span, useMinute } from "../time";
+import { EmptyList } from "./ListDetail";
 import { Group } from "./rows";
 
 export const ACTIVE_STATES: JobState[] = ["running", "paused", "awaiting_user"];
@@ -65,27 +66,32 @@ export const observedOf = (run: JobView | undefined) =>
 export const runName = (run: JobView) => run.progress?.title || run.handle;
 
 /** Every run on the node that is running, paused or waiting on the person,
-    across sessions, as `gents automation job list` lists them. */
+    across sessions, as `gents automation job list` lists them. With none, it
+    says so only as `empty`, and draws nothing without it. */
 export function RunningRuns({
   runs,
   error,
   sessions,
+  empty,
   onOpen,
 }: {
   runs: JobView[] | null;
   error: string | null;
   sessions: readonly SessionSummary[];
+  empty: string | null;
   onOpen: (run: JobView) => void;
 }) {
   const now = useMinute();
+  if (!error && runs?.length === 0)
+    return empty ? (
+      <div data-testid="running-empty">
+        <EmptyList>{empty}</EmptyList>
+      </div>
+    ) : null;
+  if (!error && !runs) return null;
   return (
     <Group title="Running">
-      {error && <p className="text-sm text-destructive">{error}</p>}
-      {runs?.length === 0 && (
-        <p data-testid="running-empty" className="py-2 text-sm text-muted-foreground">
-          Nothing running.
-        </p>
-      )}
+      {error && <p className="px-5 py-3 text-sm text-destructive">{error}</p>}
       {runs?.map((run) => {
         const phase = run.progress?.phases.find((p) => p.state === "active")?.title;
         const budget = run.progress?.budget;

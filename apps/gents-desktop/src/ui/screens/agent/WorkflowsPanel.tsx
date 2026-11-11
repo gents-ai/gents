@@ -47,6 +47,7 @@ export function WorkflowsPanel({ deployment }: { deployment: NodeView }) {
         runs={running.runs}
         error={running.error}
         sessions={sessions}
+        empty={local ? null : "No workflows running on this node."}
         onOpen={open}
       />
       {local && <LocalWorkflows nodeDid={nodeDid} observed={sessions} onOpen={open} />}
