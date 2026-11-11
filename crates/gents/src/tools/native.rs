@@ -1,3 +1,8 @@
+use gents_protocol::tool_names::{
+    AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME, AGENT_TOOL_NAMES, CANCEL_PROCESS_TOOL_NAME,
+    LIST_PROCESSES_TOOL_NAME, READ_PROCESS_TOOL_NAME, SPAWN_PROCESS_TOOL_NAME,
+    WAIT_PROCESS_TOOL_NAME,
+};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -73,7 +78,7 @@ pub(crate) fn cli_tool_for_test(
 
 pub use context_budget::{
     build_context_budget_tool, load_context_budget_snapshot, ContextBudgetScope,
-    ContextBudgetSnapshot, LastRequestContextSnapshot, CONTEXT_BUDGET_TOOL_NAME,
+    ContextBudgetSnapshot, LastRequestContextSnapshot,
 };
 pub use gents_loop::tool_policy::CommandPolicyDenial;
 pub(crate) use gents_loop::tool_policy::DenialReason;
@@ -90,8 +95,7 @@ pub use session_history::{
     build_session_history_tool, load_latest_session_context_calls, load_session_context_details,
     load_session_history_snapshot, load_session_history_snapshot_with_access,
     load_session_investigation, SessionCompactionEvent, SessionContextDetails, SessionHistoryRow,
-    SessionHistorySnapshot, SessionInvestigationSnapshot, SessionRequestEvent,
-    SessionToolCallStats, SESSION_HISTORY_TOOL_NAME,
+    SessionHistorySnapshot, SessionInvestigationSnapshot, SessionRequestEvent, SessionToolCallStats,
 };
 #[cfg(test)]
 pub(crate) use shared::apply_workspace_authority;
@@ -134,29 +138,6 @@ pub(crate) const DEFAULT_COMMAND_TIMEOUT_SECS: u64 = 120;
 /// document may choose a shorter background timeout; foreground host timeout
 /// flags do not raise this ceiling.
 pub(crate) const BACKGROUND_COMMAND_TIMEOUT_SECS: u64 = 36_000;
-pub const AGENT_NEW_TOOL_NAME: &str = "agent_new";
-pub const AGENT_MESSAGE_TOOL_NAME: &str = "agent_message";
-pub const AGENT_INTERRUPT_TOOL_NAME: &str = "agent_interrupt";
-pub const AGENT_STOP_TOOL_NAME: &str = "agent_stop";
-pub const AGENT_RESUME_TOOL_NAME: &str = "agent_resume";
-pub const AGENT_LIST_TOOL_NAME: &str = "agent_list";
-pub const AGENT_SESSION_LIST_TOOL_NAME: &str = "agent_session_list";
-pub const AGENT_SESSION_READ_TOOL_NAME: &str = "agent_session_read";
-pub const AGENT_TOOL_NAMES: [&str; 8] = [
-    AGENT_NEW_TOOL_NAME,
-    AGENT_MESSAGE_TOOL_NAME,
-    AGENT_INTERRUPT_TOOL_NAME,
-    AGENT_STOP_TOOL_NAME,
-    AGENT_RESUME_TOOL_NAME,
-    AGENT_LIST_TOOL_NAME,
-    AGENT_SESSION_LIST_TOOL_NAME,
-    AGENT_SESSION_READ_TOOL_NAME,
-];
-pub(crate) const SPAWN_PROCESS_TOOL_NAME: &str = "spawn_process";
-pub(crate) const WAIT_PROCESS_TOOL_NAME: &str = "wait_process";
-pub(crate) const LIST_PROCESSES_TOOL_NAME: &str = "list_processes";
-pub(crate) const READ_PROCESS_TOOL_NAME: &str = "read_process";
-pub(crate) const CANCEL_PROCESS_TOOL_NAME: &str = "cancel_process";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CliToolConfig {

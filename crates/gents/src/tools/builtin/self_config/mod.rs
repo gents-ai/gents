@@ -11,6 +11,7 @@ pub use agent_management::{configure_agent, grant_own_self_configuration};
 #[cfg(test)]
 use agent_queries::node_default_agent;
 use agent_queries::{agent_inspect, agent_list, guard_agent_profile_choice};
+use gents_protocol::tool_names::CONFIG_TOOL_NAME;
 mod command;
 pub use command::{is_help_call, ConfigCommandParams};
 pub mod configuration_discovery;
@@ -67,10 +68,6 @@ pub fn engineer_self_config() -> crate::documents::SelfConfigTools {
     serde_json::from_str(gents_protocol::ENGINEER_SELF_CONFIG_JSON)
         .expect("bundled Engineer grant must match canonical SelfConfigTools")
 }
-
-pub const CONFIG_TOOL_NAME: &str = "config";
-
-pub const SELF_CONFIG_TOOL_NAMES: [&str; 1] = [CONFIG_TOOL_NAME];
 
 pub(crate) use crate::tools::output::{ordered, Ordered};
 

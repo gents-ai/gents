@@ -18,6 +18,7 @@ pub use auth::{
 };
 pub use catalog::{builtin_catalog, primary_for_file, CatalogServer};
 pub use config::LspConfigDocument;
+use gents_protocol::tool_names::LSP_TOOL_NAME;
 pub use pool::{LspPool, PoolKey};
 pub use writethrough::{LspWritethrough, MutationKind};
 
@@ -36,7 +37,6 @@ use crate::tools::surface::{FileToolMode, ToolPolicyBash, ToolPolicySurface};
 use actions::ActionRequest;
 use config::apply_overrides;
 
-pub const LSP_TOOL_NAME: &str = "lsp";
 pub const DEFAULT_ACTION_TIMEOUT_SECS: u64 = 20;
 /// Bound the time one language-server action can hold a runtime resource.
 pub const MAX_ACTION_TIMEOUT_SECS: u64 = 300;

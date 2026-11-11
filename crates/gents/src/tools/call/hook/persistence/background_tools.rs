@@ -1,6 +1,7 @@
 use super::*;
 use anyhow::Context;
 use futures::FutureExt;
+use gents_protocol::tool_names::SPAWN_PROCESS_TOOL_NAME;
 use std::panic::AssertUnwindSafe;
 
 mod cancel;

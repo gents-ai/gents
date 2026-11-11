@@ -1,3 +1,7 @@
+use gents_protocol::tool_names::{
+    AGENT_INTERRUPT_TOOL_NAME, AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME,
+    AGENT_SESSION_LIST_TOOL_NAME,
+};
 use rapidhash::{HashSetExt, RapidHashSet};
 use std::path::Path;
 use std::sync::Arc;
@@ -9,10 +13,6 @@ use gents::documents::{AgentTools, BashTools, HostTools, Tools};
 use gents::goal::{set_goal_from_access, GoalStatus};
 use gents::observe::run_timeline_fetch::load_run_timeline_rows;
 use gents::store::graphql::escape_graphql_string;
-use gents::tools::native::{
-    AGENT_INTERRUPT_TOOL_NAME, AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME,
-    AGENT_SESSION_LIST_TOOL_NAME,
-};
 use gents::{
     AgentTargetDocument, BashMode, Collection, DocumentRuntimeOptions, Gents, NodeIdentity,
     ToolCeiling,
@@ -3316,7 +3316,7 @@ fn assert_standard_backgrounding_tool_surfaces(
     assert_eq!(
         parent_surface.included.get("agent"),
         Some(&{
-            let mut names = gents::tools::native::AGENT_TOOL_NAMES
+            let mut names = gents_protocol::tool_names::AGENT_TOOL_NAMES
                 .iter()
                 .map(|name| name.to_string())
                 .collect::<Vec<_>>();

@@ -876,7 +876,7 @@ mod tests {
             requester_did: None,
             session_id: None,
             tool_call_id: None,
-            tool_name: crate::tools::native::AGENT_NEW_TOOL_NAME.into(),
+            tool_name: gents_protocol::tool_names::AGENT_NEW_TOOL_NAME.into(),
             status: status.into(),
             lifecycle_state: Some("completed".into()),
             cancel_cause: None,
@@ -920,7 +920,7 @@ mod tests {
             lifecycle_state: Some(state),
             ..Default::default()
         };
-        for tool_name in [crate::tools::native::AGENT_NEW_TOOL_NAME, "bash"] {
+        for tool_name in [gents_protocol::tool_names::AGENT_NEW_TOOL_NAME, "bash"] {
             let background = row("background", tool_name);
             for state in [
                 RequestLifecycleState::Interrupted,

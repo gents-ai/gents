@@ -1,4 +1,5 @@
 use super::*;
+use gents_protocol::tool_names::CANCEL_PROCESS_TOOL_NAME;
 
 impl DefraSessionHook {
     pub(in crate::tools::call::hook::persistence) async fn persist_cancel_tool_call(

@@ -70,7 +70,7 @@ fn empty_mcp_tool_selection_explains_why_no_tools_are_attached() {
         assert!(!explanation
             .tool_names
             .iter()
-            .any(|name| crate::tools::mcp::meta::META_TOOL_NAMES.contains(&name.as_str())));
+            .any(|name| gents_protocol::tool_names::META_TOOL_NAMES.contains(&name.as_str())));
         let warning = explanation
             .warnings
             .iter()
@@ -1542,7 +1542,7 @@ fn document_tool_config_expands_linked_datastore_surfaces() {
     assert_eq!(
         explanation.tool_names,
         vec![
-            crate::tools::native::SESSION_HISTORY_TOOL_NAME,
+            gents_protocol::tool_names::SESSION_HISTORY_TOOL_NAME,
             "read_research_source"
         ]
     );
@@ -2000,7 +2000,7 @@ async fn session_history_tool_follows_selection() {
     .unwrap();
     assert!(!disabled
         .tool_names()
-        .contains(&crate::tools::native::SESSION_HISTORY_TOOL_NAME.to_string()));
+        .contains(&gents_protocol::tool_names::SESSION_HISTORY_TOOL_NAME.to_string()));
 
     let enabled = AgentToolSurfaceConfig::from_selection(
         "ops",
@@ -2021,7 +2021,7 @@ async fn session_history_tool_follows_selection() {
     .unwrap();
     assert!(enabled
         .tool_names()
-        .contains(&crate::tools::native::SESSION_HISTORY_TOOL_NAME.to_string()));
+        .contains(&gents_protocol::tool_names::SESSION_HISTORY_TOOL_NAME.to_string()));
 }
 
 fn tools_document(mut value: serde_json::Value) -> crate::documents::Tools {
@@ -2454,13 +2454,13 @@ fn explain_default_surface_calls_out_builtin_reads_and_defra_query_scope() {
 
     assert!(explanation
         .tool_names
-        .contains(&crate::tools::native::CONTEXT_BUDGET_TOOL_NAME.to_string()));
+        .contains(&gents_protocol::tool_names::CONTEXT_BUDGET_TOOL_NAME.to_string()));
     assert!(explanation
         .tool_names
-        .contains(&crate::tools::native::SESSION_HISTORY_TOOL_NAME.to_string()));
+        .contains(&gents_protocol::tool_names::SESSION_HISTORY_TOOL_NAME.to_string()));
     assert!(!explanation
         .tool_names
-        .contains(&crate::tools::builtin::defra_query::DEFRA_QUERY_TOOL_NAME.to_string()));
+        .contains(&gents_protocol::tool_names::DEFRA_QUERY_TOOL_NAME.to_string()));
     assert!(!explanation
         .warnings
         .iter()
@@ -2470,7 +2470,7 @@ fn explain_default_surface_calls_out_builtin_reads_and_defra_query_scope() {
         .effective
         .get("built_in_read")
         .is_some_and(
-            |names| names.contains(&crate::tools::native::CONTEXT_BUDGET_TOOL_NAME.to_string())
+            |names| names.contains(&gents_protocol::tool_names::CONTEXT_BUDGET_TOOL_NAME.to_string())
         ));
     assert!(explanation
         .unavailable
@@ -2498,12 +2498,12 @@ fn category_complete_ceiling_clamps_builtin_reads() {
 
     assert!(!explanation
         .tool_names
-        .contains(&crate::tools::native::CONTEXT_BUDGET_TOOL_NAME.to_string()));
+        .contains(&gents_protocol::tool_names::CONTEXT_BUDGET_TOOL_NAME.to_string()));
     assert!(!explanation
         .tool_names
-        .contains(&crate::tools::builtin::defra_query::DEFRA_QUERY_TOOL_NAME.to_string()));
+        .contains(&gents_protocol::tool_names::DEFRA_QUERY_TOOL_NAME.to_string()));
     assert!(explanation.excluded.get("built_in_read").is_some_and(
-        |names| names.contains(&crate::tools::native::CONTEXT_BUDGET_TOOL_NAME.to_string())
+        |names| names.contains(&gents_protocol::tool_names::CONTEXT_BUDGET_TOOL_NAME.to_string())
     ));
 }
 
@@ -2712,7 +2712,7 @@ fn flat_presentation_explanation_matches_selected_names_and_ceiling() {
         explanation.tool_names,
         vec![
             name.clone(),
-            crate::tools::native::SESSION_HISTORY_TOOL_NAME.to_string()
+            gents_protocol::tool_names::SESSION_HISTORY_TOOL_NAME.to_string()
         ]
     );
     assert_eq!(explanation.included["meta_mcp"], vec![name]);

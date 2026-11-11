@@ -745,11 +745,11 @@ mod tests {
             .kind()
         };
         assert_eq!(
-            kind_of(crate::tools::native::AGENT_NEW_TOOL_NAME),
+            kind_of(gents_protocol::tool_names::AGENT_NEW_TOOL_NAME),
             ToolRowKind::SessionMessage
         );
         assert_eq!(
-            kind_of(crate::tools::native::AGENT_MESSAGE_TOOL_NAME),
+            kind_of(gents_protocol::tool_names::AGENT_MESSAGE_TOOL_NAME),
             ToolRowKind::SessionMessage
         );
         assert_eq!(kind_of("tool"), ToolRowKind::Native);

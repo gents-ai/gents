@@ -216,7 +216,7 @@ async fn stage_caused_session_in_txn(
             anyhow::ensure!(
                 tool_rows.len() == 1
                     && tool_rows[0]["_docID"] == tool_doc
-                    && tool_rows[0]["tool_name"] == crate::tools::native::AGENT_NEW_TOOL_NAME,
+                    && tool_rows[0]["tool_name"] == gents_protocol::tool_names::AGENT_NEW_TOOL_NAME,
                 "agent_new source is not its accepted tool call"
             );
         }

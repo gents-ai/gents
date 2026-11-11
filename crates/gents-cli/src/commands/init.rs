@@ -2171,7 +2171,7 @@ mod tests {
         );
         let config = tools
             .iter()
-            .find(|tool| tool.name() == gents::tools::builtin::self_config::CONFIG_TOOL_NAME)
+            .find(|tool| tool.name() == gents_protocol::tool_names::CONFIG_TOOL_NAME)
             .expect("the configurator registers its config tool");
         config
             .call(

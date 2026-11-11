@@ -1,4 +1,5 @@
 use super::*;
+use gents_protocol::tool_names::CONFIG_TOOL_NAME;
 
 pub(super) mod agents;
 mod args;

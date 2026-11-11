@@ -107,7 +107,7 @@ async fn generated_background_completion_queue_case_uses_accepted_session_messag
             &mut parent,
             node_did,
             turn,
-            crate::tools::native::AGENT_NEW_TOOL_NAME,
+            gents_protocol::tool_names::AGENT_NEW_TOOL_NAME,
             &tool_id,
             serde_json::json!({"agent": "general", "prompt": format!("prompt for {tool_id}")}),
             AwaitMode::Background,

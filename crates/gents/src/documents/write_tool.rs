@@ -1,12 +1,10 @@
-use crate::tools::builtin::defra_query::DEFRA_QUERY_TOOL_NAME;
-use crate::tools::mcp::meta::META_TOOL_NAMES;
-use crate::tools::native::{
-    AGENT_INTERRUPT_TOOL_NAME, AGENT_LIST_TOOL_NAME, AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME,
-    CANCEL_PROCESS_TOOL_NAME, CONTEXT_BUDGET_TOOL_NAME, LIST_PROCESSES_TOOL_NAME,
-    READ_PROCESS_TOOL_NAME, SESSION_HISTORY_TOOL_NAME, SPAWN_PROCESS_TOOL_NAME,
-    WAIT_PROCESS_TOOL_NAME,
-};
 use anyhow::Result;
+use gents_protocol::tool_names::{
+    AGENT_INTERRUPT_TOOL_NAME, AGENT_LIST_TOOL_NAME, AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME,
+    AGENT_TOOL_NAMES, CANCEL_PROCESS_TOOL_NAME, CONTEXT_BUDGET_TOOL_NAME, DEFRA_QUERY_TOOL_NAME,
+    LIST_PROCESSES_TOOL_NAME, META_TOOL_NAMES, READ_PROCESS_TOOL_NAME, SESSION_HISTORY_TOOL_NAME,
+    SPAWN_PROCESS_TOOL_NAME, WAIT_PROCESS_TOOL_NAME,
+};
 
 /// `name` is trimmed at deserialization; the field name is interpolated verbatim
 /// as a GraphQL input key, so stray whitespace would otherwise corrupt the
@@ -442,18 +440,18 @@ pub fn is_reserved_builtin_tool_name(name: &str) -> bool {
         gents_protocol::plugin::WRITE_TOOL_NAME,
         CONTEXT_BUDGET_TOOL_NAME,
         SESSION_HISTORY_TOOL_NAME,
-        crate::tools::builtin::schema_help::SCHEMA_TOOL_NAME,
+        gents_protocol::tool_names::SCHEMA_TOOL_NAME,
         gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME,
         gents_protocol::goal_names::GET_GOAL_TOOL_NAME,
         gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME,
     ];
 
     crate::tools::native::NativeTool::ALL_NAMES.contains(&name)
-        || name == crate::tools::native::lsp::LSP_TOOL_NAME
+        || name == gents_protocol::tool_names::LSP_TOOL_NAME
         || META_TOOL_NAMES.contains(&name)
         || AGENT_TOOL_NAMES.contains(&name)
         || SINGLETON_TOOL_NAMES.contains(&name)
-        || crate::tools::builtin::self_config::SELF_CONFIG_TOOL_NAMES.contains(&name)
+        || gents_protocol::tool_names::SELF_CONFIG_TOOL_NAMES.contains(&name)
 }
 
 /// Collections no datastore tool may read or write.

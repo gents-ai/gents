@@ -231,7 +231,7 @@ async fn agent_new_inherits_the_signed_caller_directory() {
         let (_, caused) = dispatch_with_lost_receipt(
             &hook,
             call_id,
-            crate::tools::native::AGENT_NEW_TOOL_NAME,
+            gents_protocol::tool_names::AGENT_NEW_TOOL_NAME,
             args,
             operation,
         )
@@ -285,7 +285,7 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
     let (tool_doc_id, caused) = dispatch_with_lost_receipt(
         &hook,
         "new-call",
-        crate::tools::native::AGENT_NEW_TOOL_NAME,
+        gents_protocol::tool_names::AGENT_NEW_TOOL_NAME,
         json!({ "agent": "general", "prompt": "work" }),
         "session_message.commit_request",
     )
@@ -337,7 +337,7 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
     dispatch_with_lost_receipt(
         &hook,
         "goal-call",
-        crate::tools::native::AGENT_NEW_TOOL_NAME,
+        gents_protocol::tool_names::AGENT_NEW_TOOL_NAME,
         json!({ "agent": "general", "task": { "task_id": "goal" } }),
         "session_message.commit_goal",
     )
@@ -346,7 +346,7 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
     let (_, steering) = dispatch_with_lost_receipt(
         &hook,
         "steer-call",
-        crate::tools::native::AGENT_MESSAGE_TOOL_NAME,
+        gents_protocol::tool_names::AGENT_MESSAGE_TOOL_NAME,
         json!({ "session_id": caused_row.session_id, "message": "change course" }),
         "session_message.commit_request",
     )
@@ -359,7 +359,7 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
     let (_, explicit) = dispatch_with_lost_receipt(
         &hook,
         "explicit-steer-call",
-        crate::tools::native::AGENT_MESSAGE_TOOL_NAME,
+        gents_protocol::tool_names::AGENT_MESSAGE_TOOL_NAME,
         json!({ "session_id": caused_row.session_id, "message": "interrupt the tool boundary", "delivery": "steer" }),
         "session_message.commit_request",
     ).await;
@@ -371,7 +371,7 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
     let (_, second) = dispatch_with_lost_receipt(
         &hook,
         "second-explicit-steer-call",
-        crate::tools::native::AGENT_MESSAGE_TOOL_NAME,
+        gents_protocol::tool_names::AGENT_MESSAGE_TOOL_NAME,
         json!({ "session_id": caused_row.session_id, "message": "and another correction", "delivery": "steer" }),
         "session_message.commit_request",
     ).await;
@@ -433,14 +433,14 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
     accept_hook_tool_call(
         &hook,
         "incompatible-steer",
-        crate::tools::native::AGENT_MESSAGE_TOOL_NAME,
+        gents_protocol::tool_names::AGENT_MESSAGE_TOOL_NAME,
         &args,
         None,
     )
     .await;
     let action = hook
         .on_tool_call(
-            crate::tools::native::AGENT_MESSAGE_TOOL_NAME,
+            gents_protocol::tool_names::AGENT_MESSAGE_TOOL_NAME,
             None,
             "incompatible-steer",
             &args,

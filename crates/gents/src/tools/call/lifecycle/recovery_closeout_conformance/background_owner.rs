@@ -79,7 +79,7 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
                 &mut parent,
                 &node_did,
                 0,
-                crate::tools::native::SPAWN_PROCESS_TOOL_NAME,
+                gents_protocol::tool_names::SPAWN_PROCESS_TOOL_NAME,
                 "task-native-tool",
                 serde_json::json!({"tool_name": "bash", "args": {}}),
                 AwaitMode::Background,

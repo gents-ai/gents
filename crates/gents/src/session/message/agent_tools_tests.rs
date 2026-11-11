@@ -609,7 +609,7 @@ async fn signed_creation_waits_for_its_canonical_parent_evidence() {
     access
         .write(
             "test.restore_creation_cause",
-            &set_name(crate::tools::native::AGENT_NEW_TOOL_NAME),
+            &set_name(gents_protocol::tool_names::AGENT_NEW_TOOL_NAME),
         )
         .await
         .unwrap();
@@ -659,7 +659,7 @@ async fn remote_signed_creation_survives_parent_evidence_arriving_after_claim() 
         name: "remote-delayed-creation".into(),
         real_identity: true,
         await_mode: AwaitMode::Background,
-        tool_name: Some(crate::tools::native::AGENT_NEW_TOOL_NAME.into()),
+        tool_name: Some(gents_protocol::tool_names::AGENT_NEW_TOOL_NAME.into()),
         start_running: false,
         ..Default::default()
     })
@@ -1139,7 +1139,7 @@ async fn session_list_names_the_starter_from_the_callers_own_receipt() {
         real_identity: true,
         await_mode: AwaitMode::Background,
         start_running: false,
-        tool_name: Some(crate::tools::native::AGENT_NEW_TOOL_NAME.into()),
+        tool_name: Some(gents_protocol::tool_names::AGENT_NEW_TOOL_NAME.into()),
         ..Default::default()
     })
     .await
@@ -1616,7 +1616,7 @@ async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
             &mut caller_owner,
             &caller.node_did,
             1,
-            crate::tools::native::AGENT_MESSAGE_TOOL_NAME,
+            gents_protocol::tool_names::AGENT_MESSAGE_TOOL_NAME,
             "message-trigger-worker",
             serde_json::json!({"session_id": "correlated-worker", "message": "continue shard R3a"}),
             AwaitMode::Background,
@@ -1789,7 +1789,7 @@ async fn agent_new_goal_publishes_for_target_with_the_caller_as_native_owner() {
         real_identity: true,
         await_mode: AwaitMode::Background,
         start_running: false,
-        tool_name: Some(crate::tools::native::AGENT_NEW_TOOL_NAME.into()),
+        tool_name: Some(gents_protocol::tool_names::AGENT_NEW_TOOL_NAME.into()),
         ..Default::default()
     })
     .await

@@ -1404,7 +1404,7 @@ async fn accepted_session_message_lifecycle(
     accepted_hook_tool_lifecycle(
         hook,
         internal_call_id,
-        crate::tools::native::AGENT_NEW_TOOL_NAME,
+        gents_protocol::tool_names::AGENT_NEW_TOOL_NAME,
         &arguments,
         deadline_at,
         gents_protocol::tool_call::AwaitMode::Background,

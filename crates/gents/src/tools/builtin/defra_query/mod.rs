@@ -1,3 +1,4 @@
+use gents_protocol::tool_names::DEFRA_QUERY_TOOL_NAME;
 use std::sync::Arc;
 
 use crate::inference::llm::tool::ToolDefinition;
@@ -70,8 +71,6 @@ pub use query::{
 };
 pub use render::render_filter;
 pub use schema::{diagnose_failed_query, discovery_payload, unknown_collection_message};
-
-pub const DEFRA_QUERY_TOOL_NAME: &str = "query";
 
 #[derive(Debug)]
 pub struct DefraQueryError(anyhow::Error);

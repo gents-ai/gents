@@ -678,7 +678,7 @@ async fn selected_review_policy_survives_configuration_edits(launch: bool) {
     );
     let config = tools
         .iter()
-        .find(|tool| tool.name() == crate::tools::builtin::self_config::CONFIG_TOOL_NAME)
+        .find(|tool| tool.name() == gents_protocol::tool_names::CONFIG_TOOL_NAME)
         .unwrap();
     let tool_context = crate::tools::native::ToolContext::new(key.path.clone(), false).unwrap();
     let marker = key.path.join("marker");

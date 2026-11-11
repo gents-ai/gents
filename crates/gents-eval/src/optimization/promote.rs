@@ -1073,7 +1073,7 @@ mod tests {
 
     #[test]
     fn the_model_facing_config_tool_has_no_optimization_surface() {
-        for name in gents::tools::builtin::self_config::SELF_CONFIG_TOOL_NAMES {
+        for name in gents_protocol::tool_names::SELF_CONFIG_TOOL_NAMES {
             assert!(
                 !name.contains("optim"),
                 "the self-config tool set names {name}"
@@ -1117,7 +1117,7 @@ mod tests {
                 }
             }
         }
-        for name in gents::tools::builtin::self_config::SELF_CONFIG_TOOL_NAMES {
+        for name in gents_protocol::tool_names::SELF_CONFIG_TOOL_NAMES {
             for verb in ["cancel", "invalidate", "rm", "gc"] {
                 assert!(
                     !(name.contains("eval") && name.contains(verb)),

@@ -4,13 +4,14 @@
 //! the command reports around those decisions.
 
 use super::*;
+use gents_protocol::tool_names::CONFIG_TOOL_NAME;
 
 use std::sync::Arc;
 
 use crate::documents::ConfigurationNodeBinding;
 use crate::inference::llm::tool::{ToolDyn, ToolError};
 use crate::store::config_client::{ConfigAccess, NodePermission};
-use crate::tools::builtin::self_config::{build_self_config_tools_with_runtime, CONFIG_TOOL_NAME};
+use crate::tools::builtin::self_config::build_self_config_tools_with_runtime;
 use crate::tools::surface::SelfConfigToolConfig;
 use crate::NodeIdentity;
 

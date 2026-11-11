@@ -1,3 +1,7 @@
+use gents_protocol::tool_names::{
+    AGENT_NEW_TOOL_NAME, AGENT_TOOL_NAMES, CANCEL_PROCESS_TOOL_NAME, LIST_PROCESSES_TOOL_NAME,
+    READ_PROCESS_TOOL_NAME, SPAWN_PROCESS_TOOL_NAME, WAIT_PROCESS_TOOL_NAME,
+};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;

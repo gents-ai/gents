@@ -1,13 +1,12 @@
+use gents_protocol::tool_names::{
+    CONTEXT_BUDGET_TOOL_NAME, DEFRA_QUERY_TOOL_NAME, META_TOOL_NAMES, SESSION_HISTORY_TOOL_NAME,
+};
 use rapidhash::RapidHashSet;
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
-use crate::tools::builtin::defra_query::DEFRA_QUERY_TOOL_NAME;
-use crate::tools::mcp::meta::META_TOOL_NAMES;
-use crate::tools::native::{
-    agent_tool_names, background_tool_names, CONTEXT_BUDGET_TOOL_NAME, SESSION_HISTORY_TOOL_NAME,
-};
+use crate::tools::native::{agent_tool_names, background_tool_names};
 
 use super::{AgentToolSurfaceConfig, RuntimeToolAvailability, ToolPolicySurface, ToolSurface};
 
@@ -335,13 +334,13 @@ fn explain_agents(
         return;
     }
     if config.agent_tools().agent_new_enabled() {
-        builder.unavailable("agent", crate::tools::native::AGENT_NEW_TOOL_NAME);
+        builder.unavailable("agent", gents_protocol::tool_names::AGENT_NEW_TOOL_NAME);
         builder.warn(
             "agent_targets_unavailable",
             "agent_new is configured, but every local target's agent is inactive.",
         );
     } else {
-        builder.exclude("agent", crate::tools::native::AGENT_NEW_TOOL_NAME);
+        builder.exclude("agent", gents_protocol::tool_names::AGENT_NEW_TOOL_NAME);
     }
 }
 
@@ -376,12 +375,12 @@ fn explain_builtin_reads(
     if surface.enable_schema_tool {
         builder.include_many(
             "schema",
-            [crate::tools::builtin::schema_help::SCHEMA_TOOL_NAME.to_string()],
+            [gents_protocol::tool_names::SCHEMA_TOOL_NAME.to_string()],
         );
     } else {
         builder.exclude(
             "schema",
-            crate::tools::builtin::schema_help::SCHEMA_TOOL_NAME,
+            gents_protocol::tool_names::SCHEMA_TOOL_NAME,
         );
     }
     if surface.enable_p2p_tool {
@@ -420,26 +419,26 @@ fn explain_builtin_reads(
     } else if config.self_config_requested() {
         builder.unavailable(
             "self_config",
-            crate::tools::builtin::self_config::CONFIG_TOOL_NAME,
+            gents_protocol::tool_names::CONFIG_TOOL_NAME,
         );
     } else {
         builder.exclude(
             "self_config",
-            crate::tools::builtin::self_config::CONFIG_TOOL_NAME,
+            gents_protocol::tool_names::CONFIG_TOOL_NAME,
         );
     }
 
     if surface.lsp.is_some() {
         builder.include_many(
             "lsp",
-            [crate::tools::native::lsp::LSP_TOOL_NAME.to_string()],
+            [gents_protocol::tool_names::LSP_TOOL_NAME.to_string()],
         );
         builder.warn(
             "lsp_host_exec",
             "enable_lsp starts host language-server processes (and their descendants) for the built-in catalog. Enabling the tools self-config category can activate any detected catalog server. Off macOS the server is unsandboxed and may write outside the tool root.",
         );
     } else {
-        builder.exclude("lsp", crate::tools::native::lsp::LSP_TOOL_NAME);
+        builder.exclude("lsp", gents_protocol::tool_names::LSP_TOOL_NAME);
     }
 }
 

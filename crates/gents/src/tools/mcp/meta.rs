@@ -22,8 +22,6 @@ pub use describe::{DescribeToolArgs, DescribeToolTool};
 pub use discover::{DiscoverToolsArgs, DiscoverToolsTool};
 pub use shared::{MetaToolContext, MetaToolError};
 
-pub const META_TOOL_NAMES: [&str; 3] = ["discover_tools", "describe_tool", "call_tool"];
-
 #[expect(
     clippy::too_many_arguments,
     reason = "each meta tool context input comes from a separate runtime owner"

@@ -1,3 +1,4 @@
+use gents_protocol::tool_names::CONTEXT_BUDGET_TOOL_NAME;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -10,8 +11,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::store::graphql::escape_graphql_string;
-
-pub const CONTEXT_BUDGET_TOOL_NAME: &str = "context_budget";
 
 const RECENT_REQUEST_SCAN: usize = 200;
 

@@ -19,6 +19,9 @@ pub use build::measured_mcp_services_for_access;
 #[doc(hidden)]
 pub use build::resolve_effective_tool_root;
 pub use explain::{ToolSurfaceExplanation, ToolSurfaceWarning};
+use gents_protocol::tool_names::{
+    CONTEXT_BUDGET_TOOL_NAME, DEFRA_QUERY_TOOL_NAME, SESSION_HISTORY_TOOL_NAME,
+};
 pub use modes::{BashMode, FileToolMode, ToolCeiling};
 pub(crate) use output_budget::configured_output_budget;
 pub use policy::configured_self_config_category_set;
@@ -86,15 +89,12 @@ use crate::inference::llm::tool::ToolDyn;
 use anyhow::{Context, Result};
 
 use crate::documents::{AgentTargetDocument, QueryToolDecl, WriteToolDecl};
-use crate::tools::builtin::defra_query::{
-    build_defra_query_tool, BoundedQueryTool, CollectionScope, DEFRA_QUERY_TOOL_NAME,
-};
+use crate::tools::builtin::defra_query::{build_defra_query_tool, BoundedQueryTool, CollectionScope};
 use crate::tools::builtin::defra_write::BoundedWriteTool;
 use crate::tools::mcp::meta::build_meta_tools;
 use crate::tools::native::{
     agent_tool_names, background_tool_names, build_agent_tools, build_background_tools,
-    build_context_budget_tool, build_goal_tools, build_session_history_tool, CliToolConfig,
-    ToolSet, CONTEXT_BUDGET_TOOL_NAME, SESSION_HISTORY_TOOL_NAME,
+    build_context_budget_tool, build_goal_tools, build_session_history_tool, CliToolConfig, ToolSet,
 };
 
 const DEFAULT_CLI_TIMEOUT_SECS: u64 = 10;
@@ -301,7 +301,7 @@ impl ToolSurface {
             names.push(CONTEXT_BUDGET_TOOL_NAME.to_string());
         }
         if self.enable_schema_tool {
-            names.push(crate::tools::builtin::schema_help::SCHEMA_TOOL_NAME.to_string());
+            names.push(gents_protocol::tool_names::SCHEMA_TOOL_NAME.to_string());
         }
         if self.enable_p2p_tool {
             names.push(crate::tools::builtin::p2p::P2P_TOOL_NAME.to_string());
@@ -316,7 +316,7 @@ impl ToolSurface {
             names.push(gents_protocol::plugin::WRITE_TOOL_NAME.into());
         }
         if self.lsp.is_some() {
-            names.push(crate::tools::native::lsp::LSP_TOOL_NAME.to_string());
+            names.push(gents_protocol::tool_names::LSP_TOOL_NAME.to_string());
         }
         if self.include_goal_tools {
             names.push(gents_protocol::goal_names::GET_GOAL_TOOL_NAME.to_string());

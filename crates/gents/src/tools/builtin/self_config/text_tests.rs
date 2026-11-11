@@ -1,5 +1,6 @@
 use super::tests::{call_config_tool, config, node_identity, SelfConfigFixture};
 use super::*;
+use gents_protocol::tool_names::CONFIG_TOOL_NAME;
 
 type Tools = Vec<Box<dyn ToolDyn>>;
 

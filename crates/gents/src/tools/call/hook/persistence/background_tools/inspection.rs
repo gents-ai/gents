@@ -1,4 +1,7 @@
 use super::*;
+use gents_protocol::tool_names::{
+    LIST_PROCESSES_TOOL_NAME, READ_PROCESS_TOOL_NAME, WAIT_PROCESS_TOOL_NAME,
+};
 
 impl DefraSessionHook {
     pub(in crate::tools::call::hook::persistence) async fn persist_wait_tool_call(

@@ -370,7 +370,7 @@ async fn start_child_session(
                         PARENT_PROMPT,
                         vec![StreamChunk::tool_call(
                             PARENT_TOOL_CALL_ID,
-                            gents::tools::native::AGENT_NEW_TOOL_NAME,
+                            gents_protocol::tool_names::AGENT_NEW_TOOL_NAME,
                             json!({"agent": CHILD_NAME, "prompt": CHILD_PROMPT}).to_string(),
                         )],
                     ),

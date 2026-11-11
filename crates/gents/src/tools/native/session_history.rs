@@ -1,3 +1,4 @@
+use gents_protocol::tool_names::SESSION_HISTORY_TOOL_NAME;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -27,8 +28,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::store::graphql::escape_graphql_string;
-
-pub const SESSION_HISTORY_TOOL_NAME: &str = "sessions";
 
 const ACTIONS: [&str; 7] = [
     "help",

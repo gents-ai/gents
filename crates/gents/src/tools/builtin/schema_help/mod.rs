@@ -2,6 +2,7 @@ use crate::defra_node::Node as EmbeddedNode;
 use crate::inference::llm::tool::{Tool, ToolDefinition};
 use crate::store::config_client::ConfigAccess;
 use anyhow::{bail, ensure, Context, Result};
+use gents_protocol::tool_names::SCHEMA_TOOL_NAME;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -10,8 +11,6 @@ use std::sync::Arc;
 mod help;
 #[cfg(test)]
 mod tests;
-
-pub const SCHEMA_TOOL_NAME: &str = "schema";
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]

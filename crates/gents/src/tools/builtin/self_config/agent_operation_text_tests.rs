@@ -1,5 +1,6 @@
 use super::tests::SelfConfigFixture;
 use super::*;
+use gents_protocol::tool_names::CONFIG_TOOL_NAME;
 
 /// Everything the model reads for `agent create` and `agent clone`: verb
 /// help, receipts and failure envelopes, with run-specific identifiers named.

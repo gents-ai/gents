@@ -1,6 +1,10 @@
 use super::*;
 use crate::tools::call::hook::RetainedStopReceipt;
 use crate::tools::call::hook::{decide_persistence_outcome, FailurePolicy, PolicyDecision};
+use gents_protocol::tool_names::{
+    AGENT_NEW_TOOL_NAME, CANCEL_PROCESS_TOOL_NAME, LIST_PROCESSES_TOOL_NAME, READ_PROCESS_TOOL_NAME,
+    SPAWN_PROCESS_TOOL_NAME, WAIT_PROCESS_TOOL_NAME,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HookOwnedTool {
@@ -22,24 +26,24 @@ impl HookOwnedTool {
         (gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME, Self::UpdateGoal),
         (gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME, Self::CreateGoal),
         (
-            crate::tools::native::AGENT_INTERRUPT_TOOL_NAME,
+            gents_protocol::tool_names::AGENT_INTERRUPT_TOOL_NAME,
             Self::AgentControl,
         ),
         (
-            crate::tools::native::AGENT_LIST_TOOL_NAME,
+            gents_protocol::tool_names::AGENT_LIST_TOOL_NAME,
             Self::AgentControl,
         ),
         (
-            crate::tools::native::AGENT_SESSION_READ_TOOL_NAME,
+            gents_protocol::tool_names::AGENT_SESSION_READ_TOOL_NAME,
             Self::AgentControl,
         ),
         (
-            crate::tools::native::AGENT_SESSION_LIST_TOOL_NAME,
+            gents_protocol::tool_names::AGENT_SESSION_LIST_TOOL_NAME,
             Self::AgentControl,
         ),
         (AGENT_NEW_TOOL_NAME, Self::SessionMessage),
         (
-            crate::tools::native::AGENT_MESSAGE_TOOL_NAME,
+            gents_protocol::tool_names::AGENT_MESSAGE_TOOL_NAME,
             Self::SessionMessage,
         ),
         (SPAWN_PROCESS_TOOL_NAME, Self::SpawnProcess),

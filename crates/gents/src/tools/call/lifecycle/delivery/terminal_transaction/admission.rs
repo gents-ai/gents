@@ -91,7 +91,7 @@ pub(super) async fn validate_accepted_invocation(
             .context("spawned parent lacks tool name")?;
         anyhow::ensure!(
             parent["spawned_by_tool_call_doc_id"].is_null()
-                && parent_name == crate::tools::native::SPAWN_PROCESS_TOOL_NAME
+                && parent_name == gents_protocol::tool_names::SPAWN_PROCESS_TOOL_NAME
                 && parent["message_sequence"].as_u64() == Some(u64::from(message_sequence))
                 && accepted.session_id == session_id
                 && accepted.request_doc_id.as_deref() == Some(request_doc_id)

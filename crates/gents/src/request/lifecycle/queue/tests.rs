@@ -532,7 +532,7 @@ impl CanonicalBackgroundFixture {
                 id: native_id.clone(),
                 call_id: Some(format!("fixture-provider-call-{turn}")),
                 function: ToolFunction::new(
-                    crate::tools::native::SPAWN_PROCESS_TOOL_NAME.into(),
+                    gents_protocol::tool_names::SPAWN_PROCESS_TOOL_NAME.into(),
                     serde_json::json!({"tool_name": "fixture", "args": {}}),
                 ),
                 signature: None,

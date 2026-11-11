@@ -396,7 +396,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     );
     let tool = tools
         .iter()
-        .find(|tool| tool.name() == super::CONFIG_TOOL_NAME)
+        .find(|tool| tool.name() == gents_protocol::tool_names::CONFIG_TOOL_NAME)
         .context("configuration tool missing")?;
     let creator_access = ConfigAccess::local_managed_agent(
         node.clone(),

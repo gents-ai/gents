@@ -1,6 +1,12 @@
 use crate::inference::llm::tool::Tool;
 use crate::inference::llm::tool::ToolDefinition;
 use anyhow::anyhow;
+use gents_protocol::tool_names::{
+    AGENT_INTERRUPT_TOOL_NAME, AGENT_LIST_TOOL_NAME, AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME,
+    AGENT_RESUME_TOOL_NAME, AGENT_SESSION_LIST_TOOL_NAME, AGENT_SESSION_READ_TOOL_NAME,
+    AGENT_STOP_TOOL_NAME, CANCEL_PROCESS_TOOL_NAME, LIST_PROCESSES_TOOL_NAME,
+    READ_PROCESS_TOOL_NAME, SPAWN_PROCESS_TOOL_NAME, WAIT_PROCESS_TOOL_NAME,
+};
 
 use crate::session::message::{
     AgentInterruptArgs, AgentListArgs, AgentMessageArgs, AgentNewArgs, AgentSessionListArgs,
@@ -14,12 +20,6 @@ use crate::tools::background::status::{
 use crate::tools::surface::{AgentToolConfig, BackgroundToolConfig};
 
 use super::shared::ToolError;
-use super::{
-    AGENT_INTERRUPT_TOOL_NAME, AGENT_LIST_TOOL_NAME, AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME,
-    AGENT_RESUME_TOOL_NAME, AGENT_SESSION_LIST_TOOL_NAME, AGENT_SESSION_READ_TOOL_NAME,
-    AGENT_STOP_TOOL_NAME, CANCEL_PROCESS_TOOL_NAME, LIST_PROCESSES_TOOL_NAME,
-    READ_PROCESS_TOOL_NAME, SPAWN_PROCESS_TOOL_NAME, WAIT_PROCESS_TOOL_NAME,
-};
 
 const SESSION_SERVICE_ID: &str = "session";
 

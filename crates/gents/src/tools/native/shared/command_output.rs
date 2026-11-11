@@ -41,7 +41,7 @@ pub(super) fn foreground_timeout_hint(duration_ms: u64) -> String {
     format!(
         "timed out after {:.1}s; stdout and stderr below were captured before it was stopped. For long-running work use {} and poll its output.",
         duration_ms as f64 / 1000.0,
-        crate::tools::native::SPAWN_PROCESS_TOOL_NAME,
+        gents_protocol::tool_names::SPAWN_PROCESS_TOOL_NAME,
     )
 }
 

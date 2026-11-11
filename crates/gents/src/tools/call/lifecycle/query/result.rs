@@ -757,7 +757,7 @@ async fn load_accepted_tool_call(
         anyhow::ensure!(
             call.request_doc_id == parent.request_doc_id
                 && call.message_sequence == parent.message_sequence
-                && parent.tool_name == crate::tools::native::SPAWN_PROCESS_TOOL_NAME,
+                && parent.tool_name == gents_protocol::tool_names::SPAWN_PROCESS_TOOL_NAME,
             "spawned tool presentation has incoherent accepted-parent provenance"
         );
         Some(parent)
@@ -1467,7 +1467,7 @@ mod tests {
         assert_eq!(read.request_doc_id, request_doc_id);
         assert_eq!(
             read.tool_name,
-            crate::tools::native::SPAWN_PROCESS_TOOL_NAME
+            gents_protocol::tool_names::SPAWN_PROCESS_TOOL_NAME
         );
         assert_eq!(read.lifecycle_state, ToolCallState::Completed);
         assert!(!read.arguments.is_empty());

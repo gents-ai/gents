@@ -43,7 +43,7 @@ async fn generated_native_missing_parent_restart_cases_defer() {
             await_mode: AwaitMode::Background,
             tool_name: case
                 .session_message
-                .then(|| crate::tools::native::AGENT_NEW_TOOL_NAME.to_owned()),
+                .then(|| gents_protocol::tool_names::AGENT_NEW_TOOL_NAME.to_owned()),
             ..Default::default()
         })
         .await
@@ -160,7 +160,7 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                 name: format!("recovery-closeout-{name}"),
                 real_identity: true,
                 await_mode: AwaitMode::Background,
-                tool_name: Some(crate::tools::native::AGENT_NEW_TOOL_NAME.to_owned()),
+                tool_name: Some(gents_protocol::tool_names::AGENT_NEW_TOOL_NAME.to_owned()),
                 start_running: true,
                 ..Default::default()
             })

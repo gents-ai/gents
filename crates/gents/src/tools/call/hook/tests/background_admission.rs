@@ -602,14 +602,14 @@ async fn spawn_process_rejects_unadvertised_arguments_before_spawned_admission()
         accept_hook_tool_call(
             &hook,
             "spawn-malformed",
-            crate::tools::native::SPAWN_PROCESS_TOOL_NAME,
+            gents_protocol::tool_names::SPAWN_PROCESS_TOOL_NAME,
             args,
             None,
         )
         .await;
         let action = hook
             .on_tool_call(
-                crate::tools::native::SPAWN_PROCESS_TOOL_NAME,
+                gents_protocol::tool_names::SPAWN_PROCESS_TOOL_NAME,
                 None,
                 "spawn-malformed",
                 args,
@@ -634,7 +634,7 @@ async fn spawn_process_rejects_unadvertised_arguments_before_spawned_admission()
         assert_eq!(rows.len(), 1, "{args}: {rows:?}");
         assert_eq!(
             rows[0]["tool_name"],
-            crate::tools::native::SPAWN_PROCESS_TOOL_NAME
+            gents_protocol::tool_names::SPAWN_PROCESS_TOOL_NAME
         );
         assert!(rows[0]["spawned_by_tool_call_doc_id"].is_null(), "{rows:?}");
         assert_eq!(rows[0]["lifecycle_state"], "failed", "{args}: {rows:?}");

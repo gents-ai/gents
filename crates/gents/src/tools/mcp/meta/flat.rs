@@ -50,7 +50,11 @@ pub(crate) fn presented_tool_names(remote: &RemoteTools, allowed: &[String]) -> 
         }
     }
     if discovery {
-        names.extend(super::META_TOOL_NAMES.iter().map(|name| name.to_string()));
+        names.extend(
+            gents_protocol::tool_names::META_TOOL_NAMES
+                .iter()
+                .map(|name| name.to_string()),
+        );
     }
     names
 }

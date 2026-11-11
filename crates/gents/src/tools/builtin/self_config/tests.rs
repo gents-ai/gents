@@ -1,6 +1,7 @@
 use super::agent_management::{model_agent_mutate, model_agent_preview};
 use super::command::{agents::agent_params, contracts::help_patch_contracts};
 use super::*;
+use gents_protocol::tool_names::{CONFIG_TOOL_NAME, SELF_CONFIG_TOOL_NAMES};
 
 fn test_plugins() -> Arc<crate::plugin::executor::PluginExecutor> {
     Arc::new(crate::plugin::executor::PluginExecutor::default())
