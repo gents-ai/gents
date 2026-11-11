@@ -107,16 +107,7 @@ async fn resume_context_in_txn(
         .await?
         .context("no canonical goal exists for this owner and session")?;
     let requests = super::request_head::load_session_requests(txn, node_did, session_id).await?;
-    let parents: Vec<_> = requests
-        .iter()
-        .filter(|row| row.request_id == from_request_id)
-        .collect();
-    anyhow::ensure!(
-        parents.len() == 1,
-        "resume predecessor must uniquely belong to the goal owner and session"
-    );
-    let parent_row = parents[0].clone();
-    verify_request_receipt_signature(&parent_row)?;
+    let parent_row = resume_predecessor(&requests, from_request_id)?.clone();
     Ok((goal, requests, parent_row))
 }
 
@@ -362,45 +353,22 @@ async fn stage_resume_inner(
         }
     }
 
-    anyhow::ensure!(
-        parent_row
-            .lifecycle_state
-            .is_some_and(RequestLifecycleState::is_terminal),
-        "resume predecessor must be terminal"
-    );
-    anyhow::ensure!(
-        latest_goal_request(&goal, &requests).is_some_and(|row| row.doc_id == parent_row.doc_id),
-        "resume predecessor is no longer the latest request"
-    );
-    anyhow::ensure!(
-        goal_session_is_idle(&requests),
-        "goal session still has unfinished requests"
-    );
-    let state = goal.state().context("goal has an unknown status")?;
-    let post = state
-        .step(GoalAction::Resume)
-        .context("goal status does not allow operator resume")?;
-    let sequence = goal
-        .continuation_sequence()
-        .checked_add(1)
-        .context("goal continuation sequence exhausted")?;
     let now = Utc::now();
-    let created_at = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let wrapup = post.wrapup_requested && !post.wrapup_completed;
-    let content = crate::triggers::engine::goal_source::continuation_prompt(&goal, None, wrapup);
     let session_hop =
         gents_session::session::load_session_current_hop_in_txn(txn, node_did, session_id).await?;
-    let mut create = prepare_goal_continuation(
+    let IdleResume {
+        post,
+        sequence,
+        mut create,
+    } = decide_idle_resume(
+        &goal,
+        &requests,
+        &parent_row,
         &parent,
         agent,
-        &goal.goal_id,
-        &content,
-        sequence,
-        wrapup,
-        &created_at,
+        now,
         session_hop,
     )?;
-    create.input.goal_assignment = Some(continuation_assignment(&goal, &parent, None)?);
     if agent_initiated {
         let session = gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
             txn, node_did, session_id,
@@ -460,17 +428,93 @@ async fn stage_resume_inner(
     })
 }
 
-async fn stage_resume_state(
-    txn: &ConfigApplyTxn<'_>,
+/// An idle Goal resumed from its terminal predecessor: the Goal's next state
+/// and continuation sequence, and the unsigned continuation request.
+pub(super) struct IdleResume {
+    pub(super) post: GoalState,
+    pub(super) sequence: i64,
+    pub(super) create: gents_protocol::request_admission::AgentRequestCreate,
+}
+
+/// The Goal's decision to resume from `parent_row`, on the session's request
+/// rows alone.
+pub(super) fn decide_idle_resume(
+    goal: &GoalDocument,
+    requests: &[AgentRequestRow],
+    parent_row: &AgentRequestRow,
+    parent: &gents_protocol::row::AgentRequest,
+    agent: String,
+    now: DateTime<Utc>,
+    session_hop: u32,
+) -> Result<IdleResume> {
+    anyhow::ensure!(
+        parent_row
+            .lifecycle_state
+            .is_some_and(RequestLifecycleState::is_terminal),
+        "resume predecessor must be terminal"
+    );
+    anyhow::ensure!(
+        latest_goal_request(goal, requests).is_some_and(|row| row.doc_id == parent_row.doc_id),
+        "resume predecessor is no longer the latest request"
+    );
+    anyhow::ensure!(
+        goal_session_is_idle(requests),
+        "goal session still has unfinished requests"
+    );
+    let state = goal.state().context("goal has an unknown status")?;
+    let post = state
+        .step(GoalAction::Resume)
+        .context("goal status does not allow operator resume")?;
+    let sequence = goal
+        .continuation_sequence()
+        .checked_add(1)
+        .context("goal continuation sequence exhausted")?;
+    let created_at = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let wrapup = post.wrapup_requested && !post.wrapup_completed;
+    let content = crate::triggers::engine::goal_source::continuation_prompt(goal, None, wrapup);
+    let mut create = prepare_goal_continuation(
+        parent,
+        agent,
+        &goal.goal_id,
+        &content,
+        sequence,
+        wrapup,
+        &created_at,
+        session_hop,
+    )?;
+    create.input.goal_assignment = Some(continuation_assignment(goal, parent, None)?);
+    Ok(IdleResume {
+        post,
+        sequence,
+        create,
+    })
+}
+
+/// The predecessor `from_request_id` names among the session's requests, with
+/// its verified receipt.
+pub(super) fn resume_predecessor<'a>(
+    requests: &'a [AgentRequestRow],
+    from_request_id: &str,
+) -> Result<&'a AgentRequestRow> {
+    let parents: Vec<_> = requests
+        .iter()
+        .filter(|row| row.request_id == from_request_id)
+        .collect();
+    anyhow::ensure!(
+        parents.len() == 1,
+        "resume predecessor must uniquely belong to the goal owner and session"
+    );
+    verify_request_receipt_signature(parents[0])?;
+    Ok(parents[0])
+}
+
+/// The Goal fields a resume writes, compare-and-set by the caller.
+pub(super) fn resume_state_input(
     goal: &GoalDocument,
     post: GoalState,
     continuation: Option<(i64, &str)>,
     now: DateTime<Utc>,
-) -> Result<()> {
-    let doc_id = escape_graphql_string(&goal.doc_id);
-    let expected_status = escape_graphql_string(&goal.status);
-    let expected_sequence = goal.continuation_sequence();
-    let escaped_did = escape_graphql_string(&goal.node_did);
+) -> serde_json::Value {
     let timestamp = now.to_rfc3339();
     let mut input = serde_json::json!({
         "status": post.status.as_str(),
@@ -490,6 +534,33 @@ async fn stage_resume_state(
         input["continuation_sequence"] = sequence.into();
         input["last_continued_from_request_id"] = from.into();
     }
+    input
+}
+
+/// A paused Goal resuming the work its session still holds.
+pub(super) fn busy_resume_post(goal: &GoalDocument) -> Result<GoalState> {
+    let state = goal.state().context("goal has an unknown status")?;
+    anyhow::ensure!(
+        state.status == GoalStatus::Paused,
+        "only a paused goal can resume current work"
+    );
+    state
+        .step(GoalAction::Resume)
+        .context("goal status does not allow resume")
+}
+
+async fn stage_resume_state(
+    txn: &ConfigApplyTxn<'_>,
+    goal: &GoalDocument,
+    post: GoalState,
+    continuation: Option<(i64, &str)>,
+    now: DateTime<Utc>,
+) -> Result<()> {
+    let doc_id = escape_graphql_string(&goal.doc_id);
+    let expected_status = escape_graphql_string(&goal.status);
+    let expected_sequence = goal.continuation_sequence();
+    let escaped_did = escape_graphql_string(&goal.node_did);
+    let input = resume_state_input(goal, post, continuation, now);
     let response = txn.execute_client_signed_update(
         &format!(r#"mutation($input: GoalMutationInputArg!) {{ update_Goal(filter: {{
             _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{escaped_did}" }},
@@ -516,14 +587,7 @@ pub(super) async fn stage_busy_resume(
         txn.actor_did() == Some(identity.did()),
         "goal resume requires its authenticated signing identity"
     );
-    let state = goal.state().context("goal has an unknown status")?;
-    anyhow::ensure!(
-        state.status == GoalStatus::Paused,
-        "only a paused goal can resume current work"
-    );
-    let post = state
-        .step(GoalAction::Resume)
-        .context("goal status does not allow resume")?;
+    let post = busy_resume_post(goal)?;
     stage_resume_state(txn, goal, post, None, Utc::now()).await
 }
 

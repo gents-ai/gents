@@ -1836,6 +1836,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "LifecycleHookGateCases",
         ),
         (
+            !snapshot.lifecycle_hook_queue_scope_cases.is_empty(),
+            "lifecycle_hook_queue_scope_cases",
+            "LifecycleHookQueueScopeCases",
+        ),
+        (
             !snapshot.lifecycle_hook_delivery_cases.is_empty(),
             "lifecycle_hook_delivery_cases",
             "LifecycleHookDeliveryCases",

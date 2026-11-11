@@ -140,34 +140,6 @@ pub use write::{
     set_goal_auto_resume_from_access, set_goal_from_access,
 };
 
-/// Resume only a paused Goal; an interrupted/claimed execution must settle
-/// before a fresh continuation can be staged.
-pub(crate) async fn stage_session_resume_in_txn(
-    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
-    identity: &dyn gents_store::identity::NodeIdentity,
-    node_did: &str,
-    session_id: &str,
-) -> Result<()> {
-    let requests = request_head::load_session_requests(txn, node_did, session_id).await?;
-    anyhow::ensure!(
-        !requests.iter().any(|row| row
-            .lifecycle_state
-            .is_some_and(RequestLifecycleState::is_unsettled_execution)),
-        "session work is still settling; retry resume after the interrupted request terminates"
-    );
-    let Some(goal) = load_canonical_goal_in_txn(txn, node_did, session_id).await? else {
-        return Ok(());
-    };
-    let state = goal.state().context("Goal has an unknown status")?;
-    if state.status != GoalStatus::Paused {
-        return Ok(());
-    }
-    let prepared = client_control::prepare_goal_resume(goal, state, &requests)
-        .map_err(|error| anyhow::anyhow!("{error}; resume was not applied"))?;
-    client_control::stage_goal_control(txn, identity, prepared).await?;
-    Ok(())
-}
-
 pub const BLOCKED_AUDIT_THRESHOLD: i64 = 3;
 pub const MAX_INFRASTRUCTURE_RETRIES: i64 = 2;
 

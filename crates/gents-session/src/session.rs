@@ -15,6 +15,7 @@ pub mod tool_output_rows;
 pub mod tool_presentation;
 pub use archive::set_session_archived_on;
 mod compaction_entries;
+mod control;
 mod fork;
 mod history;
 #[cfg(test)]
@@ -51,7 +52,12 @@ pub use compaction_entries::load_prompt_compaction_state_with_access;
 pub use compaction_entries::StaleCompactionGeneration;
 pub use compaction_entries::{compaction_key, load_compaction_entries};
 pub use compaction_entries::{save_exact_compaction_entry, NewExactSessionCompaction};
-pub use control::{resume_session_with_access, stop_session_with_access, SessionStopReceipt};
+#[cfg(test)]
+pub(crate) use control::stage_session_resume_in_txn;
+pub use control::{
+    resume_session_with_access, stop_session_with_access, SessionExecutionWitness,
+    SessionStopReceipt,
+};
 pub use fork::message_tool_references;
 pub use fork::{
     fork_edit_on, fork_on, is_user_turn, publish_fork_relationships, ForkBoundary, ForkError,

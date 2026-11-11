@@ -528,7 +528,7 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
             .await;
         }
         if case.owner_session_stopped == Some(true) {
-            crate::session::stop_session_with_access(
+            gents_session::session::stop_session_with_access(
                 &admission.node,
                 &admission.tool.access().unwrap(),
                 &admission.node_did,

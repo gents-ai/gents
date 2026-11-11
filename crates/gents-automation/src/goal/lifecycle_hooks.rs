@@ -12,9 +12,12 @@ use gents_protocol::goal_names::GOAL_TRIGGER_KIND;
 use gents_protocol::row::AgentRequestRow;
 use gents_session::request::hooks::claim::{ClaimVerdict, Successor};
 use gents_session::request::hooks::effect::{Effect, Manifest, OwnedCollection, Row, Write};
-use gents_session::request::hooks::hook::{Hook, Outcome, Query};
+use gents_session::request::hooks::hook::{Direction, Hook, Outcome, Query};
 use gents_session::request::hooks::prepared::{Decide, Verdict};
-use gents_session::request::hooks::registry::{AdmitShown, ClaimCandidate, Registry, SessionHalt};
+use gents_session::request::hooks::queue_scope::{ScopeAnswer, ScopeAnswers, ScopeFailure};
+use gents_session::request::hooks::registry::{
+    AdmitShown, ClaimCandidate, QueueScopeAsk, Registry, SessionHalt, SessionResume,
+};
 use gents_store::config_client::agent_session::{decode_agent_session_read, AgentSessionRowRead};
 
 pub(super) const PLUGIN: &str = "goals";
@@ -153,6 +156,120 @@ impl Hook<SessionHalt> for PauseOnHalt {
     }
 
     fn decide(&self, event: &SessionHalt, rows: &[Vec<Row>]) -> Outcome<()> {
+        match Self::effects(event, rows) {
+            Ok(effects) => Outcome::effects(effects),
+            Err(error) => Outcome::Refuse(format!("{error:#}")),
+        }
+    }
+}
+
+/// `control.session.resume`: a paused Goal resumes with its session. Busy, it
+/// resumes the work the session holds; idle, it continues from its terminal
+/// predecessor through core's `request.create` (Lean `Hooks.Resume`).
+struct RestageOnResume {
+    manifest: Manifest,
+}
+
+/// Why the plugin cannot resume a Goal that has no assignment root. Binding
+/// the continuation as the root needs the document ID core gives the created
+/// request, which no effect of this point can name.
+const UNBOUND_RESUME: &str =
+    "goal has no assignment root to bind its resumed continuation to; resume was not applied";
+
+impl RestageOnResume {
+    fn effects(event: &SessionResume, rows: &[Vec<Row>]) -> Result<Vec<Effect>> {
+        let [sessions, goals, requests] = rows else {
+            bail!("Goal resume was not shown its declared rows");
+        };
+        let Some((goal, row)) = canonical_goal(&event.session_id, sessions, goals)? else {
+            return Ok(Vec::new());
+        };
+        let state = goal.state().context("Goal has an unknown status")?;
+        if state.status != GoalStatus::Paused {
+            return Ok(Vec::new());
+        }
+        let requests = requests
+            .iter()
+            .map(|row| serde_json::from_value::<AgentRequestRow>(row.value.clone()))
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .context("decoding the session's requests")?;
+        let now = DateTime::parse_from_rfc3339(&event.at)
+            .context("resume time is not RFC 3339")?
+            .with_timezone(&Utc);
+        let prepared = client_control::prepare_goal_resume(goal, state, &requests)
+            .map_err(|error| anyhow::anyhow!("{error}; resume was not applied"))?;
+        match prepared {
+            client_control::PreparedGoalControl::ResumeCurrent(goal) => {
+                let post = operator_resume::busy_resume_post(&goal)?;
+                Ok(vec![Effect::Write(Write::Update {
+                    doc: row.doc.clone(),
+                    expected: row.revision,
+                    value: operator_resume::resume_state_input(&goal, post, None, now),
+                })])
+            }
+            client_control::PreparedGoalControl::ResumeIdle { goal, predecessor } => {
+                let parent_row = operator_resume::resume_predecessor(&requests, &predecessor)?;
+                let parent = gents_protocol::row::AgentRequest::try_from(parent_row.clone())?;
+                let key = continuation::goal_continuation_identity(&goal.goal_id, &predecessor, 1)?
+                    .retry_key;
+                let children = requests
+                    .iter()
+                    .filter(|row| row.retry_key.as_deref() == Some(key.as_str()))
+                    .collect::<Vec<_>>();
+                anyhow::ensure!(children.len() <= 1, "ambiguous goal continuation receipt");
+                if let Some(child) = children.first() {
+                    request_head::verify_goal_continuation_receipt(&goal, parent_row, child)?;
+                    return Ok(Vec::new());
+                }
+                if goal.assignment_root_request_doc_id.is_none() {
+                    bail!(UNBOUND_RESUME);
+                }
+                let agent = parent.agent_did.clone();
+                let resumed = operator_resume::decide_idle_resume(
+                    &goal, &requests, parent_row, &parent, agent, now, 0,
+                )?;
+                Ok(vec![
+                    Effect::Write(Write::Update {
+                        doc: row.doc.clone(),
+                        expected: row.revision,
+                        value: operator_resume::resume_state_input(
+                            &goal,
+                            resumed.post,
+                            Some((resumed.sequence, &predecessor)),
+                            now,
+                        ),
+                    }),
+                    gents_session::request::lifecycle::requested_create::request_create(
+                        resumed.create,
+                    )?,
+                ])
+            }
+            _ => bail!("goal resume prepared another control"),
+        }
+    }
+}
+
+impl Hook<SessionResume> for RestageOnResume {
+    type Value = ();
+
+    fn manifest(&self) -> &Manifest {
+        &self.manifest
+    }
+
+    fn reads(&self, event: &SessionResume) -> Vec<Query> {
+        let [session, goals] = canonical_goal_reads(&event.node_did, &event.session_id);
+        vec![
+            session,
+            goals,
+            Query::select("AgentRequest", request_head::request_selection_fields())
+                .eq("node_did", event.node_did.clone())
+                .eq("session_id", event.session_id.clone())
+                .order_by("created_at", Direction::Descending)
+                .order_by("request_id", Direction::Descending),
+        ]
+    }
+
+    fn decide(&self, event: &SessionResume, rows: &[Vec<Row>]) -> Outcome<()> {
         match Self::effects(event, rows) {
             Ok(effects) => Outcome::effects(effects),
             Err(error) => Outcome::Refuse(format!("{error:#}")),
@@ -317,14 +434,108 @@ impl Decide<AgentRequestRow, AdmitShown> for ContinuationEdge {
     }
 }
 
+/// `request.queue.scope`: each asked request's Goal assignment scope (Lean
+/// `Hooks.QueueScope.goals`), from its signed reference or, for a request
+/// without one, the session's retained assignments. The Goal history is
+/// declared only when some asked request needs it, so a queue site whose
+/// requests all carry signed references reads no Goal row.
+struct AssignmentScope {
+    manifest: Manifest,
+}
+
+impl AssignmentScope {
+    fn assignments(
+        event: &QueueScopeAsk,
+        goals: Vec<GoalDocument>,
+    ) -> request_assignment::RequestAssignments {
+        request_assignment::RequestAssignments::over(Arc::clone(&event.requests), goals)
+    }
+
+    fn retained(event: &QueueScopeAsk, rows: &[Vec<Row>]) -> Result<Vec<GoalDocument>> {
+        match rows {
+            [] => Ok(Vec::new()),
+            [history] => request_assignment::latest_assignment_goals(
+                &history::assignment_versions_from_rows(
+                    &event.node_did,
+                    &event.session_id,
+                    history,
+                )?,
+            ),
+            _ => bail!("Goal queue scope was not shown its declared rows"),
+        }
+    }
+
+    fn answers(event: &QueueScopeAsk, rows: &[Vec<Row>]) -> ScopeAnswers {
+        let (assignments, unavailable) = match Self::retained(event, rows) {
+            Ok(goals) => (Self::assignments(event, goals), None),
+            Err(error) => (
+                Self::assignments(event, Vec::new()),
+                Some(ScopeFailure::of(&error)),
+            ),
+        };
+        let mut answers = ScopeAnswers::default();
+        for doc in &event.asked {
+            let scope =
+                assignments.request(doc).and_then(|_| {
+                    match request_assignment::signed_scope(&assignments, doc) {
+                        Ok(Some(scope)) => Ok(Ok(scope)),
+                        _ => match &unavailable {
+                            Some(failure) => Ok(Err(failure.clone())),
+                            None => assignments.scope(doc).map(Ok),
+                        },
+                    }
+                });
+            let answer = match scope {
+                Ok(Ok(scope)) => ScopeAnswer::Keyed(scope),
+                Ok(Err(failure)) => ScopeAnswer::Failed(failure),
+                Err(error) => ScopeAnswer::Failed(ScopeFailure::of(&error)),
+            };
+            answers.insert(doc.clone(), answer);
+        }
+        answers
+    }
+}
+
+impl Hook<QueueScopeAsk> for AssignmentScope {
+    type Value = ScopeAnswers;
+
+    fn manifest(&self) -> &Manifest {
+        &self.manifest
+    }
+
+    fn reads(&self, event: &QueueScopeAsk) -> Vec<Query> {
+        if request_assignment::scopes_need_history(
+            &Self::assignments(event, Vec::new()),
+            &event.asked,
+        ) {
+            vec![history::assignment_history_read(
+                &event.node_did,
+                &event.session_id,
+            )]
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn decide(&self, event: &QueueScopeAsk, rows: &[Vec<Row>]) -> Outcome<ScopeAnswers> {
+        Outcome::proceed(Self::answers(event, rows))
+    }
+}
+
 pub fn register(registry: &mut Registry) {
     registry
         .request_admit_verify
         .push(Arc::new(ContinuationEdge));
+    registry.queue_scope.push(Arc::new(AssignmentScope {
+        manifest: manifest(),
+    }));
     registry.claim_gate.push(Arc::new(ClaimFence {
         manifest: manifest(),
     }));
     registry.session_halt.push(Arc::new(PauseOnHalt {
+        manifest: manifest(),
+    }));
+    registry.session_resume.push(Arc::new(RestageOnResume {
         manifest: manifest(),
     }));
 }

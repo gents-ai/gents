@@ -180,6 +180,29 @@ impl BackgroundLiveOutputState {
     }
 }
 
+/// The hosting runtime's execution owners as session resume's quiescence
+/// witnesses.
+pub struct RuntimeExecutionWitness {
+    pub background_executions: BackgroundExecutionRegistry,
+    pub job_driver: Arc<crate::background::job::driver::JobDriver>,
+}
+
+impl gents_session::session::SessionExecutionWitness for RuntimeExecutionWitness {
+    fn active_tool_call_doc_ids(&self) -> Vec<String> {
+        self.background_executions.active_tool_call_doc_ids()
+    }
+
+    fn process_records(
+        &self,
+    ) -> anyhow::Result<Vec<gents_session::exec::ownership::ProcessRecord>> {
+        self.background_executions.try_process_record_list()
+    }
+
+    fn in_flight_job_row_ids(&self) -> Vec<String> {
+        self.job_driver.in_flight_row_ids()
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct BackgroundExecutionRegistry {
     inner: Arc<std::sync::Mutex<RapidHashMap<String, BackgroundExecution>>>,
