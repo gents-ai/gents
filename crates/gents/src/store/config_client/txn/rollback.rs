@@ -8,7 +8,7 @@ use futures::future::BoxFuture;
 use query::TransactionHandle;
 use tracing::{instrument::WithSubscriber, Instrument};
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 use super::fault_injection::mark_cleanup_scheduled_for_test;
 use super::gate::{MutationWriteGate, MutationWriteGuard};
 use super::native::NativeOperationTracker;
@@ -181,7 +181,7 @@ impl Drop for RollbackOnDrop {
                 }
                 .with_subscriber(dispatcher)
                 .instrument(span));
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-fixtures"))]
                 mark_cleanup_scheduled_for_test();
             }
         }

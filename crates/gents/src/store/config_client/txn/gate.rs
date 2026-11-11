@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use defra_node::Node as EmbeddedNode;
 use tracing::{instrument::WithSubscriber, Instrument};
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 use super::fault_injection::{LOCAL_OPERATION_PAUSE, SUCCESSFUL_MUTATION_FAULT};
 use super::native::ensure_not_reentrant_embedded_write;
 use super::{retry, ConfigClientError, Result, EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT};
@@ -86,8 +86,9 @@ impl LocalConfigAccess {
             .filter(|_| self.client_signed_writes)
     }
 
-    #[cfg(test)]
-    pub(crate) fn has_agent_signer(&self) -> bool {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    #[doc(hidden)]
+    pub fn has_agent_signer(&self) -> bool {
         self.agent_signer.is_some()
     }
 
@@ -141,12 +142,12 @@ impl LocalConfigAccess {
         let gate = Arc::clone(&self.gate);
         let dispatcher = tracing::dispatcher::get_default(Clone::clone);
         let span = tracing::Span::current();
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-fixtures"))]
         let local_operation_pause = LOCAL_OPERATION_PAUSE.try_with(Arc::clone).ok();
         let (send, receive) = tokio::sync::oneshot::channel();
         tokio::spawn(
             async move {
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-fixtures"))]
                 if let Some(pause) = local_operation_pause.as_ref() {
                     pause.reached.notify_one();
                     pause.release.notified().await;
@@ -154,7 +155,7 @@ impl LocalConfigAccess {
                 let result = operation(Arc::clone(&node)).await;
                 drop(node);
                 drop(gate);
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-fixtures"))]
                 if let Some(completed) = local_operation_pause
                     .as_ref()
                     .and_then(|pause| pause.completed.as_ref())
@@ -345,7 +346,7 @@ impl MutationWriteGate {
         let acquire = Arc::clone(&self.permits).acquire_owned();
         tokio::pin!(acquire);
         let mut registration = None;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-fixtures"))]
         let observation = SUCCESSFUL_MUTATION_FAULT
             .try_with(|fault| fault.write_gate_observation.clone())
             .ok()
@@ -365,7 +366,7 @@ impl MutationWriteGate {
                     .as_mut()
                     .expect("pending acquisition is registered")
                     .record_pending_poll();
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-fixtures"))]
                 if let Some(observation) = observation.as_ref() {
                     if !observation.queued_fired.swap(true, Ordering::Relaxed) {
                         observation.queued.notify_one();
@@ -375,7 +376,7 @@ impl MutationWriteGate {
             }
             std::task::Poll::Ready(permit) => {
                 registration.take();
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-fixtures"))]
                 if permit.is_ok() {
                     if let Some(observation) = observation.as_ref() {
                         observation.acquired.store(true, Ordering::Release);

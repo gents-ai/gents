@@ -6,7 +6,7 @@ use defra_node::QueryRequest;
 use serde_json::Value;
 
 use super::apply_txn::TxnBackend;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 use super::fault_injection::after_successful_mutation_for_test;
 use super::native::execute_owned_native;
 use super::{graphql, retry, ConfigApplyTxn, ConfigClientError, Result};
@@ -112,7 +112,7 @@ impl ConfigApplyTxn<'_> {
         let response = crate::store::graphql::into_data_envelope(response.data);
         self.affected_documents
             .fetch_add(graphql::affected_documents(&response), Ordering::Relaxed);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-fixtures"))]
         after_successful_mutation_for_test(self.operation).await?;
         Ok(response)
     }

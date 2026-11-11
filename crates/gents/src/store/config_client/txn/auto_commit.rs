@@ -7,7 +7,7 @@ use defra_node::Node as EmbeddedNode;
 use serde_json::Value;
 use tracing::{instrument::WithSubscriber, Instrument};
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 use super::fault_injection::SUCCESSFUL_MUTATION_FAULT;
 use super::gate::{existing_mutation_write_gate, mutation_write_gate};
 use super::native::native_operation_abandoned;
@@ -77,7 +77,7 @@ impl ConfigAccess {
         variables: Option<&Value>,
         operation: &str,
     ) -> Result<defra_node::QueryResponse> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-fixtures"))]
         if let Some(reached) = SUCCESSFUL_MUTATION_FAULT
             .try_with(|fault| {
                 fault
@@ -124,7 +124,7 @@ impl ConfigAccess {
             )
             .await;
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-fixtures"))]
         if let Some(reached) = SUCCESSFUL_MUTATION_FAULT
             .try_with(|fault| {
                 fault
@@ -431,7 +431,7 @@ impl ConfigAccess {
         let mutation = mutation.to_owned();
         let dispatcher = tracing::dispatcher::get_default(Clone::clone);
         let span = tracing::Span::current();
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-fixtures"))]
         let native_pause = SUCCESSFUL_MUTATION_FAULT
             .try_with(|fault| fault.native_pause.clone())
             .ok()
@@ -443,7 +443,7 @@ impl ConfigAccess {
                     started: false,
                     completed: false,
                 };
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-fixtures"))]
                 if let Some((reached, release)) = native_pause {
                     reached.notify_one();
                     release.notified().await;

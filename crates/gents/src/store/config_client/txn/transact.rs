@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use futures::future::BoxFuture;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 use super::fault_injection::retry_backoff_reached_for_test;
 use super::finalize::{CommitCleanup, CommitFailure};
 use super::native::ACTIVE_EMBEDDED_TRANSACTION;
@@ -422,7 +422,7 @@ where
                         rollback,
                     });
                     drop(txn);
-                    #[cfg(test)]
+                    #[cfg(any(test, feature = "test-fixtures"))]
                     retry_backoff_reached_for_test();
                     tokio::time::sleep(backoff).await;
                 }

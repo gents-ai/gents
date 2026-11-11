@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use tracing::{instrument::WithSubscriber, Instrument};
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 use super::fault_injection::SUCCESSFUL_MUTATION_FAULT;
 use super::{retry, ConfigClientError, Result, EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT};
 use crate::store::config_client::write_telemetry::{record_slow_native_phase, WriteOperation};
@@ -143,7 +143,7 @@ where
     let dispatcher = tracing::dispatcher::get_default(Clone::clone);
     let span = tracing::Span::current();
     let (send, receive) = tokio::sync::oneshot::channel();
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-fixtures"))]
     let native_pause = SUCCESSFUL_MUTATION_FAULT
         .try_with(|fault| fault.native_pause.clone())
         .ok()
@@ -152,7 +152,7 @@ where
     tokio::spawn(
         async move {
             record_slow_native_phase(operation, "execute-dispatch", dispatched_at.elapsed());
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-fixtures"))]
             if let Some((reached, release)) = native_pause {
                 reached.notify_one();
                 release.notified().await;
