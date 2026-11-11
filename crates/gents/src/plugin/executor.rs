@@ -897,9 +897,11 @@ impl crate::tools::plugin_host::PluginHost for PluginExecutor {
         collections: std::collections::BTreeSet<String>,
         actor: Option<identity::Did>,
     ) -> Result<Box<dyn crate::inference::llm::tool::ToolDyn>> {
-        Ok(Box::new(
-            crate::plugin::application_write::WriteTool::new(access, collections, actor),
-        ))
+        Ok(Box::new(crate::plugin::application_write::WriteTool::new(
+            access,
+            collections,
+            actor,
+        )))
     }
 
     fn plugin_tool(
