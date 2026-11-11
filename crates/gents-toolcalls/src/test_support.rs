@@ -1,8 +1,8 @@
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 use gents_pack::test_support::fixture_pack_copy;
 
-#[cfg(test)]
-pub(crate) fn home_with_fixture_pack(
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn home_with_fixture_pack(
     name: &str,
 ) -> (
     tempfile::TempDir,
@@ -12,7 +12,7 @@ pub(crate) fn home_with_fixture_pack(
     home_with_pack_dir(&dir)
 }
 
-pub(crate) fn home_with_pack_dir(
+pub fn home_with_pack_dir(
     dir: &std::path::Path,
 ) -> (
     tempfile::TempDir,
@@ -30,6 +30,6 @@ pub(crate) fn home_with_pack_dir(
     (home, plugins)
 }
 
-pub(crate) fn default_plugin_host() -> std::sync::Arc<dyn gents_tools::plugin_host::PluginHost> {
+pub fn default_plugin_host() -> std::sync::Arc<dyn gents_tools::plugin_host::PluginHost> {
     std::sync::Arc::new(crate::plugin::executor::PluginExecutor::default())
 }
