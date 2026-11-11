@@ -1,5 +1,6 @@
 use super::*;
 use crate::store::config_client::ConfigAccess;
+use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::{KeyIdentity, NodeIdentity};
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,

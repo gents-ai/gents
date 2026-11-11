@@ -55,9 +55,7 @@ pub(crate) use folding::{
     heads_user_turn, load_consumed_folded_inputs, select_fold_in_claim_txn, FoldedConsumption,
     FoldedInput,
 };
-pub use gents_protocol::request_input::{
-    GoalContinuationInput, QueuePolicy, QueueSource, RequestInput, RequestQueue,
-};
+pub use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};
 #[cfg(test)]
 use input::queue_is_automated_wakeup;
 pub(crate) use input::{

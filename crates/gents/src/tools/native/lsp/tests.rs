@@ -1,11 +1,10 @@
 mod consent;
 
 use super::*;
+use crate::documents::FileToolMode;
 use crate::tools::native::shared::ToolContext;
 use crate::tools::native::{CommandConstraints, CommandExecutionMode, CommandNetworkMode};
-use crate::tools::surface::{
-    AgentToolSurfaceConfig, FileToolMode, ResolvedToolSelection, ToolCeiling,
-};
+use crate::tools::surface::{AgentToolSurfaceConfig, ResolvedToolSelection, ToolCeiling};
 
 fn first_line_containing(path: &std::path::Path, needle: &str) -> u32 {
     let text = std::fs::read_to_string(path).unwrap_or_else(|err| {

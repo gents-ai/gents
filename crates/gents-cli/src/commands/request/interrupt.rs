@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use gents::{
-    store::graphql::escape_graphql_string, tools::call::lifecycle::CancelCause, ConfigAccess,
+    session::tool_call_state::CancelCause, store::graphql::escape_graphql_string, ConfigAccess,
 };
 use gents_protocol::client_protocol::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;

@@ -1,5 +1,5 @@
 use super::*;
-use crate::documents::{AgentContext, AgentTools};
+use crate::documents::{AgentContext, AgentTools, BuiltInTools};
 use crate::pack::InstalledVia;
 use crate::plugin::store::InstalledPlugin;
 use crate::tools::background::job::settings;

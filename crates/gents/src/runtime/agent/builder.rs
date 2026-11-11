@@ -13,6 +13,7 @@ use super::{assemble_node_and_agents, runtime, AgentBuildError, Gents, ProcessLi
 use crate::documents::inference_defaults::{
     DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
+use crate::documents::{BashMode, FileToolMode};
 use crate::inference::admission::BackendAdmissionConfig;
 #[cfg(test)]
 use crate::inference::backends::provider::BackendProviderKind;
@@ -30,8 +31,7 @@ use crate::tools::call::hook::{BackgroundExecutionRegistry, FailurePolicy};
 use crate::tools::mcp::health::HealthCheckerOptions;
 use crate::tools::mcp::pool::McpPool;
 use crate::tools::surface::{
-    AgentToolSurfaceConfig, BashMode, CustomToolFactory, FileToolMode, ResolvedToolSelection,
-    ToolCeiling,
+    AgentToolSurfaceConfig, CustomToolFactory, ResolvedToolSelection, ToolCeiling,
 };
 
 #[cfg(test)]

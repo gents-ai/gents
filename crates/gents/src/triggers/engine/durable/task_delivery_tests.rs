@@ -5,6 +5,7 @@ use crate::request::lifecycle::materialize::{
 };
 use crate::request::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
 use crate::request::lifecycle::{build_signed_request, ExecutionOrigin, TriggerLineage};
+use crate::store::graphql::escape_graphql_string;
 use std::sync::Arc;
 
 #[test]
