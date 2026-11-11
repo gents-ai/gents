@@ -3,14 +3,13 @@ pub mod status_projection;
 
 use crate::inference::llm::message::{AssistantContent, Message, Text};
 use crate::session::tool_output_rows::observe_canonical_tool_output_with_access;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::Utc;
 use serde::Deserialize;
 
 use crate::tools::native::background_args::{
-    BackgroundToolArgs, CancelToolArgs, ListBackgroundToolsArgs, ListBackgroundToolsEntry,
-    ListBackgroundToolsResponse, ListStatusFilter, ReadToolOutputArgs, ReadToolOutputResponse,
-    WaitToolArgs,
+    ListBackgroundToolsArgs, ListBackgroundToolsEntry, ListBackgroundToolsResponse,
+    ListStatusFilter, ReadToolOutputArgs, ReadToolOutputResponse,
 };
 pub(crate) use gents_loop::live_output::{
     LiveOutputStream, LiveToolOutputRegistry, LiveToolOutputWriter,

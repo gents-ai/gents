@@ -5,6 +5,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use super::*;
+use crate::documents::InferenceProfile;
 use crate::plugin::executor::PluginExecutor;
 use crate::plugin::model_binding::{
     endpoint_for, AccessModels, ModelBinding, ModelEndpoint, ModelResolver,
@@ -13,7 +14,9 @@ use crate::plugin::rounds::{drive, HostCalls, Round, MAX_ROUNDS};
 use crate::plugin::store::{self, InstalledPlugin};
 use crate::plugin::tests::executor::{asking_plugin_wat, installed_plugin};
 use crate::plugin::{PluginBudget, PluginOutcome, PluginVerdict};
+use crate::store::config_client::ConfigAccess;
 use crate::store::identity::NodeIdentity;
+use futures::future::BoxFuture;
 
 const KEY: &str = "sekret-key-0123";
 
