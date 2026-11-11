@@ -499,29 +499,18 @@ pub(crate) fn parse_target(raw: &str) -> Result<JobTarget, String> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ProposerArg {
-    /// A script of proposals, one per round.
-    Scripted(PathBuf),
-    /// An agent of a pack asked once per round; without a
-    /// agent, the pack's only inference-slot agent.
-    Agent { pack: String, agent: Option<String> },
+/// An agent of a pack asked once per round; without an agent, the pack's only
+/// inference-slot agent.
+pub(crate) struct ProposerArg {
+    pub(crate) pack: String,
+    pub(crate) agent: Option<String>,
 }
 
 pub(crate) fn parse_proposer(raw: &str) -> Result<ProposerArg, String> {
-    let usage = || {
-        format!(
-            "unknown proposer {raw:?}; pass --proposer scripted:<file> or --proposer agent:<pack>[:<agent>]"
-        )
-    };
-    if let Some(path) = raw.strip_prefix("scripted:") {
-        return match path.trim() {
-            "" => Err(usage()),
-            path => Ok(ProposerArg::Scripted(PathBuf::from(path))),
-        };
-    }
+    let usage = || format!("unknown proposer {raw:?}; pass --proposer agent:<pack>[:<agent>]");
     let Some(target) = raw.strip_prefix("agent:") else {
         return Err(usage());
     };
     let SubjectArg { pack, agent } = parse_subject(target).map_err(|_| usage())?;
-    Ok(ProposerArg::Agent { pack, agent })
+    Ok(ProposerArg { pack, agent })
 }

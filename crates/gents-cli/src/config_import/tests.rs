@@ -70,7 +70,7 @@ async fn tools_id(access: &ConfigAccess, owner: &str, id: &str) -> Result<Option
 
 #[tokio::test]
 async fn imports_complete_candidate_and_recreates_only_the_scoped_tombstone() -> Result<()> {
-    let client = crate::shared::test_support::ClientHome::new().await;
+    let client = gents_host::test_support::ClientHome::new().await;
     let peer_dir = tempfile::tempdir()?;
     let peer =
         gents_store::identity::KeyIdentity::load_or_create(peer_dir.path().join("peer.key"), None)?;
@@ -119,7 +119,7 @@ async fn imports_complete_candidate_and_recreates_only_the_scoped_tombstone() ->
 
 #[tokio::test]
 async fn invalid_candidate_rolls_back_other_selected_writes() -> Result<()> {
-    let client = crate::shared::test_support::ClientHome::new().await;
+    let client = gents_host::test_support::ClientHome::new().await;
     let owner = client.node_did().to_owned();
     let access = client.access.clone();
     let valid = config(&owner, "tools");

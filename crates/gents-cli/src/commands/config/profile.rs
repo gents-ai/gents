@@ -70,7 +70,7 @@ pub(crate) fn bound_slots(
         return Ok(Vec::new());
     }
     gents_pack::plugin::store::bound_to_profile(
-        &crate::home_state::resolve_home_dir(home),
+        &gents_service::home_state::resolve_home_dir(home),
         node_did,
         profile_id,
     )
@@ -83,7 +83,7 @@ async fn list_candidates(
     plugin_slots: &[String],
 ) -> Result<Value> {
     let observations = if let ConfigAccess::Graphql(graphql) = access {
-        let identity = crate::load_client_identity().await?;
+        let identity = gents_service::home_state::load_client_identity().await?;
         crate::commands::accounts::request_usage_reads(
             &identity,
             graphql,
@@ -422,7 +422,7 @@ mod tests {
     use super::*;
     #[tokio::test]
     async fn profile_show_warns_when_an_xai_effort_will_not_be_sent() {
-        let (access, owner) = crate::shared::test_support::seed_unsent_xai_effort().await;
+        let (access, owner) = gents_host::test_support::seed_unsent_xai_effort().await;
         let owner = owner.as_str();
         let mut row =
             super::super::crud::load_one(&access, super::super::crud::PROFILE_SPEC, owner, "grok")
@@ -434,11 +434,11 @@ mod tests {
             .expect("warning");
         assert!(warning.contains("profile grok"), "{warning}");
     }
-    const DID: &str = crate::caused_sessions::fixtures::FIXTURE_DID;
+    const DID: &str = gents_session::test_support::lineage_fixtures::FIXTURE_DID;
     const CLAUDE: &str = "claude-subscription";
 
     fn agent(name: &str) -> gents_protocol::agent_identity::AgentIdentityBinding {
-        crate::shared::test_support::fixture_agent_named(name)
+        gents_host::test_support::fixture_agent_named(name)
     }
 
     /// The named fixture Agents' DIDs in DID order.
@@ -493,7 +493,7 @@ mod tests {
     async fn seeded() -> (ConfigAccess, String, String) {
         use gents_inference::auth::credential::{set_account_enabled, store_sign_in};
         let node = std::sync::Arc::new(
-            crate::shared::test_support::fixture_node_builder()
+            gents_host::test_support::fixture_node_builder()
                 .build()
                 .await
                 .unwrap(),
@@ -501,10 +501,11 @@ mod tests {
         gents_store::schema::ensure_runtime_schemas(&node)
             .await
             .unwrap();
-        crate::shared::test_support::publish_test_node(&node).await;
+        gents_host::test_support::publish_test_node(&node).await;
         let access = ConfigAccess::local_as(
             node,
-            ::identity::Did::new(crate::caused_sessions::fixtures::FIXTURE_DID).unwrap(),
+            ::identity::Did::new(gents_session::test_support::lineage_fixtures::FIXTURE_DID)
+                .unwrap(),
         );
         for value in [
             backend(

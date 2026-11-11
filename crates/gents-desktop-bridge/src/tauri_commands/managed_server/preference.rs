@@ -34,7 +34,7 @@ pub(super) async fn refuse_renaming_home(
     node_home: &std::path::Path,
     requested: &str,
 ) -> Result<(), BridgeError> {
-    if !gents_server::server_host::initialized_home(node_home) {
+    if !gents_service::server_host::initialized_home(node_home) {
         return Ok(());
     }
     let initialized = read_initialized_name(node_home).await;

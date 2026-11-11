@@ -1,9 +1,12 @@
+use gents_host::args::StoreKeyCustodyArg;
 use std::path::PathBuf;
 
 use clap::ValueEnum;
 use gents_documents::inference_defaults::DEFAULT_MAX_QUEUE_DEPTH;
 
-use super::{BackendPresetArg, OpenAiWireApiArg, ToolPackageArg};
+use gents_service::args::ToolPackageArg;
+
+use super::{BackendPresetArg, OpenAiWireApiArg};
 
 #[derive(clap::Args)]
 pub(crate) struct ProvisionArgs {
@@ -64,27 +67,6 @@ pub(crate) enum IdentityBackendArg {
     MacosSecureEnclave,
 }
 
-/// Custody of a new home's store encryption key (`gents::store::local::store_key`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-pub(crate) enum StoreKeyCustodyArg {
-    File,
-    Keychain,
-}
-
-pub(crate) fn store_key_custody(
-    arg: Option<StoreKeyCustodyArg>,
-) -> gents_store::local::store_key::StoreKeyCustodyChoice {
-    match arg {
-        Some(StoreKeyCustodyArg::File) => {
-            gents_store::local::store_key::StoreKeyCustodyChoice::File
-        }
-        Some(StoreKeyCustodyArg::Keychain) => {
-            gents_store::local::store_key::StoreKeyCustodyChoice::Keychain
-        }
-        None => gents_store::local::store_key::StoreKeyCustodyChoice::default(),
-    }
-}
-
 #[derive(clap::Args)]
 pub(crate) struct InitArgs {
     /// Set by the interactive menu, never by a flag.
@@ -112,7 +94,7 @@ pub(crate) struct InitArgs {
         help = "Create/load identity and write init.json without seeding runtime config documents"
     )]
     pub(crate) identity_only: bool,
-    #[arg(long, default_value = crate::DEFAULT_NODE_NAME, help = "Local display name and default key filename. The node DID is derived from the identity key.")]
+    #[arg(long, default_value = gents_host::defaults::DEFAULT_NODE_NAME, help = "Local display name and default key filename. The node DID is derived from the identity key.")]
     pub(crate) node_name: String,
     #[arg(long)]
     pub(crate) key_path: Option<PathBuf>,

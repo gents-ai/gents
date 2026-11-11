@@ -7,9 +7,11 @@ use gents_observe::observe::run_timeline::{
     TimelineToolCallEvent,
 };
 use gents_protocol::adapter_projection_kind::AdapterProjectionKind;
+use gents_store::config_client::document_decide::{
+    decide_document_access, DocumentAccessQuestion, DocumentDecideError,
+};
 use gents_store::graphql::escape_graphql_string;
 use serde::Deserialize;
-use serde_json::json;
 
 use crate::config_writes::ConfigAccess;
 
@@ -29,11 +31,6 @@ impl ProjectionAcpReadScope {
             .map(String::as_str)
             .unwrap_or(collection)
     }
-}
-
-#[derive(Debug, Deserialize)]
-pub(super) struct ProjectionAcpDecisionResponse {
-    allowed: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -489,41 +486,36 @@ impl<'a> ProjectionAcpReadDecider<'a> {
         if let Some(allowed) = self.cache.get(&key) {
             return Ok(*allowed);
         }
-        let url = format!(
-            "{}/acp/document/decide",
-            self.scope.api_base.trim_end_matches('/')
-        );
-        let response = self
-            .client
-            .post(url)
-            .json(&json!({
-                "actor": self.scope.actor_did,
-                "permission": "read",
-                "policyID": self.scope.policy_id,
-                "resourceName": resource_name,
-                "docID": doc_id,
-            }))
-            .send()
-            .await
-            .with_context(|| {
-                format!("requesting DefraDB ACP read decision for {resource_name}/{doc_id}")
-            })?;
-        let status = response.status();
-        let text = response
-            .text()
-            .await
-            .context("reading DefraDB ACP decision response")?;
-        if !status.is_success() {
-            anyhow::bail!(
-                "DefraDB ACP decision endpoint returned {status} for {resource_name}/{doc_id}: {text}"
-            );
-        }
-        let decision =
-            serde_json::from_str::<ProjectionAcpDecisionResponse>(&text).with_context(|| {
-                format!("parsing DefraDB ACP decision response for {resource_name}/{doc_id}")
-            })?;
-        self.cache.insert(key, decision.allowed);
-        Ok(decision.allowed)
+        let allowed = decide_document_access(
+            &self.client,
+            &self.scope.api_base,
+            None,
+            &DocumentAccessQuestion {
+                actor: &self.scope.actor_did,
+                permission: "read",
+                policy_id: &self.scope.policy_id,
+                resource_name,
+                doc_id,
+            },
+        )
+        .await
+        .map_err(|error| match error {
+            DocumentDecideError::Request(source) => anyhow::Error::new(source).context(format!(
+                "requesting DefraDB ACP read decision for {resource_name}/{doc_id}"
+            )),
+            DocumentDecideError::ReadBody(source) => {
+                anyhow::Error::new(source).context("reading DefraDB ACP decision response")
+            }
+            DocumentDecideError::Refused { status, body } => anyhow::anyhow!(
+                "DefraDB ACP decision endpoint returned {status} for {resource_name}/{doc_id}: {body}"
+            ),
+            DocumentDecideError::Decode(source) => anyhow::Error::new(source).context(format!(
+                "parsing DefraDB ACP decision response for {resource_name}/{doc_id}"
+            )),
+            DocumentDecideError::Authorize(source) => anyhow::Error::new(source),
+        })?;
+        self.cache.insert(key, allowed);
+        Ok(allowed)
     }
 }
 

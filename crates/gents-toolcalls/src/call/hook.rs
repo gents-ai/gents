@@ -1236,7 +1236,7 @@ struct ToolResultIdentity {
     call_id: Option<String>,
 }
 
-struct SessionState {
+pub struct SessionState {
     session_id: Option<String>,
     current_request_id: Option<String>,
     current_request_doc_id: Option<String>,

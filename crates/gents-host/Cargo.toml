@@ -1,0 +1,80 @@
+[package]
+name = "gents-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The runtime host: serving, runtime preparation and the runtime's HTTP surface"
+
+[features]
+test-fixtures = ["gents-session/test-fixtures", "gents-service/test-home-guard"]
+
+[dependencies]
+gents = { path = "../gents" }
+gents-store = { workspace = true }
+gents-documents = { workspace = true }
+gents-inference = { workspace = true }
+gents-p2p = { workspace = true }
+gents-pack = { workspace = true }
+gents-session = { workspace = true }
+gents-tools = { workspace = true }
+gents-toolcalls = { workspace = true }
+gents-automation = { workspace = true }
+gents-loop = { workspace = true }
+gents-desktop-core.workspace = true
+gents-service.workspace = true
+gents-protocol.workspace = true
+anyhow.workspace = true
+async-trait = "0.1"
+axum = { version = "0.8", features = ["ws"] }
+base64.workspace = true
+chrono.workspace = true
+clap.workspace = true
+defra-node = { workspace = true, features = ["http"] }
+defra-http.workspace = true
+defra-core.workspace = true
+defra-p2p-adapter.workspace = true
+futures-util = "0.3"
+hostname.workspace = true
+identity.workspace = true
+include_dir = "0.7"
+iroh.workspace = true
+p2p.workspace = true
+query.workspace = true
+rapidhash = { workspace = true }
+reqwest.workspace = true
+rmcp = { version = "1.2.0", features = [
+    "server",
+    "transport-streamable-http-server",
+    "macros",
+    "client",
+    "transport-streamable-http-client-reqwest",
+    "reqwest",
+] }
+schema.workspace = true
+schemars = "1"
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+tempfile = "3"
+tokio.workspace = true
+tokio-util.workspace = true
+tokio-tungstenite = { version = "0.26.2", features = ["rustls-tls-native-roots"] }
+tracing.workspace = true
+uuid.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+gents = { path = "../gents", features = ["test-home-guard"] }
+gents-service = { workspace = true, features = ["test-home-guard"] }
+gents-session = { workspace = true, features = ["test-fixtures"] }
+acp.workspace = true
+ctor = "0.2"
+crypto.workspace = true
+db.workspace = true
+futures = "0.3"
+gents-lean-contract.workspace = true
+gents-lean-vocab.workspace = true

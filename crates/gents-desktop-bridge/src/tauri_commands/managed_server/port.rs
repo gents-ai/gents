@@ -125,12 +125,12 @@ pub(super) async fn observe_port_readiness(
     node_home: &Path,
     user: Option<&ClientSigningCapability>,
 ) -> Result<PortReadiness, BridgeError> {
-    let config = gents_server::server_host::ServerConfig::standard(node_home.to_path_buf());
+    let config = gents_service::server_host::ServerConfig::standard(node_home.to_path_buf());
     observe_port_readiness_at(&config, user).await
 }
 
 pub(super) async fn observe_port_readiness_at(
-    config: &gents_server::server_host::ServerConfig,
+    config: &gents_service::server_host::ServerConfig,
     user: Option<&ClientSigningCapability>,
 ) -> Result<PortReadiness, BridgeError> {
     let node_home = &config.home;
@@ -148,7 +148,7 @@ pub(super) async fn observe_port_readiness_at(
             PortReadiness::NotListening
         });
     };
-    let initialized_did = if gents_server::server_host::initialized_home(node_home) {
+    let initialized_did = if gents_service::server_host::initialized_home(node_home) {
         read_initialized_did(node_home).await
     } else {
         None
@@ -254,7 +254,7 @@ fn managed_status_from_payload(payload: serde_json::Value, live_did: &str) -> Ma
 }
 
 async fn default_port_payload(
-    config: &gents_server::server_host::ServerConfig,
+    config: &gents_service::server_host::ServerConfig,
 ) -> Result<Option<serde_json::Value>, BridgeError> {
     match gents_desktop_core::local_runtime::fetch_runtime_connection_payload(&config.status_url())
         .await

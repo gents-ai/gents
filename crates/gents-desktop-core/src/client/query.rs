@@ -4,7 +4,7 @@ use gents_documents::{
     Agent, AgentContext, AgentTargetDocument, CompactionConfig, DatastoreToolSurfaceDocument,
     DefaultAgentSelection, EventSource, InferenceBackend, InferenceBackendObservation,
     InferenceExecution, InferenceProfile, InferenceSampling, Node, Schedule, ScheduleObservation,
-    SkillDocument, Task, ToolServiceRegistry, Tools, Trigger, TriggerObservation,
+    SkillDocument, Task, ToolServiceRegistry, Tools, Trigger, TriggerObservation, SKILL_FIELDS,
 };
 use gents_protocol::client_protocol::SessionRowObservation;
 use gents_protocol::graphql::escape_graphql_string;
@@ -128,7 +128,6 @@ pub(super) const GOAL_FIELDS: &str = "goal_id session_id node_did creation_key o
 pub(super) const AGENT_TOOL_CALL_FIELDS: &str = "_docID tool_call_key node_did session_id request_id request_doc_id requester_did message_sequence tool_name tool_call_id status lifecycle_state await_mode deadline_at cancel_cause started_at completed_at selected_service_id selected_tool_name tool_failure_class denial_reason denied_argv denied_command denied_argument denied_subcommand denied_prefix policy_mode policy_network latency_ms job_pin job_progress spawned_by_tool_call_doc_id plugin_parent_tool_call_doc_id terminal_output";
 pub(super) const COMPACTION_ENTRY_FIELDS: &str = "compaction_key session_id requester_did sequence summary files_read files_modified messages_compacted compacted_through_sequence original_tokens compacted_tokens created_at";
 pub(super) const TASK_FIELDS: &str = "task_id node_did display_name description agent_did prompt_template emit_outcome goal_objective_template goal_token_budget hooks enabled output_schema_ref created_at updated_at tags";
-pub(super) const SKILL_FIELDS: &str = "skill_id node_did name description instructions source_directory tool_refs display_name interface_json enabled created_at tags";
 pub(super) const SCHEDULE_FIELDS: &str =
     "schedule_id node_did display_name cadence created_at updated_at tags";
 pub(super) const SCHEDULE_OBSERVATION_FIELDS: &str = "trigger_id next_run_at";

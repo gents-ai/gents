@@ -7,7 +7,6 @@ use gents_protocol::mailbox_question::{
 use gents_protocol::request_input::RequestInput;
 use gents_session::session::mailbox::{MailboxItem, MailboxStatus, MAILBOX_FIELDS};
 use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
-use gents_store::graphql::escape_graphql_string;
 
 use crate::cli::args::{MailboxCommand, MailboxItemArgs, MailboxListArgs, MailboxReplyArgs};
 use crate::cli::output_format::OutputFormat;
@@ -27,7 +26,10 @@ async fn reply(args: MailboxReplyArgs) -> Result<()> {
         .output
         .ensure_supported("automation mailbox reply", &[OutputFormat::Json])?;
     let home = args.item.access.home.as_deref();
-    let graphql = crate::resolve_graphql_endpoint(args.item.access.graphql.as_deref(), home)?;
+    let graphql = gents_service::home_state::resolve_graphql_endpoint(
+        args.item.access.graphql.as_deref(),
+        home,
+    )?;
     let access = ConfigAccess::Graphql(graphql.clone());
     let item = load_item(&access, &args.item.doc_id)
         .await?
@@ -139,12 +141,14 @@ pub(crate) async fn reply_to(
 }
 
 pub(crate) async fn load_item(access: &ConfigAccess, doc_id: &str) -> Result<Option<MailboxItem>> {
-    let response = access
-        .execute(&format!(
-            r#"{{ MailboxItem(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ {MAILBOX_FIELDS} }} }}"#,
-            escape_graphql_string(doc_id)
-        ))
-        .await?;
+    use gents_protocol::document_query::{
+        fields::mailbox_item as fields, Filter, Query, Selection,
+    };
+    let rendered = Query::select(Selection::owned(MAILBOX_FIELDS))
+        .filter(Filter::eq(fields::DOC_ID, doc_id))
+        .limit(2)
+        .render();
+    let response = access.read(&rendered).await?;
     let mut items = decode_rows(response)?;
     if items.len() > 1 {
         bail!("MailboxItem _docID lookup returned more than one row");

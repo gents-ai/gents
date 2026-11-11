@@ -13,7 +13,7 @@ use gents_store::graphql::escape_graphql_string;
 use serde_json::Value;
 
 use crate::config_writes::ConfigAccess;
-use crate::shared::StoredInitConfig;
+use gents_service::state::StoredInitConfig;
 
 const DISPLAY_NAME: &str = "Yolo";
 const ASSIGN_WAIT: Duration = Duration::from_secs(30);
@@ -36,15 +36,24 @@ pub(super) async fn ensure_agent(
     let access = ConfigAccess::Graphql(graphql.clone());
     let node_did = config.node_did.as_str();
     let source = default_agent(&access, node_did).await?;
-    let rows = crate::graphql_rows(
-        &access,
+    let rendered = {
+        use gents_protocol::document_query::{fields::agent as fields, Filter, Query, Selection};
+        Query::select(
+            Selection::new()
+                .field(fields::AGENT_DID)
+                .field(fields::DISPLAY_NAME)
+                .field(fields::DESCRIPTION)
+                .field(fields::ENABLED)
+                .field(fields::INFERENCE_PROFILE_ID)
+                .field(fields::CREATED_AT),
+        )
+        .filter(Filter::eq(fields::NODE_DID, node_did))
+        .render()
+    };
+    let rows = gents_protocol::graphql::graphql_rows_from_response(
+        &access.read(&rendered).await?,
         "Agent",
-        &format!(
-            r#"{{ Agent(filter: {{node_did: {{_eq: "{node}"}}}}) {{ agent_did display_name description enabled inference_profile_id created_at }} }}"#,
-            node = escape_graphql_string(node_did),
-        ),
-    )
-    .await?;
+    );
     let mut yolos: Vec<&Value> = rows
         .iter()
         .filter(|row| row["display_name"] == DISPLAY_NAME && row["description"] == DESCRIPTION)

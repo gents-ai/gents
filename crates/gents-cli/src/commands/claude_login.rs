@@ -8,7 +8,8 @@ use tokio_util::sync::CancellationToken;
 use crate::cli::args::ClaudeLoginArgs;
 use crate::commands::login_wait::{print_sign_in_notes, until_cancelled};
 use crate::config_writes::ConfigAccess;
-use crate::{print_json, resolve_config_access, resolve_node_did};
+use crate::{print_json, resolve_config_access};
+use gents_service::home_state::resolve_node_did;
 
 pub(crate) struct ClaudeLoginOptions {
     pub(crate) provider: String,

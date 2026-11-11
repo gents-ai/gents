@@ -23,7 +23,7 @@ fn status_priority_is_starting_then_failed_then_stopped_then_disabled() {
         ManagedServerState::Failed
     );
     runtime.last_error = None;
-    let installed = gents_server::native_service::NativeServiceStatus {
+    let installed = gents_service::native_service::NativeServiceStatus {
         installed: true,
         running: false,
         job_loaded: false,
@@ -61,7 +61,7 @@ fn idle_status_reprobes_and_preserves_an_external_runtime_identity() {
             error: None,
             error_code: None,
         },
-        &gents_server::native_service::NativeServiceStatus {
+        &gents_service::native_service::NativeServiceStatus {
             installed: true,
             running: false,
             job_loaded: false,
@@ -80,7 +80,7 @@ fn idle_status_reprobes_and_preserves_an_external_runtime_identity() {
 
 #[test]
 fn native_running_without_endpoint_readiness_is_starting() {
-    let native = gents_server::native_service::NativeServiceStatus {
+    let native = gents_service::native_service::NativeServiceStatus {
         installed: true,
         running: true,
         job_loaded: true,
@@ -122,7 +122,7 @@ fn native_running_without_endpoint_readiness_is_starting() {
 
 #[test]
 fn loaded_native_job_owns_a_ready_endpoint_between_process_states() {
-    let native = gents_server::native_service::NativeServiceStatus {
+    let native = gents_service::native_service::NativeServiceStatus {
         installed: true,
         running: false,
         job_loaded: true,
@@ -289,11 +289,13 @@ fn ready_runtime_requires_live_status_to_carry_reviewed_authority() {
 fn request_visibility_race_is_retriable() {
     use gents_protocol::enrollment::EnrollmentDecisionRefusalCode;
     let rejected = |status, code| {
-        anyhow::Error::new(gents_server::server_host::EnrollmentDecisionRejected {
-            status,
-            message: "refused".into(),
-            code,
-        })
+        anyhow::Error::new(
+            gents_service::enrollment_admin::EnrollmentDecisionRejected {
+                status,
+                message: "refused".into(),
+                code,
+            },
+        )
         .context("approving desktop enrollment on managed runtime")
     };
     assert!(enrollment_request_is_not_visible_yet(&rejected(

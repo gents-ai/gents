@@ -157,9 +157,9 @@ pub enum AssignmentObservation {
 /// finished turn as a finished goal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TurnAssignmentHandoff {
-    turn_completed: bool,
-    assignment: AssignmentObservation,
-    terminal_reason: Option<&'static str>,
+    pub turn_completed: bool,
+    pub assignment: AssignmentObservation,
+    pub terminal_reason: Option<&'static str>,
 }
 
 impl TurnAssignmentHandoff {

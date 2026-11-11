@@ -5,9 +5,9 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
 
-use super::super::cli_process::{path_arg, run_cli_json};
 use super::manifest::BackgroundCompletionExpectation;
 use super::results::graphql_rows;
+use gents_host::cli_process::{path_arg, run_cli_json};
 use gents_protocol::client_protocol::RequestLifecycleState;
 use gents_store::graphql::escape_graphql_string;
 

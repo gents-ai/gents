@@ -1,0 +1,418 @@
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result};
+use gents_store::config_client::ConfigAccess;
+use serde::Serialize;
+use serde_json::Value;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SchemaInputKind {
+    Sdl,
+    Patch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchemaInput {
+    path: PathBuf,
+    kind: SchemaInputKind,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SchemaApplyFileResult {
+    path: String,
+    status: &'static str,
+    collections: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SchemaApplyPatchResult {
+    path: String,
+    status: &'static str,
+    collection: String,
+    applied_fields: Vec<String>,
+    skipped_fields: Vec<String>,
+    version_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PackSchemaPhase {
+    pub status: &'static str,
+    pub root: String,
+    pub schema_files: Vec<SchemaApplyFileResult>,
+    pub patch_files: Vec<SchemaApplyPatchResult>,
+}
+
+impl PackSchemaPhase {
+    pub fn changed(&self) -> bool {
+        self.schema_files
+            .iter()
+            .any(|file| file.status != "already_exists")
+            || self
+                .patch_files
+                .iter()
+                .any(|patch| patch.status != "already_exists")
+    }
+}
+
+pub async fn apply_pack_schemas_if_present(
+    access: &ConfigAccess,
+    pack_root: &Path,
+) -> Result<Option<PackSchemaPhase>> {
+    let schemas_dir = pack_root.join("schemas");
+    if !schemas_dir.is_dir() {
+        return Ok(None);
+    }
+    let inputs = discover_schema_inputs(&schemas_dir, &[])?;
+    if inputs.is_empty() {
+        anyhow::bail!(
+            "pack root {} has a schemas/ directory but no *.graphql, *.gql, *.patch.json, or *.json-patch files",
+            pack_root.display()
+        );
+    }
+    Ok(Some(
+        apply_schema_inputs(access, &schemas_dir, &inputs).await?,
+    ))
+}
+
+pub async fn apply_schema_inputs(
+    access: &ConfigAccess,
+    root: &Path,
+    inputs: &[SchemaInput],
+) -> Result<PackSchemaPhase> {
+    let mut schema_files = Vec::new();
+    for input in inputs
+        .iter()
+        .filter(|input| input.kind == SchemaInputKind::Sdl)
+    {
+        schema_files.push(apply_sdl_file(access, &input.path).await?);
+    }
+
+    let mut patch_files = Vec::new();
+    for input in inputs
+        .iter()
+        .filter(|input| input.kind == SchemaInputKind::Patch)
+    {
+        patch_files.push(apply_patch_file(access, &input.path).await?);
+    }
+
+    for input in inputs
+        .iter()
+        .filter(|input| input.kind == SchemaInputKind::Sdl)
+    {
+        let sdl = fs::read_to_string(&input.path)?;
+        gents_store::config_client::preview_additive_schema_install(access, &sdl)
+            .await?
+            .require_satisfied()
+            .with_context(|| format!("schema series did not satisfy {}", input.path.display()))?;
+    }
+
+    Ok(PackSchemaPhase {
+        status: "schema_applied",
+        root: root.display().to_string(),
+        schema_files,
+        patch_files,
+    })
+}
+
+pub fn discover_schema_inputs(
+    root: &Path,
+    explicit_patches: &[PathBuf],
+) -> Result<Vec<SchemaInput>> {
+    let mut discovered = Vec::new();
+    collect_schema_inputs(root, &mut discovered)?;
+    for path in explicit_patches {
+        discovered.push(SchemaInput {
+            path: path.clone(),
+            kind: SchemaInputKind::Patch,
+        });
+    }
+
+    let mut by_path = BTreeMap::<PathBuf, SchemaInputKind>::new();
+    for input in discovered {
+        by_path.entry(input.path).or_insert(input.kind);
+    }
+
+    Ok(by_path
+        .into_iter()
+        .map(|(path, kind)| SchemaInput { path, kind })
+        .collect())
+}
+
+fn collect_schema_inputs(path: &Path, output: &mut Vec<SchemaInput>) -> Result<()> {
+    let metadata =
+        fs::metadata(path).with_context(|| format!("reading metadata for {}", path.display()))?;
+    if metadata.is_file() {
+        if let Some(kind) = classify_schema_input(path) {
+            output.push(SchemaInput {
+                path: path.to_path_buf(),
+                kind,
+            });
+        }
+        return Ok(());
+    }
+
+    if !metadata.is_dir() {
+        anyhow::bail!(
+            "schema input path is neither file nor directory: {}",
+            path.display()
+        );
+    }
+
+    let mut entries = fs::read_dir(path)
+        .with_context(|| format!("reading schema directory {}", path.display()))?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .with_context(|| format!("reading schema directory entries from {}", path.display()))?;
+    entries.sort_by_key(|entry| entry.path());
+
+    for entry in entries {
+        collect_schema_inputs(&entry.path(), output)?;
+    }
+
+    Ok(())
+}
+
+fn classify_schema_input(path: &Path) -> Option<SchemaInputKind> {
+    let file_name = path.file_name()?.to_string_lossy();
+    if file_name.ends_with(".patch.json") || file_name.ends_with(".json-patch") {
+        return Some(SchemaInputKind::Patch);
+    }
+
+    match path.extension().and_then(|extension| extension.to_str()) {
+        Some("graphql" | "gql") => Some(SchemaInputKind::Sdl),
+        _ => None,
+    }
+}
+
+async fn apply_sdl_file(access: &ConfigAccess, path: &Path) -> Result<SchemaApplyFileResult> {
+    let sdl = fs::read_to_string(path)
+        .with_context(|| format!("reading schema SDL {}", path.display()))?;
+    let plan = gents_store::config_client::preview_additive_schema_install(access, &sdl)
+        .await
+        .with_context(|| format!("preview schema SDL {}", path.display()))?;
+    let receipt = gents_store::config_client::apply_additive_schema_install(
+        access,
+        &sdl,
+        &plan.artifact_digest,
+    )
+    .await
+    .with_context(|| format!("publish schema SDL {}", path.display()))?;
+    Ok(SchemaApplyFileResult {
+        path: path.display().to_string(),
+        status: if receipt.requires_publication {
+            "applied"
+        } else {
+            "already_exists"
+        },
+        collections: receipt.collection_contracts.into_keys().collect(),
+    })
+}
+
+async fn apply_patch_file(access: &ConfigAccess, path: &Path) -> Result<SchemaApplyPatchResult> {
+    let raw = fs::read_to_string(path)
+        .with_context(|| format!("reading schema patch {}", path.display()))?;
+    let patch = normalize_patch_value(
+        serde_json::from_str::<Value>(&raw)
+            .with_context(|| format!("parsing schema patch JSON {}", path.display()))?,
+    )?;
+    let collection = collection_name_from_patch(&patch)?;
+    let field_adds = additive_field_ops(&collection, &patch)?;
+    let existing_fields = collection_field_names(access, &collection).await?;
+
+    let (patch_to_apply, applied_fields, skipped_fields) =
+        filter_existing_field_adds(&patch, &field_adds, &existing_fields)?;
+    if patch_to_apply.as_array().is_some_and(Vec::is_empty) {
+        return Ok(SchemaApplyPatchResult {
+            path: path.display().to_string(),
+            status: "already_exists",
+            collection: collection.clone(),
+            applied_fields,
+            skipped_fields,
+            version_id: current_collection_version(access, &collection).await?,
+        });
+    }
+
+    let patched = access
+        .patch_collection_schema(&collection, &patch_to_apply)
+        .await?;
+    let version_id = patched
+        .get("VersionID")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+
+    Ok(SchemaApplyPatchResult {
+        path: path.display().to_string(),
+        status: "applied",
+        collection,
+        applied_fields,
+        skipped_fields,
+        version_id,
+    })
+}
+
+async fn collection_field_names(
+    access: &ConfigAccess,
+    collection: &str,
+) -> Result<BTreeSet<String>> {
+    access
+        .collection_fields(collection)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("collection {collection} does not exist"))
+}
+
+async fn current_collection_version(
+    access: &ConfigAccess,
+    collection: &str,
+) -> Result<Option<String>> {
+    Ok(access
+        .collection_version(collection)
+        .await?
+        .and_then(|version| {
+            version
+                .get("VersionID")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        }))
+}
+
+fn normalize_patch_value(value: Value) -> Result<Value> {
+    if let Some(patch) = value.get("Patch").or_else(|| value.get("patch")) {
+        return normalize_patch_value(patch.clone());
+    }
+    if !value.is_array() {
+        anyhow::bail!("schema patch must be a JSON Patch array or an object with Patch/patch");
+    }
+    Ok(value)
+}
+
+fn collection_name_from_patch(patch: &Value) -> Result<String> {
+    let path = patch
+        .as_array()
+        .and_then(|ops| ops.first())
+        .and_then(|op| op.get("path"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("schema patch must start with an op containing path"))?;
+    let collection = path
+        .split('/')
+        .find(|segment| !segment.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("schema patch path has no collection name: {path}"))?;
+    Ok(collection.to_string())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FieldAdd {
+    index: usize,
+    name: String,
+}
+
+fn additive_field_ops(collection: &str, patch: &Value) -> Result<Vec<FieldAdd>> {
+    let ops = patch
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("schema patch must be a JSON Patch array"))?;
+    let mut fields = Vec::new();
+    for (index, op) in ops.iter().enumerate() {
+        let op_name = op.get("op").and_then(Value::as_str).unwrap_or_default();
+        let path = op.get("path").and_then(Value::as_str).unwrap_or_default();
+        if op_name != "add" || path != format!("/{collection}/Fields/-") {
+            return Ok(Vec::new());
+        }
+        let Some(name) = op
+            .get("value")
+            .and_then(|value| value.get("Name"))
+            .and_then(Value::as_str)
+        else {
+            return Ok(Vec::new());
+        };
+        fields.push(FieldAdd {
+            index,
+            name: name.to_string(),
+        });
+    }
+    Ok(fields)
+}
+
+fn filter_existing_field_adds(
+    patch: &Value,
+    field_adds: &[FieldAdd],
+    existing_fields: &BTreeSet<String>,
+) -> Result<(Value, Vec<String>, Vec<String>)> {
+    if field_adds.is_empty() {
+        return Ok((patch.clone(), Vec::new(), Vec::new()));
+    }
+
+    let mut applied_fields = Vec::new();
+    let mut skipped_fields = Vec::new();
+    let mut skip_indexes = BTreeSet::new();
+    for field in field_adds {
+        if existing_fields.contains(&field.name) {
+            skipped_fields.push(field.name.clone());
+            skip_indexes.insert(field.index);
+        } else {
+            applied_fields.push(field.name.clone());
+        }
+    }
+
+    let ops = patch
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("schema patch must be a JSON Patch array"))?;
+    let filtered = ops
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !skip_indexes.contains(index))
+        .map(|(_, op)| op.clone())
+        .collect::<Vec<_>>();
+    Ok((Value::Array(filtered), applied_fields, skipped_fields))
+}
+
+#[cfg(test)]
+mod pack_schema_tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn cli_sdl_apply_checks_contracts_and_reports_reinstall_accurately() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("widget.graphql");
+        let node = std::sync::Arc::new(defra_node::Node::builder().build().await.unwrap());
+        let access = ConfigAccess::local(node.clone());
+        fs::write(&path, "type Widget { message: String }").unwrap();
+        assert_eq!(
+            apply_sdl_file(&access, &path).await.unwrap().status,
+            "applied"
+        );
+        assert_eq!(
+            apply_sdl_file(&access, &path).await.unwrap().status,
+            "already_exists"
+        );
+        fs::write(&path, "type Widget { message: Int }").unwrap();
+        let error = apply_sdl_file(&access, &path).await.unwrap_err();
+        assert!(
+            format!("{error:#}").contains("does not match requested schema"),
+            "{error:#}"
+        );
+        fs::write(
+            &path,
+            "type Widget { message: String } type OtherWidget { message: String }",
+        )
+        .unwrap();
+        assert!(apply_sdl_file(&access, &path).await.is_err());
+        assert!(node.get_collection("OtherWidget").unwrap().is_none());
+        fs::write(&path, "type Widget { message: String pending: String }").unwrap();
+        let inputs = discover_schema_inputs(dir.path(), &[]).unwrap();
+        let error = apply_schema_inputs(&access, dir.path(), &inputs)
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("missing declared fields"),
+            "{error:#}"
+        );
+        assert!(!access
+            .collection_fields("Widget")
+            .await
+            .unwrap()
+            .unwrap()
+            .contains("pending"));
+    }
+}

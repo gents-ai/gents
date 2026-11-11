@@ -591,6 +591,21 @@ pub struct RequestLifecycle {
     resumed_from_backend: bool,
 }
 
+#[cfg(any(test, feature = "test-fixtures"))]
+impl RequestLifecycle {
+    pub fn holds_execution_lease(&self) -> bool {
+        self.execution_lease.is_some()
+    }
+
+    pub fn holds_renewal_task(&self) -> bool {
+        self.renewal_task.is_some()
+    }
+
+    pub fn drop_renewal_task(&mut self) {
+        drop(self.renewal_task.take());
+    }
+}
+
 impl RequestLifecycle {
     #[cfg(any(test, feature = "test-fixtures"))]
     pub fn managed_agent_signer(&self) -> Option<gents_store::identity::ManagedAgentSigner> {

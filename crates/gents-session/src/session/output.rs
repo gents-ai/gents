@@ -46,11 +46,11 @@ pub struct CanonicalReplayScope<'a> {
 /// when another row happens to reconstruct to equal native bytes.
 pub struct CanonicalAssistantCandidate {
     pub(crate) header_doc_id: String,
-    pub(crate) request_doc_id: String,
+    pub request_doc_id: String,
     #[cfg(test)]
     pub(crate) sequence: u32,
     pub(crate) message: gents_protocol::message::Message,
-    pub(crate) coordinate: CanonicalProviderCoordinate,
+    pub coordinate: CanonicalProviderCoordinate,
     pub(crate) block_indices: Vec<usize>,
     pub(crate) complete: bool,
     capture: Option<CanonicalReplayCapture>,
@@ -72,10 +72,10 @@ struct CanonicalReplayCapture {
 /// Exact source of a provider-owned assistant, established by its physical
 /// referenced closes rather than by message bytes or a message-key suffix.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct CanonicalProviderCoordinate {
-    pub(crate) scope: gents_protocol::rendered_request::CaptureScope,
-    pub(crate) turn_index: u32,
-    pub(crate) attempt: u32,
+pub struct CanonicalProviderCoordinate {
+    pub scope: gents_protocol::rendered_request::CaptureScope,
+    pub turn_index: u32,
+    pub attempt: u32,
 }
 
 struct ReconstructedScopedMessage {

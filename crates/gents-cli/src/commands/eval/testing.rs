@@ -225,6 +225,7 @@ pub(crate) fn deps<'a>(
         registry,
         cancel,
         options: fast(),
+        proposer: None,
     }
 }
 

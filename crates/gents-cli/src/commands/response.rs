@@ -5,7 +5,8 @@ use crate::request_helpers::{
     fetch_request_view, observe_canonical_request_output, request_output_envelope,
     wait_for_terminal_response,
 };
-use crate::{print_json, resolve_graphql_endpoint, resolve_request_id};
+use crate::{print_json, resolve_request_id};
+use gents_service::home_state::resolve_graphql_endpoint;
 
 pub(crate) async fn dispatch(command: ResponseCommand) -> Result<()> {
     match command {

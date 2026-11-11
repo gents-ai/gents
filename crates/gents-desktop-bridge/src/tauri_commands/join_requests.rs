@@ -53,7 +53,7 @@ async fn list_join_requests(
     let Some((home, target)) = co_hosted_runtime(state, node_did).await? else {
         return Err(not_co_hosted());
     };
-    let pending = gents_server::server_host::pending_managed_enrollments(&home, &target.graphql)
+    let pending = gents_service::server_host::pending_managed_enrollments(&home, &target.graphql)
         .await
         .map_err(|error| BridgeError::untyped(format!("{error:#}")))?;
     Ok(pending.into_iter().map(JoinRequestView::from).collect())
@@ -66,7 +66,7 @@ async fn list_join_members(
     let Some((home, target)) = co_hosted_runtime(state, node_did).await? else {
         return Err(not_co_hosted());
     };
-    let members = gents_server::server_host::managed_enrollment_members(&home, &target.graphql)
+    let members = gents_service::server_host::managed_enrollment_members(&home, &target.graphql)
         .await
         .map_err(query_error)?;
     Ok(members.into_iter().map(JoinMemberView::from).collect())
@@ -79,7 +79,7 @@ async fn read_join_history(
     let Some((home, target)) = co_hosted_runtime(state, node_did).await? else {
         return Err(not_co_hosted());
     };
-    gents_server::server_host::managed_enrollment_history(&home, &target.graphql)
+    gents_service::server_host::managed_enrollment_history(&home, &target.graphql)
         .await
         .map(JoinHistoryView::from)
         .map_err(query_error)
@@ -93,8 +93,8 @@ async fn decide_join_request(
         return Err(not_co_hosted());
     };
     let decided = match request.decision.into() {
-        gents_server::server_host::ManagedEnrollmentDecision::Approve { lease_seconds } => {
-            gents_server::server_host::admit_managed_enrollment(
+        gents_service::server_host::ManagedEnrollmentDecision::Approve { lease_seconds } => {
+            gents_service::server_host::admit_managed_enrollment(
                 &home,
                 &target.graphql,
                 &request.request_id,
@@ -103,7 +103,7 @@ async fn decide_join_request(
             .await
         }
         decision => {
-            gents_server::server_host::decide_managed_enrollment(
+            gents_service::server_host::decide_managed_enrollment(
                 &home,
                 &target.graphql,
                 &request.request_id,
@@ -140,11 +140,13 @@ mod tests {
     use gents_protocol::enrollment::{
         EnrollmentDecisionRefusalCode, MAX_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS,
     };
-    use gents_server::server_host::{
-        EnrollmentDecisionRejected, ManagedEnrollmentDecision, ManagedEnrollmentHistory,
-        ManagedEnrollmentHistoryEntry, ManagedEnrollmentHistoryState, ManagedEnrollmentMember,
-        ManagedPendingEnrollment,
-    };
+    use gents_service::enrollment_admin::EnrollmentDecisionRejected;
+    use gents_service::server_host::ManagedEnrollmentDecision;
+    use gents_service::server_host::ManagedEnrollmentHistory;
+    use gents_service::server_host::ManagedEnrollmentHistoryEntry;
+    use gents_service::server_host::ManagedEnrollmentHistoryState;
+    use gents_service::server_host::ManagedEnrollmentMember;
+    use gents_service::server_host::ManagedPendingEnrollment;
 
     fn remote_only_state() -> (tempfile::TempDir, DesktopAppState) {
         let temp = tempfile::tempdir().expect("tempdir");

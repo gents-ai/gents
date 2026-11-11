@@ -7,10 +7,11 @@ use serde_json::json;
 use crate::cli::args::{RequestCommand, RequestResendArgs, RequestSubmitArgs};
 use crate::request_helpers::{fetch_request_view, parse_valid_until_flag, RequestOutputEnvelope};
 use crate::{
-    create_agent_request, print_json, resolve_graphql_endpoint, resolve_node_did,
-    resolve_request_content, resolve_request_id, wait_for_terminal_response,
-    write_json_output_file, RequestSubmitOptions,
+    create_agent_request, print_json, resolve_request_content, resolve_request_id,
+    wait_for_terminal_response, write_json_output_file, RequestSubmitOptions,
 };
+use gents_service::home_state::resolve_graphql_endpoint;
+use gents_service::home_state::resolve_node_did;
 
 mod interrupt;
 mod pending;

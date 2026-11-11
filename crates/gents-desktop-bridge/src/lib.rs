@@ -40,7 +40,6 @@ pub use config::{
     TracingConfig,
 };
 pub use error::{BridgeError, BridgeErrorCode};
-pub use gents_server::enrollment;
 pub use gents_store::local::store_key::StoreKeyCustodyChoice;
 pub use package_tools::{prefer_host_tools, prepare_host_command};
 #[cfg(feature = "tauri-host")]

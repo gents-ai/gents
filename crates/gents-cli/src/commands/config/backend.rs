@@ -1,6 +1,6 @@
 use crate::cli::*;
 use crate::shared::ResolvedBackendConfig;
-use crate::{resolve_node_did, BackendResolutionMode};
+use crate::BackendResolutionMode;
 use anyhow::{Context, Result};
 use gents_documents::apply_desired_state_plan;
 use gents_documents::{
@@ -9,6 +9,7 @@ use gents_documents::{
 use gents_documents::{BackendAuth, InferenceBackend};
 use gents_inference::backends::provider::discover_models as discover_backend_models;
 use gents_inference::backends::rotation::{set_backend_rotation, BackendRotation};
+use gents_service::home_state::resolve_node_did;
 use gents_store::collection::Collection;
 use gents_store::config_client::ConfigAccess;
 use serde_json::json;
@@ -120,7 +121,7 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
             }
             ConfigAccess::Graphql(endpoint) => {
                 let mut url = reqwest::Url::parse(endpoint.url())?;
-                url.set_path(crate::http::inference_activity::BACKEND_DISCOVERY_PATH);
+                url.set_path(gents_host::http::inference_activity::BACKEND_DISCOVERY_PATH);
                 url.set_query(None);
                 url.set_fragment(None);
                 let client = reqwest::Client::builder()
@@ -280,7 +281,7 @@ mod tests {
     use super::*;
     use gents_inference::auth::credential::{set_account_enabled, store_sign_in};
 
-    const DID: &str = crate::caused_sessions::fixtures::FIXTURE_DID;
+    const DID: &str = gents_session::test_support::lineage_fixtures::FIXTURE_DID;
     const CLAUDE: &str = "claude-subscription";
 
     fn claude_sign_in(who: &str) -> gents_inference::auth::credential::OAuthCredential {
@@ -302,7 +303,7 @@ mod tests {
 
     async fn seeded() -> ConfigAccess {
         let node = std::sync::Arc::new(
-            crate::shared::test_support::fixture_node_builder()
+            gents_host::test_support::fixture_node_builder()
                 .build()
                 .await
                 .unwrap(),
@@ -310,10 +311,11 @@ mod tests {
         gents_store::schema::ensure_runtime_schemas(&node)
             .await
             .unwrap();
-        crate::shared::test_support::publish_test_node(&node).await;
+        gents_host::test_support::publish_test_node(&node).await;
         let access = ConfigAccess::local_as(
             node,
-            ::identity::Did::new(crate::caused_sessions::fixtures::FIXTURE_DID).unwrap(),
+            ::identity::Did::new(gents_session::test_support::lineage_fixtures::FIXTURE_DID)
+                .unwrap(),
         );
         for (id, kind, endpoint, auth) in [
             (

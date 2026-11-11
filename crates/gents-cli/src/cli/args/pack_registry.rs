@@ -356,13 +356,11 @@ pub(crate) struct PackDriftArgs {
 
 impl PackDriftArgs {
     pub(crate) fn policy(self) -> gents_pack::pack::DriftPolicy {
-        if self.overwrite {
-            gents_pack::pack::DriftPolicy::Overwrite
-        } else if self.keep {
-            gents_pack::pack::DriftPolicy::Keep
-        } else {
-            gents_pack::pack::DriftPolicy::Refuse
+        gents_pack::pack::install_flow::InstallDrift {
+            overwrite: self.overwrite,
+            keep: self.keep,
         }
+        .policy()
     }
 }
 

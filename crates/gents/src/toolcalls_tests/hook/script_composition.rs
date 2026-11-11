@@ -151,7 +151,7 @@ async fn composed_agent_new_keeps_its_asynchronous_receipt() {
     )
     .await;
     bind_admitted_deadline(&fixture).await;
-    super::session_message_commit::enable_agents_tools_with_access(
+    gents_toolcalls::test_support::enable_agents_tools_with_access(
         &fixture.owner,
         fixture.db.node_identity.did(),
         fixture.agent.did(),

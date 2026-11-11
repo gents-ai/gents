@@ -14,10 +14,12 @@ use crate::cli::output_format::OutputFormat;
 use crate::cli::*;
 use crate::config_writes::ConfigAccess;
 use crate::request_helpers::resolve_dual_id;
-use crate::{graphql_rows, print_json, read_init_config, resolve_config_access, resolve_home_dir};
+use crate::{graphql_rows, print_json, resolve_config_access};
+use gents_service::home_state::read_init_config;
+use gents_service::home_state::resolve_home_dir;
 
 pub(super) async fn agent_set(args: AgentUpsertArgs) -> Result<()> {
-    let endpoint = crate::resolve_graphql_endpoint(Some(&args.graphql), None)?;
+    let endpoint = gents_service::home_state::resolve_graphql_endpoint(Some(&args.graphql), None)?;
     let access = ConfigAccess::Graphql(endpoint.clone());
     let owner = &args.node_did;
     let (agent, binding) = match args.agent_did.as_deref() {
@@ -171,7 +173,7 @@ async fn create_agent(
 }
 
 async fn submit_create(graphql: &str, owner: &str, input: AgentCreateInput) -> Result<()> {
-    let endpoint = crate::resolve_graphql_endpoint(Some(graphql), None)?;
+    let endpoint = gents_service::home_state::resolve_graphql_endpoint(Some(graphql), None)?;
     let identity_binding = gents_desktop_core::agent_identity::provision(&endpoint, owner).await?;
     let access = ConfigAccess::Graphql(endpoint);
     print_json(&create_agent(&access, owner, identity_binding, &input).await?)
@@ -187,7 +189,10 @@ pub(super) async fn agent_self_config_permission(
 ) -> Result<()> {
     use gents_store::config_client::AgentSelfConfigPermission;
 
-    let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
+    let access = ConfigAccess::Graphql(gents_service::home_state::resolve_graphql_endpoint(
+        Some(&args.graphql),
+        None,
+    )?);
     let permission = if grant {
         AgentSelfConfigPermission::Grant
     } else {
@@ -208,7 +213,10 @@ pub(super) async fn agent_catalog_permission(
     args: AgentCatalogPermissionArgs,
     grant: bool,
 ) -> Result<()> {
-    let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
+    let access = ConfigAccess::Graphql(gents_service::home_state::resolve_graphql_endpoint(
+        Some(&args.graphql),
+        None,
+    )?);
     access
         .transact_write("config.agent.catalog_permission", |txn| {
             let (node_did, agent_did) = (&args.node_did, &args.agent_did);
@@ -274,7 +282,10 @@ pub(super) async fn agent_clone(args: AgentCloneArgs) -> Result<()> {
 
 pub(super) async fn agent_disable(args: AgentDisableArgs) -> Result<()> {
     let owner = local_node_did(args.home.as_deref())?;
-    let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
+    let access = ConfigAccess::Graphql(gents_service::home_state::resolve_graphql_endpoint(
+        Some(&args.graphql),
+        None,
+    )?);
     let receipt = gents::operations::agent::disable(&access, &owner, &args.agent_did)
         .await
         .map_err(AgentFailure::edit)?;
@@ -283,7 +294,10 @@ pub(super) async fn agent_disable(args: AgentDisableArgs) -> Result<()> {
 
 pub(super) async fn agent_default(args: AgentDefaultArgs) -> Result<()> {
     let owner = local_node_did(args.home.as_deref())?;
-    let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
+    let access = ConfigAccess::Graphql(gents_service::home_state::resolve_graphql_endpoint(
+        Some(&args.graphql),
+        None,
+    )?);
     let receipt =
         gents::operations::agent::choose_default(&access, &owner, &args.agent_did, args.enable)
             .await
@@ -402,7 +416,7 @@ pub(super) async fn agent_show(args: ConfigShowArgs) -> Result<()> {
     // The local DID only decides which row a bare ID prefers. An explicit
     // --graphql endpoint can be read from a clean home, so a missing local DID
     // is not an error here: the exact-ID read below still resolves.
-    let local_owner = crate::resolve_node_did(args.home.as_deref(), None).ok();
+    let local_owner = gents_service::home_state::resolve_node_did(args.home.as_deref(), None).ok();
 
     let mut row = load_document(
         &access,
@@ -550,7 +564,7 @@ mod tests {
         use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         // Agent DIDs are derived per runtime, so the shared logical ID is a
         // profile label the local Node and a replicated peer both use.
-        let client = crate::shared::test_support::ClientHome::new().await;
+        let client = gents_host::test_support::ClientHome::new().await;
         let peer_dir = tempfile::tempdir()?;
         let peer = gents_store::identity::KeyIdentity::load_or_create(
             peer_dir.path().join("peer.key"),
@@ -647,7 +661,7 @@ mod tests {
 
     #[tokio::test]
     async fn agent_create_and_clone_materialize_canonical_chain() -> Result<()> {
-        let client = crate::shared::test_support::ClientHome::new().await;
+        let client = gents_host::test_support::ClientHome::new().await;
         let node = client.node().clone();
         let owner = client.node_did();
         use gents_documents::apply_desired_state_plan;
@@ -942,7 +956,7 @@ Next: gents config agent --help
     async fn raw_set_rejects_dangling_profile_reference() -> Result<()> {
         use gents_documents::apply_desired_state_plan;
         use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-        let client = crate::shared::test_support::ClientHome::new().await;
+        let client = gents_host::test_support::ClientHome::new().await;
         let binding =
             gents_store::identity::provision_agent_identity(client.home.identity.as_ref())?;
         let agent = json!({

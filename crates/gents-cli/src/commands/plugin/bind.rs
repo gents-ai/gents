@@ -11,9 +11,9 @@ pub(super) async fn bind(args: PluginBindArgs) -> Result<()> {
         args.scope.graphql.is_none(),
         "plugin model bindings run on the local host; bind there with --home instead of --graphql"
     );
-    let (namespace, name) = crate::commands::pack::split_namespace(&args.name);
+    let (namespace, name) = gents_pack::pack::registry::split_pack_coordinate(&args.name);
     let coordinate = format!("{namespace}/{name}");
-    let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
+    let home = gents_service::home_state::resolve_home_dir(args.scope.home.as_deref());
     let record = store::read_record(&home, namespace, name)
         .with_context(|| format!("{coordinate} is not installed under {}", home.display()))?;
     anyhow::ensure!(
@@ -34,9 +34,9 @@ pub(super) async fn bind(args: PluginBindArgs) -> Result<()> {
 }
 
 pub(super) fn unbind(args: PluginUnbindArgs) -> Result<()> {
-    let (namespace, name) = crate::commands::pack::split_namespace(&args.name);
+    let (namespace, name) = gents_pack::pack::registry::split_pack_coordinate(&args.name);
     let coordinate = format!("{namespace}/{name}");
-    let home = crate::home_state::resolve_home_dir(args.home.as_deref());
+    let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
     set_model_binding(&home, &coordinate, None)?;
     crate::print_json(&json!({ "bound": null, "plugin": coordinate }))
 }

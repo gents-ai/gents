@@ -60,7 +60,7 @@ fn a_job_that_dies_seconds_into_boot_is_a_crash_loop_across_running_samples() {
     assert_eq!(
         looping_restarts(
             &mut watch,
-            JobSample::Exited(&gents_server::native_service::ServiceExit {
+            JobSample::Exited(&gents_service::native_service::ServiceExit {
                 reason: "exited normally".to_string(),
                 restarts: 9,
                 clean: true,
@@ -73,7 +73,7 @@ fn a_job_that_dies_seconds_into_boot_is_a_crash_loop_across_running_samples() {
 
 #[test]
 fn a_crash_loop_seen_between_respawns_is_reported_failed_with_its_reason() {
-    let native = gents_server::native_service::NativeServiceStatus {
+    let native = gents_service::native_service::NativeServiceStatus {
         installed: true,
         running: true,
         job_loaded: true,
@@ -102,7 +102,7 @@ fn a_crash_loop_seen_between_respawns_is_reported_failed_with_its_reason() {
 
 #[test]
 fn a_linux_unit_the_supervisor_gave_up_on_is_failed_with_its_exit_cause() {
-    let failed = gents_server::native_service::NativeServiceStatus {
+    let failed = gents_service::native_service::NativeServiceStatus {
         installed: true,
         running: false,
         job_loaded: false,
@@ -112,7 +112,7 @@ fn a_linux_unit_the_supervisor_gave_up_on_is_failed_with_its_exit_cause() {
         failed: true,
         detail: Some("failed".to_string()),
     };
-    let exit = gents_server::native_service::ServiceExit {
+    let exit = gents_service::native_service::ServiceExit {
         reason: "exit-code (exit status 1)".to_string(),
         restarts: 5,
         clean: false,
@@ -168,7 +168,7 @@ async fn readiness_fails_with_the_cause_when_the_supervisor_gives_up() {
         || async { Ok(PortReadiness::NotListening) },
         || async {
             Ok(NativeProgress::Failed(
-                gents_server::native_service::ServiceExit {
+                gents_service::native_service::ServiceExit {
                     reason: "start-limit-hit (exit status 1)".to_string(),
                     restarts: 5,
                     clean: false,
@@ -216,7 +216,7 @@ async fn a_clean_exit_of_the_loaded_job_is_not_waited_out() {
         || async { Ok(PortReadiness::NotListening) },
         || async {
             Ok(NativeProgress::Exited(
-                gents_server::native_service::ServiceExit {
+                gents_service::native_service::ServiceExit {
                     reason: "exited normally".to_string(),
                     restarts: 0,
                     clean: true,
@@ -232,7 +232,7 @@ async fn a_clean_exit_of_the_loaded_job_is_not_waited_out() {
 
 #[test]
 fn a_loaded_job_that_exited_cleanly_is_reported_stopped() {
-    let native = gents_server::native_service::NativeServiceStatus {
+    let native = gents_service::native_service::NativeServiceStatus {
         installed: true,
         running: false,
         job_loaded: true,
@@ -242,7 +242,7 @@ fn a_loaded_job_that_exited_cleanly_is_reported_stopped() {
         failed: false,
         detail: None,
     };
-    let clean = gents_server::native_service::ServiceExit {
+    let clean = gents_service::native_service::ServiceExit {
         reason: "exited normally".to_string(),
         restarts: 0,
         clean: true,
@@ -410,7 +410,7 @@ fn a_foreign_runtime_fails_a_loaded_job_and_names_itself_when_stopped() {
         node_did: Some("did:key:other".to_string()),
         home: None,
     };
-    let loaded = gents_server::native_service::NativeServiceStatus {
+    let loaded = gents_service::native_service::NativeServiceStatus {
         installed: true,
         running: true,
         job_loaded: true,
@@ -430,7 +430,7 @@ fn a_foreign_runtime_fails_a_loaded_job_and_names_itself_when_stopped() {
     );
     assert!(status.error.as_deref().unwrap().contains("did:key:other"));
 
-    let stopped = gents_server::native_service::NativeServiceStatus {
+    let stopped = gents_service::native_service::NativeServiceStatus {
         running: false,
         job_loaded: false,
         ..loaded

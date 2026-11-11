@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use gents_eval::checks::CheckRegistry;
+use gents_eval::optimization::Proposer;
 use gents_eval::runner::embedded::EmbeddedExecutor;
 use gents_eval::runner::{RunOptions, TrialExecutor};
 use serde::Serialize;
@@ -26,8 +27,9 @@ impl EvalContext {
     ) -> Result<Self> {
         let (access, home_dir) =
             crate::resolve_config_access(scope.home.as_deref(), scope.graphql.as_deref()).await?;
-        let owner = crate::resolve_node_did(Some(&home_dir), None)?;
-        let evaluator = std::sync::Arc::new(crate::load_client_identity().await?);
+        let owner = gents_service::home_state::resolve_node_did(Some(&home_dir), None)?;
+        let evaluator =
+            std::sync::Arc::new(gents_service::home_state::load_client_identity().await?);
         let client_signing = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
             evaluator.private_key_bytes(),
         )?;
@@ -89,6 +91,9 @@ pub(crate) struct Deps<'a> {
     pub(crate) registry: &'a CheckRegistry,
     pub(crate) cancel: CancellationToken,
     pub(crate) options: RunOptions,
+    /// A proposer supplied by the caller in place of `--proposer`; only
+    /// optimization reads it, and only tests supply one.
+    pub(crate) proposer: Option<&'a dyn Proposer>,
 }
 
 pub(crate) fn usage_error(command: &EvalCommand) -> Option<String> {
@@ -103,7 +108,7 @@ pub(crate) async fn dispatch(command: EvalCommand, runtime: tokio::runtime::Hand
         command,
         EvalCommand::Run(_) | EvalCommand::Batch(_) | EvalCommand::Resume(_) | EvalCommand::Init(_)
     ) {
-        crate::process_resources::prepare()?;
+        gents_service::process_resources::prepare()?;
     }
     if let EvalCommand::Cancel(args) = &command {
         return cancel_without_context(args, runtime)
@@ -148,6 +153,7 @@ pub(crate) async fn dispatch(command: EvalCommand, runtime: tokio::runtime::Hand
         registry: &registry,
         cancel,
         options: RunOptions::default(),
+        proposer: None,
     };
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
@@ -195,7 +201,7 @@ async fn cancel_without_context(
     args: &crate::cli::EvalRunIdArgs,
     runtime: tokio::runtime::Handle,
 ) -> Result<()> {
-    let home_dir = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
+    let home_dir = gents_service::home_state::resolve_home_dir(args.scope.home.as_deref());
     let purpose = async {
         let ctx = EvalContext::resolve(&args.scope, runtime).await?;
         manage::run_purpose(&ctx.access, &ctx.owner, &args.run_id).await
@@ -237,7 +243,8 @@ async fn watch_while_held(
                     error = %format!("{error:#}"),
                     "node held, reading runner files"
                 );
-                let home_dir = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
+                let home_dir =
+                    gents_service::home_state::resolve_home_dir(args.scope.home.as_deref());
                 watch::watch(
                     &runs_dir(&home_dir),
                     args,

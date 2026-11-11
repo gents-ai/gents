@@ -1,3 +1,5 @@
+pub mod lineage_fixtures;
+
 use crate::request::watcher::DefraWatcher;
 
 pub struct ScopedWatcherFixture {
@@ -683,4 +685,17 @@ pub async fn fork_reader_node(
     )
     .await;
     (db, user, client, binding)
+}
+
+pub async fn assert_block_signer(node: &defra_node::Node, cid: &str, signer: &str) {
+    let (block, signature) = node
+        .authorized_signed_block_bytes(cid, Some(signer))
+        .await
+        .unwrap();
+    let block = defra_core::block::Block::from_dag_cbor(&block).unwrap();
+    let signature = defra_core::block::Signature::from_dag_cbor(&signature).unwrap();
+    assert_eq!(
+        db::block::verify::verified_signature_signer_did(&block, &signature).unwrap(),
+        signer
+    );
 }

@@ -7,10 +7,10 @@ use gents_desktop_core::{
     },
 };
 
-use crate::{
-    cli::DesktopCommand,
-    native_service::{NativeServiceConfig, NativeServiceManager, NativeServicePlatform},
-};
+use crate::cli::DesktopCommand;
+use gents_service::native_service::NativeServiceConfig;
+use gents_service::native_service::NativeServiceManager;
+use gents_service::native_service::NativeServicePlatform;
 
 pub(crate) async fn run(command: DesktopCommand) -> Result<()> {
     if !cfg!(target_os = "macos") {
@@ -85,7 +85,7 @@ async fn reset(
     let home = match explicit_home {
         Some(home) => home,
         None => gents_desktop_core::home_reset::reviewed_reset_home(&desktop)?
-            .unwrap_or_else(|| crate::resolve_home_dir(None)),
+            .unwrap_or_else(|| gents_service::home_state::resolve_home_dir(None)),
     };
     let home = crate::absolutize(home)?;
     *retry = retry_command(&home, desktop.root())?;
@@ -137,7 +137,7 @@ async fn reset(
     if still_running {
         bail!("The managed service is still running; quit Gents and stop it before resetting.");
     }
-    let server = crate::server_host::ServerConfig::standard(home.clone());
+    let server = gents_service::server_host::ServerConfig::standard(home.clone());
     let address = std::net::SocketAddr::new(server.http_addr, server.http_port);
     match std::net::TcpStream::connect_timeout(&address, std::time::Duration::from_millis(150)) {
         Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {}

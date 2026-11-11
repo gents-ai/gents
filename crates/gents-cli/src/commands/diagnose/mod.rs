@@ -7,11 +7,15 @@ use anyhow::Result;
 use gents_protocol::row::{project_node_readiness_summary, ProjectedNodeReadinessSummary};
 use serde_json::{json, Value};
 
-use crate::cli::args::{DiagnoseArgs, P2pTransportArg};
+use crate::cli::args::DiagnoseArgs;
 use crate::{
-    build_config_export_bundle, graphql_endpoint_available, print_json, read_init_config,
-    read_runtime_state, resolve_config_access, resolve_home_dir, resolve_node_did,
+    build_config_export_bundle, graphql_endpoint_available, print_json, resolve_config_access,
 };
+use gents_host::args::P2pTransportArg;
+use gents_service::home_state::read_init_config;
+use gents_service::home_state::read_runtime_state;
+use gents_service::home_state::resolve_home_dir;
+use gents_service::home_state::resolve_node_did;
 
 use backends::diagnose_backends;
 use plugin_jobs::diagnose_plugin_jobs;
@@ -45,7 +49,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         }),
     };
     let live_runtime = graphql_reachable && runtime_row.get("node_did").is_some();
-    let readiness_row = crate::commands::status::load_node_readiness(&access, &node_did).await;
+    let readiness_row = gents_host::readiness::load_node_readiness(&access, &node_did).await;
     let (runtime_node_readiness, runtime_node_readiness_check) = match readiness_row {
         Ok(row) => match project_node_readiness_summary(row.as_ref(), &node_did) {
             ProjectedNodeReadinessSummary::Observed(summary) => {
@@ -151,10 +155,13 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
     });
     let p2p_status = match graphql.as_deref().filter(|_| graphql_reachable) {
         Some(endpoint) => {
-            let endpoint = crate::resolve_graphql_endpoint(Some(endpoint), args.home.as_deref())?;
-            crate::commands::p2p::load_live_http_p2p_status(args.home.as_deref(), &endpoint).await
+            let endpoint = gents_service::home_state::resolve_graphql_endpoint(
+                Some(endpoint),
+                args.home.as_deref(),
+            )?;
+            gents_host::p2p_status::load_live_http_p2p_status(args.home.as_deref(), &endpoint).await
         }
-        None => crate::commands::p2p::persisted_p2p_status(matching_runtime_state),
+        None => gents_host::p2p_status::persisted_p2p_status(matching_runtime_state),
     };
     let p2p_transport = p2p_status
         .get("p2p_transport")
@@ -464,7 +471,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
     });
     if let Some(map) = output.as_object_mut() {
         let p2p_value = map.get("p2p").cloned().unwrap_or(Value::Null);
-        crate::commands::p2p::flatten_p2p_fields(map, &p2p_value);
+        gents_host::p2p_status::flatten_p2p_fields(map, &p2p_value);
     }
     print_json(&output)?;
     Ok(())

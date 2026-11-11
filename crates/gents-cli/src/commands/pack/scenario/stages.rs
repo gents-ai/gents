@@ -331,11 +331,23 @@ pub(super) fn stage_requests_query(trigger_id: &str, correlation: &str) -> Strin
 }
 
 async fn trigger_error(graphql: &GraphqlEndpoint, trigger_id: &str) -> Option<String> {
-    let query = format!(
-        r#"{{ Trigger(filter: {{ trigger_id: {{ _eq: "{}" }} }}) {{ last_status last_error }} }}"#,
-        escape_graphql_string(trigger_id)
-    );
-    let resp = post_graphql(graphql, &query).await.ok()?;
+    let rendered = {
+        use gents_protocol::document_query::{fields::trigger, Filter, Query, Selection};
+        Query::select(
+            Selection::new()
+                .field(trigger::LAST_STATUS)
+                .field(trigger::LAST_ERROR),
+        )
+        .filter(Filter::eq(trigger::TRIGGER_ID, trigger_id))
+        .render()
+    };
+    let resp = gents_store::config_client::post_graphql_with_variables(
+        graphql,
+        &rendered.document,
+        &rendered.variables,
+    )
+    .await
+    .ok()?;
     let row = resp.pointer("/data/Trigger/0")?;
     if row.get("last_status").and_then(Value::as_str) != Some("error") {
         return None;
