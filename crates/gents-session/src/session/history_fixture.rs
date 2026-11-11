@@ -263,3 +263,145 @@ pub async fn import_history_observation_as(
         .unwrap();
     assert_eq!(reconstructed, history_observation_message(text, tool_call));
 }
+
+pub async fn publish_signed_history(
+    db: &gents_inference::test_support::TestDb,
+    user: &dyn gents_store::identity::NodeIdentity,
+    client: &gents_store::config_client::ConfigAccess,
+    binding: &gents_protocol::agent_identity::AgentIdentityBinding,
+    session_id: &str,
+    messages: &[String],
+) -> Vec<String> {
+    let mut keys = Vec::new();
+    for (index, message) in messages.iter().enumerate() {
+        let request_id = format!("{session_id}-request-{index}");
+        let mut lifecycle =
+            signed_claimed_authored_request(db, user, client, binding, &request_id, session_id)
+                .await;
+        let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
+            db.node.clone(),
+            &lifecycle,
+            std::time::Duration::ZERO,
+        )
+        .unwrap();
+        lifecycle.begin_owned_execution(&writer).await.unwrap();
+        let key = gents_protocol::output::rows::authored_message_key(
+            &lifecycle.request().doc_id,
+            "prompt",
+        );
+        writer
+            .publish_authored_message(&lifecycle, "prompt", &Message::user(message))
+            .await
+            .unwrap();
+        lifecycle
+            .terminalize_owned(
+                crate::request::lifecycle::RequestTerminalOutcome::Completed,
+                gents_protocol::output::TerminalOutput::NoMessage,
+                None,
+            )
+            .await
+            .unwrap();
+        keys.push(key);
+    }
+    keys
+}
+
+pub async fn signed_claimed_authored_request(
+    db: &gents_inference::test_support::TestDb,
+    user: &dyn gents_store::identity::NodeIdentity,
+    client: &gents_store::config_client::ConfigAccess,
+    binding: &gents_protocol::agent_identity::AgentIdentityBinding,
+    request_id: &str,
+    session_id: &str,
+) -> crate::request::lifecycle::RequestLifecycle {
+    signed_claimed_authored_request_with_retry(
+        db, user, client, binding, request_id, session_id, None,
+    )
+    .await
+}
+
+pub async fn signed_claimed_authored_request_with_retry(
+    db: &gents_inference::test_support::TestDb,
+    user: &dyn gents_store::identity::NodeIdentity,
+    client: &gents_store::config_client::ConfigAccess,
+    binding: &gents_protocol::agent_identity::AgentIdentityBinding,
+    request_id: &str,
+    session_id: &str,
+    retry: Option<crate::request::lifecycle::RetryLink>,
+) -> crate::request::lifecycle::RequestLifecycle {
+    use crate::request::lifecycle::{
+        ClaimOutcome, RequestIdentity, RequestLifecycle, RequestSigner, RequestSpec,
+    };
+    let agent =
+        gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), binding).unwrap();
+    let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let mut spec = RequestSpec::new(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        RequestIdentity {
+            request_id: request_id.into(),
+            node_did: db.node_identity.did().into(),
+            requester_did: Some(user.did().into()),
+            agent_did: binding.agent_did.clone(),
+            session_id: session_id.into(),
+            content: "race".into(),
+            execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+            created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        },
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
+    );
+    spec.retry = retry;
+    let create = crate::request::lifecycle::build_signed_client_request(
+        client,
+        spec,
+        RequestSigner::Identity(user),
+    )
+    .await
+    .unwrap();
+    crate::request::lifecycle::submit_client_request(client, &create)
+        .await
+        .unwrap();
+    let response = agent_access
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}, limit: 2) {{ {} }} }}"#,
+            escape_graphql_string(request_id),
+            gents_protocol::row::AGENT_REQUEST_FIELDS,
+        ))
+        .await
+        .unwrap();
+    let [row] = response["data"]["AgentRequest"]
+        .as_array()
+        .unwrap()
+        .as_slice()
+    else {
+        panic!("signed fixture request must be unique");
+    };
+    let row: gents_protocol::row::AgentRequestRow = serde_json::from_value(row.clone()).unwrap();
+    let request = row.try_into().unwrap();
+    let (_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
+    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+        db.node.clone(),
+        db.node_identity.clone(),
+        authority,
+    );
+    let (request, admission) = verifier
+        .verify_fresh_for_claim_with_identity(&request, agent.as_ref())
+        .await
+        .unwrap();
+    assert!(
+        admission.is_some(),
+        "client request needs verified claim admission"
+    );
+    let mut lifecycle = RequestLifecycle::new_with_node_did(db.node.clone(), request, 60);
+    lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
+    lifecycle.set_client_claim_admission(admission);
+    assert_eq!(
+        lifecycle.claim_with_identity().await.unwrap(),
+        ClaimOutcome::Claimed
+    );
+    lifecycle
+}

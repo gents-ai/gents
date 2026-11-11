@@ -43,8 +43,12 @@ mod tests;
 pub use history_fixture::import_history_observation;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use history_fixture::import_history_observation_as;
-#[cfg(test)]
-pub use tests::publish_signed_history;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use history_fixture::publish_signed_history;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use history_fixture::{
+    signed_claimed_authored_request, signed_claimed_authored_request_with_retry,
+};
 
 pub use crate::tool_call::query::result::{
     load_tool_call_arguments, load_tool_call_presentation, load_tool_call_result,

@@ -258,11 +258,11 @@ async fn check_turn_chronology(retry: bool) {
     node.shutdown().await.expect("node shutdown");
     drop(node);
     drop(fixture.home);
-    let reopened = crate::runtime::embedded::EmbeddedHome::open_retained(&fixture.path)
+    let reopened = gents_toolcalls::test_support::TestHome::create_at(&fixture.path, None)
         .await
         .unwrap();
     assert_eq!(
-        gents_store::identity::NodeIdentity::did(reopened.identity.as_ref()),
+        gents_store::identity::NodeIdentity::did(reopened.node_identity.as_ref()),
         fixture.node_did
     );
     let restored = FileInventorySnapshot::load(&reopened.node, &admission)
