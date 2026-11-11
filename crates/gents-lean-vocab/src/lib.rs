@@ -2083,7 +2083,7 @@ pub struct LeanNamedTransition {
 pub struct LeanCoverageEntry {
     pub category: String,
     pub domain: String,
-    pub consumer: String,
+    pub consumed: bool,
     pub accepted_boundary: String,
     pub accepted_follow_up: String,
     pub feature: String,
@@ -2784,6 +2784,7 @@ mod command_identity_queue;
 mod compaction_canonical_projection;
 mod compaction_projection_join;
 mod composed_invariants;
+pub mod consumer_scan;
 mod durable_reduction;
 mod eval;
 mod event_delivery;

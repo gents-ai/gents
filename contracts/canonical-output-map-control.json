@@ -276,7 +276,7 @@
       "crates/gents-store/src/graphql.rs",
       "crates/gents-store/src/config_client/txn.rs"
     ],
-    "consumer_paths": ["crates/gents/tests/conformance/structure.rs", "crates/gents-store/src/config_client/txn_owner_tests.rs"],
+    "consumer_paths": ["crates/gents-store/src/config_client/txn_owner_tests.rs"],
     "native_status": "pending",
     "required_cases": [
       "schedule the storage finalizer independently from a sibling waiting on the same mutation gate",
