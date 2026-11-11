@@ -51,7 +51,7 @@ pub(super) struct ImportSession {
     /// `ENGINE_FAILED`, so a guest that then exits non-zero reports the
     /// engine's failure, not the exit.
     pub failure: Option<(PluginVerdict, String)>,
-    pub host: Option<super::host_calls::Bridge>,
+    pub host: Option<super::host_bridge::Bridge>,
 }
 
 /// The call's `script`: a non-empty string. Whitespace is source.

@@ -338,7 +338,7 @@ impl PluginRunner {
         arguments: &serde_json::Value,
         budget: &PluginBudget,
         manifold: Manifold,
-        host: Option<host_calls::Bridge>,
+        host: Option<host_bridge::Bridge>,
     ) -> Result<PluginOutcome> {
         debug_assert!(
             matches!(manifold.listen, ListenAccess::None),
@@ -707,6 +707,7 @@ pub fn retry_backoff(attempts: u32) -> std::time::Duration {
 }
 pub mod data;
 pub mod executor;
+pub mod host_bridge;
 mod host_calls;
 #[cfg(test)]
 pub(crate) use host_calls::live as live_guests;
