@@ -45,7 +45,7 @@ fn admitted_call_error(error: AdmittedCallError<CompletionError>) -> CompletionE
 }
 
 #[derive(Clone)]
-pub(crate) struct AdmittedCompletionClient<C> {
+pub struct AdmittedCompletionClient<C> {
     inner: C,
     admission: AdmissionRegistry,
     connection: std::sync::Arc<str>,
@@ -146,7 +146,7 @@ where
 /// Deserializing raw transport data cannot recover the selected provider
 /// dialect, so it leaves the derived budget projection unknown.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
-pub(crate) struct ObservedStreamingResponse<R> {
+pub struct ObservedStreamingResponse<R> {
     #[serde(flatten)]
     raw: R,
     #[serde(skip)]

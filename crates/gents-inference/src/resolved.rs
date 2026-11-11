@@ -6,7 +6,6 @@ use anyhow::Result;
 use crate::backends::provider::BackendProviderKind;
 use crate::backends::registry::backend_fields;
 use crate::compaction::CompactionStrategy;
-use crate::tools::surface::AgentToolSurfaceConfig;
 use gents_documents::inference_defaults::ReasoningEffort;
 use gents_loop::completion_retry::CompletionRetryProfileFields;
 use gents_loop::openai_wire::OpenAiWireApi;
@@ -96,7 +95,6 @@ pub struct ResolvedAgent {
     pub max_turns: usize,
     pub max_turns_provenance: MaxTurnsProvenance,
     pub system_prompt: String,
-    pub tools: AgentToolSurfaceConfig,
     pub compaction: Option<gents_documents::CompactionConfig>,
     pub compaction_inference: Option<ResolvedInference>,
     pub max_total_tokens: Option<u64>,
@@ -379,7 +377,6 @@ impl std::fmt::Debug for ResolvedAgent {
             .field("max_turns", &self.max_turns)
             .field("max_turns_provenance", &self.max_turns_provenance)
             .field("system_prompt", &self.system_prompt)
-            .field("tools", &self.tools)
             .field("compaction", &self.compaction)
             .field("compaction_inference", &self.compaction_inference)
             .field("max_total_tokens", &self.max_total_tokens)
@@ -669,7 +666,6 @@ mod tests {
             max_turns: DEFAULT_MAX_TURNS,
             max_turns_provenance: MaxTurnsProvenance::Default,
             system_prompt: "system".to_string(),
-            tools: AgentToolSurfaceConfig::meta_only(),
             compaction: None,
             compaction_inference: None,
             max_total_tokens: None,
