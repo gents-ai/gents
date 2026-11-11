@@ -2,9 +2,8 @@ use std::path::PathBuf;
 
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
-use crate::tools::native::{
-    apply_workspace_authority, CommandExecutionMode, CommandExecutionPolicy, WorkspaceAuthority,
-};
+use crate::tools::native::{apply_workspace_authority, CommandExecutionPolicy};
+use gents_loop::tool_policy::{CommandExecutionMode, WorkspaceAuthority};
 
 use super::{
     bind_workspace_overlay, IsolatedWorkspaceRecord, WorkspaceBindInput, WorkspacePlacementRecord,
@@ -843,7 +842,8 @@ async fn artifact_grant_rejects_source_drift_and_allocates_disjoint_outputs() {
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn generated_artifact_admission_cases_drive_live_binding_and_launch_policy() {
-    use crate::tools::native::{CommandConstraints, CommandNetworkMode};
+    use crate::tools::native::CommandConstraints;
+    use gents_loop::tool_policy::CommandNetworkMode;
     use crate::tools::runtime_context::{
         scope_request_tool_execution_with_workspace_overlay, ToolWorkspaceScope,
     };

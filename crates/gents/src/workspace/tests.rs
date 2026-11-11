@@ -4,10 +4,8 @@ use std::path::{Path, PathBuf};
 
 use tempfile::TempDir;
 
-use crate::tools::native::{
-    validate_command_policy, CommandConstraints, CommandExecutionMode, CommandExecutionPolicy,
-    CommandNetworkMode,
-};
+use crate::tools::native::{validate_command_policy, CommandConstraints, CommandExecutionPolicy};
+use gents_loop::tool_policy::{CommandExecutionMode, CommandNetworkMode};
 
 use super::adapter::DIRTY_BASE_SUMMARY_LIMIT;
 use super::*;
@@ -832,7 +830,7 @@ fn writer_seal_persists_receipt_and_forbids_read_write() {
         "ws-seal",
         "req-writer",
         "req-writer-doc",
-        crate::tools::native::WorkspaceAuthority::ReadWrite,
+        gents_loop::tool_policy::WorkspaceAuthority::ReadWrite,
         "did:key:zWorkspaceOwner",
         None,
     );
@@ -869,7 +867,7 @@ fn writer_seal_persists_receipt_and_forbids_read_write() {
             "ws-seal",
             "req-writer-2",
             "req-writer-2-doc",
-            crate::tools::native::WorkspaceAuthority::ReadWrite,
+            gents_loop::tool_policy::WorkspaceAuthority::ReadWrite,
             "did:key:zWorkspaceOwner",
             sealed.workspace.seal_hash.as_deref(),
         ),
@@ -935,7 +933,7 @@ fn concurrent_read_only_after_seal_with_matching_hash() {
             "ws-ro",
             "req-review-a",
             "doc-a",
-            crate::tools::native::WorkspaceAuthority::ReadOnly,
+            gents_loop::tool_policy::WorkspaceAuthority::ReadOnly,
             "did:key:zWorkspaceOwner",
             Some(&hash),
         ),
@@ -954,7 +952,7 @@ fn concurrent_read_only_after_seal_with_matching_hash() {
             "ws-ro",
             "req-review-b",
             "doc-b",
-            crate::tools::native::WorkspaceAuthority::ReadOnly,
+            gents_loop::tool_policy::WorkspaceAuthority::ReadOnly,
             "did:key:zWorkspaceOwner",
             Some(&hash),
         ),
@@ -1012,7 +1010,7 @@ async fn seal_drift_fails_closed() {
         &placed,
         WorkspaceBindInput {
             workspace_id: "ws-drift",
-            authority: crate::tools::native::WorkspaceAuthority::ReadOnly,
+            authority: gents_loop::tool_policy::WorkspaceAuthority::ReadOnly,
             seal_hash: Some(&hash),
             request_cwd: None,
             node_did: "did:key:zWorkspaceOwner",
@@ -1030,7 +1028,7 @@ async fn seal_drift_fails_closed() {
         &placed,
         WorkspaceBindInput {
             workspace_id: "ws-drift",
-            authority: crate::tools::native::WorkspaceAuthority::ReadOnly,
+            authority: gents_loop::tool_policy::WorkspaceAuthority::ReadOnly,
             seal_hash: Some(&hash),
             request_cwd: None,
             node_did: "did:key:zWorkspaceOwner",
@@ -1162,7 +1160,7 @@ fn bind_integrate(
         workspace_id,
         request_id,
         &format!("{request_id}-doc"),
-        crate::tools::native::WorkspaceAuthority::Integrate,
+        gents_loop::tool_policy::WorkspaceAuthority::Integrate,
         "did:key:zWorkspaceOwner",
         Some(seal_hash),
     ))
@@ -1349,7 +1347,7 @@ fn integrate_applies_sealed_diff_to_trunk_not_via_worker_git_merge() {
             "ws-int",
             "req-review-a",
             "doc-a",
-            crate::tools::native::WorkspaceAuthority::ReadOnly,
+            gents_loop::tool_policy::WorkspaceAuthority::ReadOnly,
             "did:key:zWorkspaceOwner",
             Some(&hash),
         ),
@@ -1369,7 +1367,7 @@ fn integrate_applies_sealed_diff_to_trunk_not_via_worker_git_merge() {
             "ws-int",
             "req-review-b",
             "doc-b",
-            crate::tools::native::WorkspaceAuthority::ReadOnly,
+            gents_loop::tool_policy::WorkspaceAuthority::ReadOnly,
             "did:key:zWorkspaceOwner",
             Some(&hash),
         ),
@@ -1908,7 +1906,7 @@ fn cleanup_refuses_ready_and_active_bindings() {
         "ws-ready-c",
         "req-review",
         "doc-review",
-        crate::tools::native::WorkspaceAuthority::ReadOnly,
+        gents_loop::tool_policy::WorkspaceAuthority::ReadOnly,
         "did:key:zWorkspaceOwner",
         Some(&hash),
     ))

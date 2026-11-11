@@ -97,7 +97,7 @@ fn generated_operator_base_freeze_cases_drive_real_git_executor() {
                     "workspace-1",
                     "existing-writer",
                     "existing-writer-doc",
-                    crate::tools::native::WorkspaceAuthority::ReadWrite,
+                    gents_loop::tool_policy::WorkspaceAuthority::ReadWrite,
                     "did:key:zWorkspaceOwner",
                     None,
                 ))

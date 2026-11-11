@@ -264,7 +264,7 @@ async fn runtime_seal_case(unowned: bool) {
         host_path: fx.repo.clone(),
         enabled: true,
     };
-    crate::triggers::callback::flush_workspace_docs(&agent_access, &memory, agent.did(), &action)
+    crate::workspace::flush_workspace_docs(&agent_access, &memory, agent.did(), &action)
         .await
         .unwrap();
     let repo_mutation = repository_placement_upsert_mutation(&repository, &timestamp).unwrap();
@@ -760,7 +760,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
     )?;
     let mut denied_docs = MemoryWorkspaceDocuments::default();
     denied_docs.write_isolated_workspace(reservation)?;
-    assert!(crate::triggers::callback::flush_workspace_docs(
+    assert!(crate::workspace::flush_workspace_docs(
         &creator_access,
         &denied_docs,
         creator.did(),
@@ -851,7 +851,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
             .as_bool()
             .unwrap()
     );
-    crate::triggers::callback::flush_workspace_docs(&creator_access, &docs, creator.did(), &action)
+    crate::workspace::flush_workspace_docs(&creator_access, &docs, creator.did(), &action)
         .await?;
     let workspace_rows = writer_access
         .execute("{ IsolatedWorkspace { _docID } }")
@@ -868,7 +868,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
             &writer.did().parse()?,
         )
         .await?;
-    crate::triggers::callback::flush_workspace_docs(&creator_access, &docs, creator.did(), &action)
+    crate::workspace::flush_workspace_docs(&creator_access, &docs, creator.did(), &action)
         .await?;
     let visible_after_retry = !writer_access
         .execute("{ IsolatedWorkspace { _docID } }")
@@ -900,7 +900,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
             &reader.did().parse()?,
         )
         .await?;
-    crate::triggers::callback::flush_workspace_docs(&creator_access, &docs, creator.did(), &action)
+    crate::workspace::flush_workspace_docs(&creator_access, &docs, creator.did(), &action)
         .await?;
     let reader_access = crate::ConfigAccess::local_managed_agent(
         node.clone(),
@@ -1061,7 +1061,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
         state["data"]["IsolatedWorkspace"][0]["lifecycle_state"],
         "cleaning"
     );
-    let stale = crate::triggers::callback::flush_workspace_docs(
+    let stale = crate::workspace::flush_workspace_docs(
         &creator_access,
         &docs,
         creator.did(),
