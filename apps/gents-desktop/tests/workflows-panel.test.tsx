@@ -205,7 +205,7 @@ describe("WorkflowsPanel", () => {
     });
     expect(listDynamicWorkflows).not.toHaveBeenCalled();
     expect(screen.queryByText("Dynamic workflows")).toBeNull();
-    expect(screen.queryByText(/No workflows yet/)).toBeNull();
+    expect(screen.queryByText(/No workflow scripts yet/)).toBeNull();
   });
 
   it("lists every run that is running, paused or waiting, across sessions", async () => {

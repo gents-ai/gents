@@ -140,8 +140,8 @@ function LocalWorkflows({
       )}
       {dynamic.length === 0 ? (
         <EmptyList>
-          No workflows yet. A workflow an agent writes and runs appears here once it
-          completes, to keep as a tool.
+          No workflow scripts yet. A workflow an agent writes in a session appears here
+          once it completes, to keep as a tool.
         </EmptyList>
       ) : (
         <Group title="Dynamic workflows">
