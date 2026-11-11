@@ -137,6 +137,28 @@ def taskHookRecordRecoveryCase
     executionRegistered := some liveExecution
   }
 
+/-- Owed-delivery witness: one redrive of a pending record
+(`Hooks.OwedDelivery.redrive`). A record that stays owed is `running`. -/
+def owedDeliveryRecoveryCase (name : String) (authorized current : Bool)
+    (attempt : Hooks.OwedDelivery.Attempt) : RecoverySweepCase :=
+  let row : OwedDeliveryRow :=
+    { record := Hooks.OwedDelivery.Record.fresh "agent" ⟨"control.session.halt", "goals", "s"⟩
+    , observed := ⟨authorized, current⟩
+    , attempt := attempt }
+  let recovered := owedDeliveryRecover row
+  let state := fun (row : OwedDeliveryRow) => match row.record.settled with
+    | none => "running"
+    | some .delivered => "delivered"
+    | some .dropped => "dropped"
+  recoveryCase
+    owedDeliveryRecoverySweep
+    name
+    (state row)
+    (state recovered)
+    "lifecycle-hook-owed-delivery-redrive"
+    (owedDeliveryMeasure row)
+    (owedDeliveryMeasure recovered)
+
 def recoverySweepCases : List RecoverySweepCase :=
   [ recoveryCase
       requestRecoverySweep
@@ -294,6 +316,10 @@ def recoverySweepCases : List RecoverySweepCase :=
       "task_hook_record_hidden_request_deferred" .hidden false
   , taskHookRecordRecoveryCase
       "task_hook_record_unavailable_identity_deferred" .unavailable false
+  , owedDeliveryRecoveryCase "owed_delivery_applied_to_delivered" true true .applied
+  , owedDeliveryRecoveryCase "owed_delivery_revoked_actor_to_dropped" false true .applied
+  , owedDeliveryRecoveryCase "owed_delivery_superseded_to_dropped" true false .applied
+  , owedDeliveryRecoveryCase "owed_delivery_failed_attempt_deferred" true true (.failed "refused")
   ]
 
 def restartDispositionCase
