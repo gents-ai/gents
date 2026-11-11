@@ -423,7 +423,7 @@ pub async fn plugin_build(dir: PathBuf, run_cases: bool) -> Result<()> {
     .await
     .context("the plugin build task did not finish")??;
     let cases = if run_cases {
-        Some(gents::pack::authoring::run_plugin_cases(&dir).await?)
+        Some(gents::plugin::authoring_test::run_plugin_cases(&dir).await?)
     } else {
         None
     };

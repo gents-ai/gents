@@ -694,6 +694,7 @@ pub mod allowed;
 pub mod application_write;
 pub mod approval;
 pub mod authority;
+pub mod authoring_test;
 mod bound;
 pub use bound::{BoundDir, InvocationConsent};
 

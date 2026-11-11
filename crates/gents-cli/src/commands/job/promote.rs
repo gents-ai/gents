@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use gents::documents::Tools;
 use gents::pack::authoring::check_dir;
-use gents::pack::authoring::test::run_plugin_cases;
+use gents::plugin::authoring_test::run_plugin_cases;
 use gents::store::config_client::ConfigAccess;
 use gents::tools::background::job::promote::{
     generate_pack, load_dynamic_run, validate_name, write_promotion, PromoteRefusal,
