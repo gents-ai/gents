@@ -297,6 +297,7 @@ pub async fn promote(
             remove: false,
             preview: false,
             dynamic_consent: false,
+            tool_calls_consent: false,
         },
     )
     .await

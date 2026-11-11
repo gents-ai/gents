@@ -33,6 +33,10 @@ pub(crate) struct WireRequest {
     /// approval of its pack): wiring raises its job block from `check` to
     /// `run` (Lean `consentedDynamic`). The wire command never sets it.
     pub(crate) dynamic_consent: bool,
+    /// The node owner approved this plugin calling the agent's own tools
+    /// (the init approval of its pack): its selection is wired with
+    /// `tool_calls: true`. The wire command never sets it.
+    pub(crate) tool_calls_consent: bool,
 }
 
 #[cfg(test)]
@@ -56,6 +60,7 @@ pub(crate) async fn wire(args: PackWireArgs) -> Result<()> {
         remove: args.remove,
         preview: args.preview,
         dynamic_consent: false,
+        tool_calls_consent: false,
     };
     crate::print_json(&wire_in(&access, &owner, &home, &request).await?)
 }
@@ -125,6 +130,7 @@ async fn wire_in_owned(
     plan.dynamic_consent = request
         .dynamic_consent
         .then_some(gents::tools::background::job::settings::consent_dynamic_run as _);
+    plan.tool_calls_consent = request.tool_calls_consent;
     plan.next_step = format!("gents config tools explain --agent {}", request.agent);
     let report = if request.preview {
         access

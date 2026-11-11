@@ -17,6 +17,7 @@ pub(crate) const ENGINEER_DEFAULT_PACKS: &[&str] = &[
     "gents/dynamic_workflows",
     "gents/charts",
     "gents/data_tables",
+    "gents/script",
 ];
 
 /// The default packs whose approval is also the consent to dynamic workflow
@@ -24,6 +25,14 @@ pub(crate) const ENGINEER_DEFAULT_PACKS: &[&str] = &[
 /// (Lean `consentedDynamic`), since a pack can only ship `check`, which
 /// refuses every spawn a script asks for.
 const DYNAMIC_RUN_ON_APPROVAL: &[&str] = &["gents/dynamic_workflows"];
+
+/// The default packs whose approval is also the consent to their plugins
+/// calling the Engineer's own tools: approving one wires its plugins with
+/// `tool_calls: true`. Without it a script only computes and sleeps.
+const TOOL_CALLS_ON_APPROVAL: &[&str] = &["gents/script"];
+
+/// What the notice says `gents/script` is for.
+const SCRIPT_PURPOSE: &str = "gents/script runs a short script over the Engineer's own tools: waiting, trying logic, bulk changes.";
 
 /// How long one default pack may take to resolve. Init succeeds without its
 /// default packs, so an unreachable registry must not hold a first run for
@@ -84,8 +93,13 @@ pub(crate) async fn install(
     approval: Approval,
 ) -> Value {
     eprintln!(
-        "\nThe Engineer starts with these packs: {}.\nEach is installed from this home's pack store or the registry. {}",
+        "\nThe Engineer starts with these packs: {}.\nEach is installed from this home's pack store or the registry. {}{}",
         packs.join(", "),
+        if packs.iter().any(|pack| TOOL_CALLS_ON_APPROVAL.contains(pack)) {
+            format!("{SCRIPT_PURPOSE} ")
+        } else {
+            String::new()
+        },
         match approval {
             Approval::Ask => "Before a pack whose plugins request permissions is installed, you are asked to approve them.",
             Approval::Approved => "The permissions their plugins request were approved with --approve-default-packs.",
@@ -170,12 +184,17 @@ async fn install_one(
     )?;
     let wire = !source.manifest().metadata.plugins.is_empty();
     let asks = requested.as_array().is_some_and(|asks| !asks.is_empty());
-    let grant = asks
+    let tool_calls = TOOL_CALLS_ON_APPROVAL.contains(&pack);
+    let approved = (asks || tool_calls)
         && match approval {
             Approval::Approved => true,
             Approval::Unattended => false,
             Approval::Ask => {
-                eprintln!("\n{pack} requests these permissions for its plugins:");
+                if asks {
+                    eprintln!("\n{pack} requests these permissions for its plugins:");
+                } else {
+                    eprintln!("\n{pack}:");
+                }
                 for ask in requested.as_array().into_iter().flatten() {
                     eprintln!(
                         "  {}: {}",
@@ -186,13 +205,21 @@ async fn install_one(
                 if DYNAMIC_RUN_ON_APPROVAL.contains(&pack) {
                     eprintln!("  Approving also lets workflow scripts the model writes start agents (job.policy.dynamic: run).");
                 }
+                if tool_calls {
+                    eprintln!("  Approving lets a script it runs call the Engineer's own tools (tool_calls: true); declined, a script only computes and sleeps.");
+                }
                 crate::interactive_backend::confirm(
-                    &format!("Install {pack} and allow this?"),
+                    &if asks {
+                        format!("Install {pack} and allow this?")
+                    } else {
+                        format!("Allow this for {pack}?")
+                    },
                     false,
                 )
                 .await
             }
         };
+    let grant = asks && approved;
     if asks && !grant {
         return Ok(Outcome::Unapproved { requested, wire });
     }
@@ -233,6 +260,7 @@ async fn install_one(
                 &source,
                 &[engineer.to_owned()],
                 grant && DYNAMIC_RUN_ON_APPROVAL.contains(&coordinate.as_str()),
+                approved && tool_calls,
             )
             .await
             .with_context(|| {
@@ -262,6 +290,9 @@ async fn install_one(
     }
     drop(access);
     let (wired, skills, host_tool_roots) = attached?;
+    if tool_calls && !approved {
+        eprintln!("  {pack} is wired without the Engineer's tools, which was not approved: a script only computes and sleeps. The Engineer grants it with tool_calls true on that plugin in its Tools.");
+    }
     Ok(Outcome::Installed(json!({
         "pack": coordinate,
         "version": source.manifest().version,
@@ -840,6 +871,97 @@ mod tests {
         drop(config);
         if let Some(node) = access.local_node() {
             node.shutdown().await.expect("node shutdown");
+        }
+    }
+
+    /// `gents/script` is a default pack, and approving it is what lets its
+    /// scripts call the Engineer's tools: unattended it installs (its plugin
+    /// requests no permissions) wired without `tool_calls`, and approved it
+    /// is wired with `tool_calls: true`.
+    #[tokio::test]
+    async fn the_script_pack_calls_the_engineers_tools_only_when_approved() {
+        assert_eq!(ENGINEER_DEFAULT_PACKS.len(), 6);
+        assert!(TOOL_CALLS_ON_APPROVAL
+            .iter()
+            .all(|pack| ENGINEER_DEFAULT_PACKS.contains(pack)));
+        let afb = tokio::task::spawn_blocking(|| {
+            crate::commands::plugin::testing::build_plugin_afb(
+                "script",
+                b"fn main() { println!(\"{{}}\"); }",
+            )
+        })
+        .await
+        .unwrap();
+        for (approval, expected) in [(Approval::Unattended, false), (Approval::Approved, true)] {
+            let home = tempfile::tempdir().unwrap();
+            let cli = crate::cli::Cli::try_parse_from([
+                "gents",
+                "init",
+                "--store-key-custody",
+                "file",
+                "--engineer",
+                "--no-default-packs",
+                "--inference-url",
+                "http://127.0.0.1:9/v1",
+                "--home",
+                home.path().to_str().unwrap(),
+            ])
+            .unwrap();
+            let Some(crate::cli::Command::Init(args)) = cli.command else {
+                panic!("expected init")
+            };
+            let initialized = crate::commands::init::init_home(args).await.unwrap();
+            let engineer = initialized["default_agent_did"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            let packs = tempfile::tempdir().unwrap();
+            let script = packs.path().join("script");
+            write_pack(
+                &script,
+                json!({
+                    "manifest_version": 1, "name": "script", "namespace": "gents",
+                    "version": "1.0.0", "description": "A script over the caller's tools",
+                    "authors": ["tests"], "tags": [], "kind": "plugins",
+                    "assets": ["README.md", "plugins/script.afb"],
+                    "plugins": [{
+                        "name": "script", "description": "test", "artifact": "plugins/script.afb",
+                        "language": "rust", "input_schema": {"type": "object"},
+                        "manifold": {"fs": "None", "net": "None", "crypto": false,
+                            "child_process": false, "env": "None",
+                            "allow_exit": false, "http_timeout_ms": null, "listen": "None"},
+                    }],
+                }),
+                &[("plugins/script.afb", afb.clone())],
+            );
+            gents::pack::local::open(&gents::pack::local::LocalName::Path(&script), home.path())
+                .unwrap();
+            let report = install(
+                home.path(),
+                &engineer,
+                &["gents/script"],
+                Some("http://127.0.0.1:9"),
+                approval,
+            )
+            .await;
+            assert_eq!(report["not_installed"], json!([]), "{report}");
+            assert_eq!(
+                report["installed"][0]["granted_permissions"],
+                json!([]),
+                "{report}"
+            );
+            let documents = engineer_documents(home.path()).await;
+            assert_eq!(
+                documents["plugins"][0]["plugin"], "gents/script",
+                "{documents}"
+            );
+            assert_eq!(
+                documents["plugins"][0]["tool_calls"]
+                    .as_bool()
+                    .unwrap_or(false),
+                expected,
+                "{approval:?}: {documents}"
+            );
         }
     }
 

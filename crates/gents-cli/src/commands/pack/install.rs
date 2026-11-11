@@ -673,11 +673,12 @@ pub(crate) async fn wire_pack_plugins(
     pack: &PackSource,
     agents: &[String],
 ) -> Result<Vec<serde_json::Value>> {
-    wire_pack_plugins_consenting(access, owner, home, pack, agents, false).await
+    wire_pack_plugins_consenting(access, owner, home, pack, agents, false, false).await
 }
 
 /// [`wire_pack_plugins`], with the node owner's consent to dynamic scripts
-/// for this pack's job blocks when `dynamic_consent` is set.
+/// for this pack's job blocks when `dynamic_consent` is set, and to its
+/// plugins calling each agent's own tools when `tool_calls_consent` is.
 pub(crate) async fn wire_pack_plugins_consenting(
     access: &gents::store::config_client::ConfigAccess,
     owner: &str,
@@ -685,6 +686,7 @@ pub(crate) async fn wire_pack_plugins_consenting(
     pack: &PackSource,
     agents: &[String],
     dynamic_consent: bool,
+    tool_calls_consent: bool,
 ) -> Result<Vec<serde_json::Value>> {
     let namespace = &pack.manifest().metadata.namespace;
     let mut wired = Vec::new();
@@ -697,6 +699,7 @@ pub(crate) async fn wire_pack_plugins_consenting(
                 remove: false,
                 preview: false,
                 dynamic_consent,
+                tool_calls_consent,
             };
             wired.push(wire::wire_in(access, owner, home, &request).await?);
         }

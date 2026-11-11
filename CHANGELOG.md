@@ -8,8 +8,11 @@ source consistency checks, not a separate runtime compatibility version.
 
 - `gents init --engineer` installs the Engineer's default packs into a fresh
   home: `gents/pack_builder`, `gents/web`, `gents/dynamic_workflows`,
-  `gents/charts` and `gents/data_tables`, resolved by name from the home's
-  pack store and then the registry (nothing is bundled). Init names them,
+  `gents/charts`, `gents/data_tables` and `gents/script`, resolved by name
+  from the home's pack store and then the registry (nothing is bundled).
+  `gents/script` runs a short script over the Engineer's own tools (waiting,
+  trying logic, bulk changes); approving it wires it with `tool_calls: true`,
+  and unapproved its scripts only compute and sleep. Init names them,
   asks per pack before granting the permissions its plugins request, wires
   plugins into the Engineer's Tools and attaches skills to its Context.
   Without a terminal, `--approve-default-packs` approves; otherwise a pack

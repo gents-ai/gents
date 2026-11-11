@@ -10,8 +10,8 @@ use super::home_install::recorded_provenance;
 use super::plugin_lifecycle::InstalledPlugin;
 use super::{installed_pack_documents, read_home_install, InstalledVia, PackKind};
 use crate::documents::{
-    apply_desired_state_plan, load_agent_context_and_tools_in_txn, unwire_plugin, wire_plugin,
-    Tools, WireReport,
+    apply_desired_state_plan, consent_tool_calls, load_agent_context_and_tools_in_txn,
+    unwire_plugin, wire_plugin, Tools, WireReport,
 };
 use crate::store::collection::Collection;
 use crate::store::config_client::{
@@ -37,6 +37,9 @@ pub struct PluginWiring {
     /// approved dynamic scripts for this plugin: its job block goes from
     /// `check` to `run` (Lean `consentedDynamic`).
     pub dynamic_consent: Option<fn(&mut Tools, &str, &mut WireReport)>,
+    /// Set when the node owner approved this plugin calling the agent's own
+    /// tools: its selection is written with `tool_calls: true`.
+    pub tool_calls_consent: bool,
     /// The caller's own command that shows why an agent's Tools or Context
     /// cannot be read, named when they cannot.
     pub next_step: String,
@@ -91,6 +94,7 @@ impl PluginWiring {
             remove: false,
             preview: false,
             dynamic_consent: None,
+            tool_calls_consent: false,
             next_step: String::new(),
         })
     }
@@ -141,6 +145,9 @@ impl PluginWiring {
         };
         if let Some(consent) = self.dynamic_consent.filter(|_| !self.remove) {
             consent(&mut tools, &self.coordinate(), &mut report);
+        }
+        if self.tool_calls_consent && !self.remove {
+            consent_tool_calls(&mut tools, &self.coordinate(), &mut report);
         }
         tools.validate()?;
         if !self.preview {

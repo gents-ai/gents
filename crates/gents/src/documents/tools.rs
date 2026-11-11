@@ -1243,6 +1243,25 @@ pub fn wire_plugin(
     ))
 }
 
+/// Applies the node owner's consent to `coordinate` calling its caller's own
+/// tools: the selection [`wire_plugin`] wrote gets `tool_calls: true`. A pack
+/// cannot ship that grant for an agent it does not own, so it is given where
+/// the owner approves the pack.
+pub fn consent_tool_calls(tools: &mut Tools, coordinate: &str, report: &mut WireReport) {
+    let Some(selection) = tools
+        .integrations
+        .iter_mut()
+        .flat_map(|integrations| integrations.plugins.iter_mut().flatten())
+        .find(|plugin| plugin.plugin == coordinate && !plugin.tool_calls)
+    else {
+        return;
+    };
+    selection.tool_calls = true;
+    report.changed.push(format!(
+        "set tool_calls true for {coordinate}: the node owner approved it calling this agent's tools"
+    ));
+}
+
 /// Inverse of [`wire_plugin`]. With no `targets_from`, drops the plugin entry
 /// and then its job targets and the `skill_ids`, each only when no other
 /// plugin entry still needs it (skills are not recorded per plugin, so any
