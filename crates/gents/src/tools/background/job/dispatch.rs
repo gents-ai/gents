@@ -37,8 +37,8 @@ use super::records::{
 };
 use super::settings::effective_ceiling;
 use super::JobBinding;
-use crate::plugin::data::DataCaller;
 use crate::plugin::data::StampContext;
+use crate::plugin::data::{DataCaller, PluginData};
 use crate::plugin::job_calls::JobCaller;
 use crate::plugin::store::InstalledPlugin;
 use crate::plugin::PluginVerdict;
@@ -514,7 +514,7 @@ struct StepZero<'a> {
     resume: Option<&'a gents_protocol::job::JobResume>,
     coordinate: &'a str,
     row_doc_id: &'a String,
-    grant: &'a Option<crate::plugin::data::PluginData>,
+    grant: &'a Option<PluginData>,
     cause: &'a SessionMessageCause,
     args_digest: &'a String,
 }

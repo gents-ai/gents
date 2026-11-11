@@ -1,7 +1,9 @@
 use super::*;
 use anyhow::Context;
 
-use crate::session::message::{AgentMessageArgs, AgentNewArgs, Plan, RenderedBody};
+use crate::session::message::{
+    AgentMessageArgs, AgentMessageDelivery, AgentNewArgs, Plan, RenderedBody,
+};
 use crate::store::config_client::{ConfigAccess, TransactionFailure};
 use crate::tools::call::lifecycle::ToolCallLifecycle;
 use crate::tools::native::AGENT_SESSION_LIST_TOOL_NAME;
@@ -228,7 +230,7 @@ impl DefraSessionHook {
         SessionMessageTarget,
         RenderedBody,
         Option<String>,
-        crate::session::message::AgentMessageDelivery,
+        AgentMessageDelivery,
     )> {
         let create = tool_name == AGENT_NEW_TOOL_NAME;
         let (target, body, title, delivery) = if create {
@@ -389,7 +391,7 @@ impl DefraSessionHook {
             SessionMessageTarget,
             RenderedBody,
             Option<String>,
-            crate::session::message::AgentMessageDelivery,
+            AgentMessageDelivery,
         ),
     ) -> SessionMessagePhase<(SessionMessageCause, Plan)> {
         let (target, rendered, title, delivery) = decided;
