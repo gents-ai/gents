@@ -1649,6 +1649,9 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
         let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
         let hook = hook
             .with_goal_tool_authority(true, true)
+            .with_goal_tools(std::sync::Arc::new(
+                gents_automation::goal::goal_tools::GoalToolAnswers,
+            ))
             .with_background_tool_registry(
                 gents_toolcalls::call::hook::BackgroundToolRegistry::from_tools(
                     vec![Box::new(AdmissionChild {

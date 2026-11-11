@@ -326,6 +326,9 @@ where
             .with_session_goals(std::sync::Arc::new(
                 gents_automation::goal::session_message::SessionGoals,
             ))
+            .with_goal_tools(std::sync::Arc::new(
+                gents_automation::goal::goal_tools::GoalToolAnswers,
+            ))
             .with_goal_tool_authority(
                 tool_config.goal_tools_requested(),
                 tool_config.goal_creation_requested(),

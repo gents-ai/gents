@@ -25,6 +25,7 @@ use gents_protocol::job::MAX_BACKGROUNDED_TOOLS_PER_PARENT;
 mod background_control;
 mod background_tools;
 mod foreground_handoff;
+pub mod goal_tools;
 pub mod helpers;
 mod prompt_hook;
 mod session_message;

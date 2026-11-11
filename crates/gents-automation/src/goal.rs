@@ -161,6 +161,6 @@ fn optional_string_graphql_field(name: &str, value: Option<&str>) -> String {
         .unwrap_or_else(|| format!("{name}: null,"))
 }
 
-mod goal_tools;
+pub mod goal_tools;
 #[cfg(test)]
 mod tests;
