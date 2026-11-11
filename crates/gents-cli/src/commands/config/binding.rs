@@ -33,11 +33,8 @@ pub(crate) struct BoundDesiredManifest {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub(crate) struct ManifestBindingContext {
-    pub(crate) bind_mode: ManifestBindMode,
     pub(crate) target_node_did: String,
-    pub(crate) source_manifest_dids: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,17 +87,13 @@ pub(crate) async fn load_bound_manifest(
         });
     };
 
-    let source_manifest_dids = manifest_node_dids(&manifest)?;
+    manifest_node_dids(&manifest)?;
 
     if bind_mode == ManifestBindMode::Manifest {
         let target_node_did = manifest.node.node_did.clone();
         return Ok(BoundManifestLoad {
             bound: Some(BoundDesiredManifest {
-                context: ManifestBindingContext {
-                    bind_mode,
-                    target_node_did,
-                    source_manifest_dids,
-                },
+                context: ManifestBindingContext { target_node_did },
                 manifest,
             }),
             report: initial_report,
@@ -119,9 +112,7 @@ pub(crate) async fn load_bound_manifest(
     Ok(BoundManifestLoad {
         bound: Some(BoundDesiredManifest {
             context: ManifestBindingContext {
-                bind_mode,
                 target_node_did: target_did,
-                source_manifest_dids,
             },
             manifest,
         }),
