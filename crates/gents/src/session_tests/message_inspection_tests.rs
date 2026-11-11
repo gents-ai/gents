@@ -11,7 +11,7 @@ use gents_session::session::message::inspection::*;
         use gents_protocol::tool_call::AwaitMode;
         use gents_store::identity::NodeIdentity;
         let (message, caller, _) =
-            gents_session::session::message::agent_tools_tests::started("agent-session-inspection").await;
+            gents_toolcalls::call::lifecycle::admission_fixture::started("agent-session-inspection").await;
         let node = message.admission.node.clone();
         let identity = gents_store::identity::KeyIdentity::load_existing(
             message.admission.path.join("node.key"),

@@ -9,34 +9,8 @@ use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity as _;
 use gents_toolcalls::call::lifecycle::admission_fixture::{
-    published_session_message, PublishedAdmissionOptions, PublishedSessionMessage,
+    cause, owner, set_state, signer, PublishedAdmissionOptions, PublishedSessionMessage,
 };
-
-async fn cause(message: &PublishedSessionMessage, caller_hop: u32) -> SessionMessageCause {
-    let tool = &message.admission.tool;
-    SessionMessageCause {
-        caller_node_did: message.admission.node_did.clone(),
-        caller_agent_did: tool.actor().to_string(),
-        caller_session_id: tool.session_id().to_owned(),
-        caller_requester_did: tool.requester_did().map(str::to_owned),
-        caller_request_id: tool.calling_request_id().await.unwrap(),
-        caller_request_doc_id: tool.request_doc_id().unwrap().to_owned(),
-        caller_hop,
-        tool_call_id: tool.tool_call_id().to_owned(),
-        tool_call_doc_id: tool.doc_id().unwrap().to_owned(),
-        correlation: None,
-    }
-}
-
-fn signer(message: &PublishedSessionMessage) -> gents_store::identity::ManagedAgentSigner {
-    message
-        .admission
-        .tool
-        .access()
-        .unwrap()
-        .managed_agent_signer()
-        .unwrap()
-}
 
 async fn started(
     name: &str,
@@ -45,31 +19,9 @@ async fn started(
     gents_protocol::row::AgentRequest,
     gents_protocol::row::AgentRequest,
 ) {
-    let message = published_session_message(PublishedAdmissionOptions {
-        name: name.to_owned(),
-        real_identity: true,
-        await_mode: AwaitMode::Background,
-        ..Default::default()
-    })
-    .await
-    .unwrap();
-    crate::lifecycle_hooks::attach(&message.admission.node).unwrap();
-    let caller = gents_session::request::binding::load_agent_request_by_doc_id_with_access(
-        &message.admission.tool.access().unwrap(),
-        message.admission.tool.request_doc_id().unwrap(),
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    let caused = gents_session::request::binding::load_agent_request_by_doc_id_with_access(
-        &message.admission.tool.access().unwrap(),
-        &message.caused_request_doc_id,
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    materialize_session(&message.admission.tool.access().unwrap(), &caused).await;
-    (message, caller, caused)
+    let started = gents_toolcalls::call::lifecycle::admission_fixture::started(name).await;
+    crate::lifecycle_hooks::attach(&started.0.admission.node).unwrap();
+    started
 }
 
 /// Goal rows carry document ACP, so their signed blocks are read as the
@@ -84,9 +36,6 @@ async fn signer_as_actor(node: &defra_node::Node, actor: &str, cid: &str) -> Str
     db::block::verify::verified_signature_signer_did(&block, &signature).unwrap()
 }
 
-fn owner(message: &PublishedSessionMessage) -> ConfigAccess {
-    message.admission.tool.access().unwrap()
-}
 
 /// Goal rows are Agent-owned, so the calling Agent reads the canonical goal.
 async fn canonical_goal(
@@ -106,61 +55,8 @@ async fn canonical_goal(
         .unwrap()
 }
 
-/// `commit` already materializes the caused session; this is the idempotent
-/// re-check, which must read the session through its owning Agent.
-async fn materialize_session(access: &ConfigAccess, caused: &gents_protocol::row::AgentRequest) {
-    // Sessions record created_at in the canonical second-precision UTC form.
-    materialize_session_at(
-        access,
-        caused,
-        &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-    )
-    .await;
-}
 
-async fn materialize_session_at(
-    access: &ConfigAccess,
-    caused: &gents_protocol::row::AgentRequest,
-    created_at: &str,
-) {
-    let caused = caused.clone();
-    let created_at = created_at.to_owned();
-    access
-        .transact_write("test.materialize_session", move |txn| {
-            let caused = caused.clone();
-            let created_at = created_at.clone();
-            Box::pin(async move {
-                gents_session::session::ensure_session_in_txn(
-                    txn,
-                    &caused.session_id,
-                    &caused.node_did,
-                    &caused.agent_did,
-                    caused.requester_did.as_deref(),
-                    None,
-                    gents_session::request::lifecycle::materialize::created_session_provenance(
-                        &caused,
-                    ),
-                    &created_at,
-                )
-                .await
-            })
-        })
-        .await
-        .unwrap();
-}
 
-async fn set_state(access: &ConfigAccess, doc_id: &str, state: &str) {
-    access
-        .write(
-            "test.set_state",
-            &format!(
-                r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "{state}" }}) {{ _docID }} }}"#,
-                escape_graphql_string(doc_id)
-            ),
-        )
-        .await
-        .unwrap();
-}
 
 #[tokio::test]
 async fn interrupt_delivery_latches_only_the_prepublication_head() {
