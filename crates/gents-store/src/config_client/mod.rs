@@ -152,6 +152,7 @@ pub struct GraphqlEndpoint {
     client_signed_agent_creates: bool,
     client_signing_capability: Option<ClientSigningCapability>,
     pack_replay: Option<pack_effect::PackReplayHandle>,
+    extensions: crate::node_extension::Extensions,
 }
 
 impl GraphqlEndpoint {
@@ -163,6 +164,7 @@ impl GraphqlEndpoint {
             client_signed_agent_creates: false,
             client_signing_capability: None,
             pack_replay: None,
+            extensions: crate::node_extension::Extensions::default(),
         }
     }
 
@@ -174,6 +176,7 @@ impl GraphqlEndpoint {
             client_signed_agent_creates: false,
             client_signing_capability: None,
             pack_replay: None,
+            extensions: crate::node_extension::Extensions::default(),
         }
     }
 
@@ -195,6 +198,7 @@ impl GraphqlEndpoint {
             client_signed_agent_creates: false,
             client_signing_capability: None,
             pack_replay: None,
+            extensions: crate::node_extension::Extensions::default(),
         })
     }
 
@@ -257,6 +261,24 @@ impl GraphqlEndpoint {
         self.pack_replay = Some(pack_effect::PackReplayHandle(replay));
         self.client_signed_agent_creates = true;
         Ok(self)
+    }
+
+    pub fn with_extension<T>(
+        mut self,
+        value: Arc<T>,
+    ) -> std::result::Result<Self, crate::node_extension::ExtensionError>
+    where
+        T: std::any::Any + Send + Sync,
+    {
+        self.extensions.attach(value)?;
+        Ok(self)
+    }
+
+    pub fn extension<T>(&self) -> Option<Arc<T>>
+    where
+        T: std::any::Any + Send + Sync,
+    {
+        self.extensions.get::<T>()
     }
 
     pub fn is_anonymous(&self) -> bool {

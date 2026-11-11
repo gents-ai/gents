@@ -26,6 +26,6 @@ pub fn bundled() -> Arc<Registry> {
 /// when it asserts behaviour the plugins own.
 pub fn attach(
     node: &Arc<defra_node::Node>,
-) -> Result<(), gents_store::node_extension::NodeExtensionError> {
+) -> Result<(), gents_store::node_extension::ExtensionError> {
     Registry::attach(node, bundled())
 }

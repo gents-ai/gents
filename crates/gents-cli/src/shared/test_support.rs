@@ -243,10 +243,13 @@ pub(crate) fn user_endpoint(
     graphql: &str,
     user: &dyn gents_store::identity::NodeIdentity,
 ) -> gents_store::config_client::GraphqlEndpoint {
-    gents_store::config_client::GraphqlEndpoint::as_principal(graphql, user.did())
-        .with_client_signing_capability(user.client_signing_capability().unwrap())
-        .unwrap()
-        .with_client_signed_agent_creates()
+    gents::runtime::lifecycle_hooks::compose_endpoint(
+        gents_store::config_client::GraphqlEndpoint::as_principal(graphql, user.did())
+            .with_client_signing_capability(user.client_signing_capability().unwrap())
+            .unwrap()
+            .with_client_signed_agent_creates(),
+    )
+    .unwrap()
 }
 
 /// Seeds an xAI backend whose profile effort will not be sent, as the
