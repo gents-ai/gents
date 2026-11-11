@@ -367,9 +367,6 @@ mod background_goal_repair;
 mod background_completion;
 
 mod coalescing;
-use gents_session::request::lifecycle::test_support::{hints, parent_request, wake_queue_input};
-use gents_session::request::lifecycle::{
-use gents_session::request::streaming::DefraStreamWriter;
 
 #[tokio::test]
 async fn pin_goal_continuation_preparation() {

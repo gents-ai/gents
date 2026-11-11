@@ -959,8 +959,6 @@ async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() 
     let later_row = hop_of(later.request.expect("later wake").doc_id).await;
     assert_eq!(later_row["request_hop"], bound + 1);
 }
-use gents_session::request::lifecycle::RequestTerminalOutcome;
-use gents_session::session;
 
 async fn desktop_owned_session(
     db: &TestDb,
