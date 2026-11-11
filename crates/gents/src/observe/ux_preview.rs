@@ -182,11 +182,9 @@ fn assets_dir() -> Result<PathBuf> {
     exe.ancestors()
         .map(|dir| dir.join(ASSETS_DEV_DIR))
         .find(|dir| dir.join(PAGE_ENTRY).is_file())
-        .with_context(|| {
-            format!(
-                "this build has no page renderer, so ux preview renders nothing here and no config call adds one. The available check is page lint ID for a page document, or ux lint PATH for a pack page; the page itself is seen in the desktop app"
-            )
-        })
+        .context(
+            "this build has no page renderer, so ux preview renders nothing here and no config call adds one. The available check is page lint ID for a page document, or ux lint PATH for a pack page; the page itself is seen in the desktop app",
+        )
 }
 
 /// Everything the page asks of the runtime, for one preview.

@@ -2068,9 +2068,7 @@ async fn non_explicit_self_config_record_never_lowers_operator_provenance() {
         home.path(),
         archive.manifest(),
         &identity,
-        String::new(),
-        Vec::new(),
-        Vec::new(),
+        documents::HomeInstallContents::default(),
         crate::pack::InstalledVia::SelfConfig,
         false,
     )

@@ -1526,14 +1526,25 @@ pub async fn install_prepared_document_pack(
             home,
             archive.manifest(),
             &identity,
-            assets,
-            dependency_assets,
-            created_collections,
+            HomeInstallContents {
+                assets,
+                dependency_assets,
+                created_collections,
+            },
             super::super::installer_provenance(installed_via, grant_authority),
             true,
         )?;
     }
     Ok(report)
+}
+
+/// What one install left in the home: its asset root, its dependencies' asset
+/// roots, and the collections it created.
+#[derive(Default)]
+pub(super) struct HomeInstallContents {
+    pub assets: String,
+    pub dependency_assets: Vec<(String, String)>,
+    pub created_collections: Vec<String>,
 }
 
 /// Writes the home record of an install through
@@ -1543,12 +1554,15 @@ pub(super) fn record_home_install(
     home: &Path,
     manifest: &super::super::PackManifest,
     identity: &PackIdentity,
-    assets: String,
-    dependency_assets: Vec<(String, String)>,
-    created_collections: Vec<String>,
+    contents: HomeInstallContents,
     installed_via: InstalledVia,
     explicit: bool,
 ) -> Result<()> {
+    let HomeInstallContents {
+        assets,
+        dependency_assets,
+        created_collections,
+    } = contents;
     super::super::record_after_install(
         home,
         HomePackInstall {
