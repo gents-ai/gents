@@ -519,6 +519,11 @@ def caseCoverage : List CoverageEntry :=
       "scope_collection_rules" "ScopeCollectionRules"
       "The snapshot emits and the decoder accepts these cases; no native test reads them.")
       "pairing-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "lifecycle_hook_owed_delivery_cases"
+      "LifecycleHookOwedDeliveryCases"
+      "The production record (hooks::owed::Record, owe_runner, derive_halts, prunable) is driven by every case. Its publication through the store's post-commit runtime write, the redrive's and the halt derivation's observation of core rows as the owning Agent, and the deletion of pruned rows are not driven by these cases.")
+      "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "cross_actor_authorization_cases" "CrossActorAuthorization"
       "Native transaction-bound requester document and node authorization is unavailable; cross-actor execution remains blocked. Bind these cases to native transaction and claim owners when supported.")

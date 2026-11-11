@@ -9,9 +9,9 @@ use gents_protocol::output::{
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct EncodedStream {
-    pub(crate) declaration: StreamDeclaration,
-    pub(crate) payload: String,
+pub struct EncodedStream {
+    pub declaration: StreamDeclaration,
+    pub payload: String,
 }
 
 #[derive(Clone, Debug)]
@@ -80,13 +80,13 @@ pub struct EncodedNativeMessage {
     pub(crate) role: MessageRole,
     pub(crate) native_id: Option<String>,
     pub(crate) native_request_id: Option<String>,
-    pub(crate) streams: Vec<EncodedStream>,
+    pub streams: Vec<EncodedStream>,
     plans: Vec<BlockPlan>,
     pub(crate) tool_calls: Vec<EncodedToolCall>,
 }
 
 impl EncodedNativeMessage {
-    pub(crate) fn build_blocks(
+    pub fn build_blocks(
         &self,
         close_doc_id: &str,
         tool_doc_ids: &[String],

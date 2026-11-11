@@ -136,7 +136,7 @@ fn deny_if(condition: bool, message: &'static str) -> AdmissionResult<()> {
     }
 }
 
-pub(crate) async fn verify_fresh_local_self_request(
+pub async fn verify_fresh_local_self_request(
     node: &Arc<EmbeddedNode>,
     identity: &dyn NodeIdentity,
     request: &AgentRequest,
@@ -612,7 +612,7 @@ impl AgentRequestAdmissionVerifier {
         }
     }
 
-    pub(crate) async fn verify_fresh(
+    pub async fn verify_fresh(
         &self,
         request: &AgentRequest,
         target_agent_did: &str,
@@ -622,8 +622,8 @@ impl AgentRequestAdmissionVerifier {
             .map(|(request, _)| request)
     }
 
-    #[cfg(test)]
-    pub(crate) async fn verify_fresh_for_claim(
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub async fn verify_fresh_for_claim(
         &self,
         request: &AgentRequest,
         target_agent_did: &str,
@@ -647,7 +647,7 @@ impl AgentRequestAdmissionVerifier {
         .await
     }
 
-    pub(crate) async fn verify_folded_for_claim(
+    pub async fn verify_folded_for_claim(
         &self,
         document: &str,
         agent_identity: &dyn NodeIdentity,
@@ -658,8 +658,8 @@ impl AgentRequestAdmissionVerifier {
             .await
     }
 
-    #[cfg(test)]
-    pub(crate) async fn verify_fresh_for_claim_at(
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub async fn verify_fresh_for_claim_at(
         &self,
         request: &AgentRequest,
         agent_identity: &dyn NodeIdentity,
@@ -675,8 +675,8 @@ impl AgentRequestAdmissionVerifier {
         .await
     }
 
-    #[cfg(test)]
-    pub(crate) async fn verify_fresh_at(
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub async fn verify_fresh_at(
         &self,
         request: &AgentRequest,
         target_agent_did: &str,
@@ -1413,7 +1413,7 @@ async fn verify_automated_trigger_source(
 static DEFAULT_REQUEST_INPUT: std::sync::LazyLock<gents_protocol::request_input::RequestInput> =
     std::sync::LazyLock::new(Default::default);
 
-fn row_into_agent_request(row: AgentRequestRow, expected_doc_id: &str) -> Result<AgentRequest> {
+pub fn row_into_agent_request(row: AgentRequestRow, expected_doc_id: &str) -> Result<AgentRequest> {
     anyhow::ensure!(
         row.doc_id.as_deref() == Some(expected_doc_id),
         "fresh AgentRequest document binding changed before admission"
@@ -1511,7 +1511,7 @@ fn resume_claim_valid(facts: &ResumeClaimFacts) -> bool {
 
 /// Reads as the Agent that parked the request: it owns both the wait record
 /// and the claim version being reconstructed.
-pub(crate) async fn verify_resumed_claim_version(
+pub async fn verify_resumed_claim_version(
     access: &gents_store::config_client::ConfigAccess,
     current: &AgentRequestRow,
 ) -> AdmissionResult<bool> {
@@ -1621,7 +1621,7 @@ pub(crate) async fn load_request_for_admission_test(
     row_into_agent_request(row, doc_id)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn load_request_for_admission_test_as(
     node: &Arc<EmbeddedNode>,
     doc_id: &str,
@@ -1645,8 +1645,8 @@ mod relationship_readiness_tests;
 #[cfg(test)]
 mod unattended_tests;
 
-#[cfg(test)]
-pub(crate) mod workspace_cleanup_tests;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod workspace_cleanup_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1745,11 +1745,221 @@ mod tests {
         node.shutdown().await.unwrap();
     }
 
+    #[tokio::test]
+    async fn runtime_receipt_authenticates_terminal_expired_child_and_rejects_forgery() {
+        let temp = tempfile::tempdir().unwrap();
+        let identity = KeyIdentity::load_or_create(temp.path().join("receipt.key"), None).unwrap();
+        let binding = gents_store::identity::provision_agent_identity(&identity).unwrap();
+        let agent = gents_store::identity::resolve_agent_identity(&identity, &binding).unwrap();
+        let node = std::sync::Arc::new(
+            defra_node::Node::builder()
+                .with_node_identity_did(identity.did())
+                .build()
+                .await
+                .unwrap(),
+        );
+        ensure_runtime_schemas(&node).await.unwrap();
+        // A runtime-local-control receipt is issued and signed by the target Agent itself.
+        let mut create = AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            "receipt-child",
+            identity.did(),
+            identity.did(),
+            agent.did(),
+            "receipt-session",
+            "original continuation",
+            "scheduled",
+            "2020-01-01T00:00:00Z",
+            AgentRequestAdmissionRecord::runtime_local_control(agent.did(), "receipt-parent"),
+        );
+        create.caused_by_parent_request_id = Some("receipt-parent".into());
+        create.caused_by_parent_request_doc_id = Some("receipt-parent-doc".into());
+        create.valid_until = Some("2020-01-01T00:00:01Z".into());
+        crate::request::admission::sign_agent_request_create(agent.as_ref(), &mut create)
+            .await
+            .unwrap();
+        let response = node.execute(&create.graphql_mutation().unwrap()).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let query = format!("{{ AgentRequest {{ {} }} }}", super::SIGNED_REQUEST_FIELDS);
+        let response = node.execute(&query).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let mut row: gents_protocol::row::AgentRequestRow =
+            gents_store::graphql::first_row(&response, "AgentRequest")
+                .unwrap()
+                .unwrap();
+        row.lifecycle_state =
+            Some(gents_protocol::request_lifecycle::RequestLifecycleState::Completed);
+        row.deadline = Some("2020-01-01T00:00:01Z".into());
+        gents_store::identity::request_receipt::verify_runtime_local_control_receipt(
+            &row,
+            identity.did(),
+            "receipt-parent",
+            identity.did(),
+        )
+        .expect("terminal and expired original receipt remains authenticated");
+        assert!(
+            gents_store::identity::request_receipt::verify_runtime_local_control_receipt(
+                &row,
+                identity.did(),
+                "different-parent",
+                identity.did(),
+            )
+            .is_err()
+        );
+        let foreign = KeyIdentity::load_or_create(temp.path().join("foreign.key"), None).unwrap();
+        assert!(
+            gents_store::identity::request_receipt::verify_runtime_local_control_receipt(
+                &row,
+                foreign.did(),
+                "receipt-parent",
+                foreign.did(),
+            )
+            .is_err()
+        );
+        assert!(
+            gents_store::identity::request_receipt::verify_runtime_local_control_receipt(
+                &row,
+                identity.did(),
+                "receipt-parent",
+                foreign.did(),
+            )
+            .is_err()
+        );
+        row.content = Some("forged continuation".into());
+        assert!(
+            gents_store::identity::request_receipt::verify_runtime_local_control_receipt(
+                &row,
+                identity.did(),
+                "receipt-parent",
+                identity.did(),
+            )
+            .is_err()
+        );
+        row.content = Some("original continuation".into());
+        row.admission_signature = Some("not-a-valid-signature".into());
+        assert!(
+            gents_store::identity::request_receipt::verify_runtime_local_control_receipt(
+                &row,
+                identity.did(),
+                "receipt-parent",
+                identity.did(),
+            )
+            .is_err()
+        );
+        node.shutdown().await.expect("shut down test node");
+    }
+
+    #[tokio::test]
+    async fn runtime_trigger_source_requires_current_trigger_and_target_policy() {
+        let node = std::sync::Arc::new(
+            gents_store::test_support::node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
+        ensure_runtime_schemas(&node).await.unwrap();
+        let response = node
+            .execute(
+                r#"mutation {
+                    task: create_Task(input: {
+                        task_id: "task-1", node_did: "did:key:target", agent_did: "agent-1",
+                        prompt_template: "run", enabled: true
+                    }) { _docID }
+                    trigger: create_Trigger(input: {
+                        trigger_id: "trigger-1", node_did: "did:key:target", task_id: "task-1",
+                        source: {kind: "event", event_source_id: "events"}, enabled: true, concurrency: "serial"
+                    }) { _docID }
+                }"#,
+            )
+            .await;
+        assert!(
+            !response.has_errors(),
+            "seed trigger policy: {:?}",
+            response.errors
+        );
+        let trigger_doc_id = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("trigger"))
+            .and_then(|rows| rows.as_array())
+            .and_then(|rows| rows.first())
+            .and_then(|row| row.get("_docID"))
+            .and_then(|value| value.as_str())
+            .expect("trigger doc id")
+            .to_string();
+        super::verify_automated_trigger_source(
+            &node,
+            "event",
+            "trigger-1",
+            Some(&trigger_doc_id),
+            "agent-1",
+            "did:key:target",
+        )
+        .await
+        .unwrap();
+
+        let response = node
+            .execute(
+                r#"mutation {
+                    update_Trigger(
+                        filter: { trigger_id: { _eq: "trigger-1" } },
+                        input: { enabled: false }
+                    ) { _docID }
+                }"#,
+            )
+            .await;
+        assert!(
+            !response.has_errors(),
+            "disable trigger: {:?}",
+            response.errors
+        );
+        assert!(super::verify_automated_trigger_source(
+            &node,
+            "event",
+            "trigger-1",
+            Some(&trigger_doc_id),
+            "agent-1",
+            "did:key:target"
+        )
+        .await
+        .is_err());
+
+        let response = node
+            .execute(
+                r#"mutation {
+                    update_Trigger(
+                        filter: { trigger_id: { _eq: "trigger-1" } },
+                        input: { enabled: true }
+                    ) { _docID }
+                    update_Task(
+                        filter: { task_id: { _eq: "task-1" } },
+                        input: { enabled: false }
+                    ) { _docID }
+                }"#,
+            )
+            .await;
+        assert!(
+            !response.has_errors(),
+            "disable trigger task: {:?}",
+            response.errors
+        );
+        assert!(super::verify_automated_trigger_source(
+            &node,
+            "event",
+            "trigger-1",
+            Some(&trigger_doc_id),
+            "agent-1",
+            "did:key:target"
+        )
+        .await
+        .is_err());
+    }
+
     /// Signed admission fixture: a test home whose ACP policies are installed,
     /// whose default managed Agent holds its projected baseline grants, and whose
     /// setup rows are written through the runtime owner's access.
     struct AdmissionFixture {
-        db: crate::support::TestDb,
+        db: gents_inference::test_support::TestDb,
         runtime: Arc<dyn NodeIdentity>,
         agent: Arc<dyn NodeIdentity>,
         admin: gents_store::config_client::ConfigAccess,
@@ -1759,9 +1969,9 @@ mod tests {
 
     impl AdmissionFixture {
         async fn new(name: &str) -> Self {
-            let db = crate::support::test_db(name).await;
+            let db = gents_inference::test_support::test_db(name).await;
             let (db, _user, user, binding) =
-                crate::test_support::root::signed_test_node_from_db(db, name).await;
+                gents_inference::test_support::signed_test_node_from_db(db, name).await;
             let runtime = db.node_identity.clone();
             let agent =
                 gents_store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
@@ -1836,19 +2046,16 @@ mod tests {
 
         /// Signs `create` as the runtime and writes it through the runtime's access.
         async fn create_signed_request(&self, mut create: AgentRequestCreate) -> String {
-            crate::request::admission::sign_agent_request_create(
-                self.runtime.as_ref(),
-                &mut create,
-            )
-            .await
-            .unwrap();
+            super::sign_agent_request_create(self.runtime.as_ref(), &mut create)
+                .await
+                .unwrap();
             self.insert_signed_request(&create).await
         }
 
         /// Signs `create` as the managed Agent. Only a request the Agent authors for
         /// itself (requester and signer both its DID) is admitted as local-self.
         async fn create_agent_signed_request(&self, mut create: AgentRequestCreate) -> String {
-            crate::request::admission::sign_agent_request_create(self.agent.as_ref(), &mut create)
+            super::sign_agent_request_create(self.agent.as_ref(), &mut create)
                 .await
                 .unwrap();
             self.insert_signed_request(&create).await
@@ -2433,32 +2640,82 @@ mod tests {
             .expect("shut down test node");
     }
 
+    #[tokio::test]
+    async fn final_verifier_returns_the_exact_fresh_signed_snapshot() {
+        let fixture = AdmissionFixture::new("final-verifier").await;
+        let agent_did = fixture.agent.did().to_owned();
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let create =
+            fixture.agent_self_create(&request_id, &session_id, "durable signed content", None);
+        let doc_id = fixture.create_agent_signed_request(create).await;
+
+        let row = super::load_signed_request(fixture.node().as_ref(), &doc_id)
+            .await
+            .unwrap();
+        gents_store::identity::request_receipt::verify_request_receipt_signature(&row)
+            .expect("original local-self immutable receipt signature");
+        let mut queued = super::row_into_agent_request(row, &doc_id).unwrap();
+        queued.content = "stale queued content".to_string();
+
+        fixture
+            .admin
+            .write(
+                "test.final_verifier.runtime_state",
+                &format!(
+                    r#"mutation {{ update_AgentRequest(filter: {{_docID: {{_eq:"{}"}}}}, input: {{execution_generation:"previous-claim",max_total_tokens:0}}) {{_docID}} }}"#,
+                    gents_store::graphql::escape_graphql_string(&doc_id)
+                ),
+            )
+            .await
+            .unwrap();
+        let (_authority_owner, authority) = enrollment_authority_channel();
+        let verifier = AgentRequestAdmissionVerifier::new(
+            fixture.node().clone(),
+            fixture.runtime.clone(),
+            authority,
+        );
+        let verified = verifier.verify_fresh(&queued, &agent_did).await.unwrap();
+        assert_eq!(verified.content, "durable signed content");
+        assert_ne!(verified.content, queued.content);
+        assert_eq!(
+            verified.execution_generation.as_deref(),
+            Some("previous-claim")
+        );
+        assert_eq!(verified.max_total_tokens, Some(0));
+
+        fixture
+            .admin
+            .write(
+                "test.final_verifier.preclaim_deadline",
+                &format!(
+                    r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ deadline: "2099-01-01T00:00:00Z" }}) {{ _docID }} }}"#,
+                    gents_store::graphql::escape_graphql_string(&queued.doc_id),
+                ),
+            )
+            .await
+            .unwrap();
+        let error = verifier
+            .verify_fresh(&queued, &agent_did)
+            .await
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("caller-authored execution deadline"));
+        fixture
+            .db
+            .node
+            .shutdown()
+            .await
+            .expect("shut down test node");
+    }
+
     #[derive(Clone)]
     struct WarnCapture(Arc<std::sync::Mutex<String>>);
 
-    impl std::io::Write for WarnCapture {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0
-                .lock()
-                .unwrap()
-                .push_str(&String::from_utf8_lossy(buf));
-            Ok(buf.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for WarnCapture {
-        type Writer = WarnCapture;
-        fn make_writer(&'a self) -> Self::Writer {
-            self.clone()
-        }
-    }
-
     #[test]
     fn version_skewed_refused_row_keeps_its_refusal_and_warns_on_the_skipped_projection() {
-        crate::test_support::root::enable_scoped_event_capture();
+        crate::test_support::enable_scoped_event_capture();
         let captured = Arc::new(std::sync::Mutex::new(String::new()));
         let subscriber = tracing_subscriber::fmt()
             .with_max_level(tracing::Level::WARN)
@@ -2532,284 +2789,24 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn runtime_receipt_authenticates_terminal_expired_child_and_rejects_forgery() {
-        let temp = tempfile::tempdir().unwrap();
-        let identity = KeyIdentity::load_or_create(temp.path().join("receipt.key"), None).unwrap();
-        let binding = gents_store::identity::provision_agent_identity(&identity).unwrap();
-        let agent = gents_store::identity::resolve_agent_identity(&identity, &binding).unwrap();
-        let node = std::sync::Arc::new(
-            defra_node::Node::builder()
-                .with_node_identity_did(identity.did())
-                .build()
-                .await
-                .unwrap(),
-        );
-        ensure_runtime_schemas(&node).await.unwrap();
-        // A runtime-local-control receipt is issued and signed by the target Agent itself.
-        let mut create = AgentRequestCreate::base(
-            gents_protocol::request_admission::RequestPurpose::Normal,
-            "receipt-child",
-            identity.did(),
-            identity.did(),
-            agent.did(),
-            "receipt-session",
-            "original continuation",
-            "scheduled",
-            "2020-01-01T00:00:00Z",
-            AgentRequestAdmissionRecord::runtime_local_control(agent.did(), "receipt-parent"),
-        );
-        create.caused_by_parent_request_id = Some("receipt-parent".into());
-        create.caused_by_parent_request_doc_id = Some("receipt-parent-doc".into());
-        create.valid_until = Some("2020-01-01T00:00:01Z".into());
-        crate::request::admission::sign_agent_request_create(agent.as_ref(), &mut create)
-            .await
-            .unwrap();
-        let response = node.execute(&create.graphql_mutation().unwrap()).await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
-        let query = format!("{{ AgentRequest {{ {} }} }}", super::SIGNED_REQUEST_FIELDS);
-        let response = node.execute(&query).await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
-        let mut row: gents_protocol::row::AgentRequestRow =
-            gents_store::graphql::first_row(&response, "AgentRequest")
+    impl std::io::Write for WarnCapture {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
                 .unwrap()
-                .unwrap();
-        row.lifecycle_state =
-            Some(gents_protocol::request_lifecycle::RequestLifecycleState::Completed);
-        row.deadline = Some("2020-01-01T00:00:01Z".into());
-        gents_store::identity::request_receipt::verify_runtime_local_control_receipt(
-            &row,
-            identity.did(),
-            "receipt-parent",
-            identity.did(),
-        )
-        .expect("terminal and expired original receipt remains authenticated");
-        assert!(
-            gents_store::identity::request_receipt::verify_runtime_local_control_receipt(
-                &row,
-                identity.did(),
-                "different-parent",
-                identity.did(),
-            )
-            .is_err()
-        );
-        let foreign = KeyIdentity::load_or_create(temp.path().join("foreign.key"), None).unwrap();
-        assert!(
-            gents_store::identity::request_receipt::verify_runtime_local_control_receipt(
-                &row,
-                foreign.did(),
-                "receipt-parent",
-                foreign.did(),
-            )
-            .is_err()
-        );
-        assert!(
-            gents_store::identity::request_receipt::verify_runtime_local_control_receipt(
-                &row,
-                identity.did(),
-                "receipt-parent",
-                foreign.did(),
-            )
-            .is_err()
-        );
-        row.content = Some("forged continuation".into());
-        assert!(
-            gents_store::identity::request_receipt::verify_runtime_local_control_receipt(
-                &row,
-                identity.did(),
-                "receipt-parent",
-                identity.did(),
-            )
-            .is_err()
-        );
-        row.content = Some("original continuation".into());
-        row.admission_signature = Some("not-a-valid-signature".into());
-        assert!(
-            gents_store::identity::request_receipt::verify_runtime_local_control_receipt(
-                &row,
-                identity.did(),
-                "receipt-parent",
-                identity.did(),
-            )
-            .is_err()
-        );
-        node.shutdown().await.expect("shut down test node");
+                .push_str(&String::from_utf8_lossy(buf));
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
     }
 
-    #[tokio::test]
-    async fn final_verifier_returns_the_exact_fresh_signed_snapshot() {
-        let fixture = AdmissionFixture::new("final-verifier").await;
-        let agent_did = fixture.agent.did().to_owned();
-        let request_id = uuid::Uuid::new_v4().to_string();
-        let session_id = uuid::Uuid::new_v4().to_string();
-        let create =
-            fixture.agent_self_create(&request_id, &session_id, "durable signed content", None);
-        let doc_id = fixture.create_agent_signed_request(create).await;
-
-        let row = super::load_signed_request(fixture.node().as_ref(), &doc_id)
-            .await
-            .unwrap();
-        gents_store::identity::request_receipt::verify_request_receipt_signature(&row)
-            .expect("original local-self immutable receipt signature");
-        let mut queued = super::row_into_agent_request(row, &doc_id).unwrap();
-        queued.content = "stale queued content".to_string();
-
-        fixture
-            .admin
-            .write(
-                "test.final_verifier.runtime_state",
-                &format!(
-                    r#"mutation {{ update_AgentRequest(filter: {{_docID: {{_eq:"{}"}}}}, input: {{execution_generation:"previous-claim",max_total_tokens:0}}) {{_docID}} }}"#,
-                    gents_store::graphql::escape_graphql_string(&doc_id)
-                ),
-            )
-            .await
-            .unwrap();
-        let (_authority_owner, authority) = enrollment_authority_channel();
-        let verifier = AgentRequestAdmissionVerifier::new(
-            fixture.node().clone(),
-            fixture.runtime.clone(),
-            authority,
-        );
-        let verified = verifier.verify_fresh(&queued, &agent_did).await.unwrap();
-        assert_eq!(verified.content, "durable signed content");
-        assert_ne!(verified.content, queued.content);
-        assert_eq!(
-            verified.execution_generation.as_deref(),
-            Some("previous-claim")
-        );
-        assert_eq!(verified.max_total_tokens, Some(0));
-
-        fixture
-            .admin
-            .write(
-                "test.final_verifier.preclaim_deadline",
-                &format!(
-                    r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ deadline: "2099-01-01T00:00:00Z" }}) {{ _docID }} }}"#,
-                    gents_store::graphql::escape_graphql_string(&queued.doc_id),
-                ),
-            )
-            .await
-            .unwrap();
-        let error = verifier
-            .verify_fresh(&queued, &agent_did)
-            .await
-            .unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("caller-authored execution deadline"));
-        fixture
-            .db
-            .node
-            .shutdown()
-            .await
-            .expect("shut down test node");
-    }
-
-    #[tokio::test]
-    async fn runtime_trigger_source_requires_current_trigger_and_target_policy() {
-        let node = std::sync::Arc::new(
-            gents_store::test_support::node_builder()
-                .build()
-                .await
-                .unwrap(),
-        );
-        ensure_runtime_schemas(&node).await.unwrap();
-        let response = node
-            .execute(
-                r#"mutation {
-                    task: create_Task(input: {
-                        task_id: "task-1", node_did: "did:key:target", agent_did: "agent-1",
-                        prompt_template: "run", enabled: true
-                    }) { _docID }
-                    trigger: create_Trigger(input: {
-                        trigger_id: "trigger-1", node_did: "did:key:target", task_id: "task-1",
-                        source: {kind: "event", event_source_id: "events"}, enabled: true, concurrency: "serial"
-                    }) { _docID }
-                }"#,
-            )
-            .await;
-        assert!(
-            !response.has_errors(),
-            "seed trigger policy: {:?}",
-            response.errors
-        );
-        let trigger_doc_id = response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("trigger"))
-            .and_then(|rows| rows.as_array())
-            .and_then(|rows| rows.first())
-            .and_then(|row| row.get("_docID"))
-            .and_then(|value| value.as_str())
-            .expect("trigger doc id")
-            .to_string();
-        super::verify_automated_trigger_source(
-            &node,
-            "event",
-            "trigger-1",
-            Some(&trigger_doc_id),
-            "agent-1",
-            "did:key:target",
-        )
-        .await
-        .unwrap();
-
-        let response = node
-            .execute(
-                r#"mutation {
-                    update_Trigger(
-                        filter: { trigger_id: { _eq: "trigger-1" } },
-                        input: { enabled: false }
-                    ) { _docID }
-                }"#,
-            )
-            .await;
-        assert!(
-            !response.has_errors(),
-            "disable trigger: {:?}",
-            response.errors
-        );
-        assert!(super::verify_automated_trigger_source(
-            &node,
-            "event",
-            "trigger-1",
-            Some(&trigger_doc_id),
-            "agent-1",
-            "did:key:target"
-        )
-        .await
-        .is_err());
-
-        let response = node
-            .execute(
-                r#"mutation {
-                    update_Trigger(
-                        filter: { trigger_id: { _eq: "trigger-1" } },
-                        input: { enabled: true }
-                    ) { _docID }
-                    update_Task(
-                        filter: { task_id: { _eq: "task-1" } },
-                        input: { enabled: false }
-                    ) { _docID }
-                }"#,
-            )
-            .await;
-        assert!(
-            !response.has_errors(),
-            "disable trigger task: {:?}",
-            response.errors
-        );
-        assert!(super::verify_automated_trigger_source(
-            &node,
-            "event",
-            "trigger-1",
-            Some(&trigger_doc_id),
-            "agent-1",
-            "did:key:target"
-        )
-        .await
-        .is_err());
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for WarnCapture {
+        type Writer = WarnCapture;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
     }
 }
 

@@ -18,9 +18,9 @@ use gents_pack::plugin::store;
 use gents_store::config_client::ConfigAccess;
 use gents_store::subscription_source::UpdateSubscriptionSource;
 use gents_toolcalls::plugin::executor::PluginExecutor;
-use gents_toolcalls::plugin::tests::executor::{asking_plugin_wat, installed_plugin};
+use gents_pack::plugin::test_fixtures::{asking_plugin_wat, installed_plugin};
 
-const OWNER: &str = gents_session::request::lifecycle::test_support::PIN_FIXED_DID;
+const OWNER: &str = gents_store::test_support::PIN_FIXED_DID;
 const CALLBACK: &str = "saturation";
 const WAIT: Duration = Duration::from_secs(10);
 const SCENARIO_LIMIT: Duration = Duration::from_secs(20);
@@ -221,7 +221,7 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
         None,
     );
     let _identity =
-        gents_session::request::lifecycle::test_support::pin_fixed_signing_identity(home.path());
+        gents_store::test_support::pin_fixed_signing_identity(home.path());
     plugin.declaration.manifold = Some(json!({
         "fs": "None", "net": {"OutboundHttp": [format!("http://{address}")]},
         "env": "None", "crypto": false, "child_process": false

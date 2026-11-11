@@ -118,14 +118,33 @@ def Effect.permitted (manifest : Manifest) (allowed : Acp Doc) (actor : Actor) :
   | .write w => manifest.owns.contains w.ref.collection && allowed actor w.access w.ref
   | .core _ => true
 
+def Effect.written : Effect Doc Val Op → Option (Ref Doc)
+  | .write w => some w.ref
+  | .core _ => none
+
+/-- No document is written twice by one result. A create followed by an update
+of the created document, or two updates of one row, is two writes of it; a
+plugin expresses either as one merged write. -/
+def distinctWrites (effects : List (Effect Doc Val Op)) : Bool :=
+  decide (effects.filterMap Effect.written).Nodup
+
 /-- Core's validation of a hook result, decided before anything is applied:
 bounded, every write in a collection the plugin owns, every write permitted to
-the caller's actor by document ACP. A requested core operation is admitted
-here and authorized by core's own `perform` under the same actor. -/
+the caller's actor by document ACP, and no document written twice. A requested
+core operation is admitted here and authorized by core's own `perform` under
+the same actor.
+
+Decision 2026-11-11, maintainer-approved: a result writes each document at
+most once. The native host checks every write's revision against the rows as
+they stand before it applies any of them (DefraDB has no savepoint, so a miss
+found after the first write cannot skip the plugin whole); with distinct
+documents that check is the sequential one `applyEffects` makes
+(`Hooks.prechecked_apply_is_apply`), and chained writes to one document,
+which would miss natively and commit here, are invalid in both. -/
 def valid (manifest : Manifest) (allowed : Acp Doc) (actor : Actor)
     (effects : List (Effect Doc Val Op)) : Bool :=
   decide (effects.length ≤ manifest.bound) &&
-    effects.all (Effect.permitted manifest allowed actor)
+    effects.all (Effect.permitted manifest allowed actor) && distinctWrites effects
 
 /-- The lifecycle transaction's view: core-owned state and document rows of
 plugin-owned collections. -/
@@ -166,6 +185,230 @@ theorem applyEffects_append (perform : Actor → Op → Core → Option Core) (a
     | none => rfl
     | some next => exact ih next
 
+/-- Whether `store` admits `w` as its next write: a create of an absent
+document, or an update or delete of a row held at the revision it names. -/
+def admits (store : Store Doc Val) : Write Doc Val → Bool
+  | .create ref _ => !store.any (fun row => row.ref == ref)
+  | .update ref expected _ => store.any (held ref expected)
+  | .delete ref expected => store.any (held ref expected)
+
+def Effect.admitted (store : Store Doc Val) : Effect Doc Val Op → Bool
+  | .write w => admits store w
+  | .core _ => true
+
+/-- The native host's order (`TxnHost::apply`): every write is checked against
+the rows as they stand before any effect is applied, then the effects apply
+in the order returned. -/
+def precheckedApply (perform : Actor → Op → Core → Option Core) (actor : Actor)
+    (effects : List (Effect Doc Val Op)) (state : State Core Doc Val) :
+    Option (State Core Doc Val) :=
+  if effects.all (Effect.admitted state.docs) then applyEffects perform actor effects state
+  else none
+
+theorem applyWrite_isSome (store : Store Doc Val) (w : Write Doc Val) :
+    (applyWrite store w).isSome = admits store w := by
+  cases w with
+  | create ref value =>
+    by_cases present : store.any (fun row => row.ref == ref) = true <;>
+      simp [applyWrite, admits, present]
+  | update ref expected value =>
+    by_cases present : store.any (held ref expected) = true <;>
+      simp [applyWrite, admits, present]
+  | delete ref expected =>
+    by_cases present : store.any (held ref expected) = true <;>
+      simp [applyWrite, admits, present]
+
+omit [DecidableEq Doc] in
+private theorem any_map_unaffected (store : Store Doc Val) (ref : Ref Doc)
+    (p : Row Doc Val → Bool) (other : ∀ row, p row = true → row.ref ≠ ref)
+    (change : Row Doc Val → Row Doc Val)
+    (fixed : ∀ row, change row = row ∨ ((change row).ref = ref ∧ row.ref = ref)) :
+    (store.map change).any p = store.any p := by
+  induction store with
+  | nil => rfl
+  | cons row rest ih =>
+    simp only [List.map_cons, List.any_cons, ih]
+    rcases fixed row with same | ⟨after, before⟩
+    · rw [same]
+    · have changed : p (change row) = false := by
+        cases holds : p (change row) with
+        | false => rfl
+        | true => exact absurd after (other _ holds)
+      have original : p row = false := by
+        cases holds : p row with
+        | false => rfl
+        | true => exact absurd before (other _ holds)
+      rw [changed, original]
+
+omit [DecidableEq Doc] in
+private theorem any_filter_unaffected (store : Store Doc Val) (keep p : Row Doc Val → Bool)
+    (dropped : ∀ row, keep row = false → p row = false) :
+    (store.filter keep).any p = store.any p := by
+  induction store with
+  | nil => rfl
+  | cons row rest ih =>
+    cases kept : keep row
+    · simp [List.filter_cons, kept, ih, dropped row kept]
+    · simp [List.filter_cons, kept, ih]
+
+/-- A write leaves every row of another document as it was, so it cannot
+change whether a write to another document is admitted. -/
+theorem applyWrite_keeps_other_documents (store next : Store Doc Val) (w : Write Doc Val)
+    (applied : applyWrite store w = some next) (p : Row Doc Val → Bool)
+    (other : ∀ row, p row = true → row.ref ≠ w.ref) : next.any p = store.any p := by
+  cases w with
+  | create ref value =>
+    simp only [applyWrite] at applied
+    split at applied
+    · cases applied
+    · cases applied
+      have fresh : p ⟨ref, 0, value⟩ = false := by
+        cases holds : p ⟨ref, 0, value⟩ with
+        | false => rfl
+        | true => exact (other _ holds rfl).elim
+      simp [fresh]
+  | update ref expected value =>
+    simp only [applyWrite] at applied
+    split at applied
+    · cases applied
+      apply any_map_unaffected store ref p other
+      intro row
+      by_cases matching : held ref expected row = true
+      · right
+        have same : row.ref = ref := by
+          simp only [held, Bool.and_eq_true, beq_iff_eq] at matching
+          exact matching.1
+        simp [matching, same]
+      · left
+        simp [matching]
+    · cases applied
+  | delete ref expected =>
+    simp only [applyWrite] at applied
+    split at applied
+    · cases applied
+      apply any_filter_unaffected
+      intro row dropped
+      have same : row.ref = ref := by simpa using dropped
+      cases holds : p row with
+      | false => rfl
+      | true => exact (other _ holds same).elim
+    · cases applied
+
+theorem admits_after_another_document (store next : Store Doc Val) (w w' : Write Doc Val)
+    (applied : applyWrite store w = some next) (differs : w'.ref ≠ w.ref) :
+    admits next w' = admits store w' := by
+  cases w' with
+  | create ref value =>
+    simp only [admits]
+    congr 1
+    apply applyWrite_keeps_other_documents store next w applied
+    intro row named
+    have same : row.ref = ref := by simpa using named
+    rw [same]
+    exact differs
+  | update ref expected value =>
+    simp only [admits]
+    apply applyWrite_keeps_other_documents store next w applied
+    intro row named
+    have same : row.ref = ref := by
+      simp only [held, Bool.and_eq_true, beq_iff_eq] at named
+      exact named.1
+    rw [same]
+    exact differs
+  | delete ref expected =>
+    simp only [admits]
+    apply applyWrite_keeps_other_documents store next w applied
+    intro row named
+    have same : row.ref = ref := by
+      simp only [held, Bool.and_eq_true, beq_iff_eq] at named
+      exact named.1
+    rw [same]
+    exact differs
+
+private theorem applied_writes_were_admitted (perform : Actor → Op → Core → Option Core)
+    (actor : Actor) (effects : List (Effect Doc Val Op)) (state next : State Core Doc Val)
+    (distinct : (effects.filterMap Effect.written).Nodup)
+    (applied : applyEffects perform actor effects state = some next) :
+    effects.all (Effect.admitted state.docs) = true := by
+  induction effects generalizing state with
+  | nil => rfl
+  | cons effect rest ih =>
+    simp only [applyEffects] at applied
+    cases step : applyEffect perform actor state effect with
+    | none => simp [step] at applied
+    | some mid =>
+      simp only [step] at applied
+      cases effect with
+      | core op =>
+        simp only [applyEffect, Option.map_eq_some'] at step
+        obtain ⟨core, _, rfl⟩ := step
+        have tail := ih _ (by simpa [Effect.written] using distinct) applied
+        simpa [Effect.admitted] using tail
+      | write w =>
+        simp only [applyEffect, Option.map_eq_some'] at step
+        obtain ⟨docs, written, rfl⟩ := step
+        simp only [List.filterMap_cons, Effect.written, List.nodup_cons] at distinct
+        have tail := ih _ distinct.2 applied
+        simp only [List.all_cons, Effect.admitted, Bool.and_eq_true]
+        refine ⟨?_, ?_⟩
+        · have admitted := applyWrite_isSome state.docs w
+          rw [written] at admitted
+          simpa using admitted.symm
+        · simp only [List.all_eq_true] at tail ⊢
+          intro other member
+          have kept := tail other member
+          cases other with
+          | core op => rfl
+          | write w' =>
+            simp only [Effect.admitted] at kept ⊢
+            have differs : w'.ref ≠ w.ref := by
+              intro same
+              apply distinct.1
+              rw [← same]
+              exact List.mem_filterMap.mpr ⟨.write w', member, rfl⟩
+            rw [← admits_after_another_document state.docs docs w w' written differs]
+            exact kept
+
+/-- Under distinct documents, checking every write against the rows as they
+stood before any was applied is the sequential check `applyEffects` makes:
+the native pre-check is the model. With a document written twice it is not
+(a create then an update of it is refused by the pre-check and applied in
+sequence), which is why `valid` requires distinct documents. -/
+theorem prechecked_apply_is_apply (perform : Actor → Op → Core → Option Core) (actor : Actor)
+    (effects : List (Effect Doc Val Op)) (state : State Core Doc Val)
+    (distinct : distinctWrites effects = true) :
+    precheckedApply perform actor effects state = applyEffects perform actor effects state := by
+  unfold precheckedApply
+  split
+  · rfl
+  · rename_i unadmitted
+    cases applied : applyEffects perform actor effects state with
+    | none => rfl
+    | some next =>
+      exact absurd (applied_writes_were_admitted perform actor effects state next
+        (by simpa [distinctWrites] using distinct) applied) unadmitted
+
+/-- A valid result commits exactly what the native host's pre-check and
+application commit. -/
+theorem commit_is_prechecked (manifest : Manifest) (allowed : Acp Doc)
+    (perform : Actor → Op → Core → Option Core) (actor : Actor)
+    (effects : List (Effect Doc Val Op)) (state : State Core Doc Val) :
+    commit manifest allowed perform actor effects state =
+      if valid manifest allowed actor effects then precheckedApply perform actor effects state
+      else none := by
+  unfold commit
+  split
+  · rename_i accepted
+    simp only [valid, Bool.and_eq_true] at accepted
+    rw [prechecked_apply_is_apply perform actor effects state accepted.2]
+  · rfl
+
+/-- A result that writes one document twice is invalid. -/
+theorem repeated_document_is_invalid (manifest : Manifest) (allowed : Acp Doc) (actor : Actor)
+    (effects : List (Effect Doc Val Op)) (repeated : distinctWrites effects = false) :
+    valid manifest allowed actor effects = false := by
+  simp [valid, repeated]
+
 theorem invalid_effects_commit_nothing (manifest : Manifest) (allowed : Acp Doc)
     (perform : Actor → Op → Core → Option Core) (actor : Actor)
     (effects : List (Effect Doc Val Op)) (state : State Core Doc Val)
@@ -182,7 +425,7 @@ theorem commit_is_bounded (manifest : Manifest) (allowed : Acp Doc)
   split at committed
   · rename_i accepted
     simp only [valid, Bool.and_eq_true, decide_eq_true_eq] at accepted
-    exact accepted.1
+    exact accepted.1.1
   · cases committed
 
 /-- Effects cannot widen authority: every committed write is one document ACP
@@ -198,7 +441,7 @@ theorem committed_writes_are_owned_and_authorized (manifest : Manifest) (allowed
   split at committed
   · rename_i accepted
     simp only [valid, Bool.and_eq_true, List.all_eq_true] at accepted
-    have permitted := accepted.2 _ member
+    have permitted := accepted.1.2 _ member
     simpa [Effect.permitted] using permitted
   · cases committed
 

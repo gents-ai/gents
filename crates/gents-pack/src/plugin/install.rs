@@ -222,7 +222,7 @@ fn install_pack_plugins_locked<'a>(
         .collect()
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub fn bind_plugin_slots(
     home: &Path,
     manifest: &PackManifest,

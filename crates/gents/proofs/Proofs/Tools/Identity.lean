@@ -9,3 +9,4 @@ import Proofs.Store.Identity.AgentTargetAccess
 import Proofs.Tools.Identity.Configuration
 import Proofs.Store.Identity.McpService
 import Proofs.Store.Identity.Operations
+import Proofs.Store.Identity.OwedDeliveryAccess

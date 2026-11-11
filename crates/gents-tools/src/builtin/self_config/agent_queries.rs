@@ -4,7 +4,7 @@ use gents_session::session::output_render::Ordered;
 /// The Node's default Agent. With a runtime Node binding it is refreshed as
 /// the runtime reads it; otherwise it is the selection document as the
 /// invoking Agent reads it.
-pub(super) async fn node_default_agent(core: &SelfConfigCore) -> Result<Option<String>> {
+pub async fn node_default_agent(core: &SelfConfigCore) -> Result<Option<String>> {
     if core.node_binding().is_some() {
         return Ok(core
             .refresh_node_binding()
@@ -117,7 +117,7 @@ pub(super) async fn agent_list(
     serde_json::to_string_pretty(&snapshot).map_err(|error| anyhow!("serialize catalog: {error}"))
 }
 
-pub(super) async fn agent_inspect(core: &SelfConfigCore, agent_did: &str) -> Result<String> {
+pub async fn agent_inspect(core: &SelfConfigCore, agent_did: &str) -> Result<String> {
     let catalog = load_agent_catalog(core).await?;
     let _ = catalog.agents.get(agent_did).with_context(|| {
         format!("unknown agent_did {agent_did:?}; copy an exact ID from [\"agent\",\"list\"]")

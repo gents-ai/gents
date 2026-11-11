@@ -52,6 +52,17 @@ impl DefraRenderedRequestSink {
         }
     }
 
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn with_signer(
+        node: Arc<EmbeddedNode>,
+        agent_signer: gents_store::identity::ManagedAgentSigner,
+    ) -> Self {
+        Self {
+            node,
+            agent_signer: Some(agent_signer),
+        }
+    }
+
     pub fn new_managed(
         node: Arc<EmbeddedNode>,
         identity: &dyn gents_store::identity::NodeIdentity,
@@ -91,7 +102,7 @@ impl DefraRenderedRequestSink {
         }
     }
 
-    async fn stored_fact(&self, rendered: &RenderedCompletionRequest) -> Result<Option<Value>> {
+    pub async fn stored_fact(&self, rendered: &RenderedCompletionRequest) -> Result<Option<Value>> {
         let capture_key = &rendered.capture_key;
         let response = self
             .access_for_capture(rendered)?
@@ -304,8 +315,8 @@ impl DefraRenderedRequestSink {
         Ok(())
     }
 
-    #[cfg(test)]
-    pub(crate) async fn create_stored_for_test(
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub async fn create_stored_for_test(
         &self,
         rendered: &RenderedCompletionRequest,
         request_json: &str,
@@ -564,9 +575,9 @@ fn canonical_capture_fact(rendered: &RenderedCompletionRequest) -> Result<Value>
     })))
 }
 
-const RENDERED_REQUEST_COLLECTION: &str = gents_protocol::schemas::RENDERED_REQUEST_NAME;
+pub const RENDERED_REQUEST_COLLECTION: &str = gents_protocol::schemas::RENDERED_REQUEST_NAME;
 
-const RENDERED_REQUEST_BLOCK_COLLECTION: &str =
+pub const RENDERED_REQUEST_BLOCK_COLLECTION: &str =
     gents_protocol::schemas::RENDERED_REQUEST_BLOCK_NAME;
 
 fn unique_blocks<'a>(
@@ -590,7 +601,7 @@ struct BlockPin {
 const CREATE_RENDERED_REQUEST_BLOCKS_MUTATION: &str = "mutation($input: \
 [RenderedRequestBlockMutationInputArg!]!) { create_RenderedRequestBlock(input: $input) { _docID content_key } }";
 
-const CAPTURE_BLOCK_CREATE_BATCH: usize = 32;
+pub const CAPTURE_BLOCK_CREATE_BATCH: usize = 32;
 
 pub struct BlockScope {
     pub session_doc_id: String,
@@ -598,7 +609,7 @@ pub struct BlockScope {
 }
 
 impl BlockScope {
-    fn key<'a>(&'a self, content_key: &'a str) -> (&'a str, &'a str) {
+    pub fn key<'a>(&'a self, content_key: &'a str) -> (&'a str, &'a str) {
         (&self.session_doc_id, content_key)
     }
 }
@@ -862,7 +873,7 @@ pub fn defra_rendered_request_capture_factory_for_agent(
 
 /// Fixture factory for a claimed request whose lifecycle holds the Agent's
 /// managed signer; captures persist as that Agent, as in production.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub fn defra_rendered_request_capture_factory_for_signer(
     node: Arc<EmbeddedNode>,
     signer: gents_store::identity::ManagedAgentSigner,
@@ -892,5 +903,3 @@ fn capture_factory(sink: DefraRenderedRequestSink) -> RenderedRequestCaptureFact
     })
 }
 
-#[cfg(test)]
-mod tests;

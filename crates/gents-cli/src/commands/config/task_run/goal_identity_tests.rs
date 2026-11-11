@@ -179,7 +179,7 @@ async fn signed_request(
                 trigger_kind: Some("manual".into()),
                 ..Default::default()
             },
-            ..gents::RequestSpec::new(
+            ..gents_session::request::lifecycle::RequestSpec::new(
                 gents_protocol::request_admission::RequestPurpose::Normal,
                 gents_session::request::lifecycle::RequestIdentity {
                     request_id: fire.request_id.clone(),

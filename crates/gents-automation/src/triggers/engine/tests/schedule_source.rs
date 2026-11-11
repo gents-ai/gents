@@ -253,7 +253,7 @@ async fn schedule_cursor_batches_more_than_one_chunk() {
     let scopes = (0..128)
         .map(|index| (owner.clone(), format!("missing-schedule-trigger-{index}")))
         .collect::<Vec<_>>();
-    let (cursors, query_count) = gents_documents::count_trigger_cursor_batch_queries(
+    let (cursors, query_count) = gents_documents::event_trigger::count_trigger_cursor_batch_queries(
         gents_documents::load_trigger_next_run_at_batch(node.as_ref(), &scopes),
     )
     .await;
@@ -317,7 +317,7 @@ async fn schedule_source_stops_loading_chunks_after_first_due_trigger() {
     let mut source = ScheduleSource::new(snapshot_rx, node.clone(), cancel.clone())
         .with_tick_every(Duration::from_millis(1));
     let (intent, query_count) =
-        gents_documents::count_trigger_cursor_batch_queries(source.next_fire()).await;
+        gents_documents::event_trigger::count_trigger_cursor_batch_queries(source.next_fire()).await;
 
     let intent = intent.expect("first active schedule is due");
     assert_eq!(

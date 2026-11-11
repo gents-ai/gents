@@ -78,7 +78,7 @@ struct Cursor {
     hit_sequence: Option<i64>,
 }
 
-fn quoted(value: &str) -> String {
+pub fn quoted(value: &str) -> String {
     format!("\"{}\"", escape_graphql_string(value))
 }
 
@@ -166,7 +166,7 @@ fn compact(row: &Value, current_session: Option<&str>, agent: &str) -> Value {
     json!({"session_id":row["session_id"],"title":row["title"]["text"],"created_at":row["created_at"],"closed_at":row["closed_at"],"agent_did":row["agent_did"],"tags":row["tags"],"node_did":row["node_did"],"requester_did":row["requester_did"],"is_current":current_session.is_some_and(|id|super::is_current_session(agent,id,row["node_did"].as_str().unwrap_or_default(),row["session_id"].as_str().unwrap_or_default())),"session_doc_id":row["_docID"]})
 }
 
-const OUTPUT_PAGE_BYTES: usize = 16_000;
+pub const OUTPUT_PAGE_BYTES: usize = 16_000;
 /// Search stops reading a session's headers once it has enough hits.
 const SEARCH_MESSAGE_PAGE: usize = if cfg!(test) { 1 } else { 100 };
 

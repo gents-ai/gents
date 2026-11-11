@@ -27,7 +27,7 @@ pub(crate) use recovery::recover_outcomes_in_txn;
 pub use recovery::recover_outcomes_with_access;
 
 #[derive(Clone)]
-pub(crate) struct PreparedFire {
+pub struct PreparedFire {
     pub receipt: TriggerFire,
     pub target_existing: bool,
     pub create_session: bool,
@@ -40,7 +40,7 @@ pub(crate) fn fire_key(identity: &FireIdentity) -> String {
     identity.fire_key()
 }
 
-pub(crate) fn resolve_session_id(
+pub fn resolve_session_id(
     identity: &FireIdentity,
     target: Option<&str>,
     owned: bool,
@@ -625,7 +625,7 @@ pub async fn write_task_delivery_local(
     write_task_delivery(&access, fire, continue_existing, create).await
 }
 
-pub(crate) async fn write_trigger_delivery_with_identity(
+pub async fn write_trigger_delivery_with_identity(
     node: &std::sync::Arc<EmbeddedNode>,
     actor: ::identity::Did,
     prepared: &PreparedFire,

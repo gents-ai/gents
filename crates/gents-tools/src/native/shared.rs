@@ -13,9 +13,9 @@ pub(crate) use command::command_launch::select_sandbox_for_policy;
 pub(crate) use command::command_output::shell_join;
 pub(super) use command::command_output::{captured_channel, stopped_stream, truncate_stream};
 pub(super) use command::command_run::run_command;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use command::command_run::run_command as run_command_for_test;
-pub(crate) use command::command_validation::validate_command_policy;
+pub use command::command_validation::validate_command_policy;
 #[cfg(test)]
 pub(super) use command::command_validation::validate_read_only_command;
 pub(crate) use command::{

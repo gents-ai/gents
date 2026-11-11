@@ -144,7 +144,7 @@ pub struct SchemaTool {
 }
 
 impl SchemaTool {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub fn new(node: Arc<EmbeddedNode>) -> Self {
         Self {
             node_did: node.node_identity_did().unwrap_or_default().to_owned(),

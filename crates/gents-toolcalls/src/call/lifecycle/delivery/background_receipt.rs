@@ -16,13 +16,13 @@ use gents_store::config_client::session_children::{
     output_segment_bound_variables, transcript_message_bound_variables,
 };
 use gents_store::config_client::ConfigApplyTxn;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 use gents_store::config_client::IdempotentTransactionRetry;
 use gents_store::graphql::created_doc_id;
 
 impl ToolCallLifecycle {
-    #[cfg(test)]
-    pub(crate) async fn publish_background_receipt(&mut self, text: &str) -> Result<bool> {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub async fn publish_background_receipt(&mut self, text: &str) -> Result<bool> {
         let binding = self.background_receipt_binding()?;
         let receipt = text.to_owned();
         let result = self

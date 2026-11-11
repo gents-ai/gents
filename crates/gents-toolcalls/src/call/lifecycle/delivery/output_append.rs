@@ -12,7 +12,7 @@ use gents_store::config_client::{ConfigAccess, IdempotentTransactionRetry};
 use gents_store::graphql::created_doc_id;
 
 #[derive(Clone)]
-pub(crate) struct ToolOutputBinding {
+pub struct ToolOutputBinding {
     pub(crate) actor: identity::Did,
     pub(crate) agent_signer: Option<gents_store::identity::ManagedAgentSigner>,
     pub(crate) node: std::sync::Arc<defra_node::Node>,
@@ -59,7 +59,7 @@ impl std::fmt::Debug for ToolOutputBinding {
 }
 
 impl ToolCallLifecycle {
-    pub(crate) fn tool_output_binding(&self) -> Result<ToolOutputBinding> {
+    pub fn tool_output_binding(&self) -> Result<ToolOutputBinding> {
         anyhow::ensure!(
             self.state == ToolCallState::Running,
             "raw tool output requires a running admitted lifecycle"
@@ -92,7 +92,7 @@ pub enum ToolOutputAppendRejection {
 }
 
 #[derive(Debug)]
-pub(crate) struct ToolOutputAppendReceipt {
+pub struct ToolOutputAppendReceipt {
     pub(crate) range: std::ops::Range<u64>,
     #[cfg_attr(
         not(test),
@@ -101,10 +101,10 @@ pub(crate) struct ToolOutputAppendReceipt {
             reason = "Conformance binds the returned physical segment ID to the modeled write."
         )
     )]
-    pub(crate) segment_doc_id: String,
+    pub segment_doc_id: String,
 }
 
-pub(crate) async fn append_tool_output(
+pub async fn append_tool_output(
     binding: &ToolOutputBinding,
     bytes: &str,
 ) -> Result<std::ops::Range<u64>> {
@@ -118,7 +118,7 @@ pub(crate) async fn append_tool_output(
     )
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn append_tool_output_at(
     binding: &ToolOutputBinding,
     bytes: &str,

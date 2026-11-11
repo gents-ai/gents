@@ -11,7 +11,7 @@ use std::sync::Arc;
 use super::access::{rows_value, ReadAccess, ReadCache, RequestOutputRows};
 use super::headers::{load_header, validate_origin_chain, OriginWalk};
 use super::ReconstructedScopedMessage;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 use super::{record_request_output_scan, SOURCE_OUTPUT_QUERIES};
 use gents_protocol::output::rows::{
     decode_output_segment_row, decode_scoped_request_output_segments, AGENT_OUTPUT_SEGMENT_FIELDS,
@@ -32,7 +32,7 @@ async fn request_rows(
     {
         return Ok(Arc::clone(rows));
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-fixtures"))]
     record_request_output_scan();
     let values = access
         .request_segment_values(request_doc_id, "load_output_source")
@@ -50,7 +50,7 @@ pub(super) async fn source_rows(
     node_did: &str,
     requester_did: Option<&str>,
 ) -> Result<Vec<gents_protocol::output::rows::OutputSegmentRow>> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-fixtures"))]
     let _ = SOURCE_OUTPUT_QUERIES
         .try_with(|queries| queries.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
     let values = if let ReadAccess::Txn(txn) = access {
@@ -107,7 +107,7 @@ pub(super) async fn preload_request_output_segments(
         let query = format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _in: [{filter}] }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#
         );
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-fixtures"))]
         record_request_output_scan();
         let response = access
             .query(&query, "preload_canonical_replay_output_segments")

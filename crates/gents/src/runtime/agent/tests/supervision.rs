@@ -16,14 +16,12 @@ async fn supervision_restarts_panicking_behavior_while_sibling_continues() {
     let (sibling_tick_tx, mut sibling_tick_rx) = watch::channel(0usize);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let agents = vec![
-        Arc::new(
-            PendingAgent::new("panic-profile")
-                .build_with_identity_for_test(test_identity("panic-profile")),
-        ),
-        Arc::new(
-            PendingAgent::new("steady-profile")
-                .build_with_identity_for_test(test_identity("steady-profile")),
-        ),
+        PendingAgent::new("panic-profile")
+            .build_with_identity_for_test(test_identity("panic-profile"))
+            .agent,
+        PendingAgent::new("steady-profile")
+            .build_with_identity_for_test(test_identity("steady-profile"))
+            .agent,
     ];
 
     // Agent DIDs derive from each identity, so the panicking behavior is

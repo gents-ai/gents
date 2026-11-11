@@ -481,7 +481,7 @@ mod tests {
             write_fields: Vec::new(),
         });
         run_plugin_binding(
-            gents_toolcalls::plugin::tests::executor::installed_echo(),
+            gents_pack::plugin::test_fixtures::installed_echo(),
             digest,
             binding,
             allowed.map(|path| (path, gents_pack::pack::BindAccess::Read)),
@@ -535,7 +535,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let owner = gents_session::request::lifecycle::test_support::PIN_FIXED_DID;
+        let owner = gents_store::test_support::PIN_FIXED_DID;
         let agent = crate::triggers::callback::test_agent_did();
         crate::triggers::callback::seed_test_agent(&node, owner).await;
         crate::triggers::callback::seed_test_configuration(&node, owner, vec![
@@ -581,7 +581,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_created_document_runs_the_plugin_and_its_output_starts_the_next_stage() {
-        let (_, record) = gents_toolcalls::plugin::tests::executor::installed_echo();
+        let (_, record) = gents_pack::plugin::test_fixtures::installed_echo();
         let (node, _home) = run_echo_binding(&record.digest).await;
 
         let echoed = rows(&node, "{ Echoed { job_run text path run_ref } }", "Echoed").await;
@@ -657,8 +657,8 @@ mod tests {
         gents_pack::plugin::store::InstalledPlugin,
     ) {
         use gents_protocol::job::{PluginDataDeclaration, StampedField};
-        let (home, mut record) = gents_toolcalls::plugin::tests::executor::installed_plugin(
-            &gents_toolcalls::plugin::tests::executor::asking_plugin_wat(
+        let (home, mut record) = gents_pack::plugin::test_fixtures::installed_plugin(
+            &gents_pack::plugin::test_fixtures::asking_plugin_wat(
                 service,
                 "data_results",
                 canned,
@@ -805,7 +805,7 @@ mod tests {
         let docs = root.path().join("docs");
         std::fs::create_dir_all(&docs).unwrap();
         std::fs::write(docs.join("a.txt"), "hello").unwrap();
-        let digest = gents_toolcalls::plugin::tests::executor::installed_echo()
+        let digest = gents_pack::plugin::test_fixtures::installed_echo()
             .1
             .digest;
         let file = docs.join("a.txt");
@@ -836,7 +836,7 @@ mod tests {
         let outside = root.path().join("outside");
         std::fs::create_dir_all(&docs).unwrap();
         std::fs::create_dir_all(&outside).unwrap();
-        let digest = gents_toolcalls::plugin::tests::executor::installed_echo()
+        let digest = gents_pack::plugin::test_fixtures::installed_echo()
             .1
             .digest;
         let (node, _home) =
@@ -858,8 +858,8 @@ mod tests {
     #[tokio::test]
     async fn a_plugin_stage_writes_only_where_the_operator_allowed_writing() {
         let writer = || {
-            gents_toolcalls::plugin::tests::executor::installed_plugin(
-                &gents_pack::plugin::tests::call_bound::create_file_wat("out.json"),
+            gents_pack::plugin::test_fixtures::installed_plugin(
+                &gents_pack::plugin::test_fixtures::create_file_wat("out.json"),
                 None,
             )
         };

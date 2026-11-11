@@ -1,5 +1,6 @@
-/// The request that retires a pending one, named by the plugin that asked for
-/// the retirement so core can record it on the superseded row.
+/// Lean `Hooks.Successor`: the request that retires a pending one, named by
+/// the plugin that asked for the retirement so core can record it on the
+/// superseded row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Successor {
     pub request_id: String,
@@ -14,7 +15,7 @@ pub enum ClaimVerdict {
     LeaveQueued,
     Retire {
         reason: String,
-        successor: Option<Successor>,
+        successor: Successor,
     },
     Reject {
         reason: String,

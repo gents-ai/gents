@@ -1,3 +1,4 @@
+use super::provider_context_reduction::capture_source_boundary;
 use std::sync::Arc;
 
 use defra_node::Node as EmbeddedNode;
@@ -13,7 +14,7 @@ use gents_store::identity::NodeIdentity;
 use super::output::replay_candidates::load_canonical_assistant_candidates;
 use super::output::replay_request::ReplayRequestReader;
 use super::output::CanonicalReplayScope;
-use crate::session::provider_context_reduction::capture_source_boundary;
+
 use gents_protocol::output::rows::{
     output_segment_create_variables, transcript_message_create_variables,
     CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
@@ -24,6 +25,13 @@ use gents_loop::claude_messages_body::{
     replay_stage, select_replay, ReplayIssuer, ReplayTag, ReplayWire, TaggedAssistantRow,
 };
 use gents_loop::provider_input::replay_frontier::flatten;
+
+#[derive(Clone, Copy, Debug)]
+enum RequestFault {
+    Missing,
+    RowsReadFails,
+    CommitsReadFails,
+}
 
 #[derive(Clone, Copy)]
 enum CaptureStorage {
@@ -40,11 +48,12 @@ struct CapturedRequest {
 }
 
 const SESSION_ID: &str = "replay-session";
+
 const REQUEST_ID: &str = "replay-request";
 
 struct ReplayFixture {
     node: Arc<EmbeddedNode>,
-    _db: crate::support::TestDb,
+    _db: gents_inference::test_support::TestDb,
     user: gents_store::identity::KeyIdentity,
     user_access: gents_store::config_client::ConfigAccess,
     agent: Arc<dyn gents_store::identity::NodeIdentity>,
@@ -591,7 +600,7 @@ async fn fixture_with_provider_payload_options(
     use crate::request::lifecycle::{RequestIdentity, RequestSigner, RequestSpec};
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
     let (db, user, user_access, binding) =
-        crate::test_support::root::signed_test_node("canonical-replay").await;
+        gents_inference::test_support::signed_test_node("canonical-replay").await;
     let node = db.node.clone();
     let node_did = db.node_identity.did().to_owned();
     let requester_did = user.did().to_owned();
@@ -1302,94 +1311,6 @@ async fn authored_assistant_is_history_not_provider_continuation() {
 }
 
 #[tokio::test]
-async fn non_required_signed_history_with_wrong_provider_scope_stays_permissive() {
-    use gents_loop::loop_stream::provider_view_tagged;
-    use gents_loop::provider_input::ProviderInputProfile;
-    use gents_protocol::message::AssistantContent;
-    use gents_protocol::rendered_request::CaptureScopeKind;
-
-    let fixture =
-        fixture_with_provider_payload_and_scope_and_tool(true, CaptureScopeKind::OneShot, false)
-            .await;
-    assert_eq!(fixture.candidates().await.unwrap().len(), 1);
-    let inference_scope = CanonicalReplayScope {
-        expected_scope_kind: CaptureScopeKind::Inference,
-        ..fixture.scope()
-    };
-    assert!(load_canonical_assistant_candidates(
-        &fixture.access,
-        inference_scope,
-        &fixture.boundary,
-    )
-    .await
-    .unwrap()
-    .is_empty());
-
-    let history = super::output::sequenced::load_sequenced_messages_using(
-        super::output::access::ReadAccess::Config(&fixture.access),
-        SESSION_ID,
-        &fixture.node_did,
-        Some(&fixture.requester_did),
-        None,
-        None,
-        Some(&fixture.request_doc_id),
-        Some(ProviderInputProfile::ClaudeMessages),
-    )
-    .await
-    .unwrap();
-    assert_eq!(history.len(), 1);
-    assert!(history[0].provider_source.is_none());
-    assert!(matches!(&history[0].message,
-        Message::Assistant { content, .. }
-        if content.iter().filter(|block| matches!(block, AssistantContent::Reasoning(_))).count() == 2
-    ));
-
-    let tagged = crate::turn::provider_input::replay::tag_canonical_history(&history);
-    let projected = provider_view_tagged(tagged).unwrap();
-    let rows = projected
-        .iter()
-        .map(|row| {
-            let Message::Assistant { id, content, .. } = &row.message else {
-                panic!("fixture history is one assistant")
-            };
-            TaggedAssistantRow {
-                source: row.source.clone(),
-                physical_header: row.physical_header.clone(),
-                block_indices: row.block_indices.clone(),
-                id: id.clone(),
-                content: content.clone(),
-            }
-        })
-        .collect::<Vec<_>>();
-    let issuer = gents_inference::llm::backend_client::claude_subscription_replay_issuer()
-        .unwrap()
-        .unwrap();
-    let selected = select_replay(
-        &rows,
-        &issuer,
-        ReplayWire::ClaudeMessages,
-        |_| Vec::new(),
-        &[],
-    );
-    let projected = [gents_loop::loop_stream::TaggedMessage {
-        message: Message::Assistant {
-            request_id: None,
-            id: selected[0].id.clone(),
-            content: selected[0].content.clone(),
-        },
-        source: selected[0].source.clone(),
-        physical_header: selected[0].physical_header.clone(),
-        block_indices: selected[0].block_indices.clone(),
-    }];
-    assert_eq!(projected.len(), 1);
-    assert!(projected[0].source.is_none());
-    assert!(matches!(&projected[0].message,
-        Message::Assistant { content, .. }
-        if matches!(content.as_slice(), [AssistantContent::Text(text)] if text.text == "answer")
-    ));
-}
-
-#[tokio::test]
 async fn replay_rejects_forged_high_water_and_storage_rejects_sequence_twins() {
     let observed = fixture().await;
     let mut forged = observed.boundary.clone();
@@ -1484,13 +1405,6 @@ async fn unverifiable_capture_drops_its_reasoning_without_failing_the_request() 
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-enum RequestFault {
-    Missing,
-    RowsReadFails,
-    CommitsReadFails,
-}
-
 struct FaultingRequests<'a> {
     access: &'a gents_store::config_client::ConfigAccess,
     request_doc_id: &'a str,
@@ -1501,22 +1415,6 @@ struct CountingRequests<'a> {
     access: &'a gents_store::config_client::ConfigAccess,
     rows: std::sync::atomic::AtomicUsize,
     commits: std::sync::atomic::AtomicUsize,
-}
-
-#[async_trait::async_trait]
-impl ReplayRequestReader for CountingRequests<'_> {
-    async fn request_facts(
-        &self,
-        ids: &[String],
-    ) -> anyhow::Result<
-        std::collections::BTreeMap<String, super::output::replay_request::ReplayRequestFacts>,
-    > {
-        self.commits
-            .fetch_add(ids.len(), std::sync::atomic::Ordering::Relaxed);
-        self.rows
-            .fetch_add(ids.len(), std::sync::atomic::Ordering::Relaxed);
-        self.access.request_facts(ids).await
-    }
 }
 
 #[tokio::test]
@@ -1560,7 +1458,7 @@ async fn replay_resolution_reads_shared_request_once_and_keeps_every_physical_ca
         commits: std::sync::atomic::AtomicUsize::new(0),
     };
     for resolution in 1..=2 {
-        let (candidates, segment_scans) = crate::session::count_request_output_scans(
+        let (candidates, segment_scans) = super::count_request_output_scans(
             super::output::replay_candidates::load_canonical_assistant_candidates_with(
                 &fixture.access,
                 &requests,
@@ -1608,33 +1506,6 @@ async fn replay_resolution_reads_shared_request_once_and_keeps_every_physical_ca
     .unwrap();
     assert_eq!(selected.len(), 2, "selection preserves physical twins");
     assert_ne!(selected[0].header_doc_id, selected[1].header_doc_id);
-}
-
-#[async_trait::async_trait]
-impl ReplayRequestReader for FaultingRequests<'_> {
-    async fn request_facts(
-        &self,
-        request_doc_ids: &[String],
-    ) -> anyhow::Result<
-        std::collections::BTreeMap<String, super::output::replay_request::ReplayRequestFacts>,
-    > {
-        if request_doc_ids.iter().any(|id| id == self.request_doc_id) {
-            match self.fault {
-                Some(RequestFault::RowsReadFails) => anyhow::bail!("injected AgentRequest read"),
-                Some(RequestFault::CommitsReadFails) => {
-                    anyhow::bail!("injected composite commit read")
-                }
-                _ => {}
-            }
-        }
-        let mut facts = self.access.request_facts(request_doc_ids).await?;
-        if matches!(self.fault, Some(RequestFault::Missing)) {
-            if let Some(request) = facts.get_mut(self.request_doc_id) {
-                request.rows.clear();
-            }
-        }
-        Ok(facts)
-    }
 }
 
 async fn load_with_fault(
@@ -1819,182 +1690,6 @@ async fn historical_request_store_faults_propagate_instead_of_dropping_reasoning
     }
 }
 
-async fn stored_agent_request(fixture: &ReplayFixture) -> gents_protocol::row::AgentRequest {
-    let response = fixture_query(
-        &fixture.access,
-        &format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
-            gents_store::graphql::escape_graphql_string(&fixture.request_doc_id),
-            gents_protocol::row::AGENT_REQUEST_FIELDS,
-        ),
-    )
-    .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let row = response.data.unwrap()["AgentRequest"][0].clone();
-    gents_protocol::row::AgentRequest::try_from(
-        serde_json::from_value::<gents_protocol::row::AgentRequestRow>(row).unwrap(),
-    )
-    .unwrap()
-}
-
-#[tokio::test]
-async fn replay_resolution_observes_capture_arriving_for_existing_header() {
-    let fixture = signed_fixture().await;
-    let candidate = fixture.candidates().await.unwrap().remove(0);
-    let tag = ReplayTag {
-        request_doc_id: candidate.request_doc_id.clone(),
-        source: OutputSource::ProviderTurn {
-            scope: candidate.coordinate.scope,
-            turn_index: candidate.coordinate.turn_index,
-            attempt: candidate.coordinate.attempt,
-        },
-    };
-    let replay = crate::turn::provider_input::replay::owned_replay_input(
-        fixture.node.clone(),
-        stored_agent_request(&fixture).await,
-        fixture.request_commit_cid.clone(),
-        fixture.scope_kind,
-        None,
-        gents_loop::provider_input::ProviderInputProfile::ClaudeMessages,
-    );
-    let resolve = replay.resolve.expect("canonical resolver");
-    assert!(resolve(vec![tag.clone()]).await.unwrap().is_empty());
-    fixture
-        .insert_capture(RenderedRequestSource::ClaudeCliSubscription)
-        .await
-        .unwrap();
-    assert_eq!(
-        resolve(vec![tag]).await.unwrap().len(),
-        1,
-        "a capture arriving for the same physical header must become replay evidence"
-    );
-}
-
-#[tokio::test]
-async fn replay_resolution_observes_a_header_replicated_before_dispatch() {
-    let fixture = signed_fixture().await;
-    fixture
-        .insert_capture(RenderedRequestSource::ClaudeCliSubscription)
-        .await
-        .unwrap();
-    let candidate = fixture.candidates().await.unwrap().remove(0);
-    let tag = ReplayTag {
-        request_doc_id: candidate.request_doc_id.clone(),
-        source: OutputSource::ProviderTurn {
-            scope: candidate.coordinate.scope,
-            turn_index: candidate.coordinate.turn_index,
-            attempt: candidate.coordinate.attempt,
-        },
-    };
-    let replay = crate::turn::provider_input::replay::owned_replay_input(
-        fixture.node.clone(),
-        stored_agent_request(&fixture).await,
-        fixture.request_commit_cid.clone(),
-        fixture.scope_kind,
-        None,
-        gents_loop::provider_input::ProviderInputProfile::ClaudeMessages,
-    );
-    let resolve = replay.resolve.expect("canonical resolver");
-    let estimate = resolve(vec![tag.clone()]).await.unwrap();
-    assert_eq!(estimate.len(), 1);
-    let (unchanged, scans) =
-        crate::session::count_request_output_scans(resolve(vec![tag.clone()])).await;
-    assert_eq!(
-        unchanged.unwrap().len(),
-        1,
-        "an unchanged view resolves the same evidence"
-    );
-    assert_eq!(
-        scans, 1,
-        "each dispatch lookup revalidates canonical evidence"
-    );
-    assert_eq!(resolve(vec![tag.clone()]).await.unwrap().len(), 1);
-
-    let mut duplicate = fixture.header.clone();
-    duplicate.sequence += 1;
-    duplicate.message_key.push_str("-replicated-twin");
-    fixture_write(
-        &fixture.access,
-        CREATE_AGENT_MESSAGE_MUTATION,
-        &transcript_message_create_variables(&duplicate).unwrap(),
-    )
-    .await
-    .unwrap();
-
-    let dispatch = resolve(vec![tag]).await.unwrap();
-    assert_eq!(
-        dispatch.len(),
-        2,
-        "the dispatch lookup sees the replicated physical twin"
-    );
-    assert_ne!(
-        dispatch[0].evidence.physical_header,
-        dispatch[1].evidence.physical_header
-    );
-}
-
-#[tokio::test]
-async fn a_header_twin_arriving_between_the_admission_estimate_and_dispatch_waits_for_the_next_lookup(
-) {
-    let fixture = signed_fixture().await;
-    fixture
-        .insert_capture(RenderedRequestSource::ClaudeCliSubscription)
-        .await
-        .unwrap();
-    let candidate = fixture.candidates().await.unwrap().remove(0);
-    let tag = ReplayTag {
-        request_doc_id: candidate.request_doc_id.clone(),
-        source: OutputSource::ProviderTurn {
-            scope: candidate.coordinate.scope,
-            turn_index: candidate.coordinate.turn_index,
-            attempt: candidate.coordinate.attempt,
-        },
-    };
-    let replay = crate::turn::provider_input::replay::owned_replay_input(
-        fixture.node.clone(),
-        stored_agent_request(&fixture).await,
-        fixture.request_commit_cid.clone(),
-        fixture.scope_kind,
-        None,
-        gents_loop::provider_input::ProviderInputProfile::ClaudeMessages,
-    );
-    let resolve = replay.resolve.clone().expect("canonical resolver");
-    let estimate = {
-        let _estimate_seed = replay.arm_estimate_seed();
-        resolve(vec![tag.clone()]).await.unwrap()
-    };
-    assert_eq!(estimate.len(), 1);
-
-    let mut duplicate = fixture.header.clone();
-    duplicate.sequence += 1;
-    duplicate.message_key.push_str("-estimate-twin");
-    fixture_write(
-        &fixture.access,
-        CREATE_AGENT_MESSAGE_MUTATION,
-        &transcript_message_create_variables(&duplicate).unwrap(),
-    )
-    .await
-    .unwrap();
-
-    let dispatch =
-        gents_loop::loop_stream::resolve_replay_evidence(&replay, std::slice::from_ref(&tag))
-            .await
-            .unwrap();
-    assert_eq!(
-        dispatch, estimate,
-        "the seeded dispatch answers the estimate's window, not the replicated twin"
-    );
-    let observed =
-        gents_loop::loop_stream::resolve_replay_evidence(&replay, std::slice::from_ref(&tag))
-            .await
-            .unwrap();
-    assert_eq!(
-        observed.len(),
-        2,
-        "the next resolution observes the replicated physical twin"
-    );
-}
-
 #[tokio::test]
 async fn a_pass_with_many_selected_turns_batches_capture_rows_and_block_commits() {
     let turns = 4;
@@ -2094,18 +1789,17 @@ async fn a_pass_with_many_selected_turns_batches_capture_rows_and_block_commits(
         })
         .sum::<usize>();
 
-    let ((batched, commit_statements), capture_queries) =
-        crate::session::count_capture_row_queries(
-            gents_inference::rendered_request::commits::count_field_commit_statements(
-                super::output::replay_tags::resolve_canonical_replay_tags(
-                    &fixture.access,
-                    fixture.scope(),
-                    &fixture.boundary,
-                    &tags,
-                ),
+    let ((batched, commit_statements), capture_queries) = super::count_capture_row_queries(
+        gents_inference::rendered_request::commits::count_field_commit_statements(
+            super::output::replay_tags::resolve_canonical_replay_tags(
+                &fixture.access,
+                fixture.scope(),
+                &fixture.boundary,
+                &tags,
             ),
-        )
-        .await;
+        ),
+    )
+    .await;
     let batched = batched.unwrap();
     assert_eq!(
         batched.len(),
@@ -2306,5 +2000,48 @@ async fn a_capture_pinning_a_block_that_does_not_hash_drops_only_its_own_turn() 
                 "the healthy turn {turn_index} still replays its captured body"
             );
         }
+    }
+}
+
+#[async_trait::async_trait]
+impl ReplayRequestReader for CountingRequests<'_> {
+    async fn request_facts(
+        &self,
+        ids: &[String],
+    ) -> anyhow::Result<
+        std::collections::BTreeMap<String, super::output::replay_request::ReplayRequestFacts>,
+    > {
+        self.commits
+            .fetch_add(ids.len(), std::sync::atomic::Ordering::Relaxed);
+        self.rows
+            .fetch_add(ids.len(), std::sync::atomic::Ordering::Relaxed);
+        self.access.request_facts(ids).await
+    }
+}
+
+#[async_trait::async_trait]
+impl ReplayRequestReader for FaultingRequests<'_> {
+    async fn request_facts(
+        &self,
+        request_doc_ids: &[String],
+    ) -> anyhow::Result<
+        std::collections::BTreeMap<String, super::output::replay_request::ReplayRequestFacts>,
+    > {
+        if request_doc_ids.iter().any(|id| id == self.request_doc_id) {
+            match self.fault {
+                Some(RequestFault::RowsReadFails) => anyhow::bail!("injected AgentRequest read"),
+                Some(RequestFault::CommitsReadFails) => {
+                    anyhow::bail!("injected composite commit read")
+                }
+                _ => {}
+            }
+        }
+        let mut facts = self.access.request_facts(request_doc_ids).await?;
+        if matches!(self.fault, Some(RequestFault::Missing)) {
+            if let Some(request) = facts.get_mut(self.request_doc_id) {
+                request.rows.clear();
+            }
+        }
+        Ok(facts)
     }
 }

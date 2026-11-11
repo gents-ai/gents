@@ -32,7 +32,7 @@ pub enum RecoveryResult {
 
 #[derive(Debug, Clone)]
 #[cfg_attr(
-    not(test),
+    not(any(test, feature = "test-fixtures")),
     expect(
         dead_code,
         reason = "Model-driven conformance supplies explicit selections to the production recovery owner."
@@ -203,7 +203,7 @@ pub(super) async fn recover_expired_generation(
     .await
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 #[expect(
     clippy::too_many_arguments,
     reason = "the conformance adapter supplies deterministic recovery facts"

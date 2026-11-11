@@ -12,7 +12,7 @@ use crate::call::lifecycle::CausedRequestTerminal;
 use gents_session::session::TxnCanonicalReader;
 use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
 
-pub(crate) fn select_folded_outcome(
+pub fn select_folded_outcome(
     folded: bool,
     caused: Option<CausedRequestTerminal>,
     head: Option<CausedRequestTerminal>,
@@ -24,7 +24,7 @@ pub(crate) fn select_folded_outcome(
     }
 }
 
-pub(crate) async fn load_session_message_terminal(
+pub async fn load_session_message_terminal(
     access: &ConfigAccess,
     caused_doc_id: &str,
 ) -> Result<Option<CausedRequestTerminal>> {
@@ -127,7 +127,7 @@ pub(crate) async fn load_session_message_terminal(
 /// The durable terminals of many caused requests: one request query and one
 /// header query, whatever the count. A request that is live or whose terminal
 /// selection has not replicated is absent from the result.
-pub(crate) async fn load_caused_request_terminals(
+pub async fn load_caused_request_terminals(
     access: &ConfigAccess,
     caused_request_doc_ids: &[String],
 ) -> Result<RapidHashMap<String, CausedRequestTerminal>> {
@@ -152,7 +152,7 @@ where
     serde_json::from_value(rows).with_context(|| format!("decoding caused terminal {collection}"))
 }
 
-pub(crate) async fn caused_request_terminals_in_txn(
+pub async fn caused_request_terminals_in_txn(
     txn: &ConfigApplyTxn<'_>,
     caused_request_doc_ids: &[String],
 ) -> Result<RapidHashMap<String, CausedRequestTerminal>> {

@@ -121,7 +121,7 @@ pub(super) async fn retain_inventory(
             .is_some_and(|rows| rows.len() == 1 && rows[0]["_docID"].as_str().is_some()),
         "file inventory projection was not retained"
     );
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-fixtures"))]
     {
         let mut failures = FAIL_NEXT.lock().unwrap();
         if let Some(index) = failures.iter().position(|id| id == tool_call_doc_id) {
@@ -132,10 +132,10 @@ pub(super) async fn retain_inventory(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 static FAIL_NEXT: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
-#[cfg(test)]
-pub(crate) fn fail_next_publication(tool_call_doc_id: &str) {
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn fail_next_publication(tool_call_doc_id: &str) {
     FAIL_NEXT.lock().unwrap().push(tool_call_doc_id.to_owned());
 }

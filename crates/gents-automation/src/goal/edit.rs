@@ -15,7 +15,7 @@ impl GoalEditOrigin {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
-pub(crate) struct GoalEdit {
+pub struct GoalEdit {
     pub objective: Option<String>,
     pub budget: Option<i64>,
 }
@@ -40,8 +40,8 @@ impl GoalEdit {
     }
 }
 
-#[cfg(test)]
-pub(crate) async fn edit_active_goal(
+#[cfg(any(test, feature = "test-fixtures"))]
+pub async fn edit_active_goal(
     node: &std::sync::Arc<EmbeddedNode>,
     observed: &GoalDocument,
     fields: &GoalEdit,
@@ -60,7 +60,7 @@ pub(crate) async fn edit_active_goal(
     .await
 }
 
-pub(crate) async fn edit_active_goal_from_access(
+pub async fn edit_active_goal_from_access(
     access: &gents_store::config_client::ConfigAccess,
     observed: &GoalDocument,
     fields: &GoalEdit,

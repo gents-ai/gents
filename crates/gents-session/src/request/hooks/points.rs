@@ -1,18 +1,20 @@
 use super::claim::{combine, ClaimVerdict};
 use super::native::TxnHost;
+use super::owed::{owe, request_session_owner, Owing};
 use super::prepared::{admit, inputs_digest, prepare, Binding, Stale};
 use super::queue_scope::{QueueScopes, SessionRequests};
 use super::registry::{
     AdmitShown, ClaimApplied, ClaimCandidate, OperationContext, QueueScopeAsk, Registry,
-    RequestTerminal, SessionHalt, SessionResume,
+    RequestCreated, RequestTerminal, SessionHalt, SessionResume,
 };
-use super::stage::{gate, stage, stage_dropping, stage_naming, HookError, Staged};
+use super::stage::{gate, stage, stage_dropping, stage_naming, HookError, Plugin, Staged};
 use crate::request::admission::{
     load_exact_parent_request, required_row_string, AdmissionResult, AgentRequestAdmissionError,
 };
+use gents_protocol::owed_delivery::OwedSubject;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
-use gents_store::config_client::ConfigApplyTxn;
+use gents_store::config_client::{ConfigApplyTxn, ConfigClientError, RerunNote};
 
 /// A store or core-operation failure reaches the caller as the error it was
 /// before the seam, so its text and its conflict classification are unchanged.
@@ -26,21 +28,59 @@ fn surface(error: HookError) -> anyhow::Error {
     }
 }
 
-/// A dropped staging is owed as a delivery (Lean `Hooks.owed`). No durable
-/// record of a generic owed delivery exists yet; until one does, a plugin
-/// whose state can lag redrives it from durable state, and the drop is
-/// reported here.
-fn report_owed(point: &'static str, subject: &str, staged: &[Staged]) {
-    for entry in staged {
-        if let Staged::Owed { plugin, cause } = entry {
-            tracing::warn!(
-                point,
-                plugin,
-                subject,
-                error = %gents_protocol::error_chain::ErrorChain(cause),
-                "lifecycle plugin staging was dropped; its delivery is owed"
-            );
+/// The subject's owning session, as the owing transaction sees it. A failed
+/// read cannot block a must-commit transition (Lean
+/// `Hooks.must_commit_is_decided_by_core`); its owed delivery is then not
+/// recorded, and a halt is re-derived from core state by the recovery sweep.
+fn owning_session(
+    read: anyhow::Result<Option<gents_protocol::session::SessionOwnerRow>>,
+) -> Option<gents_protocol::session::SessionOwnerRow> {
+    read.unwrap_or_else(|error| {
+        tracing::warn!(
+            error = %gents_protocol::error_chain::ErrorChain(error.as_ref()),
+            "the owning session of an owed lifecycle delivery could not be read"
+        );
+        None
+    })
+}
+
+/// The note asking the store to run a transition again without `plugin`'s
+/// staging at `point` for `subject`.
+fn rerun_note(point: &str, plugin: &str, subject: &str) -> RerunNote {
+    RerunNote::new(format!("lifecycle-hooks\n{point}\n{plugin}\n{subject}"))
+}
+
+/// `Hooks.stageDropping` at a must-commit point, inside a transaction the
+/// store re-runs. A plugin whose staging failed after part of it was written
+/// cannot be skipped within the attempt, so the attempt asks the store to run
+/// the whole transition again; the next attempt skips that plugin for this
+/// subject and owes it.
+async fn stage_must_commit<E>(
+    txn: &ConfigApplyTxn<'_>,
+    host: &TxnHost<'_, '_>,
+    plugins: &[Plugin<E, ()>],
+    event: &E,
+    point: &'static str,
+    subject: &str,
+) -> anyhow::Result<Vec<Staged>> {
+    let without = plugins
+        .iter()
+        .map(|plugin| plugin.manifest().name)
+        .filter(|plugin| {
+            txn.rerun_notes()
+                .contains(&rerun_note(point, plugin, subject))
+        })
+        .collect::<Vec<_>>();
+    match stage_dropping(host, plugins, event, &without).await {
+        Ok(staged) => Ok(staged),
+        Err(error @ HookError::PartialStaging { plugin, .. }) => {
+            Err(ConfigClientError::RerunRequested {
+                note: rerun_note(point, plugin, subject),
+                cause: Box::new(error),
+            }
+            .into())
         }
+        Err(other) => Err(surface(other)),
     }
 }
 
@@ -63,10 +103,35 @@ pub async fn request_terminal(
     };
     let registry = Registry::for_transaction(txn)?;
     let host = TxnHost::new(txn, &registry, OperationContext::default());
-    let staged = stage_dropping(&host, &registry.request_terminal, &event)
-        .await
-        .map_err(surface)?;
-    report_owed("request.terminal.stage", request_id, &staged);
+    let staged = stage_must_commit(
+        txn,
+        &host,
+        &registry.request_terminal,
+        &event,
+        REQUEST_TERMINAL_STAGE,
+        request_id,
+    )
+    .await?;
+    if staged.iter().any(Staged::is_owed) {
+        let session = owning_session(request_session_owner(txn, request_id).await);
+        owe(
+            txn,
+            &Owing {
+                point: REQUEST_TERMINAL_STAGE,
+                subject: OwedSubject::Request,
+                subject_id: request_id,
+                subject_node_did: node_did,
+                owner: session
+                    .as_ref()
+                    .map(|session| session.session.agent_did.as_str()),
+                terminal_state: Some(state.as_str()),
+                reason: Some(reason),
+                occurred_at: at,
+                halt_latch: None,
+            },
+            &staged,
+        );
+    }
     Ok(())
 }
 
@@ -84,10 +149,43 @@ pub async fn session_halt(
     };
     let registry = Registry::for_transaction(txn)?;
     let host = TxnHost::new(txn, &registry, OperationContext::default());
-    let staged = stage_dropping(&host, &registry.session_halt, &event)
-        .await
-        .map_err(surface)?;
-    report_owed("control.session.halt", session_id, &staged);
+    let staged = stage_must_commit(
+        txn,
+        &host,
+        &registry.session_halt,
+        &event,
+        CONTROL_SESSION_HALT,
+        session_id,
+    )
+    .await?;
+    if staged.iter().any(Staged::is_owed) {
+        let session = owning_session(
+            gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
+                txn, node_did, session_id,
+            )
+            .await,
+        );
+        let halt_latch = session
+            .as_ref()
+            .and_then(|session| session.session.stopped_at.clone());
+        owe(
+            txn,
+            &Owing {
+                point: CONTROL_SESSION_HALT,
+                subject: OwedSubject::Session,
+                subject_id: session_id,
+                subject_node_did: node_did,
+                owner: session
+                    .as_ref()
+                    .map(|session| session.session.agent_did.as_str()),
+                terminal_state: None,
+                reason: None,
+                occurred_at: &event.at,
+                halt_latch: halt_latch.as_deref(),
+            },
+            &staged,
+        );
+    }
     Ok(())
 }
 
@@ -116,6 +214,22 @@ pub async fn session_resume(
         },
     );
     stage(&host, &registry.session_resume, &event)
+        .await
+        .map_err(surface)?;
+    Ok(())
+}
+
+/// `request.create.stage` after creation (may refuse). Called by core's
+/// `request.create` operation once the row exists, in the same transaction; a
+/// refusal fails the creation with the plugin's reason.
+pub async fn request_created(
+    txn: &ConfigApplyTxn<'_>,
+    context: OperationContext<'_>,
+    event: &RequestCreated,
+) -> anyhow::Result<()> {
+    let registry = Registry::for_transaction(txn)?;
+    let host = TxnHost::new(txn, &registry, context);
+    stage(&host, &registry.request_created, event)
         .await
         .map_err(surface)?;
     Ok(())
@@ -156,7 +270,9 @@ pub async fn claim_applied_in(
     request: &gents_protocol::row::AgentRequest,
     claimed_at: &str,
 ) -> anyhow::Result<()> {
-    use gents_protocol::document_query::{fields::trigger_fire as fields, Filter, Query, Selection};
+    use gents_protocol::document_query::{
+        fields::trigger_fire as fields, Filter, Query, Selection,
+    };
     let response = txn
         .run_local_response(
             &Query::select(
@@ -167,13 +283,12 @@ pub async fn claim_applied_in(
                     .field(fields::GOAL_TOKEN_BUDGET)
                     .field(fields::GOAL_ASSIGNMENT_APPLIED),
             )
-                .filter(Filter::eq(fields::OWNER_DID, &request.node_did))
-                .filter(Filter::eq(fields::REQUEST_ID, &request.request_id))
-                .render(),
+            .filter(Filter::eq(fields::OWNER_DID, &request.node_did))
+            .filter(Filter::eq(fields::REQUEST_ID, &request.request_id))
+            .render(),
         )
         .await?;
-    let mut fires: Vec<serde_json::Value> =
-        gents_store::graphql::rows(&response, "TriggerFire")?;
+    let mut fires: Vec<serde_json::Value> = gents_store::graphql::rows(&response, "TriggerFire")?;
     anyhow::ensure!(fires.len() <= 1, "request has multiple Task fire receipts");
     let event = ClaimApplied {
         request: request.clone(),
@@ -253,6 +368,8 @@ pub(crate) async fn request_admit_verify(
 }
 
 pub const REQUEST_ADMIT_VERIFY: &str = "request.admit.verify";
+pub const REQUEST_TERMINAL_STAGE: &str = "request.terminal.stage";
+pub const CONTROL_SESSION_HALT: &str = "control.session.halt";
 
 /// `request.queue.scope` (may refuse): core reads the session's request rows
 /// and asks every plugin for the queue partition of the requests in `asked`.

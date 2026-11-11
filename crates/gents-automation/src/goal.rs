@@ -22,10 +22,10 @@ mod history;
 pub mod lifecycle_hooks;
 mod load;
 mod observation;
-mod operator_resume;
-#[cfg(test)]
-pub(crate) use operator_resume::support as operator_resume_test_support;
-mod readiness_gate;
+pub mod operator_resume;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use operator_resume::support as operator_resume_test_support;
+pub mod readiness_gate;
 mod request_assignment;
 mod request_head;
 mod reset_resume;
@@ -37,7 +37,7 @@ mod tool_context;
 mod transition;
 mod usage;
 mod write;
-pub(crate) use claimed_publication::{
+pub use claimed_publication::{
     publish_claimed_continuation_with_identity,
     stop_claimed_continuation_for_unavailable_agent_from_access,
 };
@@ -49,13 +49,12 @@ pub use client_submission::{
     load_applied_opening_goal_provenance, prepare_session_goal_control,
     recover_session_goal_control, submit_prepared_session_goal_control, OpeningGoalProvenance,
 };
-#[cfg(test)]
-pub(crate) use edit::edit_active_goal;
-pub(crate) use edit::{edit_active_goal_from_access, GoalEdit};
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use edit::edit_active_goal;
+pub use edit::{edit_active_goal_from_access, GoalEdit};
 pub use first_request_binding::task_assignment_goal_id;
-pub(crate) use first_request_binding::{
-    bind_goal_first_request_in_txn, validate_task_goal_identity_in_txn,
-};
+pub use first_request_binding::bind_goal_first_request_in_txn;
+pub(crate) use first_request_binding::validate_task_goal_identity_in_txn;
 use first_request_binding::{continuation_assignment, continuation_reference_matches};
 pub use history::load_goal_versions_for_session;
 pub(crate) use history::{load_assignment_versions_for_session, GoalAssignmentVersion};
@@ -79,7 +78,8 @@ pub use readiness_gate::{
     ObservedGoalAgent, GOAL_READINESS_WAIT_PREFIX,
 };
 pub use readiness_gate::{goal_reconcile_settled, GoalReconcileSettled};
-pub(crate) use request_assignment::{latest_assignment_goals, RequestAssignmentObservation};
+pub use request_assignment::RequestAssignmentObservation;
+pub(crate) use request_assignment::latest_assignment_goals;
 pub use request_assignment::{load_request_assignment, load_request_assignment_scopes};
 #[cfg(test)]
 pub(crate) use request_head::assignment_allows;
@@ -91,9 +91,9 @@ pub(crate) use request_head::{
 pub use reset_resume::resume_at_reset;
 mod question_wait;
 pub(crate) use backed_request::fingerprint::GoalBackedRequestFingerprint;
+pub use backed_request::submit_goal_backed_request_with_identity;
 pub(crate) use backed_request::{
     stage_goal_backed_request_in_txn, stage_goal_backed_request_with_identity_in_txn,
-    submit_goal_backed_request_with_identity,
 };
 pub use backed_request::{
     submit_goal_backed_request, submit_goal_backed_request_local, GoalBackedRequestDisposition,
@@ -123,7 +123,7 @@ pub use task_fire::{
     decide_task_goal_fire_recovery, task_goal_fire_identity, TaskGoalFireIdentity,
     TaskGoalFireRecoveryDecision, TaskGoalFireRecoveryDisposition, TaskGoalRequestBinding,
 };
-pub(crate) use tool_context::load_goal_tool_context;
+pub use tool_context::load_goal_tool_context;
 use tool_context::same_goal_assignment;
 pub use transition::{
     decide_model_goal_create, goal_continuation_materialization_step, goal_creation_fingerprint,

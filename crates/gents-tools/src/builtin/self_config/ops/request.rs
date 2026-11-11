@@ -5,7 +5,7 @@ use super::AgentAnchor;
 use gents_documents::patch::{SelfConfigPatch, SelfConfigTarget};
 use gents_store::config_client::ConfigApplyTxn;
 
-pub(crate) struct ApplyRequest<'a> {
+pub struct ApplyRequest<'a> {
     pub(crate) target: SelfConfigTarget,
     pub(crate) patch: SelfConfigPatch,
     pub(crate) allow_create: bool,
@@ -54,7 +54,7 @@ pub(crate) type NormalizeFn<'a> = Box<
 >;
 
 impl<'a> ApplyRequest<'a> {
-    pub(crate) fn new(target: SelfConfigTarget, patch: SelfConfigPatch) -> Self {
+    pub fn new(target: SelfConfigTarget, patch: SelfConfigPatch) -> Self {
         Self {
             target,
             patch,

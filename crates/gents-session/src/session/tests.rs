@@ -1,133 +1,16 @@
+use crate::test_support::{
+    fork_reader_node, history_on, sequenced_history_on, session_rewrite_rows,
+};
+use super::history_fixture::signed_claimed_authored_request;
 use super::*;
 use gents_inference::llm::message::{Text, ToolResult, ToolResultContent, UserContent};
 use gents_store::test_support::first_content;
-
-async fn sequenced_history_on(
-    access: &gents_store::config_client::ConfigAccess,
-    session_id: &str,
-    node_did: &str,
-    requester: Option<&str>,
-    after: Option<u32>,
-    excluded_request: Option<&str>,
-) -> anyhow::Result<Vec<SequencedMessage>> {
-    output::sequenced::load_sequenced_messages_using(
-        output::access::ReadAccess::Config(access),
-        session_id,
-        node_did,
-        requester,
-        None,
-        after,
-        excluded_request,
-        None,
-    )
-    .await
-}
-
-async fn history_on(
-    access: &gents_store::config_client::ConfigAccess,
-    session_id: &str,
-    node_did: &str,
-    requester: Option<&str>,
-    excluded_request: Option<&str>,
-) -> anyhow::Result<Vec<Message>> {
-    Ok(sequenced_history_on(
-        access,
-        session_id,
-        node_did,
-        requester,
-        None,
-        excluded_request,
-    )
-    .await?
-    .into_iter()
-    .map(|row| row.message)
-    .collect())
-}
-
-#[tokio::test]
-async fn provider_history_excludes_current_input_but_keeps_its_tool_results() {
-    use crate::tools::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
-    use gents_protocol::tool_call::AwaitMode;
-    use gents_store::identity::NodeIdentity;
-    let (db, user, client, binding) =
-        crate::test_support::root::signed_test_node("provider-history").await;
-    let session_id = "session-steering-provider-history";
-    publish_signed_history(
-        &db,
-        &user,
-        &client,
-        &binding,
-        session_id,
-        &["older steering".into()],
-    )
-    .await;
-    let mut current = signed_claimed_authored_request(
-        &db,
-        &user,
-        &client,
-        &binding,
-        "current-steering",
-        session_id,
-    )
-    .await;
-    let mut tool = publish_accepted_on_claimed_request(
-        db.node.clone(),
-        &mut current,
-        db.node_identity.did(),
-        0,
-        "fixture",
-        "call-current",
-        serde_json::json!({}),
-        AwaitMode::Foreground,
-        true,
-    )
-    .await
-    .unwrap();
-    let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
-        db.node.clone(),
-        &current,
-        std::time::Duration::ZERO,
-    )
-    .unwrap();
-    writer
-        .publish_authored_message(&current, "prompt", &Message::user("current steering"))
-        .await
-        .unwrap();
-    tool.complete("tool finished").await.unwrap();
-    let history = history_on(
-        &client,
-        session_id,
-        db.node_identity.did(),
-        Some(user.did()),
-        Some(&current.request().doc_id),
-    )
-    .await
-    .unwrap();
-    assert_eq!(history.len(), 3);
-    assert!(matches!(history.first(), Some(Message::User {content})
-        if matches!(first_content(content), UserContent::Text(Text {text}) if text == "older steering")));
-    assert!(
-        matches!(&history[1], Message::Assistant {content, ..} if content.iter().any(|block|
-        matches!(block, gents_inference::llm::message::AssistantContent::ToolCall(call) if call.id == "call-current")))
-    );
-    let tool_result = Message::User {
-        content: vec![UserContent::ToolResult(ToolResult {
-            id: "call-current".into(),
-            call_id: Some("fixture-provider-call-0".into()),
-            content: vec![ToolResultContent::Text(Text {
-                text: "tool finished".into(),
-            })],
-        })],
-    };
-    assert_eq!(history.get(2), Some(&tool_result));
-    db.node.shutdown().await.expect("shut down test node");
-}
 
 #[tokio::test]
 async fn history_reconstruction_scans_a_shared_request_once() {
     use gents_store::identity::NodeIdentity;
     let (db, user, client, binding) =
-        crate::test_support::root::signed_test_node("history-shared-scan").await;
+        gents_inference::test_support::signed_test_node("history-shared-scan").await;
     let session_id = "session-shared-request-scan";
     let messages = (1..=3)
         .map(|sequence| format!("message {sequence}"))
@@ -153,7 +36,7 @@ async fn history_reconstruction_scans_a_shared_request_once() {
 async fn history_reconstruction_batches_distinct_requests() {
     use gents_store::identity::NodeIdentity;
     let (db, user, client, binding) =
-        crate::test_support::root::signed_test_node("history-batch-scan").await;
+        gents_inference::test_support::signed_test_node("history-batch-scan").await;
     let session_id = "session-many-request-scans";
     let count = gents_inference::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH + 3;
     let messages = (0..count)
@@ -185,13 +68,13 @@ async fn signed_compaction_fixture(
     session: &str,
     count: usize,
 ) -> (
-    crate::support::TestDb,
+    gents_inference::test_support::TestDb,
     gents_store::identity::KeyIdentity,
     std::sync::Arc<dyn gents_store::identity::NodeIdentity>,
     gents_store::config_client::ConfigAccess,
     Vec<(String, String)>,
 ) {
-    let (db, user, client, binding) = crate::test_support::root::signed_test_node(name).await;
+    let (db, user, client, binding) = gents_inference::test_support::signed_test_node(name).await;
     let agent =
         gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
     let access = gents_store::config_client::ConfigAccess::local_managed_agent(
@@ -531,7 +414,7 @@ async fn exact_compaction_redelivery_is_idempotent() {
 async fn history_sequence_cursor_loads_only_the_sparse_suffix() {
     use gents_store::identity::NodeIdentity;
     let (db, user, client, binding) =
-        crate::test_support::root::signed_test_node("history-cursor").await;
+        gents_inference::test_support::signed_test_node("history-cursor").await;
     let session_id = "session-cursor";
     let keys = publish_signed_history(
         &db,
@@ -623,7 +506,7 @@ async fn history_sequence_cursor_loads_only_the_sparse_suffix() {
 async fn close_session_preserves_creation_time() {
     use gents_store::identity::NodeIdentity;
     let (db, user, client, binding) =
-        crate::test_support::root::signed_test_node("close-session").await;
+        gents_inference::test_support::signed_test_node("close-session").await;
     let node_did = db.node_identity.did();
     reserve_signed_session(&db, &user, &client, &binding, "session-1").await;
     let before = client
@@ -657,7 +540,7 @@ async fn close_session_preserves_creation_time() {
 #[tokio::test]
 async fn create_session_with_id_is_idempotent() {
     let (db, user, client, binding) =
-        crate::test_support::root::signed_test_node("session-idempotent").await;
+        gents_inference::test_support::signed_test_node("session-idempotent").await;
     let node_did = db.node_identity.did();
     reserve_signed_session(&db, &user, &client, &binding, "session-1").await;
     let before = client
@@ -711,7 +594,7 @@ async fn create_session_with_agent_did_rejects_mismatched_existing_binding() {
     use gents_store::identity::NodeIdentity;
 
     let (db, user, access, binding) =
-        crate::test_support::root::signed_test_node("session-binding").await;
+        gents_inference::test_support::signed_test_node("session-binding").await;
     let node_did = db.node_identity.did();
     let other = gents_store::identity::provision_agent_identity_authorized(
         &db.node,
@@ -782,33 +665,6 @@ async fn create_session_with_agent_did_rejects_mismatched_existing_binding() {
     assert!(error.to_string().contains("agent mismatch"));
 }
 
-async fn session_rewrite_rows(
-    access: &gents_store::config_client::ConfigAccess,
-) -> Vec<Vec<String>> {
-    let response = access
-        .execute(
-            "{ AgentSession { _docID session_id agent_did } \
-           AgentMessage { _docID session_id sequence message_key } \
-           CompactionEntry { _docID session_id sequence compaction_key summary } }",
-        )
-        .await
-        .unwrap();
-    let data = &response["data"];
-    ["AgentSession", "AgentMessage", "CompactionEntry"]
-        .into_iter()
-        .map(|collection| {
-            let mut rows = data[collection]
-                .as_array()
-                .expect("collection rows")
-                .iter()
-                .map(|row| row.to_string())
-                .collect::<Vec<_>>();
-            rows.sort();
-            rows
-        })
-        .collect()
-}
-
 #[tokio::test]
 async fn editing_a_canonical_user_message_forks_its_prefix_and_preserves_the_source() {
     use gents_store::identity::NodeIdentity;
@@ -871,49 +727,6 @@ async fn editing_a_canonical_user_message_forks_its_prefix_and_preserves_the_sou
         before
     );
     node.shutdown().await.expect("shut down test node");
-}
-
-/// The shared fixture installs its Agent as the non-admin user, which the
-/// native source projection refuses; this fixture installs it as the node.
-async fn fork_reader_node(
-    name: &str,
-) -> (
-    crate::support::TestDb,
-    gents_store::identity::KeyIdentity,
-    gents_store::config_client::ConfigAccess,
-    gents_protocol::agent_identity::AgentIdentityBinding,
-) {
-    use gents_store::config_client::NodePermission;
-    use gents_store::identity::NodeIdentity;
-    let (db, user, client) = crate::test_support::root::signed_test_node_without_agent(name).await;
-    let runtime = db.node_identity.as_ref();
-    let admin = gents_store::config_client::ConfigAccess::local_as(
-        db.node.clone(),
-        identity::Did::new(runtime.did()).unwrap(),
-    );
-    let user_did = identity::Did::new(user.did()).unwrap();
-    admin
-        .grant_node_permission(&user_did, NodePermission::DacRelationDelete)
-        .await
-        .unwrap();
-    let binding =
-        gents_store::identity::provision_agent_identity_authorized(&db.node, runtime, &user_did)
-            .await
-            .unwrap();
-    gents_inference::test_support::install_test_agent_binding_with_access(
-        runtime.did(),
-        "Default fixture agent",
-        &binding,
-        &admin,
-    )
-    .await;
-    gents_documents::test_support::set_test_default_agent_as(
-        &client,
-        runtime.did(),
-        &binding.agent_did,
-    )
-    .await;
-    (db, user, client, binding)
 }
 
 async fn session_doc_id(
@@ -1212,141 +1025,6 @@ async fn edit_fork_reuses_canonical_request_reads_for_the_retained_prefix() {
 }
 
 #[tokio::test]
-async fn retained_edit_fork_survives_reopen_without_copying_or_rechecking_current_agent() {
-    use gents_store::identity::NodeIdentity as _;
-    const SOURCE: &str = "retained-source";
-    const CHILD: &str = "retained-child";
-    let (mut db, user, client, binding) = fork_reader_node("retained-edit-fork").await;
-    let node_did = db.node_identity.did().to_owned();
-    let messages = (1..=3)
-        .map(|sequence| format!("retained-{sequence}"))
-        .collect::<Vec<_>>();
-    let keys = publish_signed_history(&db, &user, &client, &binding, SOURCE, &messages).await;
-    let params = ForkParams {
-        source_session_id: SOURCE,
-        boundary: ForkBoundary::BeforeMessageKey(&keys[2]),
-        caller_node_did: &node_did,
-        caller_requester_did: Some(user.did()),
-        target_agent_did: None,
-    };
-    assert_eq!(
-        fork_edit_on(&client, params.clone(), CHILD, user.did())
-            .await
-            .unwrap(),
-        CHILD
-    );
-    let agent = escape_graphql_string(&binding.agent_did);
-    let response = client
-        .execute(&format!(
-            r#"{{ Agent(filter: {{agent_did: {{_eq: "{agent}"}}}}, limit: 2) {{ _docID }} }}"#
-        ))
-        .await
-        .unwrap();
-    let [row] = response["data"]["Agent"].as_array().unwrap().as_slice() else {
-        panic!("fixture Agent must be unique")
-    };
-    let doc = escape_graphql_string(row["_docID"].as_str().unwrap());
-    let mutation = format!(
-        r#"mutation($input: AgentMutationInputArg!) {{ update_Agent(docID: "{doc}", input: $input) {{ _docID }} }}"#
-    );
-    gents_store::config_client::ConfigAccess::local_as(
-        db.node.clone(),
-        identity::Did::new(&node_did).unwrap(),
-    )
-    .transact_write("test.disable_fork_agent", |txn| {
-        let mutation = &mutation;
-        Box::pin(async move {
-            txn.execute_client_signed_update(
-                mutation,
-                &serde_json::json!({"input":{"enabled":false}}),
-                gents_protocol::schemas::AGENT,
-            )
-            .await?;
-            Ok::<_, anyhow::Error>(())
-        })
-    })
-    .await
-    .unwrap();
-    let before = session_rewrite_rows(&client).await;
-    let history = history_on(&client, CHILD, &node_did, Some(user.did()), None)
-        .await
-        .unwrap();
-    assert_eq!(history.len(), 2);
-    drop(client);
-    db.simulate_process_crash().await.unwrap();
-    let client = db.client_access(&user);
-    assert_eq!(
-        fork_edit_on(&client, params.clone(), CHILD, user.did())
-            .await
-            .unwrap(),
-        CHILD
-    );
-    assert_eq!(session_rewrite_rows(&client).await, before);
-    assert_eq!(
-        history_on(&client, CHILD, &node_did, Some(user.did()), None)
-            .await
-            .unwrap(),
-        history
-    );
-    let foreign = tokio::task::spawn_blocking(|| {
-        gents_store::test_support::test_identity("retained-foreign")
-    })
-    .await
-    .unwrap();
-    for changed in [
-        ForkParams {
-            boundary: ForkBoundary::BeforeMessageKey(&keys[1]),
-            ..params.clone()
-        },
-        ForkParams {
-            source_session_id: "another-source",
-            ..params.clone()
-        },
-        ForkParams {
-            caller_requester_did: Some(foreign.did()),
-            ..params.clone()
-        },
-    ] {
-        assert!(fork_edit_on(&client, changed, CHILD, user.did())
-            .await
-            .is_err());
-        assert_eq!(session_rewrite_rows(&client).await, before);
-    }
-    assert!(fork_edit_on(&client, params.clone(), CHILD, foreign.did())
-        .await
-        .is_err());
-    assert_eq!(session_rewrite_rows(&client).await, before);
-    client
-        .transact_write("test.unbound_fork_session", |txn| {
-            let binding = &binding;
-            let node_did = &node_did;
-            let user = &user;
-            Box::pin(async move {
-                ensure_session_in_txn(
-                    txn,
-                    "unbound-child",
-                    node_did,
-                    &binding.agent_did,
-                    Some(user.did()),
-                    None,
-                    None,
-                    "2026-09-22T00:00:00Z",
-                )
-                .await?;
-                Ok::<_, anyhow::Error>(())
-            })
-        })
-        .await
-        .unwrap();
-    let unbound_before = session_rewrite_rows(&client).await;
-    assert!(fork_edit_on(&client, params, "unbound-child", user.did())
-        .await
-        .is_err());
-    assert_eq!(session_rewrite_rows(&client).await, unbound_before);
-    db.node.shutdown().await.expect("shut down test node");
-}
-
-#[tokio::test]
 async fn fork_rolls_back_at_every_mutation_position() {
     use gents_store::identity::NodeIdentity;
     const SOURCE: &str = "fork-rollback-source";
@@ -1450,7 +1128,7 @@ async fn compaction_save_fault_leaves_chain_and_generation_intact() {
     use gents_store::identity::NodeIdentity;
     const SESSION: &str = "compaction-rollback";
     let (db, user, client, binding) =
-        crate::test_support::root::signed_test_node("compaction-rollback").await;
+        gents_inference::test_support::signed_test_node("compaction-rollback").await;
     let node = &db.node;
     let node_did = db.node_identity.did();
     let agent =
@@ -1563,276 +1241,13 @@ async fn compaction_save_fault_leaves_chain_and_generation_intact() {
     node.shutdown().await.expect("shut down test node");
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "shared test helper with call sites in modules outside session"
-)]
-pub async fn import_history_observation(
-    node: &std::sync::Arc<defra_node::Node>,
-    request_id: &str,
-    session_id: &str,
-    node_did: &str,
-    requester_did: Option<&str>,
-    text: &str,
-    message_key_suffix: &str,
-    sequence: u32,
-    tool_call: Option<(&str, &str)>,
-) {
-    use gents_protocol::output::rows::*;
-    let segment = history_observation_segment(
-        request_id,
-        session_id,
-        node_did,
-        requester_did,
-        text,
-        message_key_suffix,
-        tool_call,
-    );
-    let response = node
-        .execute_request(
-            defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
-                .with_variables(output_segment_create_variables(&segment).unwrap()),
-        )
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let row =
-        gents_store::graphql::single_mutation_document(&response, "create_AgentOutputSegment")
-            .unwrap()
-            .unwrap();
-    let header = history_observation_header(
-        request_id,
-        session_id,
-        node_did,
-        requester_did,
-        message_key_suffix,
-        sequence,
-        tool_call,
-        row["_docID"].as_str().unwrap(),
-        &segment.created_at,
-    );
-    let response = node
-        .execute_request(
-            defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
-                .with_variables(transcript_message_create_variables(&header).unwrap()),
-        )
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let row = gents_store::graphql::single_mutation_document(&response, "create_AgentMessage")
-        .unwrap()
-        .unwrap();
-    let (_, reconstructed) = load_canonical_message_from_node(
-        node,
-        row["_docID"].as_str().unwrap(),
-        node_did,
-        requester_did,
-    )
-    .await
-    .unwrap();
-    let expected = history_observation_message(text, tool_call);
-    assert_eq!(reconstructed, expected);
-}
-
-fn history_observation_segment(
-    request_id: &str,
-    session_id: &str,
-    node_did: &str,
-    requester_did: Option<&str>,
-    text: &str,
-    message_key_suffix: &str,
-    tool_call: Option<(&str, &str)>,
-) -> gents_protocol::output::OutputSegment {
-    use gents_protocol::output::*;
-    OutputSegment {
-        node_did: node_did.into(),
-        requester_did: requester_did.map(str::to_owned),
-        session_id: session_id.into(),
-        request_doc_id: request_id.into(),
-        source: match tool_call {
-            Some((doc_id, _)) => OutputSource::ToolCall {
-                tool_call_doc_id: doc_id.into(),
-            },
-            None => OutputSource::Authored {
-                key: message_key_suffix.into(),
-            },
-        },
-        writer: match tool_call {
-            Some((doc_id, _)) => OutputWriter::ToolExecution {
-                tool_call_doc_id: doc_id.into(),
-            },
-            None => OutputWriter::RequestExecution {
-                execution_generation: "observed-generation".into(),
-            },
-        },
-        ordinal: Some(0),
-        runs: vec![SegmentRun {
-            stream: 0,
-            bytes: text.len().try_into().unwrap(),
-            declaration: Some(StreamDeclaration {
-                block_index: 0,
-                part_index: 0,
-                payload: if tool_call.is_some() {
-                    StreamPayload::ToolOutput
-                } else {
-                    StreamPayload::Text
-                },
-            }),
-        }],
-        payload: text.into(),
-        close: Some(SourceClose::Closed {
-            outcome: OutputOutcome::Complete,
-            segments: 1,
-            stream_bytes: vec![text.len() as u64],
-        }),
-        created_at: chrono::Utc::now().to_rfc3339(),
-    }
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "mirrors the shared history observation fixture's arguments"
-)]
-fn history_observation_header(
-    request_id: &str,
-    session_id: &str,
-    node_did: &str,
-    requester_did: Option<&str>,
-    message_key_suffix: &str,
-    sequence: u32,
-    tool_call: Option<(&str, &str)>,
-    close_doc_id: &str,
-    now: &str,
-) -> gents_protocol::output::TranscriptMessage {
-    use gents_protocol::output::*;
-    TranscriptMessage {
-        native_request_id: None,
-        message_key: message_key_suffix.into(),
-        session_id: session_id.into(),
-        node_did: node_did.into(),
-        requester_did: requester_did.map(str::to_owned),
-        request_doc_id: Some(request_id.into()),
-        publication: match tool_call {
-            Some((doc_id, _)) => MessagePublication::ToolDelivery {
-                tool_call_doc_id: doc_id.into(),
-            },
-            None => MessagePublication::RequestExecution {
-                execution_generation: "observed-generation".into(),
-            },
-        },
-        outcome: OutputOutcome::Complete,
-        sequence,
-        role: MessageRole::User,
-        native_id: None,
-        blocks: vec![{
-            let payload = PresentedPayload {
-                output: PayloadRef {
-                    close_doc_id: close_doc_id.into(),
-                    stream: 0,
-                },
-                presentation: PayloadPresentation::Full,
-            };
-            match tool_call {
-                Some((doc_id, call_id)) => MessageBlock::ToolResult {
-                    tool_call_doc_id: doc_id.into(),
-                    id: call_id.into(),
-                    call_id: Some(call_id.into()),
-                    parts: vec![ToolResultPart::Text { text: payload }],
-                },
-                None => MessageBlock::Text { text: payload },
-            }
-        }],
-        created_at: now.into(),
-    }
-}
-
-fn history_observation_message(text: &str, tool_call: Option<(&str, &str)>) -> Message {
-    match tool_call {
-        Some((_, call_id)) => Message::User {
-            content: vec![UserContent::ToolResult(ToolResult {
-                id: call_id.into(),
-                call_id: Some(call_id.into()),
-                content: vec![ToolResultContent::Text(Text { text: text.into() })],
-            })],
-        },
-        None => Message::user(text),
-    }
-}
-
-/// [`import_history_observation`] written and read back by `access`, so the
-/// rows are owned by the actor (such as the session's Agent) that reads them.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "shared test helper with call sites in modules outside session"
-)]
-pub(crate) async fn import_history_observation_as(
-    access: &gents_store::config_client::ConfigAccess,
-    request_id: &str,
-    session_id: &str,
-    node_did: &str,
-    requester_did: Option<&str>,
-    text: &str,
-    message_key_suffix: &str,
-    sequence: u32,
-    tool_call: Option<(&str, &str)>,
-) {
-    use gents_protocol::output::rows::*;
-    let segment = history_observation_segment(
-        request_id,
-        session_id,
-        node_did,
-        requester_did,
-        text,
-        message_key_suffix,
-        tool_call,
-    );
-    let header_doc = access
-        .transact_write("test.history_observation", |txn| {
-            let segment = &segment;
-            Box::pin(async move {
-                let response = txn
-                    .execute_with_variables(
-                        CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-                        &output_segment_create_variables(segment)?,
-                    )
-                    .await?;
-                let close = gents_store::graphql::created_doc_id(&response, "AgentOutputSegment")?;
-                let header = history_observation_header(
-                    request_id,
-                    session_id,
-                    node_did,
-                    requester_did,
-                    message_key_suffix,
-                    sequence,
-                    tool_call,
-                    &close,
-                    &segment.created_at,
-                );
-                let response = txn
-                    .execute_with_variables(
-                        CREATE_AGENT_MESSAGE_MUTATION,
-                        &transcript_message_create_variables(&header)?,
-                    )
-                    .await?;
-                Ok::<_, anyhow::Error>(gents_store::graphql::created_doc_id(
-                    &response,
-                    "AgentMessage",
-                )?)
-            })
-        })
-        .await
-        .unwrap();
-    let (_, reconstructed) = load_canonical_message(access, &header_doc, node_did, requester_did)
-        .await
-        .unwrap();
-    assert_eq!(reconstructed, history_observation_message(text, tool_call));
-}
-
 #[tokio::test]
 async fn history_reads_exact_node_and_requester_scope() {
     use gents_store::identity::NodeIdentity;
     let (local_db, local_user, local_client, local_binding) =
-        crate::test_support::root::signed_test_node("history-local").await;
+        gents_inference::test_support::signed_test_node("history-local").await;
     let (foreign_db, foreign_user, foreign_client, foreign_binding) =
-        crate::test_support::root::signed_test_node("history-foreign").await;
+        gents_inference::test_support::signed_test_node("history-foreign").await;
     let local_node = local_db.node_identity.did();
     let foreign_node = foreign_db.node_identity.did();
     assert_ne!(local_node, foreign_node);
@@ -1924,9 +1339,9 @@ async fn history_reads_exact_node_and_requester_scope() {
 async fn authored_keys_are_immutable_and_sequences_are_node_scoped() {
     use gents_store::identity::NodeIdentity;
     let (first_db, first_user, first_client, first_binding) =
-        crate::test_support::root::signed_test_node("authored-local").await;
+        gents_inference::test_support::signed_test_node("authored-local").await;
     let (second_db, second_user, second_client, second_binding) =
-        crate::test_support::root::signed_test_node("authored-foreign").await;
+        gents_inference::test_support::signed_test_node("authored-foreign").await;
     let first_node = first_db.node_identity.did();
     let second_node = second_db.node_identity.did();
     assert_ne!(first_node, second_node);
@@ -2031,9 +1446,9 @@ async fn authored_keys_are_immutable_and_sequences_are_node_scoped() {
 async fn compaction_chains_with_equal_session_labels_remain_owner_scoped() {
     use gents_store::identity::NodeIdentity;
     let (local_db, local_user, local_client, local_binding) =
-        crate::test_support::root::signed_test_node("compaction-local").await;
+        gents_inference::test_support::signed_test_node("compaction-local").await;
     let (foreign_db, foreign_user, foreign_client, foreign_binding) =
-        crate::test_support::root::signed_test_node("compaction-foreign").await;
+        gents_inference::test_support::signed_test_node("compaction-foreign").await;
     let local_node = local_db.node_identity.did();
     let foreign_node = foreign_db.node_identity.did();
     assert_ne!(local_node, foreign_node);
@@ -2157,7 +1572,7 @@ async fn compaction_chains_with_equal_session_labels_remain_owner_scoped() {
 }
 
 async fn reserve_signed_session(
-    db: &crate::support::TestDb,
+    db: &gents_inference::test_support::TestDb,
     user: &dyn gents_store::identity::NodeIdentity,
     client: &gents_store::config_client::ConfigAccess,
     binding: &gents_protocol::agent_identity::AgentIdentityBinding,
@@ -2186,7 +1601,7 @@ async fn reserve_signed_session(
 }
 
 pub(crate) async fn publish_shared_signed_history(
-    db: &crate::support::TestDb,
+    db: &gents_inference::test_support::TestDb,
     user: &dyn gents_store::identity::NodeIdentity,
     client: &gents_store::config_client::ConfigAccess,
     binding: &gents_protocol::agent_identity::AgentIdentityBinding,
@@ -2225,155 +1640,13 @@ pub(crate) async fn publish_shared_signed_history(
         .unwrap();
 }
 
-pub async fn publish_signed_history(
-    db: &crate::support::TestDb,
-    user: &dyn gents_store::identity::NodeIdentity,
-    client: &gents_store::config_client::ConfigAccess,
-    binding: &gents_protocol::agent_identity::AgentIdentityBinding,
-    session_id: &str,
-    messages: &[String],
-) -> Vec<String> {
-    let mut keys = Vec::new();
-    for (index, message) in messages.iter().enumerate() {
-        let request_id = format!("{session_id}-request-{index}");
-        let mut lifecycle =
-            signed_claimed_authored_request(db, user, client, binding, &request_id, session_id)
-                .await;
-        let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
-            db.node.clone(),
-            &lifecycle,
-            std::time::Duration::ZERO,
-        )
-        .unwrap();
-        lifecycle.begin_owned_execution(&writer).await.unwrap();
-        let key = gents_protocol::output::rows::authored_message_key(
-            &lifecycle.request().doc_id,
-            "prompt",
-        );
-        writer
-            .publish_authored_message(&lifecycle, "prompt", &Message::user(message))
-            .await
-            .unwrap();
-        lifecycle
-            .terminalize_owned(
-                crate::request::lifecycle::RequestTerminalOutcome::Completed,
-                gents_protocol::output::TerminalOutput::NoMessage,
-                None,
-            )
-            .await
-            .unwrap();
-        keys.push(key);
-    }
-    keys
-}
-
-async fn signed_claimed_authored_request(
-    db: &crate::support::TestDb,
-    user: &dyn gents_store::identity::NodeIdentity,
-    client: &gents_store::config_client::ConfigAccess,
-    binding: &gents_protocol::agent_identity::AgentIdentityBinding,
-    request_id: &str,
-    session_id: &str,
-) -> crate::request::lifecycle::RequestLifecycle {
-    signed_claimed_authored_request_with_retry(
-        db, user, client, binding, request_id, session_id, None,
-    )
-    .await
-}
-
-async fn signed_claimed_authored_request_with_retry(
-    db: &crate::support::TestDb,
-    user: &dyn gents_store::identity::NodeIdentity,
-    client: &gents_store::config_client::ConfigAccess,
-    binding: &gents_protocol::agent_identity::AgentIdentityBinding,
-    request_id: &str,
-    session_id: &str,
-    retry: Option<crate::request::lifecycle::RetryLink>,
-) -> crate::request::lifecycle::RequestLifecycle {
-    use crate::request::lifecycle::{
-        ClaimOutcome, RequestIdentity, RequestLifecycle, RequestSigner, RequestSpec,
-    };
-    let agent =
-        gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), binding).unwrap();
-    let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
-        db.node.clone(),
-        identity::Did::new(agent.did()).unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
-    let mut spec = RequestSpec::new(
-        gents_protocol::request_admission::RequestPurpose::Normal,
-        RequestIdentity {
-            request_id: request_id.into(),
-            node_did: db.node_identity.did().into(),
-            requester_did: Some(user.did().into()),
-            agent_did: binding.agent_did.clone(),
-            session_id: session_id.into(),
-            content: "race".into(),
-            execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
-            created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        },
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
-    );
-    spec.retry = retry;
-    let create = crate::request::lifecycle::build_signed_client_request(
-        client,
-        spec,
-        RequestSigner::Identity(user),
-    )
-    .await
-    .unwrap();
-    crate::request::lifecycle::submit_client_request(client, &create)
-        .await
-        .unwrap();
-    let response = agent_access
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}, limit: 2) {{ {} }} }}"#,
-            escape_graphql_string(request_id),
-            gents_protocol::row::AGENT_REQUEST_FIELDS,
-        ))
-        .await
-        .unwrap();
-    let [row] = response["data"]["AgentRequest"]
-        .as_array()
-        .unwrap()
-        .as_slice()
-    else {
-        panic!("signed fixture request must be unique");
-    };
-    let row: gents_protocol::row::AgentRequestRow = serde_json::from_value(row.clone()).unwrap();
-    let request = row.try_into().unwrap();
-    let (_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
-    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
-        db.node.clone(),
-        db.node_identity.clone(),
-        authority,
-    );
-    let (request, admission) = verifier
-        .verify_fresh_for_claim_with_identity(&request, agent.as_ref())
-        .await
-        .unwrap();
-    assert!(
-        admission.is_some(),
-        "client request needs verified claim admission"
-    );
-    let mut lifecycle = RequestLifecycle::new_with_node_did(db.node.clone(), request, 60);
-    lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
-    lifecycle.set_client_claim_admission(admission);
-    assert_eq!(
-        lifecycle.claim_with_identity().await.unwrap(),
-        ClaimOutcome::Claimed
-    );
-    lifecycle
-}
-
 #[tokio::test]
 async fn concurrent_keyed_appends_resolve_sequence_conflicts_without_duplicates() {
     use crate::request::streaming::DefraStreamWriter;
     use gents_store::identity::NodeIdentity;
     use std::time::Duration;
     let (db, user, client, binding) =
-        crate::test_support::root::signed_test_node("append-race").await;
+        gents_inference::test_support::signed_test_node("append-race").await;
     let node = db.node.clone();
     let node_did = db.node_identity.did();
     let mut lifecycle = signed_claimed_authored_request(
@@ -2442,7 +1715,7 @@ async fn single_header_transaction_matches_bulk_coordinate_validation() {
     use gents_store::identity::NodeIdentity;
 
     let (foreign_db, foreign_user, _foreign_client, _foreign_binding) =
-        crate::test_support::root::signed_test_node("header-coordinate-foreign").await;
+        gents_inference::test_support::signed_test_node("header-coordinate-foreign").await;
     for case in [
         "unrelated",
         "key",
@@ -2453,7 +1726,8 @@ async fn single_header_transaction_matches_bulk_coordinate_validation() {
         "fork",
     ] {
         let (db, user, client, binding) =
-            crate::test_support::root::signed_test_node(&format!("header-coordinate-{case}")).await;
+            gents_inference::test_support::signed_test_node(&format!("header-coordinate-{case}"))
+                .await;
         let node_did = db.node_identity.did();
         let foreign_did = foreign_db.node_identity.did();
         let user_did = user.did();
@@ -2568,172 +1842,6 @@ async fn single_header_transaction_matches_bulk_coordinate_validation() {
 }
 
 #[tokio::test]
-async fn retry_frontier_matches_lean_admission() {
-    use crate::tools::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
-    use gents_protocol::tool_call::AwaitMode;
-    use gents_store::identity::NodeIdentity;
-    let (db, user, client, binding) =
-        crate::test_support::root::signed_test_node("retry-frontier").await;
-    let node = &db.node;
-    let node_did = db.node_identity.did();
-    let other = tokio::task::spawn_blocking(|| {
-        gents_store::test_support::test_identity("retry-foreign-user")
-    })
-    .await
-    .unwrap();
-    for (index, case) in gents_lean_vocab::lean_contract_snapshot()
-        .retry_frontier_cases
-        .iter()
-        .enumerate()
-    {
-        let session_id = format!("retry-frontier-{index}");
-        let parent_request_id = format!("retry-frontier-parent-{index}");
-        let mut parent = signed_claimed_authored_request(
-            &db,
-            &user,
-            &client,
-            &binding,
-            &parent_request_id,
-            &session_id,
-        )
-        .await;
-        let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
-            node.clone(),
-            &parent,
-            std::time::Duration::ZERO,
-        )
-        .unwrap();
-        if case["running"].as_bool().unwrap() {
-            let mode = if case["background"].as_bool().unwrap() {
-                AwaitMode::Background
-            } else {
-                AwaitMode::Foreground
-            };
-            let _tool = publish_accepted_on_claimed_request(
-                node.clone(),
-                &mut parent,
-                node_did,
-                0,
-                "fixture",
-                &format!("retry-tool-{index}"),
-                serde_json::json!({}),
-                mode,
-                true,
-            )
-            .await
-            .unwrap();
-        } else {
-            parent.begin_owned_execution(&writer).await.unwrap();
-        }
-        if case["published"].as_bool().unwrap() {
-            writer
-                .publish_authored_message(&parent, "prompt", &Message::user("Do the work"))
-                .await
-                .unwrap();
-        }
-        let parent_doc = parent.request().doc_id.clone();
-        let mut request = parent.request().clone();
-        request.doc_id = "successor".into();
-        request.request_id = "successor".into();
-        request.retry_parent_request_doc_id = Some(parent_doc.clone());
-        if !case["same_requester"].as_bool().unwrap() {
-            request.requester_did = Some(other.did().into());
-        }
-        if !case["same_session"].as_bool().unwrap() {
-            request.session_id = format!("fresh-session-{index}");
-        }
-        if case["scoped_terminal"].as_bool().unwrap() {
-            // A running parent already published its tool-call assistant
-            // header, which the terminal must select rather than discard.
-            let scope = parent.request().clone();
-            let headers = parent
-                .access()
-                .unwrap()
-                .transact_readonly("test.retry_frontier.headers", |txn| {
-                    let scope = &scope;
-                    Box::pin(async move {
-                        load_request_headers_in_txn(
-                            txn,
-                            &scope.session_id,
-                            &scope.node_did,
-                            scope.requester_did.as_deref(),
-                            &scope.doc_id,
-                        )
-                        .await
-                    })
-                })
-                .await
-                .unwrap();
-            let selection = headers
-                .iter()
-                .filter(|header| {
-                    header.message.role == gents_protocol::output::MessageRole::Assistant
-                })
-                .max_by_key(|header| header.message.sequence)
-                .map_or(
-                    gents_protocol::output::TerminalOutput::NoMessage,
-                    |header| gents_protocol::output::TerminalOutput::Message {
-                        message_doc_id: header.doc_id.clone(),
-                    },
-                );
-            parent
-                .terminalize_owned(
-                    crate::request::lifecycle::RequestTerminalOutcome::Dead,
-                    selection,
-                    Some("Stale"),
-                )
-                .await
-                .unwrap_or_else(|error| panic!("{case}: {error:#}"));
-        }
-        let actual = history::retry_has_published_input(node, &request).await;
-        assert_eq!(actual.ok(), case["expected"].as_bool(), "{case}");
-        if case["name"] == "ready" {
-            let retry = crate::request::lifecycle::RetryLink {
-                parent_request_id: Some(parent_request_id.clone()),
-                parent_request_doc_id: Some(parent_doc.clone()),
-                root_request_id: parent_request_id.clone(),
-                retry_count: 1,
-                max_retries: 3,
-            };
-            let mut second = signed_claimed_authored_request_with_retry(
-                &db,
-                &user,
-                &client,
-                &binding,
-                "retry-frontier-second",
-                &session_id,
-                Some(retry),
-            )
-            .await;
-            let second_writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
-                node.clone(),
-                &second,
-                std::time::Duration::ZERO,
-            )
-            .unwrap();
-            second.begin_owned_execution(&second_writer).await.unwrap();
-            second
-                .terminalize_owned(
-                    crate::request::lifecycle::RequestTerminalOutcome::Failed,
-                    gents_protocol::output::TerminalOutput::NoMessage,
-                    None,
-                )
-                .await
-                .unwrap();
-            request.retry_parent_request_doc_id = Some(second.request().doc_id.clone());
-            assert_eq!(
-                history::retry_has_published_input(node, &request)
-                    .await
-                    .ok(),
-                case["expected"].as_bool(),
-                "retry chain must find the same authored input"
-            );
-        }
-    }
-    node.shutdown().await.expect("shut down test node");
-}
-
-#[tokio::test]
 async fn unsigned_starter_cannot_populate_the_index() {
     let starter_cases = &gents_lean_vocab::lean_contract_snapshot()
         .session_document_cases
@@ -2753,7 +1861,7 @@ async fn unsigned_starter_cannot_populate_the_index() {
         .unwrap();
     use gents_store::identity::NodeIdentity;
     let (db, user, access, binding) =
-        crate::test_support::root::signed_test_node("unsigned-starter").await;
+        gents_inference::test_support::signed_test_node("unsigned-starter").await;
     let mut session = super::model_test_support::model_session(&case["before"]);
     session.node_did = db.node_identity.did().to_owned();
     session.requester_did = Some(user.did().to_owned());
@@ -2799,13 +1907,13 @@ async fn unsigned_starter_cannot_populate_the_index() {
     }
     let child_scope = gents_protocol::session::SessionScope::from(&session);
     assert!(
-        crate::session::origin::started_by(&access, &child_scope)
+        super::origin::started_by(&access, &child_scope)
             .await
             .unwrap()
             .is_none(),
         "unsigned descriptive source cannot populate the index"
     );
-    assert!(crate::session::origin::lineage(&access, &scope)
+    assert!(super::origin::lineage(&access, &scope)
         .await
         .unwrap()
         .started

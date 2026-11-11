@@ -15,15 +15,15 @@ use gents_pack::{
     plugin::PluginVerdict,
 };
 
-#[cfg(test)]
-pub(crate) mod live {
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod live {
     //! Which guests still occupy a worker thread, by artifact digest.
     static GUESTS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
     pub(super) struct Guard(String);
 
     impl Guard {
-        pub(super) fn new(digest: String) -> Self {
+        pub fn new(digest: String) -> Self {
             GUESTS.lock().unwrap().push(digest.clone());
             Self(digest)
         }
@@ -38,7 +38,7 @@ pub(crate) mod live {
         }
     }
 
-    pub(crate) fn count(digest: &str) -> usize {
+    pub fn count(digest: &str) -> usize {
         let guests = GUESTS.lock().unwrap();
         guests
             .iter()
@@ -214,7 +214,7 @@ mod tests {
         let wasm = std::fs::read(std::env::var_os("GENTS_SCRIPT_WASM").expect("GENTS_SCRIPT_WASM"))
             .unwrap();
         let bytes = gents_pack::plugin::test_fixtures::build_plugin_afb_bytes(&wasm);
-        let (home, mut record) = crate::plugin::tests::executor::installed_echo();
+        let (home, mut record) = gents_pack::plugin::test_fixtures::installed_echo();
         let digest = format!("{:x}", sha2::Sha256::digest(&bytes));
         gents_pack::plugin::store::store_bytes(home.path(), &digest, &bytes).unwrap();
         record.digest = format!("sha256:{digest}");
@@ -264,7 +264,7 @@ mod tests {
     }
 
     async fn execute(request: Value, count: u32, grant: bool, input: Value) -> PluginOutcome {
-        let (home, mut record) = crate::plugin::tests::executor::installed_plugin(
+        let (home, mut record) = gents_pack::plugin::test_fixtures::installed_plugin(
             &crate::plugin::tests::executor::host_call_plugin_wat(&request, count),
             None,
         );
@@ -318,7 +318,7 @@ mod tests {
     /// caller's Tools select it with `tool_calls: true`.
     #[tokio::test]
     async fn plugin_run_serves_a_host_call_plugin_under_the_callers_selection() {
-        let (home, mut record) = crate::plugin::tests::executor::installed_plugin(
+        let (home, mut record) = gents_pack::plugin::test_fixtures::installed_plugin(
             &crate::plugin::tests::executor::host_call_plugin_wat(
                 &json!({"tool_name": "query", "arguments": {}}),
                 1,

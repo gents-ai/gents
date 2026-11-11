@@ -253,7 +253,7 @@ pub struct GraphqlDirectoryStore {
 }
 
 impl GraphqlDirectoryStore {
-    pub(crate) fn new(node: Arc<EmbeddedNode>) -> Self {
+    pub fn new(node: Arc<EmbeddedNode>) -> Self {
         Self { node }
     }
 }

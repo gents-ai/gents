@@ -90,7 +90,7 @@ impl ToolCallLifecycle {
         Ok(())
     }
 
-    pub(crate) async fn admit_spawned_background(
+    pub async fn admit_spawned_background(
         &mut self,
         admission: crate::call::lifecycle::SpawnedBackgroundToolAdmission,
         receipt: &str,
@@ -104,8 +104,8 @@ impl ToolCallLifecycle {
         Ok(child)
     }
 
-    #[cfg(test)]
-    pub(crate) async fn admit_spawned_background_child_at(
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub async fn admit_spawned_background_child_at(
         &mut self,
         admission: crate::call::lifecycle::SpawnedBackgroundToolAdmission,
         now: DateTime<Utc>,

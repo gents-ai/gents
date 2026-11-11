@@ -198,6 +198,10 @@ pub enum GrantSetError {
     },
 }
 
+#[cfg(any(test, feature = "test-fixtures"))]
+#[path = "grant_sets_test_support.rs"]
+pub mod test_support;
+
 #[cfg(test)]
 #[path = "grant_sets_tests.rs"]
-pub mod tests;
+mod tests;

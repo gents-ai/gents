@@ -233,7 +233,7 @@ where
 
 #[cfg(test)]
 pub(super) fn spawn_slot<F, Fut>(
-    agent_config: Arc<ResolvedAgent>,
+    agent_config: AgentWithTools,
     tool_surface: Arc<ToolSurface>,
     retry_policy: RetryPolicy,
     runner: F,

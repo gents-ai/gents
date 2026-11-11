@@ -21,6 +21,8 @@ use gents_session::session::tool_call_state::CancelCause;
 use gents_tools::mcp::meta::selected_remote_identity;
 
 pub mod persistence;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod fixtures;
 #[cfg(test)]
 pub(crate) mod tests;
 
@@ -332,7 +334,7 @@ impl BackgroundExecutionRegistry {
         }
     }
 
-    pub(crate) fn process_record(
+    pub fn process_record(
         &self,
         tool_call_id: &str,
         tool_call_doc_id: &str,
@@ -1239,7 +1241,7 @@ struct SessionState {
     current_request_id: Option<String>,
     current_request_doc_id: Option<String>,
     current_requester_did: Option<String>,
-    request_deadline_at: Option<DateTime<Utc>>,
+    pub request_deadline_at: Option<DateTime<Utc>>,
     sequence: u32,
     transcript_turn: TranscriptTurnState,
     tool_result_identities: RapidHashMap<String, ToolResultIdentity>,
@@ -1291,22 +1293,22 @@ type SharedLoopTools = Arc<Vec<Box<dyn ToolDyn>>>;
 
 #[derive(Clone)]
 pub struct DefraSessionHook {
-    node: Arc<EmbeddedNode>,
-    actor: Option<identity::Did>,
+    pub node: Arc<EmbeddedNode>,
+    pub actor: Option<identity::Did>,
     agent_signer: Option<gents_store::identity::ManagedAgentSigner>,
-    node_did: String,
+    pub node_did: String,
     truncation_limits: TruncationLimits,
     failure_policy: FailurePolicy,
     counters: Arc<HookCounters>,
-    state: Arc<Mutex<SessionState>>,
-    in_flight_lifecycles: Arc<Mutex<RapidHashMap<String, ToolCallLifecycle>>>,
+    pub state: Arc<Mutex<SessionState>>,
+    pub in_flight_lifecycles: Arc<Mutex<RapidHashMap<String, ToolCallLifecycle>>>,
     foreground_process_evidence: Arc<
         Mutex<RapidHashMap<String, Arc<gents_session::exec::ownership::LiveProcessEvidenceOwner>>>,
     >,
-    accepted_tool_calls:
+    pub accepted_tool_calls:
         Arc<Mutex<RapidHashMap<String, gents_session::request::streaming::AcceptedToolCall>>>,
-    effect_tool_calls: Arc<Mutex<RapidHashMap<String, (ToolCallLifecycle, String)>>>,
-    effect_lifecycles: Arc<Mutex<RapidHashMap<String, ToolCallLifecycle>>>,
+    pub effect_tool_calls: Arc<Mutex<RapidHashMap<String, (ToolCallLifecycle, String)>>>,
+    pub effect_lifecycles: Arc<Mutex<RapidHashMap<String, ToolCallLifecycle>>>,
     selected_loop_tools: Arc<Mutex<Option<SharedLoopTools>>>,
     background_tool_registry: BackgroundToolRegistry,
     background_executions: BackgroundExecutionRegistry,
@@ -1317,9 +1319,9 @@ pub struct DefraSessionHook {
     goal_creation_enabled: bool,
     session_goals: Arc<dyn gents_session::session::message::SessionMessageGoals>,
     goal_tools: Arc<dyn persistence::goal_tools::GoalTools>,
-    job_tools: RapidHashMap<String, crate::background::job::JobBinding>,
+    pub job_tools: RapidHashMap<String, crate::background::job::JobBinding>,
     /// The runtime's job driver, whose handles step 0 of a job tool runs on.
-    pub(crate) job_driver: Option<Arc<crate::background::job::driver::JobDriver>>,
+    pub job_driver: Option<Arc<crate::background::job::driver::JobDriver>>,
     output_obligation_gate: Option<Arc<dyn OutputObligationCheck>>,
     steering_input_source: Option<Arc<SteeringInputSource>>,
     inference_observation:
@@ -1339,7 +1341,7 @@ enum PolicyDecision {
 }
 
 impl DefraSessionHook {
-    fn actor_access(&self) -> anyhow::Result<gents_store::config_client::ConfigAccess> {
+    pub fn actor_access(&self) -> anyhow::Result<gents_store::config_client::ConfigAccess> {
         let actor = self
             .actor
             .clone()
@@ -1393,7 +1395,7 @@ impl DefraSessionHook {
         }));
         self
     }
-    pub(crate) async fn adopt_accepted_tool_calls(
+    pub async fn adopt_accepted_tool_calls(
         &self,
         calls: Vec<(String, gents_session::request::streaming::AcceptedToolCall)>,
     ) -> anyhow::Result<()> {
@@ -1495,7 +1497,7 @@ impl DefraSessionHook {
         .with_selected_tool_identity(selected))
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub fn with_identity(
         node: Arc<EmbeddedNode>,
         node_did: &str,
@@ -1566,7 +1568,7 @@ impl DefraSessionHook {
         .await
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub async fn resume_with_identity_policy(
         node: Arc<EmbeddedNode>,
         session_id: &str,
@@ -1759,7 +1761,7 @@ impl DefraSessionHook {
         self.state.lock().await.session_id.clone()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub async fn set_active_request_lineage(
         &self,
         request_id: Option<String>,
@@ -1802,12 +1804,12 @@ impl DefraSessionHook {
         state.current_requester_did = requester_did;
     }
 
-    async fn active_requester_did(&self) -> Option<String> {
+    pub async fn active_requester_did(&self) -> Option<String> {
         self.state.lock().await.current_requester_did.clone()
     }
 
-    #[cfg(test)]
-    async fn active_request_doc_id(&self) -> Option<String> {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub async fn active_request_doc_id(&self) -> Option<String> {
         self.state.lock().await.current_request_doc_id.clone()
     }
 
@@ -1826,13 +1828,13 @@ impl DefraSessionHook {
         Ok(Some(doc_id))
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-fixtures"))]
     async fn request_doc_id_for_request(&self, request_id: &str) -> anyhow::Result<Option<String>> {
         gents_session::request::binding::resolve_request_doc_id(self.node.as_ref(), request_id)
             .await
     }
 
-    pub(crate) async fn register_stream_tool_call_identity(
+    pub async fn register_stream_tool_call_identity(
         &self,
         internal_call_id: &str,
         result_id: &str,

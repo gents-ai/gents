@@ -281,7 +281,7 @@ pub async fn load_canonical_message_from_node(
 
 /// Fixture read of an Agent-owned payload as that Agent, without pinning the
 /// expected source.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn load_canonical_payload_from_access(
     access: &ConfigAccess,
     request_doc_id: &str,

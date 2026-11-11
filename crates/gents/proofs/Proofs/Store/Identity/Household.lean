@@ -65,7 +65,19 @@ per Node (`SelfConfig.initDefaultSelection`). Its update is its parent Node's
 its read is the Node's read or `manage_agents`, so a catalog holder sees the
 selection it changes; its delete is the Node's delete. Decision
 (maintainer, 2026-11-11, #3656): the selection leaves the Node document, so the
-catalog never needs Node update. -/
+catalog never needs Node update.
+
+`owed_deliveries` holds the lifecycle deliveries a must-commit transition owes
+a plugin whose staging was dropped (`Hooks.OwedDelivery`). Decision 2026-11-11,
+maintainer-approved: it is node-owned operational state, because the runtime
+must redrive it whatever the owing actor's own grants are. Only its native
+owner, the node key, creates, updates and deletes it: `update` and `delete`
+name no relation. Its read is its parent Node's `update`, Node administration
+(the Node owner and its administrators); `runtime_reader` and `agent_manager`
+do not read it, because a record names sessions, requests and actors across
+every Agent of the Node. No relation grants it to an Agent, a session or a
+plugin, and no resource names it as a parent or a relation type, so holding it
+reaches nothing else (`Identity.OwedDeliveryAccess`). -/
 def policy : List ResourceDefinition :=
   [ { name := "nodes"
       relations := [⟨"administrator", ["actor"], ["administrator", "runtime_reader", "agent_manager"]⟩,
@@ -81,6 +93,10 @@ def policy : List ResourceDefinition :=
   , { name := "operations"
       relations := [⟨"parent", ["nodes"], []⟩]
       permissions := [permission "read" [] [("parent", "read")],
+        permission "update" [] [], permission "delete" [] []] }
+  , { name := "owed_deliveries"
+      relations := [⟨"parent", ["nodes"], []⟩]
+      permissions := [permission "read" [] [("parent", "update")],
         permission "update" [] [], permission "delete" [] []] }
   , { name := "pairing_observations"
       relations := [⟨"parent", ["nodes"], []⟩, ⟨"route_reader", ["actor"], []⟩,

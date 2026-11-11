@@ -282,6 +282,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
         let request_identity = agent_config.node_identity().clone();
         let mut daemon = AgentDaemon::new(AgentDaemonInit {
             node: node.clone(),
+            tool_config: Arc::new(Default::default()),
             agent_config: agent_config.clone(),
             provider_family: None,
             model: Arc::new(WakeInputModel {
@@ -385,6 +386,7 @@ async fn scripted_daemon(
     let preamble = prompt_builder.preamble().to_string();
     AgentDaemon::new(AgentDaemonInit {
         node: node.clone(),
+        tool_config: Arc::new(Default::default()),
         agent_config: agent_config.clone(),
         provider_family: None,
         model: Arc::new(WakeInputModel {

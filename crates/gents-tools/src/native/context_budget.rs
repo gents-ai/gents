@@ -574,11 +574,11 @@ mod tests {
     use super::*;
 
     fn agent_context_did() -> String {
-        crate::triggers::callback::test_agent_did()
+        crate::test_support::test_agent_did()
     }
 
     fn agent_codex_identity() -> Arc<dyn gents_store::identity::NodeIdentity> {
-        let root = crate::triggers::callback::test_root_identity();
+        let root = crate::test_support::test_root_identity();
         let binding = gents_protocol::agent_identity::AgentIdentityBinding {
             creation_nonce: "d".repeat(64),
             agent_did: gents_store::identity::derive_agent_identity(&root, &"d".repeat(64))
@@ -599,7 +599,7 @@ mod tests {
         agent_did: &str,
     ) -> gents_store::config_client::ConfigAccess {
         if agent_did == agent_context_did() {
-            return crate::triggers::callback::test_agent_access(node);
+            return crate::test_support::test_agent_access(node);
         }
         assert_eq!(agent_did, agent_codex_did());
         let agent = agent_codex_identity();
@@ -629,7 +629,7 @@ mod tests {
 
     async fn seeded_node() -> Arc<EmbeddedNode> {
         // The runtime holds the root its fixture Agents derive from.
-        let root = crate::triggers::callback::test_root_identity();
+        let root = crate::test_support::test_root_identity();
         let node = Arc::new(
             defra_node::Node::builder()
                 .with_node_identity_did(gents_store::identity::NodeIdentity::did(&root))

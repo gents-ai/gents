@@ -17,7 +17,7 @@ pub(super) fn outcome_text(outcome: &PatchOutcome) -> Result<String> {
     .pretty()
 }
 
-pub(super) fn anchored_request(
+pub fn anchored_request(
     target: SelfConfigTarget,
     field: &'static str,
     patch: SelfConfigPatch,
@@ -30,8 +30,8 @@ pub(super) fn anchored_request(
     });
     request
 }
-#[cfg(test)]
-pub(super) fn agent_request(
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn agent_request(
     core: &SelfConfigCore,
     patch: SelfConfigPatch,
 ) -> ApplyRequest<'static> {
@@ -80,7 +80,7 @@ fn fence_profile_pick(request: &mut ApplyRequest<'static>) {
 /// reading the field at call time made the answer depend on whether the caller
 /// had already assigned it, which is how the bound `context update` path
 /// silently ignored `options.shared = "acknowledge"`.
-pub(super) fn protect_working_agent(
+pub fn protect_working_agent(
     mut request: ApplyRequest<'static>,
     acknowledged: bool,
     holds_catalog_grant: bool,
@@ -142,7 +142,7 @@ fn stored_host_root(stored: &serde_json::Map<String, serde_json::Value>) -> Opti
         .root
 }
 
-pub(super) fn tools_request(
+pub fn tools_request(
     core: &SelfConfigCore,
     patch: SelfConfigPatch,
 ) -> ApplyRequest<'static> {
@@ -305,7 +305,7 @@ fn dropped_settings(path: &str, before: &Value, after: &Value, out: &mut Vec<Str
         _ => {}
     }
 }
-pub(super) fn profile_request(patch: SelfConfigPatch) -> ApplyRequest<'static> {
+pub fn profile_request(patch: SelfConfigPatch) -> ApplyRequest<'static> {
     let mut request = anchored_request(
         SelfConfigTarget::InferenceProfile,
         "inference_profile_id",
@@ -332,7 +332,7 @@ fn fence_profile_backend(request: &mut ApplyRequest<'static>) {
         })
     });
 }
-pub(super) fn profile_create_request(
+pub fn profile_create_request(
     owner: String,
     profile_id: String,
     patch: SelfConfigPatch,
@@ -350,7 +350,7 @@ pub(super) fn profile_create_request(
     fence_profile_backend(&mut request);
     request
 }
-pub(super) fn profile_target_request(
+pub fn profile_target_request(
     target: Option<&str>,
     patch: SelfConfigPatch,
 ) -> Result<ApplyRequest<'static>> {
@@ -374,7 +374,7 @@ pub(super) fn profile_target_request(
         other => bail!("unknown profile target {other:?}"),
     })
 }
-pub(super) fn backend_request(patch: SelfConfigPatch) -> ApplyRequest<'static> {
+pub fn backend_request(patch: SelfConfigPatch) -> ApplyRequest<'static> {
     let mut request = anchored_request(SelfConfigTarget::InferenceBackend, "backend_id", patch);
     request.validate = Box::new(move |_, _, stored, merged| {
         let merged = merged.clone();

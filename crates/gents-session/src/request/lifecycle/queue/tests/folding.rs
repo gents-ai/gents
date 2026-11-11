@@ -2,9 +2,11 @@ use super::*;
 use crate::request::lifecycle::RequestTerminalOutcome;
 use gents_lean_vocab::{LeanFoldQueueCase, LeanFoldQueueEntry, LeanFoldQueueInput};
 use rapidhash::{HashMapExt, RapidHashMap};
+use serde::Deserialize;
 use serde_json::json;
 
 const FOREIGN_REQUESTER: &str = "did:test:fold-foreign-requester";
+
 const OTHER_CWD: &str = "/tmp/gents-fold-other-context";
 
 async fn insert_row(db: &TestDb, input: serde_json::Value) -> String {
@@ -166,15 +168,6 @@ pub(super) struct ActiveTurn {
     selected: Vec<u64>,
     consumed: usize,
     begun: bool,
-}
-
-impl ActiveTurn {
-    async fn begin(&mut self, writer: &DefraStreamWriter) {
-        if !self.begun {
-            self.lifecycle.begin_owned_execution(writer).await.unwrap();
-            self.begun = true;
-        }
-    }
 }
 
 pub(super) async fn claim_head(
@@ -1153,6 +1146,15 @@ async fn expired_or_malformed_steering_is_a_modelled_publication_barrier() {
                 "{name}"
             );
             assert!(row.superseded_by_request_doc_id.is_none(), "{name}");
+        }
+    }
+}
+
+impl ActiveTurn {
+    async fn begin(&mut self, writer: &DefraStreamWriter) {
+        if !self.begun {
+            self.lifecycle.begin_owned_execution(writer).await.unwrap();
+            self.begun = true;
         }
     }
 }

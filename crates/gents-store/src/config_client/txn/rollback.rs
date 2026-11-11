@@ -51,14 +51,14 @@ pub(super) enum RollbackOnDrop {
         native_gate: Arc<MutationWriteGate>,
         native_owner: StdMutex<Option<BoxFuture<'static, Result<()>>>>,
         write_guard: Option<MutationWriteGuard>,
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-fixtures"))]
         drop_cleanup_pause: Option<Arc<RollbackDropCleanupPause>>,
         native_operations: Arc<NativeOperationTracker>,
         armed: bool,
     },
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub(crate) struct RollbackDropCleanupPause {
     pub(crate) started: Arc<tokio::sync::Notify>,
     pub(crate) release: Arc<tokio::sync::Notify>,
@@ -116,7 +116,7 @@ impl Drop for RollbackOnDrop {
                 native_gate,
                 native_owner,
                 write_guard,
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-fixtures"))]
                 drop_cleanup_pause,
                 native_operations,
                 armed,
@@ -130,9 +130,9 @@ impl Drop for RollbackOnDrop {
                 if !*armed {
                     return;
                 }
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-fixtures"))]
                 let pause_cleanup = drop_cleanup_pause.is_some();
-                #[cfg(not(test))]
+                #[cfg(not(any(test, feature = "test-fixtures")))]
                 let pause_cleanup = false;
                 let in_flight = native_operations
                     .state
@@ -146,7 +146,7 @@ impl Drop for RollbackOnDrop {
                 let native_gate = Arc::clone(native_gate);
                 let native_operations = Arc::clone(native_operations);
                 let write_guard = write_guard.take();
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-fixtures"))]
                 let drop_cleanup_pause = drop_cleanup_pause.take();
                 let dispatcher = tracing::dispatcher::get_default(Clone::clone);
                 let span = tracing::Span::current();
@@ -154,7 +154,7 @@ impl Drop for RollbackOnDrop {
                     let _native_gate = native_gate;
                     native_operations.wait_idle().await;
                     let cleanup = async move {
-                        #[cfg(test)]
+                        #[cfg(any(test, feature = "test-fixtures"))]
                         if let Some(pause) = drop_cleanup_pause {
                             pause.started.notify_one();
                             pause.release.notified().await;
@@ -243,7 +243,7 @@ where
         native_gate,
         native_owner: StdMutex::new(Some(native_owner)),
         write_guard,
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-fixtures"))]
         drop_cleanup_pause: None,
         native_operations,
         armed: true,

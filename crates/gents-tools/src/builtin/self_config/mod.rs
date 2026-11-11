@@ -1,7 +1,7 @@
 //! Raw API keys cannot be changed or returned.
 
 pub mod agent;
-mod agent_management;
+pub mod agent_management;
 mod agent_queries;
 #[cfg(test)]
 use agent_management::agent_mutate;
@@ -15,15 +15,15 @@ pub use agent_management::{configure_agent, grant_own_self_configuration};
 use agent_queries::node_default_agent;
 use agent_queries::{agent_inspect, agent_list, guard_agent_profile_choice};
 use gents_protocol::tool_names::CONFIG_TOOL_NAME;
-mod command;
+pub mod command;
 pub use command::{is_help_call, ConfigCommandParams};
 pub mod configuration_discovery;
 mod execution;
 pub use execution::ConfigExecutionReceipt;
-mod ops;
+pub mod ops;
 mod pack_catalog;
 mod pack_documents;
-mod pack_installer;
+pub mod pack_installer;
 use gents_pack::pack::node_packs::{
     self, Distribution, DriftPolicy, HomePackRemovalError, LocalPackError, NodePacks, PackChange,
     PluginPinConflict,
@@ -42,11 +42,20 @@ use requests::{
     refuse_uninstalled_plugins, tools_request,
 };
 #[cfg(test)]
-mod agent_operation_text_tests;
-#[cfg(test)]
 mod tests;
-#[cfg(test)]
-mod text_tests;
+
+/// Request builders and admission helpers that the root crate's self-config
+/// tests drive through the same owners production uses.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod test_support {
+    pub use super::agent_management::agent_mutate;
+    pub use super::agent_queries::{agent_inspect, node_default_agent};
+    pub use super::ops::ApplyRequest;
+    pub use super::requests::{
+        agent_request, anchored_request, backend_request, profile_create_request,
+        profile_request, profile_target_request, protect_working_agent, tools_request,
+    };
+}
 
 pub use ops::{
     apply_tool_grant_selection, guard_agent_keeps_reach, guard_backend_auth, guard_backend_choice,
@@ -255,7 +264,7 @@ pub async fn build_runtime_self_config_tools(
     clippy::too_many_arguments,
     reason = "runtime and physical Node binding are explicit capabilities"
 )]
-pub(crate) fn build_self_config_tools_with_runtime(
+pub fn build_self_config_tools_with_runtime(
     usage_cache: Arc<gents_inference::usage_observation::UsageCache>,
     node: Arc<EmbeddedNode>,
     node_did: String,
@@ -327,5 +336,3 @@ pub fn self_config_tool_names(config: &SelfConfigToolConfig) -> Vec<String> {
     names
 }
 
-#[cfg(test)]
-mod agent_creation_native_tests;

@@ -4,6 +4,7 @@ import Proofs.ToolCalls.Recovery.Sweeps.SessionMessage
 import Proofs.Inference.Recovery.Sweeps.Inference
 import Proofs.ToolCalls.Recovery.Sweeps.TaskHooks
 import Proofs.ToolCalls.Recovery.Sweeps.PluginJob
+import Proofs.Session.Recovery.Sweeps.OwedDelivery
 
 namespace Recovery
 
@@ -17,6 +18,7 @@ def registeredRecoverySweeps : List RecoverySweep :=
   , inferenceCallRecoverySweep
   , taskHookRecoverySweep
   , pluginJobRecoverySweep
+  , owedDeliveryRecoverySweep
   ]
 
 def registeredRecoverySweepIds : List String :=
@@ -42,5 +44,7 @@ theorem registered_sweeps_cover_persisted_collections :
       exact ⟨inferenceCallRecoverySweep, by simp [registeredRecoverySweeps], rfl⟩
   | taskHookRecord =>
       exact ⟨taskHookRecoverySweep, by simp [registeredRecoverySweeps], rfl⟩
+  | owedDelivery =>
+      exact ⟨owedDeliveryRecoverySweep, by simp [registeredRecoverySweeps], rfl⟩
 
 end Recovery

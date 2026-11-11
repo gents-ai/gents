@@ -4,24 +4,28 @@ use gents_lean_vocab::{
     lean_lifecycle_hook_admit_cases, lean_lifecycle_hook_combine_cases,
     lean_lifecycle_hook_delivery_cases, lean_lifecycle_hook_effect_cases,
     lean_lifecycle_hook_gate_cases, lean_lifecycle_hook_grant_cases,
-    lean_lifecycle_hook_must_commit_cases, lean_lifecycle_hook_queue_scope_cases,
-    lean_lifecycle_hook_stage_cases, LeanLifecycleHookAccess, LeanLifecycleHookAdmitResult,
-    LeanLifecycleHookBinding, LeanLifecycleHookChoice, LeanLifecycleHookDecision,
-    LeanLifecycleHookDeliveryRecord, LeanLifecycleHookDeliveryStep, LeanLifecycleHookEffect,
-    LeanLifecycleHookGateResult, LeanLifecycleHookManifest, LeanLifecycleHookPartition,
+    lean_lifecycle_hook_must_commit_cases, lean_lifecycle_hook_owed_delivery_cases,
+    lean_lifecycle_hook_queue_scope_cases, lean_lifecycle_hook_stage_cases,
+    LeanLifecycleHookAccess, LeanLifecycleHookAdmitResult, LeanLifecycleHookBinding,
+    LeanLifecycleHookChoice, LeanLifecycleHookDecision, LeanLifecycleHookDeliveryRecord,
+    LeanLifecycleHookDeliveryStep, LeanLifecycleHookEffect, LeanLifecycleHookGateResult,
+    LeanLifecycleHookManifest, LeanLifecycleHookOwedAttempt, LeanLifecycleHookOwedKey,
+    LeanLifecycleHookOwedKind, LeanLifecycleHookOwedRecord, LeanLifecycleHookOwedSettlement,
+    LeanLifecycleHookOwedStep, LeanLifecycleHookOwedWrite, LeanLifecycleHookPartition,
     LeanLifecycleHookPreparedVerdict, LeanLifecycleHookQueueScopeResult, LeanLifecycleHookRef,
     LeanLifecycleHookRefusal, LeanLifecycleHookRow, LeanLifecycleHookScopeAnswer,
     LeanLifecycleHookScopeKey, LeanLifecycleHookScript, LeanLifecycleHookStageResult,
     LeanLifecycleHookStale, LeanLifecycleHookState, LeanLifecycleHookSubject,
     LeanLifecycleHookSubjectKind, LeanLifecycleHookVerdict, LeanLifecycleHookWorld,
 };
-use gents_session::request::hooks::claim::{combine, ClaimVerdict};
+use gents_session::request::hooks::claim::{combine, ClaimVerdict, Successor};
 use gents_session::request::hooks::delivery::DeliveryRecord;
 use gents_session::request::hooks::effect::{
     validate, Access, CoreOp, DocRef, Effect, Grant, Grantable, Manifest, Named, OwnedCollection,
     Row, Subject, SubjectKind, Write,
 };
 use gents_session::request::hooks::hook::{Hook, Outcome, Query};
+use gents_session::request::hooks::owed;
 use gents_session::request::hooks::prepared::{admit, prepare, Binding, Stale, Verdict};
 use gents_session::request::hooks::queue_scope::{
     partition, Partition, ScopeAnswer, ScopeAnswers, ScopeFailure, ScopeRefused,
@@ -119,9 +123,12 @@ fn verdict(lean: &LeanLifecycleHookVerdict) -> ClaimVerdict {
     match lean {
         LeanLifecycleHookVerdict::Allow => ClaimVerdict::Allow,
         LeanLifecycleHookVerdict::LeaveQueued => ClaimVerdict::LeaveQueued,
-        LeanLifecycleHookVerdict::Retire { reason } => ClaimVerdict::Retire {
+        LeanLifecycleHookVerdict::Retire { reason, successor } => ClaimVerdict::Retire {
             reason: reason.clone(),
-            successor: None,
+            successor: Successor {
+                request_id: successor.request_id.clone(),
+                request_doc_id: successor.request_doc_id.clone(),
+            },
         },
         LeanLifecycleHookVerdict::Reject { reason } => ClaimVerdict::Reject {
             reason: reason.clone(),
@@ -625,7 +632,7 @@ async fn generated_lifecycle_hook_must_commit_cases_drive_dropping_staging() {
         core.push(case.transition.clone());
         let host = StoreDouble::new(&case.world, core, &case.read_failed);
         let plugins = string_plugins(&case.plugins);
-        let staged = stage_dropping(&host, &plugins, &())
+        let staged = stage_dropping(&host, &plugins, &(), &[])
             .await
             .unwrap_or_else(|error| panic!("{}: {error:?}", case.name));
         let dropped: Vec<bool> = staged.iter().map(Staged::is_owed).collect();
@@ -841,6 +848,165 @@ fn generated_lifecycle_hook_delivery_cases_drive_the_delivery_record() {
                 case.name
             );
         }
+    }
+}
+
+fn owed_key_of(lean: &LeanLifecycleHookOwedKey) -> owed::Key {
+    owed::Key {
+        point: lean.point.clone(),
+        plugin: lean.plugin.clone(),
+        subject: lean.subject.clone(),
+    }
+}
+
+fn owed_write_of(lean: &LeanLifecycleHookOwedWrite) -> owed::Write {
+    owed::Write {
+        subject: lean.subject.clone(),
+        doc: lean.doc.clone(),
+    }
+}
+
+fn owed_record_of(lean: &LeanLifecycleHookOwedRecord) -> owed::Record {
+    owed::Record {
+        key: owed_key_of(&lean.key),
+        kind: match lean.kind {
+            LeanLifecycleHookOwedKind::Staging => owed::Kind::Staging,
+            LeanLifecycleHookOwedKind::OnBehalf => owed::Kind::OnBehalf,
+        },
+        actor: lean.actor.clone(),
+        runner: lean.runner.clone(),
+        attempts: lean.attempts,
+        last_error: lean.last_error.clone(),
+        settled: lean.settled.map(|settled| match settled {
+            LeanLifecycleHookOwedSettlement::Delivered => owed::Settlement::Delivered,
+            LeanLifecycleHookOwedSettlement::Dropped => owed::Settlement::Dropped,
+        }),
+    }
+}
+
+/// Lean `Hooks.OwedDelivery.owe`, `publish`, `redrive` and `performs` drive
+/// the production record the periodic sweep settles (`owed::redrive_pending`),
+/// and `deriveHalts` and `prune` drive the sweep's derivation and pruning.
+#[test]
+fn generated_lifecycle_hook_owed_delivery_cases_drive_the_redrive_record() {
+    let cases = lean_lifecycle_hook_owed_delivery_cases();
+    assert!(!cases.traces.is_empty());
+    for case in &cases.traces {
+        let mut records: Vec<owed::Record> = Vec::new();
+        for (index, entry) in case.trace.iter().enumerate() {
+            let (runner, performed) = match &entry.step {
+                LeanLifecycleHookOwedStep::Owe {
+                    point,
+                    actor,
+                    owner,
+                    signable,
+                    keys,
+                    commit,
+                } => {
+                    let kind = owed::Kind::of_point(point);
+                    let runner =
+                        owed::owe_runner(kind, actor.as_deref(), owner.as_deref(), |did| {
+                            signable.iter().any(|signable| signable == did)
+                        });
+                    if let Some(runner) = &runner {
+                        owed::publish(
+                            &mut records,
+                            |key| owed::Record::fresh(kind, actor.as_deref(), runner, key),
+                            keys.iter().map(owed_key_of),
+                            *commit,
+                        );
+                    }
+                    (runner, false)
+                }
+                LeanLifecycleHookOwedStep::Redrive {
+                    key,
+                    authorized,
+                    current,
+                    attempt,
+                    refused,
+                } => {
+                    let key = owed_key_of(key);
+                    let observed = owed::Observation {
+                        authorized: *authorized,
+                        current: *current,
+                    };
+                    let attempt = match attempt {
+                        LeanLifecycleHookOwedAttempt::Applied { writes } => {
+                            owed::Attempt::Applied(writes.iter().map(owed_write_of).collect())
+                        }
+                        LeanLifecycleHookOwedAttempt::Failed { error } => {
+                            owed::Attempt::Failed(error.clone())
+                        }
+                    };
+                    let refused: Vec<owed::Write> = refused.iter().map(owed_write_of).collect();
+                    let may_write = |write: &owed::Write| !refused.contains(write);
+                    let mut performed = false;
+                    for record in records.iter_mut().filter(|record| record.key == key) {
+                        performed |= record.performs(observed, &attempt, may_write);
+                        *record = record.redrive(observed, &attempt, may_write);
+                    }
+                    (None, performed)
+                }
+            };
+            assert_eq!(runner, entry.runner, "{} step {index}: runner", case.name);
+            assert_eq!(
+                records,
+                entry.records.iter().map(owed_record_of).collect::<Vec<_>>(),
+                "{} step {index}: records",
+                case.name
+            );
+            assert_eq!(
+                performed, entry.performed,
+                "{} step {index}: performed",
+                case.name
+            );
+        }
+    }
+    assert!(!cases.derive.is_empty());
+    for case in &cases.derive {
+        let sessions: Vec<owed::HaltedSession> = case
+            .sessions
+            .iter()
+            .map(|session| owed::HaltedSession {
+                session: session.session.clone(),
+                owner: session.owner.clone(),
+                latched_at: session.latched_at.clone(),
+                current: session.current,
+            })
+            .collect();
+        let derived: Vec<owed::DerivedHalt> = case
+            .derived
+            .iter()
+            .map(|halt| owed::DerivedHalt {
+                session: halt.session.clone(),
+                at: halt.at.clone(),
+                owner: halt.owner.clone(),
+            })
+            .collect();
+        assert_eq!(
+            owed::derive_halts(case.bound, &sessions),
+            derived,
+            "{}: derived halts",
+            case.name
+        );
+    }
+    assert!(!cases.prune.is_empty());
+    for case in &cases.prune {
+        let kept: Vec<(owed::Record, u64)> = case
+            .records
+            .iter()
+            .map(|aged| (owed_record_of(&aged.record), aged.age))
+            .filter(|(record, age)| !owed::prunable(record, *age, case.retention))
+            .collect();
+        assert_eq!(
+            kept,
+            case.kept
+                .iter()
+                .map(|aged| (owed_record_of(&aged.record), aged.age))
+                .collect::<Vec<_>>(),
+            "{}: kept records",
+            case.name
+        );
     }
 }
 

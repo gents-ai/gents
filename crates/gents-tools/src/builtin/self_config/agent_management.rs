@@ -95,7 +95,7 @@ fn catalog_from_documents(
     Ok(view)
 }
 
-pub(super) async fn load_agent_catalog(core: &SelfConfigCore) -> Result<agent::AgentCatalogView> {
+pub async fn load_agent_catalog(core: &SelfConfigCore) -> Result<agent::AgentCatalogView> {
     let node = core.node_handle();
     let owner = core.node_did();
     ConfigAccess::transact_local_readonly(
@@ -204,7 +204,7 @@ fn replacement(
 
 /// The receipt as the model reads it: fields in declaration order, each
 /// value compact.
-pub(super) fn receipt_text(receipt: &AgentReceipt<Agent>) -> Result<String> {
+pub fn receipt_text(receipt: &AgentReceipt<Agent>) -> Result<String> {
     Ordered::from_serialize(receipt)?.pretty()
 }
 
@@ -342,8 +342,8 @@ fn admission_targets(args: &ConfigureAgentParams) -> Vec<String> {
         .collect()
 }
 
-#[cfg(test)]
-pub(super) async fn agent_mutate(
+#[cfg(any(test, feature = "test-fixtures"))]
+pub async fn agent_mutate(
     node: &Arc<EmbeddedNode>,
     owner: &str,
     identity: &dyn NodeIdentity,
@@ -469,7 +469,7 @@ pub async fn apply_agent_in_txn(
     .await?)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 async fn agent_apply(
     node: &Arc<EmbeddedNode>,
     owner: &str,
@@ -491,7 +491,7 @@ async fn agent_apply(
 
 /// The model's preview text: the receipt when admitted; when refused, the
 /// refusal with the message and next call the commit's guidance carries.
-pub(super) async fn model_agent_outcome(
+pub async fn model_agent_outcome(
     core: &SelfConfigCore,
     args: &ConfigureAgentParams,
 ) -> Result<AgentOutcome<String>, AgentApplyError> {
@@ -530,7 +530,7 @@ pub(super) async fn model_agent_outcome(
     }
 }
 
-pub(super) async fn model_agent_create_preview(
+pub async fn model_agent_create_preview(
     core: &SelfConfigCore,
     input: &AgentCreateInput,
 ) -> Result<AgentOutcome<String>, AgentApplyError> {
@@ -538,8 +538,8 @@ pub(super) async fn model_agent_create_preview(
 }
 
 /// The preview as text, a refusal without its rendered next call.
-#[cfg(test)]
-pub(super) async fn model_agent_preview(
+#[cfg(any(test, feature = "test-fixtures"))]
+pub async fn model_agent_preview(
     core: &SelfConfigCore,
     args: &ConfigureAgentParams,
 ) -> Result<String> {
@@ -557,8 +557,8 @@ pub(super) async fn model_agent_preview(
     }
 }
 
-#[cfg(test)]
-pub(super) async fn model_agent_mutate(
+#[cfg(any(test, feature = "test-fixtures"))]
+pub async fn model_agent_mutate(
     core: &SelfConfigCore,
     identity: &dyn NodeIdentity,
     args: &ConfigureAgentParams,
@@ -566,7 +566,7 @@ pub(super) async fn model_agent_mutate(
     receipt_text(&model_agent_apply(core, identity, args.clone()).await?)
 }
 
-pub(super) async fn model_agent_create(
+pub async fn model_agent_create(
     core: &SelfConfigCore,
     identity: &dyn NodeIdentity,
     input: &AgentCreateInput,

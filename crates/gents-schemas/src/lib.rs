@@ -15,6 +15,8 @@ pub const NODE_RUNTIME_NAME: &str = "NodeRuntime";
 pub const NODE_RUNTIME: &str = include_str!("../schemas/agent/node_runtime.graphql");
 pub const NODE_READINESS_NAME: &str = "NodeReadiness";
 pub const NODE_READINESS: &str = include_str!("../schemas/agent/node_readiness.graphql");
+pub const OWED_DELIVERY_NAME: &str = "OwedDelivery";
+pub const OWED_DELIVERY: &str = include_str!("../schemas/agent/owed_delivery.graphql");
 pub const NODE_DIRECTORY_ENTRY_NAME: &str = "NodeDirectoryEntry";
 pub const NODE_DIRECTORY_ENTRY: &str =
     include_str!("../schemas/agent/node_directory_entry.graphql");
@@ -30,7 +32,7 @@ pub const AGENT_SESSION: &str = include_str!("../schemas/agent/agent_session.gra
 pub const AGENT_OWNERSHIP_POLICY: &str =
     include_str!("../schemas/agent/agent_ownership_policy.yaml");
 pub const AGENT_OWNERSHIP_POLICY_ID: &str =
-    "ac7d6625bfe087880ab77635e5da9c48fe1ee5f9152748018a63c0d9a75ceb70";
+    "5214e9adbbb9b355e4f18a31587c3592d67bf40567688584187bd3ea74bafd91";
 pub const SESSION_POLICY_RESOURCE: &str = "sessions";
 pub const GOAL_NAME: &str = "Goal";
 pub const GOAL: &str = include_str!("../schemas/agent/goal.graphql");
@@ -219,6 +221,7 @@ pub const ALL: &[&str] = &[
     AGENT_TARGET,
     NODE_RUNTIME,
     NODE_READINESS,
+    OWED_DELIVERY,
     NODE_DIRECTORY_ENTRY,
     TOOLS,
     SKILL,
@@ -303,6 +306,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     AGENT_TARGET_NAME,
     NODE_RUNTIME_NAME,
     NODE_READINESS_NAME,
+    OWED_DELIVERY_NAME,
     NODE_DIRECTORY_ENTRY_NAME,
     TOOLS_NAME,
     SKILL_NAME,
@@ -420,6 +424,7 @@ pub const LOCAL_ONLY_COLLECTION_NAMES: &[&str] = &[
     ENROLLMENT_RENEWAL_POLICY_NAME,
     FILE_INVENTORY_REPLY_NAME,
     FILE_INVENTORY_PROGRESS_NAME,
+    OWED_DELIVERY_NAME,
     PENDING_CHAT_SUBMISSION_NAME,
 ];
 

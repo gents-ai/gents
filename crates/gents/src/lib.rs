@@ -88,6 +88,11 @@ pub mod __test_internals {
 }
 
 #[cfg(test)]
+mod toolcalls_tests;
+#[cfg(test)]
+mod automation_tests;
+
+#[cfg(test)]
 mod documents_config_tests;
 
 #[cfg(test)]
@@ -97,4 +102,13 @@ mod documents_selection_tests;
 mod pack_export_tests;
 
 #[cfg(test)]
+mod tool_source_policy_tests;
+
+#[cfg(test)]
+mod tools_tests;
+
+#[cfg(test)]
 mod pack_installation_root_tests;
+
+#[cfg(test)]
+mod session_tests;

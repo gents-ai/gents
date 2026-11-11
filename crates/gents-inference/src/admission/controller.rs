@@ -498,50 +498,50 @@ impl Drop for QueuedCallGuard {
     }
 }
 
-pub(super) struct PendingCallMetadata {
-    pub(super) agent_signer: Option<gents_store::identity::ManagedAgentSigner>,
-    pub(super) call_id: String,
-    pub(super) runtime_instance_id: String,
-    pub(super) request_id: String,
-    pub(super) request_doc_id: String,
-    pub(super) request_purpose: gents_protocol::request_admission::RequestPurpose,
-    pub(super) session_id: String,
-    pub(super) requester_did: Option<String>,
-    pub(super) model_name: Option<String>,
-    pub(super) profile_id: Option<String>,
-    pub(super) call_seq: u64,
-    pub(super) backend_id: String,
-    pub(super) agent_did: String,
-    pub(super) node_did: String,
-    pub(super) call_kind: CallKind,
-    pub(super) attempt: i64,
+pub struct PendingCallMetadata {
+    pub agent_signer: Option<gents_store::identity::ManagedAgentSigner>,
+    pub call_id: String,
+    pub runtime_instance_id: String,
+    pub request_id: String,
+    pub request_doc_id: String,
+    pub request_purpose: gents_protocol::request_admission::RequestPurpose,
+    pub session_id: String,
+    pub requester_did: Option<String>,
+    pub model_name: Option<String>,
+    pub profile_id: Option<String>,
+    pub call_seq: u64,
+    pub backend_id: String,
+    pub agent_did: String,
+    pub node_did: String,
+    pub call_kind: CallKind,
+    pub attempt: i64,
 }
 
 #[derive(Clone)]
-pub(super) struct InferenceCallRecord {
-    pub(super) agent_signer: Option<gents_store::identity::ManagedAgentSigner>,
-    pub(super) call_id: String,
-    pub(super) runtime_instance_id: String,
-    pub(super) request_id: String,
-    pub(super) request_doc_id: String,
-    pub(super) request_purpose: gents_protocol::request_admission::RequestPurpose,
-    pub(super) session_id: String,
-    pub(super) requester_did: Option<String>,
-    pub(super) model_name: Option<String>,
-    pub(super) profile_id: Option<String>,
-    pub(super) call_seq: u64,
-    pub(super) backend_id: String,
-    pub(super) agent_did: String,
-    pub(super) node_did: String,
-    pub(super) call_kind: CallKind,
-    pub(super) attempt: i64,
-    pub(super) queue_depth_at_enqueue: usize,
-    pub(super) controller_generation: u64,
-    pub(super) backend_config_fingerprint: String,
+pub struct InferenceCallRecord {
+    pub agent_signer: Option<gents_store::identity::ManagedAgentSigner>,
+    pub call_id: String,
+    pub runtime_instance_id: String,
+    pub request_id: String,
+    pub request_doc_id: String,
+    pub request_purpose: gents_protocol::request_admission::RequestPurpose,
+    pub session_id: String,
+    pub requester_did: Option<String>,
+    pub model_name: Option<String>,
+    pub profile_id: Option<String>,
+    pub call_seq: u64,
+    pub backend_id: String,
+    pub agent_did: String,
+    pub node_did: String,
+    pub call_kind: CallKind,
+    pub attempt: i64,
+    pub queue_depth_at_enqueue: usize,
+    pub controller_generation: u64,
+    pub backend_config_fingerprint: String,
 }
 
 impl InferenceCallRecord {
-    pub(super) fn without_controller(pending: PendingCallMetadata) -> Self {
+    pub fn without_controller(pending: PendingCallMetadata) -> Self {
         Self {
             agent_signer: pending.agent_signer,
             call_id: pending.call_id,

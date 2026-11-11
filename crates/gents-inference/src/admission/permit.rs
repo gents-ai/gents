@@ -11,7 +11,7 @@ use super::persistence::{persist_existing_call_terminal, ProviderCallUsage};
 use super::stream_guard::StreamGuardLifecycle;
 use gents_store::drop_cleanup::DropCleanup;
 
-pub(crate) struct AdmissionPermit {
+pub struct AdmissionPermit {
     node: Arc<EmbeddedNode>,
     permit: Option<PoolPermit>,
     call: InferenceCallRecord,
@@ -67,8 +67,8 @@ impl AdmissionPermit {
         self.provider_activity = activity;
     }
 
-    #[cfg(test)]
-    pub(crate) async fn finish_success(
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub async fn finish_success(
         &mut self,
         usage: Option<ProviderCallUsage>,
     ) -> Result<(), AdmissionError> {

@@ -6,3 +6,6 @@ pub mod triggers;
 
 #[cfg(test)]
 mod documents_references_tests;
+
+#[cfg(test)]
+mod goal_budget_limited_tests;

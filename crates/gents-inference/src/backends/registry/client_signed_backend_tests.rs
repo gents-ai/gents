@@ -1,4 +1,3 @@
-use gents_store::config_client::client_signed_agent::{create_route, CreateRoute};
 
 #[tokio::test]
 async fn user_signed_backend_separates_metadata_and_private_credential() -> anyhow::Result<()> {

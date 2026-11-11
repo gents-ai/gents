@@ -170,22 +170,22 @@ pub async fn run_callback_engine(
     result
 }
 
-#[cfg(test)]
-pub(crate) fn test_root_identity() -> gents_store::identity::KeyIdentity {
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn test_root_identity() -> gents_store::identity::KeyIdentity {
     let home = tempfile::tempdir().unwrap();
-    gents_session::request::lifecycle::test_support::pin_fixed_signing_identity(home.path())
+    gents_store::test_support::pin_fixed_signing_identity(home.path())
 }
 
-#[cfg(test)]
-pub(crate) fn test_node_builder() -> defra_node::NodeBuilder {
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn test_node_builder() -> defra_node::NodeBuilder {
     use gents_store::identity::NodeIdentity as _;
     defra_node::Node::builder()
         .with_node_identity_did(test_root_identity().did())
         .with_node_acp_enabled()
 }
 
-#[cfg(test)]
-pub(crate) fn test_agent_identity() -> Arc<dyn gents_store::identity::NodeIdentity> {
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn test_agent_identity() -> Arc<dyn gents_store::identity::NodeIdentity> {
     let root = test_root_identity();
     let binding = gents_protocol::agent_identity::AgentIdentityBinding {
         creation_nonce: "c".repeat(64),
@@ -197,13 +197,13 @@ pub(crate) fn test_agent_identity() -> Arc<dyn gents_store::identity::NodeIdenti
     gents_store::identity::resolve_agent_identity(&root, &binding).unwrap()
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub fn test_agent_did() -> String {
     test_agent_identity().did().to_owned()
 }
 
-#[cfg(test)]
-pub(crate) fn test_agent_access(
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn test_agent_access(
     node: &Arc<defra_node::Node>,
 ) -> gents_store::config_client::ConfigAccess {
     let agent = test_agent_identity();
@@ -227,10 +227,11 @@ pub(crate) fn test_snapshot(
     let snapshot = Arc::new(crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
         generation: 1,
         node: None,
-        local_did: gents_session::request::lifecycle::test_support::PIN_FIXED_DID.into(),
+        local_did: gents_store::test_support::PIN_FIXED_DID.into(),
         default_agent_did: agent.did().to_owned(),
         agents: Default::default(),
         tool_surfaces: Default::default(),
+        tool_configs: Default::default(),
         backend_admission_configs: Default::default(),
         unavailable_agents,
         active_schedules: Default::default(),
@@ -245,12 +246,12 @@ pub(crate) fn test_snapshot(
     tokio::sync::watch::channel(snapshot).1
 }
 
-#[cfg(test)]
-pub(crate) async fn seed_test_agent(node: &std::sync::Arc<defra_node::Node>, owner: &str) {
+#[cfg(any(test, feature = "test-fixtures"))]
+pub async fn seed_test_agent(node: &std::sync::Arc<defra_node::Node>, owner: &str) {
     let agent = test_agent_did();
     let access = gents_store::config_client::ConfigAccess::local_as(
         node.clone(),
-        identity::Did::new(gents_session::request::lifecycle::test_support::PIN_FIXED_DID).unwrap(),
+        identity::Did::new(gents_store::test_support::PIN_FIXED_DID).unwrap(),
     );
     for permission in [
         gents_store::config_client::NodePermission::DocumentRead,
@@ -309,7 +310,7 @@ pub(crate) async fn seed_test_configuration(
     let plan = DesiredStateApplyPlan::new(documents).unwrap();
     let access = gents_store::config_client::ConfigAccess::local_as(
         node.clone(),
-        identity::Did::new(gents_session::request::lifecycle::test_support::PIN_FIXED_DID).unwrap(),
+        identity::Did::new(gents_store::test_support::PIN_FIXED_DID).unwrap(),
     );
     access
         .transact_write("test.callback.seed_configuration", |txn| {
@@ -332,7 +333,7 @@ pub(crate) async fn seed_test_configuration(
 pub(crate) async fn grant_test_node_administrator(node: &Arc<defra_node::Node>, user: &str) {
     let access = gents_store::config_client::ConfigAccess::local_as(
         node.clone(),
-        identity::Did::new(gents_session::request::lifecycle::test_support::PIN_FIXED_DID).unwrap(),
+        identity::Did::new(gents_store::test_support::PIN_FIXED_DID).unwrap(),
     );
     for permission in [
         gents_store::config_client::NodePermission::DocumentRead,
@@ -360,7 +361,7 @@ pub(crate) async fn grant_test_node_administrator(node: &Arc<defra_node::Node>, 
 pub(crate) async fn grant_test_node_read(node: &Arc<defra_node::Node>, user: &str) {
     let access = gents_store::config_client::ConfigAccess::local_as(
         node.clone(),
-        identity::Did::new(gents_session::request::lifecycle::test_support::PIN_FIXED_DID).unwrap(),
+        identity::Did::new(gents_store::test_support::PIN_FIXED_DID).unwrap(),
     );
     access
         .grant_node_permission(

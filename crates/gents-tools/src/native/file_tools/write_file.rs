@@ -58,13 +58,13 @@ async fn guard_existing_file_overwrite(
     .into())
 }
 #[derive(Clone)]
-pub(in crate::native) struct WriteFileTool {
+pub struct WriteFileTool {
     context: ToolContext,
     writethrough: Option<crate::native::lsp::LspWritethrough>,
 }
 
 impl WriteFileTool {
-    pub(in crate::native) fn new(context: ToolContext) -> Self {
+    pub fn new(context: ToolContext) -> Self {
         Self {
             context,
             writethrough: None,

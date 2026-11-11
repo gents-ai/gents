@@ -311,16 +311,16 @@ mod startup_barrier_tests {
     use super::*;
 
     fn agent_config(agent_did: &str) -> Arc<gents_inference::resolved::ResolvedAgent> {
-        Arc::new(
-            crate::runtime::agent::PendingAgent::new(agent_did).build_with_identity_for_test(
+        crate::runtime::agent::PendingAgent::new(agent_did)
+            .build_with_identity_for_test(
                 gents_store::identity::KeyIdentity::load_or_create(
                     std::env::temp_dir()
                         .join(format!("barrier-{agent_did}-{}.key", uuid::Uuid::new_v4())),
                     None,
                 )
                 .unwrap(),
-            ),
-        )
+            )
+            .agent
     }
 
     #[tokio::test]

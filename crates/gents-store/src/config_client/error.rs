@@ -85,6 +85,15 @@ pub enum ConfigClientError {
     LensConfig(#[from] lens::Error),
     #[error(transparent)]
     TransactionConflict(TransactionConflict),
+    /// The callback asks to be run again from the start with `note`
+    /// recorded. The transaction owner runs it again once per distinct note
+    /// while it can discard the attempt; otherwise this is the failure.
+    #[error("the transaction could not run again without part of its work")]
+    RerunRequested {
+        note: RerunNote,
+        #[source]
+        cause: Box<dyn std::error::Error + Send + Sync>,
+    },
     /// Displays the whole wrapped chain and also exposes it as the source.
     #[error("{}", ErrorChain(.0.as_ref()))]
     StorageFailure(#[source] Box<ConfigClientError>),
@@ -544,6 +553,14 @@ impl ConfigClientError {
         }
     }
 
+    /// The note of a callback's request to run the transaction again.
+    pub(crate) fn rerun_requested(&self) -> Option<&RerunNote> {
+        match self.access() {
+            Self::RerunRequested { note, .. } => Some(note),
+            _ => None,
+        }
+    }
+
     /// A storage failure the transaction owner classified while running an
     /// attempt, as opposed to an error the callback returned.
     pub(crate) fn is_storage_failure(&self) -> bool {
@@ -595,7 +612,7 @@ impl ConfigClientError {
 
     /// DefraDB answered the operation with a store conflict its GraphQL
     /// errors code as retryable.
-    pub(crate) fn is_retryable_database_conflict(&self) -> bool {
+    pub fn is_retryable_database_conflict(&self) -> bool {
         match self {
             Self::EmbeddedGraphqlErrors { errors } => {
                 !self.is_permission_denied()
@@ -634,6 +651,23 @@ impl From<query::error::QueryError> for ConfigClientError {
 impl From<defra_node::Error> for ConfigClientError {
     fn from(error: defra_node::Error) -> Self {
         Self::Node(Box::new(error))
+    }
+}
+
+/// An opaque cause a transaction callback names when it asks to be run again
+/// ([`ConfigClientError::RerunRequested`]). Later attempts of the same
+/// transaction read it back through [`super::ConfigApplyTxn::rerun_notes`];
+/// its meaning belongs to the callback.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RerunNote(String);
+
+impl RerunNote {
+    pub fn new(note: impl Into<String>) -> Self {
+        Self(note.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 

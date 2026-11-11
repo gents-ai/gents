@@ -78,7 +78,7 @@ fn created_tool_call_doc_ids(
         .collect()
 }
 
-pub(in crate::request::streaming) async fn publish_provider_turn_with_signer(
+pub async fn publish_provider_turn_with_signer(
     node: &std::sync::Arc<EmbeddedNode>,
     actor: identity::Did,
     signer: Option<gents_store::identity::ManagedAgentSigner>,
@@ -88,7 +88,7 @@ pub(in crate::request::streaming) async fn publish_provider_turn_with_signer(
     publish_provider_turn_with_time(node, actor, signer, generation, plan, None).await
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn publish_provider_turn_at_with_access(
     access: &ConfigAccess,
     generation: &str,
@@ -327,7 +327,7 @@ pub(in crate::request::streaming) async fn publish_provider_turn_with_time(
             }).collect();
             Ok(PublishedProviderTurn {
                 message_doc_id,
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-fixtures"))]
                 sequence,
                 accepted_tools,
             })
@@ -516,7 +516,7 @@ async fn replay_publication_in_txn(
     }
     Ok(PublishedProviderTurn {
         message_doc_id: row.doc_id,
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-fixtures"))]
         sequence: row.message.sequence,
         accepted_tools,
     })

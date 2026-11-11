@@ -105,14 +105,14 @@ const fn chunk_hash_power(mut base: u64, mut exponent: usize) -> u64 {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BaseWitness {
-    pub(crate) doc_id: String,
-    pub(crate) field_commit_cid: String,
-    pub(crate) depth: u8,
-    pub(crate) node_did: String,
-    pub(crate) requester_did: String,
-    pub(crate) session_id: String,
-    pub(crate) source: String,
-    pub(crate) capture_scope: String,
+    pub doc_id: String,
+    pub field_commit_cid: String,
+    pub depth: u8,
+    pub node_did: String,
+    pub requester_did: String,
+    pub session_id: String,
+    pub source: String,
+    pub capture_scope: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -131,10 +131,10 @@ pub enum FieldDelta {
 /// Integrity comes from the field commit witness, never the writer-computed key.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestEntry {
-    pub(crate) doc_id: String,
-    pub(crate) content_key: String,
-    pub(crate) field_commit_cid: String,
-    pub(crate) byte_len: u64,
+    pub doc_id: String,
+    pub content_key: String,
+    pub field_commit_cid: String,
+    pub byte_len: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -235,7 +235,7 @@ pub struct EncodedJson {
     pub(crate) stored: String,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub fn encode_full(value: &Value) -> Result<EncodedJson> {
     let stored = encode_envelope(Payload::Full {
         value: value.clone(),
@@ -250,7 +250,7 @@ pub fn encode_full(value: &Value) -> Result<EncodedJson> {
     Ok(EncodedJson { stored })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub fn encode_against(value: &Value, base_value: &Value, base: BaseWitness) -> Result<EncodedJson> {
     let full = encode_full(value)?;
     if base.depth >= MAX_DELTA_DEPTH {
@@ -299,8 +299,8 @@ fn encode_envelope(payload: Payload) -> Result<String> {
 }
 
 pub struct ChunkedBlock {
-    pub(crate) content_key: String,
-    pub(crate) bytes: Vec<u8>,
+    pub content_key: String,
+    pub bytes: Vec<u8>,
 }
 
 const APPEND_GROWING_FIELDS: [&str; 5] = [
@@ -379,7 +379,7 @@ pub fn capture_block_layout(value: &Value) -> Result<CaptureLayout> {
     Ok(CaptureLayout { json, stable_len })
 }
 
-pub(crate) fn chunk_capture_body(encoded: &str) -> Vec<ChunkedBlock> {
+pub fn chunk_capture_body(encoded: &str) -> Vec<ChunkedBlock> {
     let bytes = encoded.as_bytes();
     let mut blocks = Vec::new();
     let mut start = 0;
@@ -518,8 +518,8 @@ pub(crate) const TREE_RESOLUTION_FUEL: usize =
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ManifestTree {
-    pub(crate) root: ManifestEntry,
-    pub(crate) height: u8,
+    pub root: ManifestEntry,
+    pub height: u8,
     pub(crate) leaves: usize,
 }
 
@@ -652,8 +652,8 @@ where
 
 pub(crate) const MANIFEST_RESOLUTION_FUEL: usize = MAX_MANIFEST_BLOCKS + 2;
 
-#[cfg(test)]
-pub(crate) fn encode_manifest(blocks: &[ManifestEntry]) -> Result<EncodedJson> {
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn encode_manifest(blocks: &[ManifestEntry]) -> Result<EncodedJson> {
     anyhow::ensure!(
         blocks.len() <= MAX_MANIFEST_BLOCKS,
         "capture manifest names {} blocks, above the {MAX_MANIFEST_BLOCKS} the reader resolves",
@@ -785,7 +785,7 @@ pub(crate) fn capture_record_depth(
     )
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 fn splice_delta(base: &Value, value: &Value) -> Option<FieldDelta> {
     let base = super::canonical_json_string(base).ok()?;
     let value = super::canonical_json_string(value).ok()?;
@@ -800,7 +800,7 @@ fn splice_delta(base: &Value, value: &Value) -> Option<FieldDelta> {
     (serde_json::to_vec(&splice).ok()?.len() < value.len()).then_some(splice)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 fn common_prefix_boundary(left: &str, right: &str) -> usize {
     let mut prefix = left
         .bytes()
@@ -813,7 +813,7 @@ fn common_prefix_boundary(left: &str, right: &str) -> usize {
     prefix
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 fn common_suffix_boundary(left: &str, right: &str) -> usize {
     let mut suffix = left
         .bytes()

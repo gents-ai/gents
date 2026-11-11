@@ -172,3 +172,6 @@ fn token_like(candidate: &str, minimum: usize) -> bool {
                     .chars()
                     .any(|character| character.is_ascii_lowercase()))
 }
+
+#[cfg(test)]
+mod tests;

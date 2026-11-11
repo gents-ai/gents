@@ -156,7 +156,7 @@
     ],
     "consumer_paths": [
       "crates/gents-session/src/request/lifecycle/queue/tests/background_completion.rs",
-      "crates/gents-session/src/request/lifecycle/queue/tests/background_goal_repair.rs"
+      "crates/gents/src/session_tests/queue_tests/background_goal_repair.rs"
     ],
     "native_status": "pending",
     "required_cases": [

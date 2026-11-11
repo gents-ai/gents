@@ -88,6 +88,7 @@ where
     );
     let mut daemon = daemon::AgentDaemon::new(daemon::AgentDaemonInit {
         node: node.clone(),
+        tool_config: Arc::new(Default::default()),
         agent_config: agent_config.clone(),
         provider_family: None,
         model: Arc::new(model),

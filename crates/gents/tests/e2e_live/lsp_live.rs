@@ -19,7 +19,7 @@ use crate::support::snapshots::fetch_tool_call_payloads_for_request_as;
 use crate::support::test_db;
 
 const MEET_FILE: &str = "crates/gents-loop/src/tool_policy.rs";
-const ADVERTISED_FILE: &str = "crates/gents/src/tools/native/lsp/auth.rs";
+const ADVERTISED_FILE: &str = "crates/gents-tools/src/native/lsp/auth.rs";
 
 fn live_lsp_enabled() -> bool {
     std::env::var("GENTS_LIVE_LSP").as_deref() == Ok("1")

@@ -80,9 +80,9 @@ async fn document_runtime_uses_backend_specific_api_key_env_var() -> Result<()> 
     let default_agent = agent
         .agents()
         .iter()
-        .find(|behavior| behavior.agent_did == agent.default_agent_did())
+        .find(|behavior| behavior.agent.agent_did == agent.default_agent_did())
         .expect("document runtime should load the default behavior");
-    assert_eq!(default_agent.completion_client_api_key()?, "backend-key");
+    assert_eq!(default_agent.agent.completion_client_api_key()?, "backend-key");
 
     Ok(())
 }
@@ -97,7 +97,7 @@ async fn oneshot_refuses_admission_bound_to_another_node() -> Result<()> {
 
     let error = gents::run_openai_oneshot_admitted(
         other.node.clone(),
-        &behavior,
+        &crate::support::fixtures::with_default_tools(behavior),
         "ping",
         &admitted.backend_admission(),
     )
@@ -137,7 +137,7 @@ async fn admitted_openrouter_oneshot_completes_one_request_with_its_terminal_mes
 
     let result = gents::run_openai_oneshot_admitted(
         db.node.clone(),
-        &behavior,
+        &crate::support::fixtures::with_default_tools(behavior),
         "Say hello in one sentence.",
         &db.home.backend_admission(),
     )

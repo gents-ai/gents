@@ -85,7 +85,7 @@ async fn load_replay_request_facts_batch(
 /// failed store read is an error, never empty rows, so it cannot pass for a
 /// missing request.
 #[async_trait::async_trait]
-pub(crate) trait ReplayRequestReader: Sync {
+pub trait ReplayRequestReader: Sync {
     async fn request_facts(
         &self,
         request_doc_ids: &[String],
@@ -93,7 +93,7 @@ pub(crate) trait ReplayRequestReader: Sync {
 }
 
 #[derive(Clone)]
-pub(crate) struct ReplayRequestFacts {
+pub struct ReplayRequestFacts {
     pub(in crate::session) rows: Vec<serde_json::Value>,
     commits: Vec<gents_store::graphql::CompositeCommit>,
 }

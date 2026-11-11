@@ -30,6 +30,9 @@ use defra_node::Node as EmbeddedNode;
 
 pub mod delivery;
 pub(crate) use delivery::publish_background_receipt_in_txn;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod file_inventory;
+#[cfg(not(any(test, feature = "test-fixtures")))]
 pub(crate) mod file_inventory;
 pub mod query;
 pub use gents_session::tool_call::query::result::{
@@ -41,22 +44,18 @@ pub(crate) mod plugin_receipt;
 pub use plugin_receipt::ReceiptDecision;
 mod recovery;
 mod session_message_call;
-mod transition;
-
-use gents_loop::tool_call_lifecycle::FailureClass;
 #[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
 #[allow(dead_code)]
 pub mod admission_fixture;
+mod transition;
+
+use gents_loop::tool_call_lifecycle::FailureClass;
 
 #[cfg(test)]
 mod background_conformance;
 #[cfg(test)]
-mod background_hook_conformance;
-#[cfg(test)]
 mod client_control_race_tests;
-#[cfg(test)]
-pub mod completion_owner_conformance;
 #[cfg(test)]
 mod composed_conformance;
 #[cfg(test)]
@@ -130,24 +129,24 @@ impl ToolRowKind {
 
 #[derive(Clone)]
 pub struct ToolCallLifecycle {
-    actor: identity::Did,
+    pub actor: identity::Did,
     agent_signer: Option<gents_store::identity::ManagedAgentSigner>,
     node: Arc<EmbeddedNode>,
     request_id: String,
     request_doc_id: Option<String>,
-    session_id: String,
+    pub session_id: String,
     /// Immutable scope key used by filtered replication.
     node_did: String,
     requester_did: Option<String>,
     tool_call_id: String,
     /// Immutable accepted-header provenance used to pair the native result.
     call_id: Option<String>,
-    message_sequence: u32,
+    pub message_sequence: u32,
     tool_name: String,
     kind: ToolRowKind,
     /// Exact accepted assistant header that introduced this physical call.
     accepted_header_doc_id: Option<String>,
-    arguments: Option<gents_protocol::output::PayloadRef>,
+    pub arguments: Option<gents_protocol::output::PayloadRef>,
     execution_generation: Option<String>,
     plugin_receipt: Option<gents_protocol::plugin::PluginExecutionReceipt>,
     /// Data writes a plugin tool returned beside its output; committed with a
@@ -158,7 +157,7 @@ pub struct ToolCallLifecycle {
     spawned_by_tool_call_doc_id: Option<String>,
     plugin_effect: Option<PluginEffectBinding>,
     doc_id: Option<String>,
-    deadline_at: chrono::DateTime<chrono::Utc>,
+    pub deadline_at: chrono::DateTime<chrono::Utc>,
     state: ToolCallState,
     started_at: Option<chrono::DateTime<chrono::Utc>>,
     failure_class: Option<FailureClass>,
@@ -175,14 +174,14 @@ struct SelectedToolIdentity {
 
 #[derive(Clone, Debug)]
 pub struct SpawnedBackgroundToolAdmission {
-    pub(crate) tool_name: String,
-    pub(crate) deadline_at: chrono::DateTime<chrono::Utc>,
+    pub tool_name: String,
+    pub deadline_at: chrono::DateTime<chrono::Utc>,
     /// Remote target identity recorded at creation for later wait-policy lookup.
-    pub(crate) selected_tool_identity: Option<(String, String)>,
+    pub selected_tool_identity: Option<(String, String)>,
 }
 
 impl ToolCallLifecycle {
-    pub(crate) fn access(&self) -> anyhow::Result<gents_store::config_client::ConfigAccess> {
+    pub fn access(&self) -> anyhow::Result<gents_store::config_client::ConfigAccess> {
         Ok(
             gents_store::config_client::ConfigAccess::local_with_optional_agent_signer(
                 self.node.clone(),
@@ -192,7 +191,7 @@ impl ToolCallLifecycle {
         )
     }
 
-    pub(crate) fn inherit_signer(&mut self, source: &Self) -> anyhow::Result<()> {
+    pub fn inherit_signer(&mut self, source: &Self) -> anyhow::Result<()> {
         anyhow::ensure!(
             self.actor == source.actor && self.node_did == source.node_did,
             "reloaded tool actor differs from its original binding"
@@ -201,7 +200,7 @@ impl ToolCallLifecycle {
         Ok(())
     }
 
-    pub(crate) fn bind_agent_signer(
+    pub fn bind_agent_signer(
         &mut self,
         signer: Option<gents_store::identity::ManagedAgentSigner>,
     ) -> anyhow::Result<()> {
@@ -216,7 +215,7 @@ impl ToolCallLifecycle {
         Ok(())
     }
     /// Adopt a pending row atomically published with an accepted provider header.
-    pub(crate) fn from_accepted(
+    pub fn from_accepted(
         node: Arc<EmbeddedNode>,
         node_did: String,
         requester_did: Option<String>,
@@ -273,7 +272,7 @@ impl ToolCallLifecycle {
         }
     }
 
-    pub(crate) fn stage_deferred_writes(
+    pub fn stage_deferred_writes(
         &mut self,
         writes: Option<gents_loop::live_output::DeferredToolWrites>,
     ) {
@@ -459,7 +458,7 @@ impl ToolCallLifecycle {
         }
     }
 
-    pub(crate) fn actor(&self) -> &identity::Did {
+    pub fn actor(&self) -> &identity::Did {
         &self.actor
     }
 
@@ -475,11 +474,11 @@ impl ToolCallLifecycle {
         self.started_at
     }
 
-    pub(crate) fn state(&self) -> ToolCallState {
+    pub fn state(&self) -> ToolCallState {
         self.state
     }
 
-    pub(crate) fn request_doc_id(&self) -> Option<&str> {
+    pub fn request_doc_id(&self) -> Option<&str> {
         self.request_doc_id.as_deref()
     }
 
@@ -487,7 +486,7 @@ impl ToolCallLifecycle {
         &self.request_id
     }
 
-    pub(crate) async fn calling_request_id(&self) -> anyhow::Result<String> {
+    pub async fn calling_request_id(&self) -> anyhow::Result<String> {
         if !self.request_id.trim().is_empty() {
             return Ok(self.request_id.clone());
         }
@@ -511,15 +510,15 @@ impl ToolCallLifecycle {
         Ok(request.request_id)
     }
 
-    pub(crate) fn session_id(&self) -> &str {
+    pub fn session_id(&self) -> &str {
         &self.session_id
     }
 
-    pub(crate) fn node_did(&self) -> &str {
+    pub fn node_did(&self) -> &str {
         &self.node_did
     }
 
-    pub(crate) fn requester_did(&self) -> Option<&str> {
+    pub fn requester_did(&self) -> Option<&str> {
         self.requester_did.as_deref()
     }
 
@@ -574,17 +573,17 @@ impl ToolCallLifecycle {
             .map(|selected| selected.service_id.as_str())
     }
 
-    pub(crate) fn tool_call_id(&self) -> &str {
+    pub fn tool_call_id(&self) -> &str {
         &self.tool_call_id
     }
 
-    #[cfg(test)]
-    pub(crate) fn execution_generation(&self) -> Option<&str> {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn execution_generation(&self) -> Option<&str> {
         self.execution_generation.as_deref()
     }
 
-    #[cfg(test)]
-    pub(crate) fn accepted_header_doc_id(&self) -> Option<&str> {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn accepted_header_doc_id(&self) -> Option<&str> {
         self.accepted_header_doc_id.as_deref()
     }
 
@@ -600,8 +599,8 @@ impl ToolCallLifecycle {
         self.state == ToolCallState::Cancelled
     }
 
-    #[cfg(test)]
-    pub(crate) fn set_state(&mut self, state: ToolCallState) {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn set_state(&mut self, state: ToolCallState) {
         self.state = state;
     }
 
@@ -622,7 +621,7 @@ mod tests {
         let kind_of = |tool_name: &str| {
             ToolCallLifecycle::new(
                 node.clone(),
-                crate::background::job::input::tests::agent_actor(),
+                identity::Did::new("did:test:agent").unwrap(),
                 "request".into(),
                 "session".into(),
                 "did:test:owner".into(),

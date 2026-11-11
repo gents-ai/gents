@@ -40,7 +40,7 @@ fn file_metadata(metadata: &Metadata) -> (FilePermissions, Option<u64>) {
     }
 }
 
-fn read_image(path: &Path) -> FileImage {
+pub fn read_image(path: &Path) -> FileImage {
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return FileImage::Missing,
@@ -130,7 +130,7 @@ async fn image(path: PathBuf) -> FileImage {
         })
 }
 
-pub(super) struct FileChangeCapture {
+pub struct FileChangeCapture {
     writer: LiveToolOutputWriter,
     root: String,
     relative: String,
@@ -142,7 +142,7 @@ impl FileChangeCapture {
     /// The native mutator has authorized and resolved this path and holds its
     /// existing mutation lock. A pending image survives cancellation after a
     /// partial write; it cannot be mistaken for a verified postimage.
-    pub(super) async fn start(root: &Path, path: &Path) -> Option<Self> {
+    pub async fn start(root: &Path, path: &Path) -> Option<Self> {
         let writer =
             gents_loop::tool_call_lifecycle::runtime::current_tool_runtime_context()?.live_output?;
         let relative = path
@@ -195,6 +195,3 @@ impl FileChangeCapture {
 
 #[cfg(test)]
 mod tests;
-
-#[cfg(test)]
-mod plugin_inventory_tests;
