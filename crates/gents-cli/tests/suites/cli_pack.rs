@@ -812,7 +812,7 @@ fn pack_wire_refuses_an_agent_without_a_tools_document() -> Result<()> {
     )?;
     anyhow::ensure!(
         refusal.contains(&format!(
-            "gents config tools explain --agent {}",
+            "gents config tools explain --agent-did {}",
             fixture.agent
         )),
         "the refusal does not name the next call: {refusal}"

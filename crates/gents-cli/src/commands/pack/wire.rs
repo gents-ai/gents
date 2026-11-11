@@ -65,6 +65,16 @@ pub(crate) async fn wire(args: PackWireArgs) -> Result<()> {
     crate::print_json(&wire_in(&access, &owner, &home, &request).await?)
 }
 
+fn explain_tools_command(agent: &str) -> String {
+    format!("gents config tools explain --agent-did {agent}")
+}
+
+fn publish_root_command(node_did: &str, root: &str, agent: &str) -> String {
+    format!(
+        "gents config workspace-root set --graphql <url> --node-did {node_did} --path {root} --reader-agent {agent}"
+    )
+}
+
 /// Wires (or with `remove`, unwires) `request.plugin` over a held `access`.
 /// A preview computes the same report and writes nothing.
 pub(crate) async fn wire_in(
@@ -131,7 +141,7 @@ async fn wire_in_owned(
         .dynamic_consent
         .then_some(gents::tools::background::job::settings::consent_dynamic_run as _);
     plan.tool_calls_consent = request.tool_calls_consent;
-    plan.next_step = format!("gents config tools explain --agent {}", request.agent);
+    plan.next_step = explain_tools_command(&request.agent);
     let report = if request.preview {
         access
             .transact_readonly("cli.pack.wire.preview", |txn| {
@@ -226,11 +236,10 @@ pub(crate) async fn grant_pack_root_readers(
                     .with_context(|| format!("granting {agent} reader on {root}"))?;
                 json!({"agent": agent, "reader_on": root})
             }
-            ToolRootReader::Unpublished(root) => json!({
-                "agent": agent,
-                "unpublished_root": root,
-                "next": format!("gents config workspace-root set --path {root} --reader-agent {agent}"),
-            }),
+            ToolRootReader::Unpublished(root) => {
+                let next = publish_root_command(owner, &root, &agent);
+                json!({"agent": agent, "unpublished_root": root, "next": next})
+            }
             ToolRootReader::NotNeeded => continue,
         });
     }
@@ -385,5 +394,25 @@ impl PackEffectApprover for LocalWireApprover {
         _txn: &ConfigApplyTxn<'_>,
     ) -> std::result::Result<(), PackApprovalError> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod next_command_tests {
+    use clap::Parser as _;
+
+    #[test]
+    fn the_commands_wiring_names_parse() {
+        for command in [
+            super::explain_tools_command("did:key:agent"),
+            super::publish_root_command("did:key:node", "/srv/root", "did:key:agent"),
+        ] {
+            let arguments = command.split(' ').map(|word| match word {
+                "<url>" => "http://127.0.0.1:9191/api/v1/graphql",
+                word => word,
+            });
+            crate::cli::Cli::try_parse_from(arguments)
+                .unwrap_or_else(|error| panic!("{command}: {error}"));
+        }
     }
 }
