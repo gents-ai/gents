@@ -71,6 +71,7 @@ import Proofs.Conformance.WorkspacePathCapability
 import Proofs.Conformance.FileReviewRoutes
 import Proofs.Conformance.FileInventory
 import Proofs.Conformance.TaskHooks
+import Proofs.Conformance.Hooks
 import Proofs.Conformance.StoreEncryptionUpgrade
 import Proofs.Conformance.Contracts.Json.Core
 import Proofs.Conformance.Contracts.Json.Runtime
@@ -531,6 +532,18 @@ def snapshotRequestCasesJson : String :=
     ++ "\"goal_backed_runtime_cases\":" ++ runtimeGoalPublicationCasesJson ++ ","
     ++ "\"goal_continuation_materialization_cases\":"
       ++ goalContinuationMaterializationCasesJson ++ ","
+    ++ "\"lifecycle_hook_effect_cases\":"
+      ++ Conformance.HooksContracts.effectCasesJson ++ ","
+    ++ "\"lifecycle_hook_stage_cases\":"
+      ++ Conformance.HooksContracts.stageCasesJson ++ ","
+    ++ "\"lifecycle_hook_must_commit_cases\":"
+      ++ Conformance.HooksContracts.mustCommitCasesJson ++ ","
+    ++ "\"lifecycle_hook_combine_cases\":"
+      ++ Conformance.HooksContracts.combineCasesJson ++ ","
+    ++ "\"lifecycle_hook_gate_cases\":"
+      ++ Conformance.HooksContracts.gateCasesJson ++ ","
+    ++ "\"lifecycle_hook_delivery_cases\":"
+      ++ Conformance.HooksContracts.deliveryCasesJson ++ ","
 
 def snapshotSessionCasesJson : String :=
   ""

@@ -79,6 +79,8 @@ mod event_delivery;
 mod fleet;
 #[path = "conformance/goals.rs"]
 mod goals;
+#[path = "conformance/hooks.rs"]
+mod hooks;
 #[path = "conformance/inference_call.rs"]
 mod inference_call;
 #[path = "conformance/interrupts_manual.rs"]

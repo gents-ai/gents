@@ -623,6 +623,12 @@ pub struct LeanContractSnapshot {
     pub store_encryption_upgrade_cases: Vec<serde_json::Value>,
     pub task_hook_run_cases: Vec<LeanTaskHookRunCase>,
     pub task_hook_recovery_cases: Vec<LeanTaskHookRecoveryCase>,
+    pub lifecycle_hook_effect_cases: Vec<LeanLifecycleHookEffectCase>,
+    pub lifecycle_hook_stage_cases: Vec<LeanLifecycleHookStageCase>,
+    pub lifecycle_hook_must_commit_cases: Vec<LeanLifecycleHookMustCommitCase>,
+    pub lifecycle_hook_combine_cases: Vec<LeanLifecycleHookCombineCase>,
+    pub lifecycle_hook_gate_cases: Vec<LeanLifecycleHookGateCase>,
+    pub lifecycle_hook_delivery_cases: Vec<LeanLifecycleHookDeliveryCase>,
     pub follow_up_hooks: Vec<String>,
     pub coverage_ledger: Vec<LeanCoverageEntry>,
     pub feature_surface_requirements: Vec<LeanFeatureSurfaceRequirement>,
@@ -2778,6 +2784,7 @@ mod composed_invariants;
 mod durable_reduction;
 mod eval;
 mod event_delivery;
+mod hooks;
 mod optimization;
 mod prompt_assembly;
 mod publish_if;
@@ -2807,6 +2814,7 @@ pub use composed_invariants::*;
 pub use durable_reduction::*;
 pub use eval::*;
 pub use event_delivery::*;
+pub use hooks::*;
 pub use optimization::*;
 pub use prompt_assembly::*;
 pub use publish_if::*;
@@ -2972,6 +2980,30 @@ pub fn lean_task_hook_run_cases() -> &'static [LeanTaskHookRunCase] {
 
 pub fn lean_task_hook_recovery_cases() -> &'static [LeanTaskHookRecoveryCase] {
     &lean_contract_snapshot().task_hook_recovery_cases
+}
+
+pub fn lean_lifecycle_hook_effect_cases() -> &'static [LeanLifecycleHookEffectCase] {
+    &lean_contract_snapshot().lifecycle_hook_effect_cases
+}
+
+pub fn lean_lifecycle_hook_stage_cases() -> &'static [LeanLifecycleHookStageCase] {
+    &lean_contract_snapshot().lifecycle_hook_stage_cases
+}
+
+pub fn lean_lifecycle_hook_must_commit_cases() -> &'static [LeanLifecycleHookMustCommitCase] {
+    &lean_contract_snapshot().lifecycle_hook_must_commit_cases
+}
+
+pub fn lean_lifecycle_hook_combine_cases() -> &'static [LeanLifecycleHookCombineCase] {
+    &lean_contract_snapshot().lifecycle_hook_combine_cases
+}
+
+pub fn lean_lifecycle_hook_gate_cases() -> &'static [LeanLifecycleHookGateCase] {
+    &lean_contract_snapshot().lifecycle_hook_gate_cases
+}
+
+pub fn lean_lifecycle_hook_delivery_cases() -> &'static [LeanLifecycleHookDeliveryCase] {
+    &lean_contract_snapshot().lifecycle_hook_delivery_cases
 }
 
 pub fn lean_request_execution_lease_cases() -> &'static [LeanRequestExecutionLeaseCase] {

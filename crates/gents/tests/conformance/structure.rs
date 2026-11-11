@@ -63,6 +63,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
             WorkspaceTest("crates/gents/src/file_inventory/snapshot/tests.rs"),
         ),
         ("Fleet", Module("conformance/fleet.rs")),
+        ("Hooks", Module("conformance/hooks.rs")),
         ("GoalAutomation", Module("conformance/goals.rs")),
         ("Goals", Module("conformance/goals.rs")),
         ("Identity", Module("conformance/identity.rs")),
