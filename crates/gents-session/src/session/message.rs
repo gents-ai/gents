@@ -39,7 +39,7 @@ pub use interrupt::{
     agent_interrupt_allowed, interrupt_refusal, interrupt_session, interrupt_session_with_access,
 };
 #[cfg(any(test, feature = "test-fixtures"))]
-pub(crate) use plan::plan;
+pub use plan::plan;
 pub use plan::{plan_with_delivery, Plan};
 pub use target::{
     agent_list, load_caller_session_tools, resolve_send_target, target_agent_exists, target_scope,
