@@ -324,7 +324,7 @@ pub(crate) struct PackInstallArgs {
     pub(crate) drift: PackDriftArgs,
     #[arg(
         long,
-        help = "Allow the files, network or environment the pack's plugins ask for"
+        help = "Allow the files, network or environment the pack's plugins ask for, and its agents reading your tool root"
     )]
     pub(crate) grant_authority: bool,
     #[arg(

@@ -88,7 +88,8 @@ source consistency checks, not a separate runtime compatibility version.
   its plugins request, wires
   plugins into the Engineer's Tools and attaches skills to its Context.
   Without a terminal, `--approve-default-packs` approves; otherwise a pack
-  that requests permissions is left uninstalled. `--no-default-packs` skips
+  that requests permissions, or whose agents would be granted the
+  Engineer's folder, is left uninstalled. `--no-default-packs` skips
   them. A pack that cannot be resolved or approved never fails init: it is
   listed under `default_packs.not_installed` with the command that installs
   it later: `gents config pack starter --approve <pack>`, which installs it

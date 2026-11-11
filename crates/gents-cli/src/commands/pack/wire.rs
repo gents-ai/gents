@@ -208,15 +208,83 @@ pub(crate) fn requested_authority(
     Ok(super::review::identity_and_authority(manifest, dependencies)?["authority"].take())
 }
 
+fn grant_reader_command(root: &str, agent: &str) -> String {
+    format!(
+        "gents config workspace-root grant-reader --graphql <url> --path {root} --agent-did {agent}"
+    )
+}
+
+/// The Tools `pack` ships that select host tools and name no root, by
+/// `tools_id`: the ones an install runs under its installer's own root, and
+/// whose agents an approved install grants reader there. A config that does
+/// not load offline lists none, so nothing is granted for it.
+pub(crate) fn tools_taking_installer_root(pack: &super::PackSource) -> Vec<String> {
+    if pack.manifest().config.is_none() {
+        return Vec::new();
+    }
+    gents::pack::load_pack_authoring_config(
+        pack.manifest(),
+        &gents::pack::PackInstallOptions {
+            node_did: "did:pack:installer".to_owned(),
+        },
+        &|path| Ok(pack.asset(path)?.to_vec()),
+        &|name| std::env::var(name).ok(),
+    )
+    .and_then(|authored| gents::pack::tools_taking_installer_root(&authored.documents.tools))
+    .unwrap_or_else(|error| {
+        tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(error.as_ref()), pack = %pack.manifest().name, "pack config did not load for its host tool review");
+        Vec::new()
+    })
+}
+
+/// The root an install by `installer` (the node's User when `None`) supplies
+/// to the Tools `pack` ships without one, and the reader its agents need
+/// there: what a preview lists and an approval covers. `None` when the pack
+/// ships no such Tools, the installer has no root, or no reader is needed.
+pub(crate) async fn supplied_tool_root(
+    access: &ConfigAccess,
+    owner: &str,
+    installer: Option<&str>,
+    pack: &super::PackSource,
+) -> Result<Option<Value>> {
+    use gents::tools::surface::ToolRootReader;
+    let tools = tools_taking_installer_root(pack);
+    if tools.is_empty() {
+        return Ok(None);
+    }
+    let Some(root) = gents::pack::installer_tool_root(access, owner, installer).await? else {
+        return Ok(None);
+    };
+    Ok(
+        match gents::tools::surface::tool_root_reader(access, owner, &root).await? {
+            ToolRootReader::NotNeeded => None,
+            ToolRootReader::Published(published) => {
+                Some(json!({"tools": tools, "root": root, "reader_on": published}))
+            }
+            ToolRootReader::Unpublished(_) => {
+                Some(json!({"tools": tools, "root": root, "unpublished_root": root}))
+            }
+        },
+    )
+}
+
 /// Grants each agent the installed pack `coordinate` ships with host tools
 /// reader on the published WorkspaceRoot covering its tool root, as the User
 /// holding `access`: a new agent lacks that grant, only a User makes it, and
-/// without it the runtime reports the agent unavailable. Returns what each
-/// agent was granted, or the root nothing published covers.
+/// without it the runtime reports the agent unavailable.
+///
+/// The grant is the installer's consent to its own root and nothing else: it
+/// is made only when the install was `approved`, and only for an agent whose
+/// tool root is `supplied`, the root this install gave the pack's rootless
+/// Tools ([`gents::pack::installer_tool_root`]). An agent under any other
+/// root, one an install variable set or a later edit wrote, is listed with
+/// the User command that grants it. Returns one entry per agent.
 pub(crate) async fn grant_pack_root_readers(
     access: &ConfigAccess,
     owner: &str,
     coordinate: &str,
+    supplied: Option<&str>,
+    approved: bool,
 ) -> Result<Vec<Value>> {
     use gents::tools::surface::ToolRootReader;
     let mut granted = Vec::new();
@@ -226,15 +294,28 @@ pub(crate) async fn grant_pack_root_readers(
         .filter(|(collection, _)| *collection == Collection::Agent)
         .map(|(_, agent)| agent)
         .collect();
-    for (agent, reader) in
+    for (agent, root, reader) in
         gents::tools::surface::agents_tool_root_readers(access, owner, &agents).await?
     {
         granted.push(match reader {
-            ToolRootReader::Published(root) => {
-                gents::tools::surface::grant_workspace_root_reader(access, &root, &agent)
+            ToolRootReader::Published(published) if approved && supplied == Some(root.as_str()) => {
+                gents::tools::surface::grant_workspace_root_reader(access, &published, &agent)
                     .await
-                    .with_context(|| format!("granting {agent} reader on {root}"))?;
-                json!({"agent": agent, "reader_on": root})
+                    .with_context(|| format!("granting {agent} reader on {published}"))?;
+                json!({"agent": agent, "root": root, "reader_on": published})
+            }
+            ToolRootReader::Published(published) => {
+                let reason = if supplied == Some(root.as_str()) {
+                    "the install was not approved to grant it"
+                } else {
+                    "its tool root is not the one this install supplied"
+                };
+                json!({
+                    "agent": agent,
+                    "root": root,
+                    "not_granted": format!("{agent} was not granted reader on {published}: {reason}. It is unavailable until a User grants it."),
+                    "next": grant_reader_command(&published, &agent),
+                })
             }
             ToolRootReader::Unpublished(root) => {
                 let next = publish_root_command(owner, &root, &agent);

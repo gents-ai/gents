@@ -125,7 +125,7 @@ impl PackInstaller {
         )
         .await?
         .into_iter()
-        .map(|(agent, reader)| {
+        .map(|(agent, _, reader)| {
             let published = match &reader {
                 crate::tools::surface::ToolRootReader::Published(root) => Some(root.as_str()),
                 _ => None,

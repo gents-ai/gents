@@ -28,11 +28,11 @@ pub use declared_access::declared_readers;
 pub use documents::{
     apply_hosted_document_graph, apply_prepared_dependency_schemas, assemble_document_graph_report,
     collections_install_creates, document_pack_schema_paths, hosted_document_graph,
-    install_prepared_document_graph, install_prepared_document_pack, plugin_data_unique_keys,
-    prepare_document_pack_archive, prepare_document_pack_archive_with_runtime,
-    prepare_document_pack_install, prepare_hosted_document_pack_archive,
-    DependencyVariableOverrides, HostedDocumentGraph, HostedPackPreparation, PreparedDependency,
-    PreparedDocumentPackInstall,
+    install_prepared_document_graph, install_prepared_document_pack, installer_tool_root,
+    plugin_data_unique_keys, prepare_document_pack_archive,
+    prepare_document_pack_archive_with_runtime, prepare_document_pack_install,
+    prepare_hosted_document_pack_archive, tools_taking_installer_root, DependencyVariableOverrides,
+    HostedDocumentGraph, HostedPackPreparation, PreparedDependency, PreparedDocumentPackInstall,
 };
 pub use hosted::{stage_hosted_pack, HostedHomePublication, HostedPackStage, HostedPackStageError};
 pub use removal::{

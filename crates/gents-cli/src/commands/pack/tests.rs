@@ -810,3 +810,179 @@ fn wire_refuses_a_pluginless_pack() {
         "{error:#}"
     );
 }
+
+/// A documents pack `fixture/NAME` shipping one agent whose Tools select
+/// read-only files, with `host` as its Tools author it.
+fn host_tools_pack_dir(name: &str, host: serde_json::Value) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("manifest.json"),
+        serde_json::to_vec(&json!({
+            "manifest_version": 1, "name": name, "namespace": "fixture", "version": "1.0.0",
+            "description": "An agent with host tools", "authors": ["tests"], "tags": [],
+            "kind": "documents", "assets": ["README.md", "pack_config.json"],
+            "dependencies": [], "config": "pack_config.json",
+            "inference_slots": [{"name": "worker", "description": "The worker.",
+                "agents": [format!("{name}-worker")]}],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("README.md"), "# fixture").unwrap();
+    std::fs::write(
+        dir.path().join("pack_config.json"),
+        serde_json::to_vec(&json!({
+            "node": {},
+            "agents": [{"agent_slot": format!("{name}-worker"),
+                "context_id": format!("{name}-context"),
+                "display_name": format!("{name} worker"), "description": "Does one task.",
+                "inference_profile_id": "gents:inference-slot:worker"}],
+            "contexts": [{"context_id": format!("{name}-context"), "system_prompt": "Work.",
+                "tools_id": format!("{name}-tools")}],
+            "tools": [{"tools_id": format!("{name}-tools"), "display_name": "Read-only files",
+                "host": host}],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    dir
+}
+
+/// The reader grant a User install makes is the installer's consent to its
+/// own root: a pack that authors a root is refused, a root an install
+/// variable set is never granted, and the installer's root is granted only
+/// with `--grant-authority`, after a preview that lists it.
+#[tokio::test]
+async fn an_install_grants_reader_only_on_its_own_root_and_only_with_the_flag() {
+    use clap::Parser;
+    let home = tempfile::tempdir().unwrap();
+    let cli = crate::cli::Cli::try_parse_from([
+        "gents",
+        "init",
+        "--store-key-custody",
+        "file",
+        "--engineer",
+        "--no-default-packs",
+        "--model-name",
+        "test-model",
+        "--inference-url",
+        "http://127.0.0.1:9/v1",
+        "--home",
+        home.path().to_str().unwrap(),
+    ])
+    .unwrap();
+    let Some(crate::cli::Command::Init(init_args)) = cli.command else {
+        panic!("expected init")
+    };
+    let initialized = crate::commands::init::init_home(init_args).await.unwrap();
+    let engineer_root = initialized["tool_root"].as_str().unwrap().to_owned();
+
+    // Another folder the node publishes, which no pack was given.
+    let other = tempfile::tempdir().unwrap();
+    let other_root = std::fs::canonicalize(other.path()).unwrap();
+    let other_root = other_root.to_str().unwrap();
+    let (access, owner) = super::resolve_scope_owner(&ScopeArgs {
+        home: Some(home.path().to_owned()),
+        graphql: None,
+        node_did: None,
+    })
+    .await
+    .unwrap();
+    gents::tools::surface::set_workspace_root(&access, &owner, other_root, None, true)
+        .await
+        .unwrap();
+    access.local_node().unwrap().shutdown().await.unwrap();
+    drop(access);
+
+    let install_with = |dir: &std::path::Path, grant_authority: bool, preview: bool| {
+        let mut args = document_install_args(home.path(), dir, Vec::new());
+        args.grant_authority = grant_authority;
+        args.preview = preview;
+        crate::request_helpers::capture_report(install(args))
+    };
+    let files = json!({"files": {"mode": "ReadOnly"}});
+
+    let mut literal = files.clone();
+    literal["root"] = other_root.into();
+    let literal = host_tools_pack_dir("literal", literal);
+    let refused = install_with(literal.path(), true, false).await.unwrap_err();
+    let refused = format!("{:#}", refused.into_anyhow());
+    assert!(
+        refused.contains("ships a host tool root")
+            && refused.contains("Tools literal-tools")
+            && refused.contains("Nothing was installed"),
+        "{refused}"
+    );
+    assert_eq!(
+        gents::pack::read_home_install(home.path(), "fixture/literal").unwrap(),
+        None
+    );
+
+    let mut variable = files.clone();
+    variable["root"] = format!("${{GENTS_FIXTURE_UNSET_ROOT:-{other_root}}}").into();
+    let variable = host_tools_pack_dir("variable", variable);
+    let report = install_with(variable.path(), true, false).await.unwrap();
+    let roots = report["host_tool_roots"].as_array().unwrap();
+    assert_eq!(roots.len(), 1, "{report}");
+    assert_eq!(roots[0]["root"], other_root, "{report}");
+    assert_eq!(roots[0].get("reader_on"), None, "{report}");
+    assert!(
+        roots[0]["not_granted"]
+            .as_str()
+            .unwrap()
+            .contains("not the one this install supplied")
+            && roots[0]["next"]
+                .as_str()
+                .unwrap()
+                .starts_with("gents config workspace-root grant-reader "),
+        "{report}"
+    );
+
+    let rootless = host_tools_pack_dir("rootless", files);
+    let preview = install_with(rootless.path(), false, true).await.unwrap();
+    assert_eq!(
+        preview["host_tool_roots"]["tools"],
+        json!(["rootless-tools"]),
+        "{preview}"
+    );
+    assert_eq!(
+        preview["host_tool_roots"]["root"], engineer_root,
+        "{preview}"
+    );
+    assert_eq!(
+        preview["host_tool_roots"]["granted_with"], "--grant-authority",
+        "{preview}"
+    );
+    let published = preview["host_tool_roots"]["reader_on"].clone();
+    assert!(published.is_string(), "{preview}");
+
+    let unflagged = install_with(rootless.path(), false, false)
+        .await
+        .unwrap_err();
+    let unflagged = format!("{:#}", unflagged.into_anyhow());
+    assert!(
+        unflagged.contains("rootless-tools")
+            && unflagged.contains("Nothing was installed")
+            && unflagged.contains("--grant-authority"),
+        "{unflagged}"
+    );
+    assert_eq!(
+        gents::pack::read_home_install(home.path(), "fixture/rootless").unwrap(),
+        None
+    );
+
+    let report = install_with(rootless.path(), true, false).await.unwrap();
+    let roots = report["host_tool_roots"].as_array().unwrap();
+    assert_eq!(roots.len(), 1, "{report}");
+    assert_eq!(roots[0]["root"], engineer_root, "{report}");
+    assert_eq!(roots[0]["reader_on"], published, "{report}");
+
+    // A reinstall keeps what was granted and grants nothing new unflagged.
+    let again = install_with(rootless.path(), false, false).await.unwrap();
+    assert_eq!(
+        again["host_tool_roots"][0].get("reader_on"),
+        None,
+        "{again}"
+    );
+    assert!(again["host_tool_roots"][0]["next"].is_string(), "{again}");
+}

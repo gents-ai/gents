@@ -665,6 +665,9 @@ async fn prepare_document_pack_archive_inputs(
     hosted: Option<&HostedPackPreparation>,
     overrides: &DependencyVariableOverrides,
 ) -> Result<PreparedDocumentPackInstall, PackChangeError> {
+    for archive in std::iter::once(archive).chain(dependencies.iter().copied()) {
+        refuse_authored_host_roots(archive)?;
+    }
     let declared = super::super::agent_bindings::declared_dependencies(archive.manifest());
     validate_dependency_overrides(dependencies, overrides)?;
     let mut preloaded = BTreeMap::new();
@@ -754,22 +757,12 @@ async fn prepare_document_pack_archive_inputs(
     .await
 }
 
-/// A pack cannot name a folder on the node it will be installed on, so a pack
-/// Tools document that selects host tools without a root takes its
-/// installer's: the tool root of the installing agent, or of the node's
-/// default agent when the node's User installs. The root is still admitted by
-/// the node's WorkspaceRoot policy when the agent runs, and the agent still
-/// needs the User's reader grant on the published root that covers it
-/// (`tools::surface::agents_tool_root_readers`). With no such root to
-/// take, the document is left as the pack wrote it.
-async fn default_host_tool_roots(
-    access: &ConfigAccess,
-    owner: &str,
-    installer: Option<&str>,
-    config: &mut PackConfig,
-) -> Result<()> {
+/// The Tools of `tools` that select host tools and name no root: the ones an
+/// install runs under its installer's root ([`installer_tool_root`]), by
+/// position.
+fn host_tools_without_root(tools: &[crate::documents::Tools]) -> Result<Vec<usize>> {
     let mut rootless = Vec::new();
-    for (index, tools) in config.tools.iter().enumerate() {
+    for (index, tools) in tools.iter().enumerate() {
         let unset = tools.host.as_ref().is_some_and(|host| {
             host.root
                 .as_deref()
@@ -779,10 +772,64 @@ async fn default_host_tool_roots(
             rootless.push(index);
         }
     }
-    if rootless.is_empty() {
+    Ok(rootless)
+}
+
+/// The Tools documents an install of the authored `tools` would run under
+/// its installer's root, by `tools_id`: what an install preview lists and
+/// an approval covers before anything is written.
+pub fn tools_taking_installer_root(tools: &[crate::documents::Tools]) -> Result<Vec<String>> {
+    Ok(host_tools_without_root(tools)?
+        .into_iter()
+        .map(|index| tools[index].tools_id.clone())
+        .collect())
+}
+
+/// Refuses an archive whose Tools author a literal `host.root`, as
+/// `pack export` refuses to write one: a pack cannot know a folder of the
+/// node it is installed on, so a literal names one its author chose, and the
+/// agent it ships would ask for the User's reader grant there. A root given
+/// only through an install variable is the installer's to set, is listed with
+/// the preview's install variables, and is never granted automatically.
+fn refuse_authored_host_roots(archive: &PackArchive) -> Result<()> {
+    let Some(path) = archive.manifest().config.as_deref() else {
         return Ok(());
-    }
-    let root = access
+    };
+    let authored: serde_json::Value = serde_json::from_slice(archive.asset(path)?)?;
+    let literal: Vec<String> = authored["tools"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|tools| {
+            let root = tools["host"]["root"].as_str()?.trim();
+            (!root.is_empty() && !root.contains("${")).then(|| {
+                format!(
+                    "Tools {} (host.root {root})",
+                    tools["tools_id"].as_str().unwrap_or("without a tools_id")
+                )
+            })
+        })
+        .collect();
+    anyhow::ensure!(
+        literal.is_empty(),
+        "pack {}/{} ships a host tool root, a path on the node it was written on, which a pack cannot carry: {}. Nothing was installed. Its author leaves host.root unset, so the Tools run under the installer's own root",
+        archive.manifest().metadata.namespace,
+        archive.manifest().name,
+        literal.join(", ")
+    );
+    Ok(())
+}
+
+/// The root an install supplies to pack Tools that select host tools without
+/// one: the tool root of the installing agent `installer`, or of the node's
+/// default agent when the node's User installs. `None` when that agent has no
+/// root.
+pub async fn installer_tool_root(
+    access: &ConfigAccess,
+    owner: &str,
+    installer: Option<&str>,
+) -> Result<Option<String>> {
+    access
         .transact_readonly("pack.default_tool_root", |txn| {
             Box::pin(async move {
                 let agent = match installer {
@@ -812,8 +859,28 @@ async fn default_host_tool_roots(
                 )
             })
         })
-        .await?;
-    if let Some(root) = root {
+        .await
+}
+
+/// A pack cannot name a folder on the node it will be installed on, so a pack
+/// Tools document that selects host tools without a root takes its
+/// installer's ([`installer_tool_root`]). The root is still admitted by the
+/// node's WorkspaceRoot policy when the agent runs, and the agent still needs
+/// the User's reader grant on the published root that covers it
+/// (`tools::surface::agents_tool_root_readers`), which an approved install
+/// makes for this root alone. With no such root to take, the document is left
+/// as the pack wrote it.
+async fn default_host_tool_roots(
+    access: &ConfigAccess,
+    owner: &str,
+    installer: Option<&str>,
+    config: &mut PackConfig,
+) -> Result<()> {
+    let rootless = host_tools_without_root(&config.tools)?;
+    if rootless.is_empty() {
+        return Ok(());
+    }
+    if let Some(root) = installer_tool_root(access, owner, installer).await? {
         for index in rootless {
             if let Some(host) = config.tools[index].host.as_mut() {
                 host.root = Some(root.clone());

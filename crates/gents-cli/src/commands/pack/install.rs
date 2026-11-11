@@ -765,6 +765,42 @@ pub(super) async fn install_documents_command_with_local(
             anyhow::Ok((home, owner, local))
         }
         .await?;
+        let coordinate = format!(
+            "{}/{}",
+            pack.manifest().metadata.namespace,
+            pack.manifest().name
+        );
+        let supplied = wire::supplied_tool_root(&access, &owner, None, pack).await?;
+        if let Some(published) = supplied
+            .as_ref()
+            .and_then(|supplied| supplied["reader_on"].as_str())
+            .filter(|_| !args.preview && !args.grant_authority)
+        {
+            // A reader grant has no recorded consent a reinstall could keep,
+            // so only a first install is refused; a reinstall lists the step.
+            let first = gents::pack::installed_pack_documents(&access, &owner, &coordinate)
+                .await?
+                .is_empty();
+            if first {
+                let tools = supplied.as_ref().map_or_else(String::new, |supplied| {
+                    supplied["tools"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                });
+                let root = supplied
+                    .as_ref()
+                    .and_then(|supplied| supplied["root"].as_str())
+                    .unwrap_or_default();
+                return Err(anyhow::anyhow!(
+                    "{coordinate} ships Tools ({tools}) whose agents run host tools under this node's tool root {root}, and installing it grants them reader on the published WorkspaceRoot {published}. Nothing was installed. Install it with --grant-authority to allow that"
+                )
+                .into());
+            }
+        }
         let mut output = install_documents_pack_inner(
             &access,
             &owner,
@@ -774,15 +810,22 @@ pub(super) async fn install_documents_command_with_local(
             local.as_ref(),
         )
         .await?;
-        if !args.preview {
+        if args.preview {
+            if let Some(mut supplied) = supplied {
+                if supplied.get("reader_on").is_some() {
+                    supplied["granted_with"] = "--grant-authority".into();
+                }
+                output["host_tool_roots"] = supplied;
+            }
+        } else {
             let readers = wire::grant_pack_root_readers(
                 &access,
                 &owner,
-                &format!(
-                    "{}/{}",
-                    pack.manifest().metadata.namespace,
-                    pack.manifest().name
-                ),
+                &coordinate,
+                supplied
+                    .as_ref()
+                    .and_then(|supplied| supplied["root"].as_str()),
+                args.grant_authority,
             )
             .await?;
             if !readers.is_empty() {
