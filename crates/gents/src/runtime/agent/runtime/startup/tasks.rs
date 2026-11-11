@@ -48,6 +48,7 @@ pub(super) fn runtime_context(
                 .map(std::path::Path::to_path_buf)
                 .unwrap_or_default(),
             tool_root: agent.operator_tool_root().map(PathBuf::from),
+            session_goals: Arc::new(gents_automation::goal::session_message::SessionGoals),
         },
         agent.service_admission(),
     );

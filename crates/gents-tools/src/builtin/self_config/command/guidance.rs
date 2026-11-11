@@ -1,25 +1,28 @@
 use super::*;
 use agent_management::AgentApplyError;
-use gents_protocol::operations::agent::{AgentCreateOperation, NextCall};
+use gents_protocol::operations::agent::NextCall;
 
-fn next_call(next: NextCall) -> Value {
+/// The model tool's spelling of a declared next call.
+pub(super) fn next_call(next: NextCall) -> Value {
     match next {
         NextCall::VerbHelp { resource, verb } => json!({"argv":[resource, verb, "--help"]}),
         NextCall::ResourceHelp { resource } => json!({"argv":["help", resource]}),
+        NextCall::Inspect { resource } => json!({"argv":[resource, "get"]}),
+        NextCall::List { resource } => json!({"argv":[resource, "list"]}),
     }
 }
 
-/// A refused create or clone answers with the recovery its error declares.
-/// Another owner's failure passes on unchanged to that owner's classifiers
-/// in `failure_guidance`.
-pub(super) fn agent_create_failure(
+/// A refused agent operation answers with what happened and the recovery its
+/// error declares for the requested operation. Another owner's failure passes
+/// on unchanged to that owner's classifiers in `failure_guidance`.
+pub(super) fn agent_failure(
     error: AgentApplyError,
-    operation: AgentCreateOperation,
+    params: &ConfigureAgentParams,
 ) -> anyhow::Error {
     match error {
         AgentApplyError::Operation(error) => CommandGuidance {
             message: gents_protocol::error_chain::ErrorChain(&error).to_string(),
-            next_call: next_call(error.recovery(operation)),
+            next_call: next_call(agent_management::recovery_for(params, &error)),
         }
         .into(),
         AgentApplyError::Other(error) => error,

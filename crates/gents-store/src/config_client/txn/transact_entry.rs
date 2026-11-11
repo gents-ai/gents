@@ -67,6 +67,9 @@ impl ConfigAccess {
                     ConfigApplyTxn::begin_http(endpoint, cancellation_rollback_scheduled, false)
                         .await?;
                 txn.operation = Some(operation.as_str());
+                if let Self::Local(local) = self {
+                    txn.loopback_node = Some(Arc::clone(local.node()));
+                }
                 Ok(txn)
             }
             WriteRoute::Local(local) => {

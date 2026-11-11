@@ -303,6 +303,46 @@ pub async fn load_session_goal_usage(
     project_goal_catalog(&request_ids, decode_calls_for_node(raw_calls, node_did)?)
 }
 
+/// The named core read of a session's charged token total (Lean
+/// `Hooks.Read.core`), the baseline a Goal's usage is measured from. Arguments
+/// `{node_did, session_id}`; one row `{total}`.
+pub const SESSION_TOKEN_USAGE: &str = "session.token_usage";
+
+struct SessionTokenUsageRead;
+
+#[async_trait::async_trait]
+impl gents_session::request::hooks::registry::CoreRead for SessionTokenUsageRead {
+    fn name(&self) -> &'static str {
+        SESSION_TOKEN_USAGE
+    }
+
+    async fn read(
+        &self,
+        txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+        args: &serde_json::Value,
+    ) -> Result<Vec<serde_json::Value>> {
+        #[derive(Deserialize)]
+        struct Session {
+            node_did: String,
+            session_id: String,
+        }
+        let session = Session::deserialize(args).context("decoding the session usage read")?;
+        let usage = load_session_goal_usage(txn, &session.node_did, &session.session_id)
+            .await
+            .context("summing goal inference usage")?;
+        Ok(vec![
+            serde_json::json!({ "total": i64::try_from(usage.total).unwrap_or(i64::MAX) }),
+        ])
+    }
+}
+
+/// Registers the core reads this crate owns.
+pub fn register_lifecycle_reads(registry: &mut gents_session::request::hooks::registry::Registry) {
+    registry
+        .reads
+        .push(std::sync::Arc::new(SessionTokenUsageRead));
+}
+
 /// An auxiliary call enters the parent-inclusive total only through its
 /// historically verified signed parent link.
 pub async fn load_parent_inclusive_audit_usage(

@@ -150,16 +150,31 @@ impl DefraSessionHook {
             let result = Box::pin(async {
                 match route {
                     HookOwnedTool::GetGoal => {
-                        self.persist_get_goal_tool_call(tool_call_id, internal_call_id, args)
-                            .await
+                        self.persist_goal_tool_call(
+                            super::goal_tools::GoalTool::Get,
+                            tool_call_id,
+                            internal_call_id,
+                            args,
+                        )
+                        .await
                     }
                     HookOwnedTool::UpdateGoal => {
-                        self.persist_update_goal_tool_call(tool_call_id, internal_call_id, args)
-                            .await
+                        self.persist_goal_tool_call(
+                            super::goal_tools::GoalTool::Update,
+                            tool_call_id,
+                            internal_call_id,
+                            args,
+                        )
+                        .await
                     }
                     HookOwnedTool::CreateGoal => {
-                        self.persist_create_goal_tool_call(tool_call_id, internal_call_id, args)
-                            .await
+                        self.persist_goal_tool_call(
+                            super::goal_tools::GoalTool::Create,
+                            tool_call_id,
+                            internal_call_id,
+                            args,
+                        )
+                        .await
                     }
                     HookOwnedTool::AgentControl => {
                         self.persist_agent_control_tool_call(

@@ -53,6 +53,7 @@ async fn started(
     })
     .await
     .unwrap();
+    crate::lifecycle_hooks::attach(&message.admission.node).unwrap();
     let caller = gents_session::request::binding::load_agent_request_by_doc_id_with_access(
         &message.admission.tool.access().unwrap(),
         message.admission.tool.request_doc_id().unwrap(),

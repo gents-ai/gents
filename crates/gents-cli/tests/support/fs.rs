@@ -169,9 +169,9 @@ pub async fn assert_runtime_init_state(
 ) -> Result<()> {
     use super::graphql::{first_graphql_row, graphql_query};
 
-    let selected = graphql_query(graphql, &format!("{{ Node(filter: {{ node_did: {{ _eq: \"{}\" }} }}, limit: 1) {{ default_agent_did }} }}", escape_graphql_string(node_did))).await?;
+    let selected = graphql_query(graphql, &format!("{{ DefaultAgentSelection(filter: {{ node_did: {{ _eq: \"{}\" }} }}, limit: 1) {{ default_agent_did }} }}", escape_graphql_string(node_did))).await?;
     let default_agent_did = selected
-        .pointer("/data/Node/0/default_agent_did")
+        .pointer("/data/DefaultAgentSelection/0/default_agent_did")
         .and_then(Value::as_str)
         .context("initialized node must retain its selected agent")?
         .to_owned();
@@ -234,10 +234,6 @@ pub async fn assert_runtime_init_state(
     assert_eq!(
         principal.get("node_did").and_then(Value::as_str),
         Some(node_did)
-    );
-    assert_eq!(
-        principal.get("default_agent_did").and_then(Value::as_str),
-        Some(default_agent_did.as_str())
     );
     assert_eq!(
         principal.get("enabled").and_then(Value::as_bool),

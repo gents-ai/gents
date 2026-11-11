@@ -17,6 +17,7 @@ use gents_store::config_client::ConfigApplyTxn;
 
 pub(crate) const PUBLISH_FIRE_OUTCOME: &str = "trigger.fire_outcome.publish";
 pub(crate) const SETTLE_GOAL_OUTCOMES: &str = "trigger.goal_outcomes.settle";
+pub(crate) const APPLY_GOAL_ASSIGNMENT: &str = "trigger.goal_assignment.apply";
 
 /// One request has one Task fire receipt; the bound leaves room for the
 /// duplicates the publication itself tolerates.
@@ -159,6 +160,52 @@ pub(crate) fn settle_goal_outcomes(
     ))
 }
 
+#[derive(Deserialize)]
+struct ApplyGoalAssignment {
+    fire_doc_id: String,
+}
+
+/// Marks a Task fire's Goal assignment applied (Lean
+/// `Hooks.GoalTask.TaskOp.assignmentApplied`). The flag is a TriggerFire
+/// field, so core writes it when the Goals plugin applies the assignment.
+struct ApplyGoalAssignmentOperation;
+
+#[async_trait::async_trait]
+impl CoreOperation for ApplyGoalAssignmentOperation {
+    fn name(&self) -> &'static str {
+        APPLY_GOAL_ASSIGNMENT
+    }
+
+    async fn perform(
+        &self,
+        txn: &ConfigApplyTxn<'_>,
+        _context: OperationContext<'_>,
+        args: &Value,
+    ) -> anyhow::Result<()> {
+        use gents_protocol::document_query::{
+            fields::trigger_fire as fields, Filter, Input, Update,
+        };
+        let args = ApplyGoalAssignment::deserialize(args)
+            .context("decoding the Goal assignment application")?;
+        let rendered = Update::matching(
+            Filter::eq(fields::DOC_ID, &args.fire_doc_id),
+            Input::new().set(fields::GOAL_ASSIGNMENT_APPLIED, true),
+        )
+        .render();
+        txn.run(&rendered).await?;
+        Ok(())
+    }
+}
+
+/// The effect a plugin returns to have core mark a fire's Goal assignment
+/// applied.
+pub(crate) fn apply_goal_assignment(fire_doc_id: &str) -> Effect {
+    Effect::Core(CoreOp::new(
+        APPLY_GOAL_ASSIGNMENT,
+        serde_json::json!({ "fire_doc_id": fire_doc_id }),
+    ))
+}
+
 pub fn register(registry: &mut Registry) {
     registry.request_terminal.push(Arc::new(RequestOutcome {
         manifest: Manifest {
@@ -173,4 +220,7 @@ pub fn register(registry: &mut Registry) {
     registry
         .operations
         .push(Arc::new(SettleGoalOutcomesOperation));
+    registry
+        .operations
+        .push(Arc::new(ApplyGoalAssignmentOperation));
 }

@@ -65,7 +65,7 @@ fn every_subject_is_the_desktop_engineer_on_an_eval_node() {
         assert!(behavior.get("agent_did").is_none(), "{name}");
         let config = &config.documents;
         assert_eq!(
-            config.node.default_agent_did, None,
+            config.default_agent_selection, None,
             "{name}: the trial selects the cell's behavior as the default"
         );
         assert!(

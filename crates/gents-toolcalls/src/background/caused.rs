@@ -93,6 +93,7 @@ pub(crate) enum KillOutcome {
 
 pub(crate) async fn kill(
     node: &std::sync::Arc<EmbeddedNode>,
+    goals: &dyn gents_session::session::message::SessionMessageGoals,
     lifecycle: &mut crate::call::lifecycle::ToolCallLifecycle,
 ) -> Result<KillOutcome> {
     use crate::background::job::control::{CausedFacts, KillAction, KillObservation};
@@ -110,7 +111,9 @@ pub(crate) async fn kill(
     }));
     match (observation.action(), caused.as_deref()) {
         (KillAction::Settle, _) => {
-            if crate::background::completion::settle_session_message_row(node, lifecycle).await? {
+            if crate::background::completion::settle_session_message_row(node, goals, lifecycle)
+                .await?
+            {
                 return Ok(KillOutcome::Settled);
             }
         }

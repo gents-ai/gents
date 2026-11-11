@@ -106,13 +106,16 @@ impl SelfConfig {
 
     async fn seed(&self) {
         let node_did = self.node_did().to_owned();
-        let mut node = self.read(Collection::Node, &node_did).await;
-        node["default_agent_did"] = self.agent_did().into();
+        let node = self.read(Collection::Node, &node_did).await;
         let mut agent = self.read(Collection::Agent, self.agent_did()).await;
         agent["context_id"] = CONTEXT_ID.into();
         agent["inference_profile_id"] = PROFILE_ID.into();
         self.apply(vec![
             (Collection::Node, node),
+            (
+                Collection::DefaultAgentSelection,
+                json!({"node_did":node_did,"default_agent_did":self.agent_did()}),
+            ),
             (Collection::InferenceBackend, json!({"node_did":node_did,"backend_id":BACKEND_ID,"name":"Local","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:11434/v1","auth":{"kind":"api_key","key":SECRET},"max_concurrent":1})),
             (Collection::InferenceSampling, json!({"node_did":node_did,"sampling_id":"sampling","temperature":0.7})),
             (Collection::InferenceExecution, json!({"node_did":node_did,"execution_id":"execution","max_turns":40})),
@@ -575,6 +578,55 @@ async fn configure_automation_creates_one_chain_and_preserves_runtime_ownership(
         f.read(Collection::Task, "nightly").await["agent_did"],
         f.agent_did()
     );
+}
+
+/// `task run` fires through the runtime's real `TaskRuns` service, which
+/// lives above the tool crate.
+#[tokio::test]
+async fn task_run_fires_a_task_now_and_reuses_target_id() {
+    let f = SelfConfig::new("self-config-task-run").await;
+    let tools = f
+        .tools(&f.config(&["tools", "automation"], false, false))
+        .await;
+    let config = |argv: Value| {
+        let tools = &tools;
+        async move {
+            tools
+                .iter()
+                .find(|tool| tool.name() == "config")
+                .unwrap()
+                .call(argv.to_string())
+                .await
+        }
+    };
+    config(json!({"argv":["task","create","review","--set",r#"prompt_template="Review {{ args.what }}""#]}))
+        .await
+        .unwrap();
+
+    let text = config(
+        json!({"argv":["task","run"],"target_id":"review","options":{"args":{"what":"the bill"}}}),
+    )
+    .await
+    .unwrap();
+    let fired: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(fired["status"], "pending", "{fired}");
+    assert_eq!(fired["duplicate"], false, "{fired}");
+    let request_id = fired["request_id"].as_str().unwrap();
+    let query = format!(
+        r#"query {{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{ content }} }}"#,
+        escape_graphql_string(request_id)
+    );
+    let response = f.actors.agent_access.execute(&query).await.unwrap();
+    assert_eq!(
+        response["data"]["AgentRequest"][0]["content"], "Review the bill",
+        "{response}"
+    );
+
+    let missing = config(json!({"argv":["task","run","absent"]}))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(missing.contains("task not found"), "{missing}");
 }
 
 #[tokio::test]

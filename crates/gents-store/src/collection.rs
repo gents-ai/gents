@@ -5,6 +5,7 @@ use std::fmt;
 )]
 pub enum Collection {
     Node,
+    DefaultAgentSelection,
     Agent,
     AgentContext,
     Compaction,
@@ -35,11 +36,12 @@ pub enum Collection {
 /// This enumeration provides no reference-safety guarantee; publication must
 /// validate the complete manifest and atomically commit it, including legal
 /// reference cycles.
-pub const DESIRED_STATE_APPLY_ORDER: [Collection; 26] = Collection::ALL;
+pub const DESIRED_STATE_APPLY_ORDER: [Collection; 27] = Collection::ALL;
 
 impl Collection {
-    pub const ALL: [Collection; 26] = [
+    pub const ALL: [Collection; 27] = [
         Self::Node,
+        Self::DefaultAgentSelection,
         Self::Agent,
         Self::AgentContext,
         Self::Compaction,
@@ -67,16 +69,22 @@ impl Collection {
         Self::PluginSource,
     ];
 
+    /// One document per Node, whose logical ID is its owner's `node_did`.
+    pub fn keyed_by_owner(self) -> bool {
+        matches!(self, Self::Node | Self::DefaultAgentSelection)
+    }
+
     pub fn file_name(self) -> Option<&'static str> {
         match self {
             Self::Node => Some("node.json"),
+            Self::DefaultAgentSelection => Some("default_agent_selection.json"),
             _ => None,
         }
     }
 
     pub fn dir_name(self) -> Option<&'static str> {
         match self {
-            Self::Node => None,
+            Self::Node | Self::DefaultAgentSelection => None,
             Self::Agent => Some("agents"),
             Self::AgentContext => Some("contexts"),
             Self::Compaction => Some("compactions"),
@@ -108,6 +116,7 @@ impl Collection {
     pub fn graphql_type(self) -> &'static str {
         match self {
             Self::Node => "Node",
+            Self::DefaultAgentSelection => "DefaultAgentSelection",
             Self::Agent => "Agent",
             Self::AgentContext => "AgentContext",
             Self::Compaction => "CompactionConfig",
@@ -140,7 +149,7 @@ impl Collection {
     /// unique DIDs; other configuration identifiers remain node-scoped.
     pub fn unique_field(self) -> &'static str {
         match self {
-            Self::Node => "node_did",
+            Self::Node | Self::DefaultAgentSelection => "node_did",
             Self::Agent => "agent_did",
             Self::AgentContext => "context_id",
             Self::Compaction => "compaction_id",
@@ -172,7 +181,10 @@ impl Collection {
 
 impl fmt::Display for Collection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.dir_name().unwrap_or("node"))
+        f.write_str(match self {
+            Self::DefaultAgentSelection => "default_agent_selection",
+            _ => self.dir_name().unwrap_or("node"),
+        })
     }
 }
 

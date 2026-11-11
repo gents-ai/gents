@@ -45,17 +45,8 @@ impl EvalContext {
         self.access
             .transact_readonly("eval.default_inference_profile", |txn| {
                 Box::pin(async move {
-                    let (_, node) = gents_documents::read_desired_state_record_in_txn(
-                        txn,
-                        gents_store::collection::Collection::Node,
-                        &self.owner,
-                        &self.owner,
-                    )
-                    .await?
-                    .context("node configuration is missing; select --profile explicitly")?;
-                    let node: gents_documents::Node = serde_json::from_value(node)?;
-                    let did = node
-                        .default_agent_did
+                    let did = gents_documents::load_default_agent_did_in_txn(txn, &self.owner)
+                        .await?
                         .context("node has no default agent; select --profile explicitly")?;
                     let (_, agent) = gents_documents::read_desired_state_record_in_txn(
                         txn,

@@ -43,6 +43,9 @@ pub struct ConfigApplyTxn<'a> {
     pub(super) relationship_grants: Mutex<Vec<ConfigRelationshipGrant>>,
     pub(super) publication_observer: Option<Arc<dyn AgentPublicationObserver>>,
     pub(super) pack_approval: Option<Arc<super::super::pack_effect::PackInterpreterApproval>>,
+    /// The node whose own loopback endpoint carries this HTTP transaction,
+    /// when an embedded access routed its client-signed writes through it.
+    pub(super) loopback_node: Option<Arc<EmbeddedNode>>,
 }
 
 pub(super) enum EmbeddedTransactionPurpose {
@@ -53,6 +56,29 @@ pub(super) enum EmbeddedTransactionPurpose {
 }
 
 impl<'a> ConfigApplyTxn<'a> {
+    /// The in-process node this transaction runs on: its embedded node, or
+    /// the node serving the loopback endpoint an embedded access routed it
+    /// through. A transaction over a plain GraphQL endpoint has none.
+    fn local_node(&self) -> Option<&Arc<EmbeddedNode>> {
+        match &self.backend {
+            TxnBackend::Embedded { node, .. } => Some(node),
+            TxnBackend::Http { .. } => self.loopback_node.as_ref(),
+        }
+    }
+
+    pub fn has_local_node(&self) -> bool {
+        self.local_node().is_some()
+    }
+
+    /// The `T` attached to this transaction's in-process node
+    /// ([`crate::node_extension`]).
+    pub fn node_extension<T>(&self) -> Option<Arc<T>>
+    where
+        T: std::any::Any + Send + Sync,
+    {
+        crate::node_extension::attached(self.local_node()?)
+    }
+
     /// An unbound local collection cannot hide individual rows through DAC.
     /// HTTP collection metadata and metadata failures do not prove completeness.
     pub fn collection_has_no_document_policy(&self, name: &str) -> bool {
@@ -205,6 +231,7 @@ impl<'a> ConfigApplyTxn<'a> {
             relationship_grants: Mutex::new(Vec::new()),
             publication_observer: None,
             pack_approval: None,
+            loopback_node: None,
             operation: Some(operation.as_str()),
         })
     }
@@ -325,6 +352,7 @@ impl<'a> ConfigApplyTxn<'a> {
                 relationship_grants: Mutex::new(Vec::new()),
                 publication_observer: None,
                 pack_approval: None,
+                loopback_node: None,
                 operation: None,
             });
         }
@@ -348,6 +376,7 @@ impl<'a> ConfigApplyTxn<'a> {
             relationship_grants: Mutex::new(Vec::new()),
             publication_observer: None,
             pack_approval: None,
+            loopback_node: None,
             operation: None,
         };
         Ok(txn)

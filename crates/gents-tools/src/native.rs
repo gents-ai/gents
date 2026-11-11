@@ -28,6 +28,7 @@ pub mod session_history;
 mod title_audit_usage;
 pub use title_audit_usage::load_parent_inclusive_budget_usage;
 pub use title_audit_usage::load_session_goal_usage;
+pub use title_audit_usage::{register_lifecycle_reads, SESSION_TOKEN_USAGE};
 pub use title_audit_usage::{ParentAuditUsage, ParentAuditUsageObservation};
 mod session_message;
 mod shared;

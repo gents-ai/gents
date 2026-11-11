@@ -138,36 +138,61 @@ pub async fn claim_gate_in_txn(
         ClaimVerdict::LeaveQueued => Ok(ClaimGate::Queued),
         ClaimVerdict::Retire { reason, successor } => {
             let successor = successor.context("claim retirement names no superseding request")?;
-            let mutation = super::queue::supersede_pending_mutation(
-                &request.doc_id,
+            supersede_pending_in_txn(
+                txn,
                 &request.node_did,
-                &successor.request_id,
-                &successor.request_doc_id,
+                &request.doc_id,
+                &request.request_id,
+                &successor,
                 &reason,
-            );
-            let response = txn.execute_local_response(&mutation).await?;
-            if response
-                .data
-                .as_ref()
-                .and_then(|data| data.get("update_AgentRequest"))
-                .is_some_and(response_has_documents)
-            {
-                crate::request::hooks::points::request_terminal(
-                    txn,
-                    &request.node_did,
-                    &request.request_id,
-                    RequestLifecycleState::Superseded,
-                    &reason,
-                    claimed_at,
-                )
-                .await?;
-            }
+                claimed_at,
+            )
+            .await?;
             Ok(ClaimGate::Retired)
         }
         ClaimVerdict::Reject { reason } => Ok(ClaimGate::Rejected {
             applied: reject_pending_admission_in_txn(txn, request, &reason, claimed_at).await?,
         }),
     }
+}
+
+/// Core's pending-supersede path (Lean `Hooks.ClaimCore.retire`): supersedes
+/// the request if it is still pending and stages `request.terminal.stage` for
+/// it. Returns whether the row was still pending.
+pub(crate) async fn supersede_pending_in_txn(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    node_did: &str,
+    doc_id: &str,
+    request_id: &str,
+    successor: &crate::request::hooks::claim::Successor,
+    reason: &str,
+    at: &str,
+) -> Result<bool> {
+    let mutation = super::queue::supersede_pending_mutation(
+        doc_id,
+        node_did,
+        &successor.request_id,
+        &successor.request_doc_id,
+        reason,
+    );
+    let response = txn.execute_local_response(&mutation).await?;
+    let superseded = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("update_AgentRequest"))
+        .is_some_and(response_has_documents);
+    if superseded {
+        crate::request::hooks::points::request_terminal(
+            txn,
+            node_did,
+            request_id,
+            RequestLifecycleState::Superseded,
+            reason,
+            at,
+        )
+        .await?;
+    }
+    Ok(superseded)
 }
 
 async fn claim_request_with_projection<F>(
@@ -363,7 +388,7 @@ where
                         .and_then(|data| data.get("update_AgentRequest"))
                         .is_some_and(response_has_documents)
                 {
-                    crate::goal::apply_claimed_task_goal_in_txn(txn, request, claimed_at).await?;
+                    crate::request::hooks::points::claim_applied(txn, request, claimed_at).await?;
                     crate::session::mailbox::claim_reply_in_txn(txn, request, claimed_at).await?;
                     super::materialize::apply_request_session_projection(txn, request, claimed_at)
                         .await?;

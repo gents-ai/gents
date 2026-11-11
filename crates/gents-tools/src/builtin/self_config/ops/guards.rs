@@ -9,25 +9,12 @@ use gents_store::config_client::ConfigApplyTxn;
 
 /// Lean `SelfConfig.keepsReach`.
 pub fn guard_agent_keeps_reach(
-    stored: &Map<String, Value>,
+    _stored: &Map<String, Value>,
     candidate: &Map<String, Value>,
 ) -> Result<()> {
-    let engineer_tag = |doc: &Map<String, Value>| {
-        doc.get("tags")
-            .and_then(Value::as_array)
-            .is_some_and(|tags| {
-                tags.iter().any(|tag| {
-                    tag.as_str() == Some(crate::builtin::self_config::ENGINEER_AGENT_TAG)
-                })
-            })
-    };
     anyhow::ensure!(
         candidate.get("enabled").and_then(Value::as_bool) != Some(false),
         "no-lockout guard: agent must remain enabled"
-    );
-    anyhow::ensure!(
-        !engineer_tag(stored) || engineer_tag(candidate),
-        "no-lockout guard: the Engineer tag must remain on the configurator"
     );
     Ok(())
 }

@@ -45,7 +45,7 @@ fn modeled_affected_validation_preserves_visible_dependencies() {
                 "fields":["name"], "description":"Read records"}]}),
         ),
         "default-node" => (
-            Collection::Node,
+            Collection::DefaultAgentSelection,
             json!({"node_did":"owner", "default_agent_did":"disabled-agent"}),
         ),
         "disabled-agent" => (

@@ -300,7 +300,10 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
             std::sync::Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(None)),
             job_home.path().to_path_buf(),
             None,
-        ),
+        )
+        .with_session_goals(std::sync::Arc::new(
+            gents_automation::goal::session_message::SessionGoals,
+        )),
     );
     gents_session::session::resume_session_with_access(
         &db.node,
@@ -390,7 +393,10 @@ async fn generated_resume_after_settlement_stages_the_paused_goal_continuation()
             std::sync::Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(None)),
             job_home.path().to_path_buf(),
             None,
-        ),
+        )
+        .with_session_goals(std::sync::Arc::new(
+            gents_automation::goal::session_message::SessionGoals,
+        )),
     );
     let resume = || {
         gents_session::session::resume_session_with_access(

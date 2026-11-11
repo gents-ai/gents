@@ -105,7 +105,11 @@ async fn configure_session_chain(
     let mut documents = vec![
         (
             Collection::Node,
-            json!({"node_did": node_did, "enabled": true, "default_agent_did": parent.agent_did}),
+            json!({"node_did": node_did, "enabled": true}),
+        ),
+        (
+            Collection::DefaultAgentSelection,
+            json!({"node_did": node_did, "default_agent_did": parent.agent_did}),
         ),
         (
             Collection::InferenceBackend,

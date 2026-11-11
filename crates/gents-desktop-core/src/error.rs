@@ -186,6 +186,49 @@ impl BridgeError {
     }
 }
 
+/// An agent operation the desktop's operations layer refused or failed, as the
+/// message the UI shows: what happened, then the next step in desktop terms
+/// for the call the operation names.
+pub fn agent_operation_failure(
+    error: gents_protocol::operations::agent::AgentOperationError,
+    next_call: gents::operations::agent::NextCall,
+) -> anyhow::Error {
+    let message = refusal_message(
+        &gents_protocol::error_chain::ErrorChain(&error).to_string(),
+        next_call,
+    );
+    anyhow::Error::new(error).context(message)
+}
+
+/// The admitted answer of an operations preview, or its refusal as the
+/// message the UI shows.
+pub fn admitted_agent_preview<R>(
+    outcome: gents::operations::agent::AgentOutcome<R>,
+) -> anyhow::Result<R> {
+    match outcome {
+        gents::operations::agent::AgentOutcome::Admitted(receipt) => Ok(receipt),
+        gents::operations::agent::AgentOutcome::Refused {
+            message, next_call, ..
+        } => Err(anyhow::anyhow!(refusal_message(&message, next_call))),
+    }
+}
+
+fn refusal_message(message: &str, next_call: gents::operations::agent::NextCall) -> String {
+    use gents::operations::agent::NextCall;
+    let next = match next_call {
+        NextCall::Inspect { .. } => {
+            "Ask a Node owner or administrator to grant this account access to the agent."
+        }
+        NextCall::List { .. } => {
+            "Open the agent list and choose an enabled agent, or enable this one in the same change."
+        }
+        NextCall::VerbHelp { .. } | NextCall::ResourceHelp { .. } => {
+            "Review the agent's fields and save again."
+        }
+    };
+    format!("{}. {next}", message.trim_end_matches('.'))
+}
+
 /// A verified agent rejection is a denial; every unconfirmed control keeps its
 /// intent reference in the message because the action may still take effect.
 impl From<gents_toolcalls::call::control::client::send::ControlSendError> for BridgeError {

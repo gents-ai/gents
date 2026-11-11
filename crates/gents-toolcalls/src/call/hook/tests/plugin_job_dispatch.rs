@@ -341,35 +341,13 @@ async fn step0(output: Value, options: Options) -> Step0 {
             home.path().to_owned(),
             cwd.as_ref().map(|cwd| cwd.path().to_owned()),
         );
-        let mut unavailable_agents = rapidhash::RapidHashMap::default();
-        for agent in [caller.clone(), worker.clone()] {
-            unavailable_agents.insert(agent.did().to_owned(), crate::triggers::runtime_snapshot::UnavailableAgent::new(
-                gents_protocol::node_readiness::AgentReadinessUnavailableReason::RuntimeConfigurationInvalid, "job fixture",
-            ).with_watcher_identity(agent));
-        }
-        let snapshot = Arc::new(crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
-            generation: 1,
-            node: None,
-            local_did: identity.did().to_owned(),
-            default_agent_did: caller.did().to_owned(),
-            agents: Default::default(),
-            tool_surfaces: Default::default(),
-            backend_admission_configs: Default::default(),
-            unavailable_agents,
-            active_schedules: Default::default(),
-            unavailable_schedules: Default::default(),
-            active_event_triggers: Default::default(),
-            unavailable_event_triggers: Default::default(),
-            active_tasks: Default::default(),
-            dispatchers: Default::default(),
-            agent_executor_capacities: Default::default(),
-            agent_executor_queue_capacities: Default::default(),
-        });
-        let (_sender, receiver) = tokio::sync::watch::channel(snapshot);
         runtime
-            .bind_snapshot(
-                crate::triggers::runtime_snapshot::ActiveSnapshotAgentIdentities::boxed(receiver),
-            )
+            .bind_snapshot(Box::new(
+                crate::background::job::input::tests::WatchedAgentSigners(vec![
+                    caller.clone(),
+                    worker.clone(),
+                ]),
+            ))
             .unwrap();
         let admission = gents_store::service::RuntimeServiceAdmission::default();
         if !options.kicks {

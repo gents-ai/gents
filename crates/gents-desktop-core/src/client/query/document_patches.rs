@@ -52,6 +52,14 @@ pub async fn fetch_doc_patch(
             )
             .await?;
         }
+        DEFAULT_AGENT_SELECTION_NAME => {
+            rows.default_agent_selections = load_rows(
+                node,
+                DEFAULT_AGENT_SELECTION_NAME,
+                &format!("query {{ {DEFAULT_AGENT_SELECTION_NAME}(docIDs: [{in_clause}]) {{ {DEFAULT_AGENT_SELECTION_FIELDS} }} }}"),
+            )
+            .await?;
+        }
         AGENT_NAME => {
             rows.agents = load_rows(
                 node,
@@ -334,6 +342,7 @@ pub async fn fetch_doc_patch(
 
 pub(crate) const OBSERVED_COLLECTIONS: &[&str] = &[
     NODE_NAME,
+    DEFAULT_AGENT_SELECTION_NAME,
     AGENT_NAME,
     NODE_RUNTIME_NAME,
     NODE_READINESS_NAME,

@@ -116,7 +116,8 @@ fn chat_config(agents: &[&str]) -> Value {
         })
         .collect();
     json!({
-        "node": { "node_did": OWNER, "default_agent_did": did("a") },
+        "node": { "node_did": OWNER },
+        "default_agent_selection": { "node_did": OWNER, "default_agent_did": did("a") },
         "inference_backends": [{
             "node_did": OWNER, "backend_id": "backend", "name": "Backend",
             "provider_kind": "OpenAiCompatible", "endpoint": "http://127.0.0.1:1/v1",
@@ -1784,7 +1785,7 @@ fn is_skills(update: &Update) -> bool {
 /// and agent `b` on no context. `old` is listed too, and turned off.
 fn skill_settings(did: &str) -> Value {
     let mut config = node_settings_of(did);
-    config["node"]["default_agent_did"] = json!("a");
+    config["default_agent_selection"] = json!({ "node_did": did, "default_agent_did": "a" });
     config["contexts"] = json!([
         { "node_did": did, "context_id": "main", "skill_ids": ["commit", "review", "old"] },
     ]);
@@ -3701,7 +3702,8 @@ fn node_settings() -> Value {
 
 fn node_settings_of(did: &str) -> Value {
     json!({
-        "node": { "node_did": did, "default_agent_did": "engineer" },
+        "node": { "node_did": did },
+        "default_agent_selection": { "node_did": did, "default_agent_did": "engineer" },
         "inference_backends": [{
             "node_did": did,
             "backend_id": "backend",
@@ -4454,7 +4456,6 @@ async fn a_node_save_keeps_what_the_form_does_not_show() {
         "node_did": OWNER,
         "display_name": "Studio",
         "avatar": "7",
-        "default_agent_did": "engineer",
         "created_at": "2026-01-01T00:00:00Z",
         "created_by": "did:key:zMaker",
         "tags": ["gents:pack:home", "desk"],
@@ -4479,13 +4480,7 @@ async fn a_node_save_keeps_what_the_form_does_not_show() {
     assert_eq!(before["avatar"], json!("7"));
     assert_eq!(after["display_name"], json!("Workshop"));
     assert_eq!(after["tags"], json!(["gents:pack:home", "desk", "bench"]));
-    for kept in [
-        "avatar",
-        "created_at",
-        "created_by",
-        "default_agent_did",
-        "enabled",
-    ] {
+    for kept in ["avatar", "created_at", "created_by", "enabled"] {
         assert_eq!(after[kept], before[kept], "{kept}");
     }
     node.shutdown().await.expect("node shutdown");

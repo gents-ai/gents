@@ -485,7 +485,7 @@ pub async fn bind_selected_managed_agent_backend(
         .access
         .transact_signed_conflict_rebuild("test.bind_managed_agent_backend", |txn| {
             Box::pin(async move {
-                let (_, mut node) =
+                let (_, node) =
                     read_desired_state_record_in_txn(txn, Collection::Node, owner, owner)
                         .await?
                         .expect("held user must own the test Node");
@@ -496,9 +496,6 @@ pub async fn bind_selected_managed_agent_backend(
                 let profile_id = agent["inference_profile_id"]
                     .as_str()
                     .expect("managed Agent inference profile");
-                if make_default {
-                    node["default_agent_did"] = agent_did.into();
-                }
                 let profile = serde_json::json!({
                     "node_did": owner,
                     "profile_id": profile_id,
@@ -517,19 +514,26 @@ pub async fn bind_selected_managed_agent_backend(
                     "max_queue_depth": 100,
                     "enabled": true,
                 });
+                let mut documents = vec![
+                    (Collection::Node, node),
+                    (Collection::InferenceBackend, backend),
+                    (Collection::InferenceProfile, profile),
+                ];
+                if make_default {
+                    documents.push((
+                        Collection::DefaultAgentSelection,
+                        serde_json::json!({"node_did": owner, "default_agent_did": agent_did}),
+                    ));
+                }
                 let plan = DesiredStateApplyPlan::new(
-                    [
-                        (Collection::Node, node),
-                        (Collection::InferenceBackend, backend),
-                        (Collection::InferenceProfile, profile),
-                    ]
-                    .into_iter()
-                    .map(|(collection, value)| DesiredStateApplyDocument {
-                        collection,
-                        add: value.clone(),
-                        update: value,
-                    })
-                    .collect(),
+                    documents
+                        .into_iter()
+                        .map(|(collection, value)| DesiredStateApplyDocument {
+                            collection,
+                            add: value.clone(),
+                            update: value,
+                        })
+                        .collect(),
                 )?;
                 apply_desired_state_plan(
                     txn,
@@ -633,10 +637,13 @@ async fn bind_agent_backend_chain(
     let agent_did = match agent_did {
         Some(agent_did) => agent_did.to_owned(),
         None => {
-            let node = read(gents_store::collection::Collection::Node, owner.to_owned())
-                .await
-                .expect("fixture Node");
-            match node["default_agent_did"]
+            let selection = read(
+                gents_store::collection::Collection::DefaultAgentSelection,
+                owner.to_owned(),
+            )
+            .await
+            .unwrap_or_default();
+            match selection["default_agent_did"]
                 .as_str()
                 .filter(|did| !did.is_empty())
             {

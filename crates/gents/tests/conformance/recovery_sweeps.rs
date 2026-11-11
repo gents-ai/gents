@@ -388,6 +388,7 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
                 db.node_identity.did(),
                 std::slice::from_ref(&agent),
                 &registry,
+                &gents_automation::goal::session_message::SessionGoals,
             )
             .await
             .expect("live periodic recovery");
@@ -421,6 +422,7 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
                 db.node_identity.did(),
                 std::slice::from_ref(&agent),
                 &registry,
+                &gents_automation::goal::session_message::SessionGoals,
             )
             .await
             .expect("expired periodic recovery");
@@ -449,6 +451,7 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
                 db.node_identity.did(),
                 std::slice::from_ref(&agent),
                 &registry,
+                &gents_automation::goal::session_message::SessionGoals,
             )
             .await
             .expect("second periodic recovery");

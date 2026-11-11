@@ -1,5 +1,5 @@
 use super::plan::{
-    document_identity, ensure_expectations_hold, validate_node_replacement,
+    document_identity, ensure_expectations_hold, validate_default_selection_replacement,
     DesiredStateApplyCounts, DesiredStateApplyPlan,
 };
 use super::read::read_identity_records;
@@ -75,6 +75,72 @@ pub async fn grant_selected_self_configuration(
     Ok(())
 }
 
+/// Lean `SelfConfig.engineerInitRelations`: make `agent_did` an administrator
+/// of the Node (`nodes#administrator`), which node initialisation gives the
+/// Engineer. It carries the agent catalog and, through `parent`, update of
+/// every Agent and configuration document of the Node; it also carries Node
+/// delete, every Agent's sessions and the management of Node relations, the
+/// accepted cost recorded on the Lean definition. The transaction's actor must
+/// manage `administrator` on the Node (its owner or an `administrator`).
+pub async fn grant_node_administration(
+    txn: &ConfigApplyTxn<'_>,
+    node_did: &str,
+    agent_did: &str,
+) -> Result<()> {
+    let target = identity::Did::new(agent_did)?;
+    let node_doc = node_doc_id(txn, node_did).await?;
+    txn.add_actor_relationship("Node", &node_doc, "administrator", &target)
+        .await?;
+    Ok(())
+}
+
+/// Lean `SelfConfig.categoryGroupings` (`node`): grant `agent_did` the Node's
+/// agent catalog and nothing else (`nodes#agent_manager`, hence
+/// `manage_agents`), which creates and clones Agents and updates the Node's
+/// `DefaultAgentSelection`. The transaction's actor must manage
+/// `agent_manager` on the Node (its owner or an `administrator`).
+pub async fn grant_agent_catalog(
+    txn: &ConfigApplyTxn<'_>,
+    node_did: &str,
+    agent_did: &str,
+) -> Result<()> {
+    let target = identity::Did::new(agent_did)?;
+    let node_doc = node_doc_id(txn, node_did).await?;
+    txn.add_actor_relationship("Node", &node_doc, "agent_manager", &target)
+        .await?;
+    Ok(())
+}
+
+/// Withdraw the agent catalog `grant_agent_catalog` gave `agent_did`.
+pub async fn revoke_agent_catalog(
+    txn: &ConfigApplyTxn<'_>,
+    node_did: &str,
+    agent_did: &str,
+) -> Result<()> {
+    let target = identity::Did::new(agent_did)?;
+    let node_doc = node_doc_id(txn, node_did).await?;
+    txn.delete_actor_relationship("Node", &node_doc, "agent_manager", &target)
+        .await?;
+    Ok(())
+}
+
+async fn node_doc_id(txn: &ConfigApplyTxn<'_>, node_did: &str) -> Result<String> {
+    let rendered = {
+        use gents_protocol::document_query::{fields::node as fields, Filter, Query, Selection};
+        Query::select(Selection::doc_id())
+            .filter(Filter::eq(fields::NODE_DID, node_did))
+            .limit(1)
+            .render()
+    };
+    let response = txn.run(&rendered).await?;
+    gents_protocol::graphql::graphql_rows_from_response(&response, "Node")
+        .first()
+        .and_then(|row| row.get("_docID"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .with_context(|| format!("Node {node_did:?} is unavailable to the Node relation grant"))
+}
+
 /// The runtime obtains this physical Node binding through its own native read
 /// grant. It is passed with the agent operation; it never changes the actor.
 #[derive(Clone)]
@@ -146,6 +212,7 @@ pub(crate) async fn apply_desired_state_plan_with_semantics(
     let mut counts = DesiredStateApplyCounts::default();
     let mut created_agents = Vec::new();
     let mut created_configuration = Vec::new();
+    let mut created_selections = Vec::new();
     let mut selection_changes = Vec::new();
     let mut created_callback_bindings = Vec::new();
     for document in plan.documents() {
@@ -180,8 +247,8 @@ pub(crate) async fn apply_desired_state_plan_with_semantics(
         }
         let name = document.collection.graphql_type();
         let (mutation, input) = if let Some((doc_id, current)) = existing {
-            if document.collection == Collection::Node {
-                validate_node_replacement(&current, &document.update)?;
+            if document.collection == Collection::DefaultAgentSelection {
+                validate_default_selection_replacement(&current, &document.update)?;
             }
             let update = if txn.client_signed_configuration() {
                 configuration_replacement_patch(document.collection, &current, &document.update)?
@@ -296,6 +363,9 @@ pub(crate) async fn apply_desired_state_plan_with_semantics(
                     Collection::Agent => {
                         created_agents.push((owner.to_owned(), id.to_owned(), doc_id))
                     }
+                    Collection::DefaultAgentSelection => {
+                        created_selections.push((owner.to_owned(), doc_id))
+                    }
                     _ if gents_protocol::schemas::identity_policy_resource(name)
                         == Some("configuration") =>
                     {
@@ -322,6 +392,17 @@ pub(crate) async fn apply_desired_state_plan_with_semantics(
             .await?;
         publish_node_managers_in_txn(txn, collection, &doc_id, "selection_manager", &node_doc)
             .await?;
+    }
+    for (node_did, doc_id) in created_selections {
+        let node_doc = configuration_node_doc(txn, &node_did, binding).await?;
+        txn.add_resource_relationship(
+            Collection::DefaultAgentSelection.graphql_type(),
+            &doc_id,
+            "parent",
+            "nodes",
+            &node_doc,
+        )
+        .await?;
     }
     for (node_did, binding_doc, binding) in created_callback_bindings {
         let agent = identity::Did::new(&binding.agent_did)?;

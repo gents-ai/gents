@@ -1,6 +1,8 @@
 use super::*;
+use agent_management::AgentApplyError;
 use gents_protocol::operations::agent::{
-    AgentCreateInput, AgentCreateOperation, AGENT_CLONE, AGENT_CREATE,
+    AgentCreateInput, AgentCreateOperation, AgentOperationError, AgentOutcome, AgentReceipt,
+    AGENT_CLONE, AGENT_CREATE,
 };
 use gents_session::session::output_render::ordered;
 
@@ -47,94 +49,86 @@ impl ConfigCommandTool {
             "preview" => {
                 let operation = argv
                     .get(1)
-                    .context("agent preview requires create|edit|clone|disable|default")?;
-                if operation == "default" {
-                    let agent_did = argv
-                        .get(2)
-                        .context("agent preview default requires AGENT_DID")?;
-                    anyhow::ensure!(
-                        argv.len() == 3,
-                        "agent preview default accepts exactly one AGENT_DID"
-                    );
-                    let agent_did = self.resolve_agent_did(agent_did).await?;
-                    self.ensure_node_authority("preview default")?;
-                    let params = default_agent_params("preview", &agent_did);
-                    return agent_management::model_agent_preview(&self.core, &params).await;
-                }
-                if operation == "edit" {
-                    let agent_did = argv.get(2).context(
-                        "agent preview update requires target_id and fields in set or clear",
-                    )?;
-                    let core = self.target_core(Some(agent_did), Some("agent")).await?;
-                    let patch = parse_patch(&argv[3..], SelfConfigTarget::Agent)?;
-                    return self
-                        .patch(
-                            &core,
-                            "preview",
-                            protect_working_agent(
-                                agent_request(&core, patch),
-                                false,
-                                self.holds_catalog_grant(),
-                            ),
-                        )
-                        .await;
-                }
-                let options = agent_options(operation, &argv[2..])?;
-                if let Some(creation) = AgentCreateOperation::for_verb(operation) {
-                    let input = self.agent_create_input(creation, options).await?;
-                    return agent_management::model_agent_create_preview(&self.core, &input).await;
-                }
-                let mut params = options.params("preview", Some(operation.clone()));
-                self.resolve_agent_dids(&mut params).await?;
-                self.ensure_agent_mutation(operation, params.agent_did.as_deref())?;
-                self.ensure_default_selection(params.make_default)?;
-                self.ensure_agent_stays_enabled(operation, params.agent_did.as_deref())?;
-                agent_management::model_agent_preview(&self.core, &params).await
-            }
-            "edit" => {
-                let agent_did = argv
-                    .get(1)
-                    .context("agent update requires target_id and fields in set or clear")?;
-                let core = self.target_core(Some(agent_did), Some("agent")).await?;
-                let (shared_ack, rest) = extract_shared(&argv[2..])?;
-                anyhow::ensure!(
-                    !shared_ack,
-                    "shared applies only to a Context or Tools; an Agent document is not shared by reference"
-                );
-                let patch = parse_patch(&rest, SelfConfigTarget::Agent)?;
-                self.patch(
-                    &core,
-                    "edit",
-                    protect_working_agent(
-                        agent_request(&core, patch),
-                        false,
-                        self.holds_catalog_grant(),
-                    ),
+                    .context("agent preview requires create|update|clone|disable|default")?;
+                let params = match operation.as_str() {
+                    "default" => {
+                        let agent_did = argv
+                            .get(2)
+                            .context("agent preview default requires AGENT_DID")?;
+                        anyhow::ensure!(
+                            argv.len() == 3,
+                            "agent preview default accepts exactly one AGENT_DID"
+                        );
+                        default_agent_params("preview", &self.resolve_agent_did(agent_did).await?)
+                    }
+                    "edit" | "update" => {
+                        anyhow::ensure!(self.preview, "preview is not granted for this agent");
+                        match self.agent_update_params(&argv[2..], true).await? {
+                            Ok(params) => params,
+                            Err((params, error)) => {
+                                return agent_preview_text(
+                                    Err(AgentApplyError::Operation(error)),
+                                    &params,
+                                )
+                            }
+                        }
+                    }
+                    _ => {
+                        let options = agent_options(operation, &argv[2..])?;
+                        if let Some(creation) = AgentCreateOperation::for_verb(operation) {
+                            let input = self.agent_create_input(creation, options).await?;
+                            let params = creation_preview_params(creation);
+                            return agent_preview_text(
+                                agent_management::model_agent_create_preview(&self.core, &input)
+                                    .await,
+                                &params,
+                            );
+                        }
+                        let mut params = options.params("preview", Some(operation.clone()));
+                        self.resolve_agent_dids(&mut params).await?;
+                        params
+                    }
+                };
+                agent_preview_text(
+                    agent_management::model_agent_outcome(&self.core, &params).await,
+                    &params,
                 )
-                .await
+            }
+            "edit" | "update" => {
+                let params = match self.agent_update_params(&argv[1..], false).await? {
+                    Ok(params) => params,
+                    Err((params, error)) => {
+                        return Err(guidance::agent_failure(
+                            AgentApplyError::Operation(error),
+                            &params,
+                        ))
+                    }
+                };
+                let identity = self.agent_signer()?;
+                self.execution.enter_mutation();
+                agent_commit_text(
+                    agent_management::model_agent_apply(&self.core, identity, params.clone()).await,
+                    &params,
+                )
             }
             "create" | "clone" | "disable" => {
-                let identity = self.identity.as_deref().context(
-                    "agent configuration requires its selected actor signer; reads remain available",
-                )?;
+                let identity = self.agent_signer()?;
                 let options = agent_options(verb, &argv[1..])?;
                 if let Some(creation) = AgentCreateOperation::for_verb(verb) {
                     let input = self.agent_create_input(creation, options).await?;
                     self.execution.enter_mutation();
-                    return match agent_management::model_agent_create(&self.core, identity, &input)
-                        .await
-                    {
-                        Ok(receipt) => agent_management::receipt_text(&receipt),
-                        Err(error) => Err(guidance::agent_create_failure(error, creation)),
-                    };
+                    return agent_commit_text(
+                        agent_management::model_agent_create(&self.core, identity, &input).await,
+                        &options_free_params(verb),
+                    );
                 }
                 let mut params = options.params(verb, None);
                 self.resolve_agent_dids(&mut params).await?;
-                self.ensure_agent_mutation(verb, params.agent_did.as_deref())?;
-                self.ensure_default_selection(params.make_default)?;
-                self.ensure_agent_stays_enabled(verb, params.agent_did.as_deref())?;
                 self.execution.enter_mutation();
-                agent_management::model_agent_mutate(&self.core, identity, &params).await
+                agent_commit_text(
+                    agent_management::model_agent_apply(&self.core, identity, params.clone()).await,
+                    &params,
+                )
             }
             "default" => {
                 let agent_did = argv.get(1).context("agent default requires AGENT_DID")?;
@@ -143,17 +137,13 @@ impl ConfigCommandTool {
                     "agent default accepts exactly one AGENT_DID"
                 );
                 let agent_did = self.resolve_agent_did(agent_did).await?;
-                self.ensure_node_authority("default")?;
-                let identity = self.identity.as_deref().context(
-                    "agent configuration requires its selected actor signer; reads remain available",
-                )?;
+                let identity = self.agent_signer()?;
+                let params = default_agent_params("edit", &agent_did);
                 self.execution.enter_mutation();
-                agent_management::model_agent_mutate(
-                    &self.core,
-                    identity,
-                    &default_agent_params("edit", &agent_did),
+                agent_commit_text(
+                    agent_management::model_agent_apply(&self.core, identity, params.clone()).await,
+                    &params,
                 )
-                .await
             }
             "context" => self.agent_context(&argv[1..]).await,
             other => bail!("unknown agent command {other:?}; see [\"help\",\"agent\"]"),
@@ -326,6 +316,79 @@ impl ConfigCommandTool {
         })
     }
 
+    fn agent_signer(&self) -> Result<&dyn NodeIdentity> {
+        self.identity.as_deref().context(
+            "agent configuration requires its selected actor signer; reads remain available",
+        )
+    }
+
+    /// `agent update AGENT_DID` with set/clear over the agent edit's fields
+    /// (Lean `SelfConfig.agentEditKeys`). A field outside the edit is the
+    /// edit's own refusal, returned with the parameters so the caller answers
+    /// it as a commit or a preview.
+    async fn agent_update_params(
+        &self,
+        argv: &[String],
+        preview: bool,
+    ) -> Result<
+        std::result::Result<ConfigureAgentParams, (ConfigureAgentParams, AgentOperationError)>,
+    > {
+        let agent_did = argv
+            .first()
+            .filter(|word| !word.starts_with('-'))
+            .context("agent update requires target_id and fields in set or clear")?;
+        let (shared_ack, rest) = extract_shared(&argv[1..])?;
+        anyhow::ensure!(
+            !shared_ack,
+            "shared applies only to a Context or Tools; an Agent document is not shared by reference"
+        );
+        let patch = parse_patch(&rest, SelfConfigTarget::Agent)?;
+        let agent_did = self.resolve_agent_did(agent_did).await?;
+        let mut params = ConfigureAgentParams {
+            action: if preview { "preview" } else { "edit" }.to_owned(),
+            operation: preview.then(|| "edit".to_owned()),
+            agent_did: Some(agent_did),
+            ..Default::default()
+        };
+        for (field, value) in patch {
+            let text = |value: Option<Value>| -> Result<StringUpdate> {
+                match value {
+                    None => Ok(StringUpdate::Clear),
+                    Some(Value::String(text)) => Ok(StringUpdate::Set(text)),
+                    Some(_) => bail!("Agent field {field:?} takes a JSON string"),
+                }
+            };
+            match field.as_str() {
+                "display_name" => params.display_name = text(value)?,
+                "description" => params.description = text(value)?,
+                "system_prompt" => params.system_prompt = text(value)?,
+                "inference_profile_id" => params.profile_id = text(value)?,
+                "context_id" => params.context_id = text(value)?,
+                "enabled" => {
+                    params.enabled = Some(match value {
+                        None => true,
+                        Some(Value::Bool(enabled)) => enabled,
+                        Some(_) => bail!("Agent field \"enabled\" takes true or false"),
+                    })
+                }
+                "tags" => {
+                    params.tags = Some(match value {
+                        None => Vec::new(),
+                        Some(value) => serde_json::from_value(value)
+                            .context("Agent field \"tags\" takes an array of strings")?,
+                    })
+                }
+                _ => {
+                    return Ok(Err((
+                        params,
+                        AgentOperationError::UnsupportedEditField(field),
+                    )))
+                }
+            }
+        }
+        Ok(Ok(params))
+    }
+
     async fn resolve_agent_dids(&self, params: &mut ConfigureAgentParams) -> Result<()> {
         if let Some(id) = params.agent_did.take() {
             params.agent_did = Some(self.resolve_agent_did(&id).await?);
@@ -350,8 +413,6 @@ impl ConfigCommandTool {
             Some(source) => Some(self.resolve_agent_did(source).await?),
             None => None,
         };
-        self.ensure_agent_mutation(verb, None)?;
-        self.ensure_default_selection(options.make_default)?;
         Ok(AgentCreateInput {
             operation,
             clone_from: clone_from.filter(|_| operation == AgentCreateOperation::Clone),
@@ -395,6 +456,72 @@ impl ConfigCommandTool {
     }
 }
 
+/// A committed operation's receipt, or its refusal as guidance whose next call
+/// is the one the refusal declares.
+fn agent_commit_text(
+    result: std::result::Result<AgentReceipt<gents_documents::Agent>, AgentApplyError>,
+    params: &ConfigureAgentParams,
+) -> Result<String> {
+    match result {
+        Ok(receipt) => agent_management::receipt_text(&receipt),
+        Err(error) => Err(guidance::agent_failure(error, params)),
+    }
+}
+
+/// Lean `SelfConfig.agentOutcome .preview`: a refused preview succeeds and
+/// carries the refusal, message and next call its commit would raise.
+fn agent_preview_text(
+    result: std::result::Result<AgentOutcome<String>, AgentApplyError>,
+    params: &ConfigureAgentParams,
+) -> Result<String> {
+    let outcome = match result {
+        Ok(outcome) => outcome,
+        Err(AgentApplyError::Operation(error)) => {
+            let next_call = agent_management::recovery_for(params, &error);
+            match error.preview_outcome(next_call) {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    return Err(guidance::agent_failure(
+                        AgentApplyError::Operation(error),
+                        params,
+                    ))
+                }
+            }
+        }
+        Err(error) => return Err(guidance::agent_failure(error, params)),
+    };
+    match outcome {
+        AgentOutcome::Admitted(text) => Ok(text),
+        AgentOutcome::Refused {
+            refusal,
+            message,
+            next_call,
+        } => ordered! {
+            "admitted": false,
+            "committed": false,
+            "refusal": refusal.as_str(),
+            "message": message,
+            "next_call": guidance::next_call(next_call),
+        }
+        .pretty(),
+    }
+}
+
+fn creation_preview_params(operation: AgentCreateOperation) -> ConfigureAgentParams {
+    ConfigureAgentParams {
+        action: "preview".to_owned(),
+        operation: Some(operation.declaration().verb.to_owned()),
+        ..Default::default()
+    }
+}
+
+fn options_free_params(verb: &str) -> ConfigureAgentParams {
+    ConfigureAgentParams {
+        action: verb.to_owned(),
+        ..Default::default()
+    }
+}
+
 pub(super) fn default_agent_params(action: &str, agent_did: &str) -> ConfigureAgentParams {
     ConfigureAgentParams {
         action: action.to_owned(),
@@ -430,7 +557,6 @@ struct AgentOptions {
 impl AgentOptions {
     fn params(self, action: &str, operation: Option<String>) -> ConfigureAgentParams {
         ConfigureAgentParams {
-            identity_binding: None,
             action: action.to_owned(),
             operation,
             display_name: self.display_name,
@@ -442,8 +568,7 @@ impl AgentOptions {
             preset: self.preset,
             profile_id: self.profile_id,
             make_default: self.make_default,
-            enable_lsp: None,
-            network_mode: None,
+            ..Default::default()
         }
     }
 }

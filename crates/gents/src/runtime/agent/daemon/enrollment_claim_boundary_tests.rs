@@ -55,13 +55,8 @@ async fn create_enrollment_request(
             Box::pin(async move {
                 let response = txn.execute(mutation).await?;
                 let doc_id = gents_store::graphql::created_doc_id(&response, "AgentRequest")?;
-                txn.add_actor_relationship(
-                    "AgentRequest",
-                    &doc_id,
-                    "working_agent",
-                    working_agent,
-                )
-                .await?;
+                txn.add_actor_relationship("AgentRequest", &doc_id, "working_agent", working_agent)
+                    .await?;
                 Ok::<_, anyhow::Error>(doc_id)
             })
         })
@@ -107,12 +102,10 @@ where
 async fn enrollment_authority_reloads_each_generation_and_cross_actor_claims_stay_blocked() {
     let target_dir = tempfile::tempdir().unwrap();
     let member_dir = tempfile::tempdir().unwrap();
-    let target: Arc<dyn NodeIdentity> = Arc::new(
-        KeyIdentity::load_or_create(target_dir.path().join("target.key"), None).unwrap(),
-    );
-    let member: Arc<dyn NodeIdentity> = Arc::new(
-        KeyIdentity::load_or_create(member_dir.path().join("member.key"), None).unwrap(),
-    );
+    let target: Arc<dyn NodeIdentity> =
+        Arc::new(KeyIdentity::load_or_create(target_dir.path().join("target.key"), None).unwrap());
+    let member: Arc<dyn NodeIdentity> =
+        Arc::new(KeyIdentity::load_or_create(member_dir.path().join("member.key"), None).unwrap());
     let node = Arc::new(
         EmbeddedNode::builder()
             .with_node_identity_did(target.did())
@@ -131,8 +124,7 @@ async fn enrollment_authority_reloads_each_generation_and_cross_actor_claims_sta
         &binding,
     )
     .await;
-    let agent =
-        gents_store::identity::resolve_agent_identity(target.as_ref(), &binding).unwrap();
+    let agent = gents_store::identity::resolve_agent_identity(target.as_ref(), &binding).unwrap();
 
     let mut generation_one = active_enrollment(1, "2030-01-01T00:10:00Z");
     generation_one.request.candidate_did = member.did().to_string();
@@ -211,8 +203,7 @@ async fn enrollment_authority_reloads_each_generation_and_cross_actor_claims_sta
             ScriptedProjection::Error("injected enrollment projection read failure"),
         ],
     );
-    let verifier =
-        AgentRequestAdmissionVerifier::new(node.clone(), target.clone(), handle.clone());
+    let verifier = AgentRequestAdmissionVerifier::new(node.clone(), target.clone(), handle.clone());
 
     let first_fence = handle
         .fresh_member_authorization(member.did())
@@ -269,14 +260,9 @@ async fn enrollment_authority_reloads_each_generation_and_cross_actor_claims_sta
             "{request_id}: {blocked:#}"
         );
         assert!(
-            verify_request_at_claim_boundary(
-                &verifier,
-                node.clone(),
-                agent.as_ref(),
-                request,
-            )
-            .await
-            .is_none()
+            verify_request_at_claim_boundary(&verifier, node.clone(), agent.as_ref(), request,)
+                .await
+                .is_none()
         );
         let row: PendingRow = request_row_as_runtime(&node, target.as_ref(), &request_id).await;
         assert_eq!(

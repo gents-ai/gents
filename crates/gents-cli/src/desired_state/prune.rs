@@ -1,6 +1,7 @@
 use super::{diff::canonical_records, DesiredStateManifest, DocRef};
 use anyhow::Result;
 use gents_documents::ConfigReferences;
+use gents_store::collection::Collection;
 
 pub(crate) fn prune_safe_deletes(
     desired: &DesiredStateManifest,
@@ -22,6 +23,7 @@ pub(crate) fn prune_safe_deletes(
     let mut deletes = records
         .keys()
         .filter(|key| !desired.contains_key(*key))
+        .filter(|(collection, _)| *collection != Collection::DefaultAgentSelection)
         .filter(|(collection, id)| references.validate_removal(*collection, id).is_ok())
         .map(|(collection, id)| DocRef {
             collection: *collection,

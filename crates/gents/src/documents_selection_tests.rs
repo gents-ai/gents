@@ -310,7 +310,8 @@ mod self_config_inference {
                 let runtime = &runtime;
                 let agent_did = &binding.agent_did;
                 Box::pin(async move {
-                    gents_documents::grant_selected_self_configuration(txn, runtime, agent_did).await
+                    gents_documents::grant_selected_self_configuration(txn, runtime, agent_did)
+                        .await
                 })
             })
             .await?;
@@ -417,7 +418,8 @@ mod references {
         .await
         .unwrap();
         let mut config = json!({
-            "node":{"node_did":owner,"default_agent_did":default.agent_did},
+            "node":{"node_did":owner},
+            "default_agent_selection":{"node_did":owner,"default_agent_did":default.agent_did},
             "agents":[{"node_did":owner,"agent_did":binding.agent_did,"creation_nonce":binding.creation_nonce,"inference_profile_id":"profile"}],
             "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
             "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],

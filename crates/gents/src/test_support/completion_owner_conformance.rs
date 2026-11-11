@@ -804,6 +804,7 @@ pub async fn selected_background_wake_with_successor(
     let settled = gents_toolcalls::background::completion::settle_running_session_message_rows_with_access(
         node,
         &admission.tool.access().unwrap(),
+        &gents_session::session::message::NoSessionMessageGoals,
         did,
     )
     .await

@@ -53,9 +53,13 @@ async fn generated_kill_cases_drive_the_session_message_kill() {
         let did = admission.node_did.clone();
         let session_id = admission.tool.session_id().to_owned();
         let mut tool = admission.tool;
-        let outcome = crate::background::caused::kill(&node, &mut tool)
-            .await
-            .unwrap();
+        let outcome = crate::background::caused::kill(
+            &node,
+            &gents_session::session::message::NoSessionMessageGoals,
+            &mut tool,
+        )
+        .await
+        .unwrap();
         let (notifications, _) = completion_obligations(
             &tool.access().unwrap(),
             &session_id,

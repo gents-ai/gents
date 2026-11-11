@@ -549,63 +549,6 @@ async fn ux_reads_what_the_desktop_would_load() {
 }
 
 #[tokio::test]
-async fn task_run_fires_a_task_now_and_reuses_target_id() {
-    let root = tempfile::tempdir().unwrap();
-    let home = tempfile::tempdir().unwrap();
-    let (fixture, tools) = authoring_tool(
-        "task-run",
-        home.path(),
-        root.path(),
-        &["tools", "automation"],
-        false,
-    )
-    .await;
-    config_call(
-        &tools,
-        &[
-            "task",
-            "create",
-            "review",
-            "--set",
-            r#"prompt_template="Review {{ args.what }}""#,
-        ],
-    )
-    .await
-    .unwrap();
-
-    let text = tools
-        .iter()
-        .find(|tool| tool.name() == CONFIG_TOOL_NAME)
-        .unwrap()
-        .call(
-            json!({"argv":["task","run"],"target_id":"review","options":{"args":{"what":"the bill"}}})
-                .to_string(),
-        )
-        .await
-        .unwrap();
-    let fired: Value = serde_json::from_str(&text).unwrap();
-    assert_eq!(fired["status"], "pending", "{fired}");
-    assert_eq!(fired["duplicate"], false, "{fired}");
-    let request_id = fired["request_id"].as_str().unwrap();
-    let access = fixture.agent_access();
-    let query = format!(
-        r#"query {{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{ content }} }}"#,
-        gents_store::graphql::escape_graphql_string(request_id)
-    );
-    let response = access.execute(&query).await.unwrap();
-    assert_eq!(
-        response["data"]["AgentRequest"][0]["content"], "Review the bill",
-        "{response}"
-    );
-
-    let missing = config_call(&tools, &["task", "run", "absent"])
-        .await
-        .unwrap_err()
-        .to_string();
-    assert!(missing.contains("task not found"), "{missing}");
-}
-
-#[tokio::test]
 async fn page_help_discloses_detail_per_command_and_topic() {
     let root = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();

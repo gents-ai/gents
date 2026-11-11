@@ -566,7 +566,8 @@ mod tests {
 
     fn owner_with_anthropic() -> Value {
         json!({
-            "node": { "node_did": "owner", "default_agent_did": "engineer" },
+            "node": { "node_did": "owner" },
+            "default_agent_selection": { "node_did": "owner", "default_agent_did": "engineer" },
             "inference_backends": [{
                 "node_did": "owner",
                 "backend_id": "anthropic",

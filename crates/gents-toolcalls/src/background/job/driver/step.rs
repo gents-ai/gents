@@ -374,6 +374,7 @@ async fn step_transaction(
             ctx: &ctx,
             row: &row,
             cause,
+            goals: runtime.session_goals.as_ref(),
         };
         let created = stage_recorded_effects_in_txn(txn, &job, &fresh, effects).await?;
         *staged.lock().expect("staged requests lock") = created;

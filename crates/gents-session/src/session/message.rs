@@ -33,7 +33,7 @@ pub use commit::{
     SessionMessageReceipt, ToolCallTerminal,
 };
 pub use discovery::{agent_session_list, AgentSessionListArgs};
-pub use goals::{NoSessionMessageGoals, SessionGoal, SessionMessageGoals};
+pub use goals::{NoSessionMessageGoals, RequestGoalAssignment, SessionGoal, SessionMessageGoals};
 pub use inspection::{agent_session_read, AgentSessionReadArgs};
 pub use interrupt::{
     agent_interrupt_allowed, interrupt_refusal, interrupt_session, interrupt_session_with_access,

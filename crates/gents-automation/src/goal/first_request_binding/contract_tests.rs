@@ -382,12 +382,19 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
                 .await
                 .unwrap()
                 .unwrap();
+            let mut registry = gents_session::request::hooks::registry::Registry::default();
+            gents_session::request::hooks::operations::register(&mut registry);
+            gents_tools::native::register_lifecycle_reads(&mut registry);
+            crate::triggers::lifecycle_hooks::register(&mut registry);
+            crate::goal::lifecycle_hooks::register(&mut registry);
             agent_access
                 .transact_write("test.first_binding.task_claim", |txn| {
                     let persisted = &persisted;
+                    let registry = &registry;
                     Box::pin(async move {
-                        super::super::apply_claimed_task_goal_in_txn(
+                        gents_session::request::hooks::points::claim_applied_in(
                             txn,
+                            registry,
                             persisted,
                             "2026-10-21T00:00:01Z",
                         )

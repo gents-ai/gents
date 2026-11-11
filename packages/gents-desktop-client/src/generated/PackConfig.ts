@@ -7,6 +7,7 @@ import type { CallbackBinding } from "./CallbackBinding.js";
 import type { CallbackModule } from "./CallbackModule.js";
 import type { CompactionConfig } from "./CompactionConfig.js";
 import type { DatastoreToolSurfaceDocument } from "./DatastoreToolSurfaceDocument.js";
+import type { DefaultAgentSelection } from "./DefaultAgentSelection.js";
 import type { EvalDefinition } from "./EvalDefinition.js";
 import type { EventSource } from "./EventSource.js";
 import type { InferenceBackend } from "./InferenceBackend.js";
@@ -32,4 +33,9 @@ import type { Trigger } from "./Trigger.js";
  * owners must match. Validate ownership, references, unknown authoring keys,
  * and resource bounds before persistence.
  */
-export type PackConfig = { node: Node, agents?: Array<Agent> | null, contexts?: Array<AgentContext> | null, compactions?: Array<CompactionConfig> | null, tools?: Array<Tools> | null, agent_targets?: Array<AgentTargetDocument> | null, skills?: Array<SkillDocument> | null, datastore_tool_surfaces?: Array<DatastoreToolSurfaceDocument> | null, inference_backends?: Array<InferenceBackend> | null, inference_profiles?: Array<InferenceProfile> | null, inference_sampling?: Array<InferenceSampling> | null, inference_execution?: Array<InferenceExecution> | null, inference_retry_policies?: Array<InferenceRetryPolicy> | null, tool_service_registries?: Array<ToolServiceRegistry> | null, projection_acp_bindings?: Array<ProjectionAcpBinding> | null, tasks?: Array<Task> | null, triggers?: Array<Trigger> | null, schedules?: Array<Schedule> | null, event_sources?: Array<EventSource> | null, callbacks?: Array<Callback> | null, callback_bindings?: Array<CallbackBinding> | null, callback_modules?: Array<CallbackModule> | null, repository_placements?: Array<RepositoryPlacement> | null, eval_definitions?: Array<EvalDefinition> | null, pages?: Array<PageDocument> | null, plugin_sources?: Array<PluginSourceDocument> | null, };
+export type PackConfig = { node: Node,
+/**
+ * The Node's default Agent selection. Absent leaves the stored selection
+ * unchanged.
+ */
+default_agent_selection?: DefaultAgentSelection | null, agents?: Array<Agent> | null, contexts?: Array<AgentContext> | null, compactions?: Array<CompactionConfig> | null, tools?: Array<Tools> | null, agent_targets?: Array<AgentTargetDocument> | null, skills?: Array<SkillDocument> | null, datastore_tool_surfaces?: Array<DatastoreToolSurfaceDocument> | null, inference_backends?: Array<InferenceBackend> | null, inference_profiles?: Array<InferenceProfile> | null, inference_sampling?: Array<InferenceSampling> | null, inference_execution?: Array<InferenceExecution> | null, inference_retry_policies?: Array<InferenceRetryPolicy> | null, tool_service_registries?: Array<ToolServiceRegistry> | null, projection_acp_bindings?: Array<ProjectionAcpBinding> | null, tasks?: Array<Task> | null, triggers?: Array<Trigger> | null, schedules?: Array<Schedule> | null, event_sources?: Array<EventSource> | null, callbacks?: Array<Callback> | null, callback_bindings?: Array<CallbackBinding> | null, callback_modules?: Array<CallbackModule> | null, repository_placements?: Array<RepositoryPlacement> | null, eval_definitions?: Array<EvalDefinition> | null, pages?: Array<PageDocument> | null, plugin_sources?: Array<PluginSourceDocument> | null, };

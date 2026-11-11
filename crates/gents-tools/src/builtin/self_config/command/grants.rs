@@ -99,6 +99,7 @@ pub(super) fn may_edit(categories: &BTreeSet<String>, category: &str, scope: Con
 }
 
 /// `SelfConfig.mayCreateAgent`.
+#[cfg(test)]
 pub(super) fn may_create_agent(categories: &BTreeSet<String>) -> bool {
     categories.contains(CATALOG_CATEGORY)
 }
@@ -154,50 +155,6 @@ impl ConfigCommandTool {
         anyhow::ensure!(
             agent_command_exposed(&self.categories),
             "agent {operation} is not exposed"
-        );
-        Ok(())
-    }
-
-    /// Create and clone add an Agent to the node (catalog). Disable is an
-    /// Agent edit of its target, so it follows that Agent's scope.
-    pub(super) fn ensure_agent_mutation(
-        &self,
-        operation: &str,
-        agent_did: Option<&str>,
-    ) -> Result<()> {
-        match (operation, agent_did) {
-            ("create" | "clone", _) => self.ensure_node_authority(operation),
-            (_, Some(agent_did)) => self.ensure_config_scope(Some(AGENT_CATEGORY), agent_did),
-            (_, None) => Ok(()),
-        }
-    }
-
-    pub(super) fn ensure_agent_stays_enabled(
-        &self,
-        operation: &str,
-        agent_did: Option<&str>,
-    ) -> Result<()> {
-        anyhow::ensure!(
-            !(self.no_lockout
-                && operation == "disable"
-                && agent_did == Some(self.core.agent_did())),
-            "no-lockout guard: agent must remain enabled"
-        );
-        Ok(())
-    }
-
-    pub(super) fn ensure_node_authority(&self, operation: &str) -> Result<()> {
-        anyhow::ensure!(
-            self.categories.contains("node"),
-            "agent {operation} requires the agent catalog grant (category node)"
-        );
-        Ok(())
-    }
-
-    pub(super) fn ensure_default_selection(&self, make_default: bool) -> Result<()> {
-        anyhow::ensure!(
-            !make_default || may_create_agent(&self.categories),
-            "--default changes the node's agent selection and requires the agent catalog grant (category node)"
         );
         Ok(())
     }

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use super::effect::{validate, Access, DocRef, Effect, InvalidEffects, Manifest, Row};
+use super::effect::{validate, Access, DocRef, Effect, InvalidEffects, Manifest, Named, Row};
 use super::hook::{Hook, Outcome, Query};
 
 /// Lean `Hooks.Refusal`, with the store failures a native host adds. A
@@ -21,17 +21,19 @@ pub enum HookError {
     },
     #[error("lifecycle plugin {plugin} returned effects where only a verdict is accepted")]
     GateEffects { plugin: &'static str },
-    #[error(
-        "lifecycle plugin {plugin} staged a write against a row that changed or was not shown"
-    )]
-    Conflict { plugin: &'static str },
+    /// `message` is the plugin's caller-facing text for the lost fence.
+    #[error("{}", conflict_text(plugin, message.as_deref()))]
+    Conflict {
+        plugin: &'static str,
+        message: Option<String>,
+    },
     #[error("lifecycle plugin {plugin} requested the unknown core operation {operation}")]
     UnknownOperation {
         plugin: &'static str,
         operation: String,
     },
     #[error(
-        "no lifecycle plugins are installed in this process; the runtime was composed without them"
+        "no lifecycle plugins are attached to this node, or installed for this process's GraphQL transactions; the runtime was composed without them"
     )]
     NotInstalled,
     #[error("lifecycle plugin declared an unreadable query: {0}")]
@@ -53,6 +55,21 @@ pub enum HookError {
     /// A declared revision read failed; the caller sees the read's own error.
     #[error(transparent)]
     Revisions(anyhow::Error),
+    #[error("lifecycle plugin declared the unknown core read {0}")]
+    UnknownRead(String),
+    /// A declared named core read failed; the caller sees the read's own error.
+    #[error(transparent)]
+    CoreRead(anyhow::Error),
+}
+
+fn conflict_text(plugin: &str, message: Option<&str>) -> String {
+    let lost = format!(
+        "lifecycle plugin {plugin} staged a write against a row that changed or was not shown"
+    );
+    match message {
+        Some(message) => format!("{message} ({lost})"),
+        None => lost,
+    }
 }
 
 /// Why one plugin's effects were not applied. `clean` is whether the staged
@@ -66,10 +83,12 @@ pub struct ApplyFailure {
 
 /// Lean `Hooks.Host`: what core supplies. `select` answers a declared query
 /// from the transaction, `allowed` is document ACP for the transaction's
-/// actor, and `apply` applies one plugin's validated effects in the order
-/// returned, all or none (Lean `Hooks.applyEffects`).
+/// actor, `actor` is that actor, and `apply` applies one plugin's validated
+/// effects in the order returned, all or none (Lean `Hooks.applyEffects`).
 #[async_trait::async_trait]
 pub trait Host: Send + Sync {
+    fn actor(&self) -> Option<String>;
+
     async fn select(&self, query: &Query) -> Result<Vec<Row>, HookError>;
 
     async fn allowed(&self, access: Access, doc: &DocRef) -> Result<bool, HookError>;
@@ -95,16 +114,30 @@ where
     Ok(rows)
 }
 
+/// Who a plugin's grants may name: the transaction's actor, the actors the
+/// event names, and the documents core showed the plugin (Lean `Hooks.Named`).
+fn named<H>(host: &H, actors: &[String], rows: &[Vec<Row>]) -> Named
+where
+    H: Host,
+{
+    Named {
+        actor: host.actor(),
+        actors: actors.to_vec(),
+        docs: rows.iter().flatten().map(|row| row.doc.clone()).collect(),
+    }
+}
+
 async fn validated<H>(
     host: &H,
     plugin: &'static str,
     manifest: &Manifest,
     effects: &[Effect],
+    named: &Named,
 ) -> Result<(), HookError>
 where
     H: Host,
 {
-    validate(manifest, effects, |_, _| true)
+    validate(manifest, effects, |_, _| true, named)
         .map_err(|cause| HookError::Invalid { plugin, cause })?;
     let mut denied = Vec::new();
     for effect in effects {
@@ -114,11 +147,16 @@ where
             }
         }
     }
-    validate(manifest, effects, |access, doc| {
-        !denied
-            .iter()
-            .any(|(denied_access, denied_doc)| *denied_access == access && denied_doc == doc)
-    })
+    validate(
+        manifest,
+        effects,
+        |access, doc| {
+            !denied
+                .iter()
+                .any(|(denied_access, denied_doc)| *denied_access == access && denied_doc == doc)
+        },
+        named,
+    )
     .map_err(|cause| HookError::Invalid { plugin, cause })
 }
 
@@ -130,6 +168,20 @@ pub async fn stage<E, V, H>(
     host: &H,
     plugins: &[Plugin<E, V>],
     event: &E,
+) -> Result<Vec<V>, HookError>
+where
+    H: Host,
+{
+    stage_naming(host, plugins, event, &[]).await
+}
+
+/// `stage` at a point whose event names `actors` a create's grants may name
+/// besides the transaction's actor.
+pub async fn stage_naming<E, V, H>(
+    host: &H,
+    plugins: &[Plugin<E, V>],
+    event: &E,
+    actors: &[String],
 ) -> Result<Vec<V>, HookError>
 where
     H: Host,
@@ -149,7 +201,8 @@ where
                 })
             }
             Outcome::Proceed { value, effects } => {
-                validated(host, name, plugin.manifest(), &effects).await?;
+                let named = named(host, actors, rows);
+                validated(host, name, plugin.manifest(), &effects, &named).await?;
                 host.apply(plugin.manifest(), &effects)
                     .await
                     .map_err(|failure| failure.error)?;
@@ -222,7 +275,8 @@ where
             }
             Outcome::Proceed { effects, .. } => effects,
         };
-        if let Err(cause) = validated(host, name, plugin.manifest(), &effects).await {
+        let named = named(host, &[], &rows);
+        if let Err(cause) = validated(host, name, plugin.manifest(), &effects, &named).await {
             staged.push(owed(cause));
             continue;
         }

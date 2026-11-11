@@ -139,12 +139,12 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
     let (db, owner, access) = (&cycle.db, cycle.owner.clone(), &cycle.access);
     let configured = access
         .execute(
-            "{ Node { node_did default_agent_did enabled } Agent { agent_did creation_nonce enabled inference_profile_id } InferenceProfile { profile_id backend_id model_name } WorkspaceRoot { root_path enabled } }",
+            "{ Node { node_did enabled } DefaultAgentSelection { node_did default_agent_did } Agent { agent_did creation_nonce enabled inference_profile_id } InferenceProfile { profile_id backend_id model_name } WorkspaceRoot { root_path enabled } }",
         )
         .await
         .unwrap();
     assert_eq!(
-        configured["data"]["Node"][0]["default_agent_did"],
+        configured["data"]["DefaultAgentSelection"][0]["default_agent_did"],
         cycle.agent(WRITER),
         "installed principal/default behavior: {configured:#}"
     );
@@ -747,13 +747,13 @@ async fn update_document(
 }
 
 async fn select_default_agent(access: &ConfigAccess, owner: &str, agent_did: &str) {
-    update_document(
+    apply_documents(
         access,
         "workspace_cycle.select_default_agent",
-        Collection::Node,
-        owner,
-        owner,
-        |node| node["default_agent_did"] = agent_did.into(),
+        vec![(
+            Collection::DefaultAgentSelection,
+            json!({"node_did": owner, "default_agent_did": agent_did}),
+        )],
     )
     .await;
 }
@@ -1189,7 +1189,8 @@ async fn install_failure_inbox_triggers(cycle: &Cycle) -> String {
     .await
     .expect("provision the supervisor Agent for the User");
     let config = json!({
-        "node": {"node_did": owner, "default_agent_did": writer},
+        "node": {"node_did": owner},
+        "default_agent_selection": {"node_did": owner, "default_agent_did": writer},
         "agents": [
             {
                 "node_did": owner,

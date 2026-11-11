@@ -58,11 +58,9 @@ pub async fn bind_target(db: &TestDb, target: &InferenceTarget) -> RequestActors
             let profile = &profile;
             let sampling = &sampling;
             Box::pin(async move {
-                let (_, node) = read(txn, Collection::Node, node_did, node_did)
+                read(txn, Collection::Node, node_did, node_did)
                     .await?
                     .ok_or_else(|| anyhow::anyhow!("the fixture User's Node is missing"))?;
-                let mut node: Node = serde_json::from_value(node)?;
-                node.default_agent_did = Some(agent_did.clone());
                 let (_, agent) = read(txn, Collection::Agent, node_did, agent_did)
                     .await?
                     .ok_or_else(|| anyhow::anyhow!("the fixture Agent is missing"))?;
@@ -71,7 +69,10 @@ pub async fn bind_target(db: &TestDb, target: &InferenceTarget) -> RequestActors
                 agent.inference_profile_id = profile_id.clone();
                 let plan = DesiredStateApplyPlan::new(
                     [
-                        (Collection::Node, serde_json::to_value(node)?),
+                        (
+                            Collection::DefaultAgentSelection,
+                            serde_json::json!({"node_did": node_did, "default_agent_did": agent_did}),
+                        ),
                         (Collection::InferenceBackend, serde_json::to_value(backend)?),
                         (Collection::InferenceProfile, serde_json::to_value(profile)?),
                     ]
@@ -491,7 +492,7 @@ impl LiveUser {
         ];
         if spec.default_for_node {
             documents.push((
-                Collection::Node,
+                Collection::DefaultAgentSelection,
                 serde_json::json!({
                     "node_did": self.node_did,
                     "default_agent_did": binding.agent_did,

@@ -200,7 +200,7 @@ PYFREE
   served || { echo "the eval home did not become ready; see $EVAL_HOME/server.log" >&2; tail -n 20 "$EVAL_HOME/server.log" >&2; exit 1; }
 fi
 
-DEFAULT_AGENT_DID=$("$GENTS" utils data query --home "$EVAL_HOME" --graphql "$GRAPHQL" --collection Node --field node_did --field default_agent_did | python3 -c '
+DEFAULT_AGENT_DID=$("$GENTS" utils data query --home "$EVAL_HOME" --graphql "$GRAPHQL" --collection DefaultAgentSelection --field node_did --field default_agent_did | python3 -c '
 import json, sys
 rows = [row for row in json.load(sys.stdin).get("results", []) if row.get("node_did") == sys.argv[1]]
 if len(rows) != 1 or not isinstance(rows[0].get("default_agent_did"), str) or not rows[0]["default_agent_did"].strip():
@@ -239,7 +239,7 @@ json.dump({"manifest_version": 1, "name": "ladder_inference", "version": "0.1.0"
            "description": "The ladder's trial inference binding", "authors": ["gents-ai contributors"],
            "tags": ["eval"], "kind": "documents", "assets": ["pack_config.json"], "config": "pack_config.json"},
           open(f"{root}/manifest.json", "w"))
-json.dump({"node": {"default_agent_did": default_agent}, "inference_backends": [backend], "inference_sampling": [sampling],
+json.dump({"node": {"node_did": did}, "default_agent_selection": {"node_did": did, "default_agent_did": default_agent}, "inference_backends": [backend], "inference_sampling": [sampling],
            "inference_execution": [execution], "inference_profiles": [profile]}, open(f"{root}/pack_config.json", "w"), indent=2)
 PY
 apply_config "$INFERENCE"
@@ -301,8 +301,8 @@ PYSESSIONS
   fi
   DEFINITION="$EVAL_HOME/definitions/$level"
   rm -rf "$DEFINITION" && mkdir -p "$EVAL_HOME/definitions" && cp -R "${GENTS_EVAL_DEFINITION_SOURCE:-$FIXTURES/$SUITE_PATH}" "$DEFINITION"
-  python3 -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["node"]={"default_agent_did": sys.argv[2]}; json.dump(c, open(p,"w"), indent=2)' \
-    "$DEFINITION/pack_config.json" "$DEFAULT_AGENT_DID"
+  python3 -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["node"]={"node_did": sys.argv[3]}; c["default_agent_selection"]={"node_did": sys.argv[3], "default_agent_did": sys.argv[2]}; json.dump(c, open(p,"w"), indent=2)' \
+    "$DEFINITION/pack_config.json" "$DEFAULT_AGENT_DID" "$DID"
   python3 - "$DEFINITION" "$RUN_SUBJECT" <<'PYENGINEERBASELINE'
 import json, pathlib, sys
 root, subject = map(pathlib.Path, sys.argv[1:])

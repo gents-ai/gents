@@ -180,19 +180,6 @@ async fn cleanup_in_txn(
                     target.collection_name()
                 )
             })?;
-        if *target == SelfConfigTarget::Agent {
-            let protected = document
-                .get("tags")
-                .and_then(Value::as_array)
-                .is_some_and(|tags| {
-                    tags.iter()
-                        .any(|tag| tag.as_str() == Some(super::ENGINEER_AGENT_TAG))
-                });
-            anyhow::ensure!(
-                !protected,
-                "target agent {id:?} is the protected Engineer configurator and cannot be removed"
-            );
-        }
         receipt.push(json!({
             "resource": resource,
             "collection": target.collection_name(),

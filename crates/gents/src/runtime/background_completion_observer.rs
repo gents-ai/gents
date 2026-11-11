@@ -103,6 +103,7 @@ impl BackgroundCompletionObserver {
                         gents_toolcalls::background::completion::settle_rows_after_request_update(
                             &self.node,
                             &access,
+                            &gents_automation::goal::session_message::SessionGoals,
                             &self.local_did,
                             &change.doc_id,
                         )
@@ -174,6 +175,7 @@ impl BackgroundCompletionObserver {
                 &self.local_did,
                 &identities,
                 &self.background_executions,
+                &gents_automation::goal::session_message::SessionGoals,
             )
             .await?
         {

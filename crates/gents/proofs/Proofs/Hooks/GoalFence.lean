@@ -69,8 +69,8 @@ def clientBinding (candidate : Candidate) (goal : Option Assignment)
       (opening rows assignment).any fun found => found.2 == candidate.agent)
 
 /-- The Goal continuation fence (`goal::fence_goal_continuation_claim_in_txn`
-with `retire_stale_assignment_continuations_in_txn` restricted to the request
-being claimed) as a verdict. It is assembled from the existing owners:
+with `goal::request_head::stale_assignment_continuations` restricted to the
+request being claimed) as a verdict. It is assembled from the existing owners:
 `Enrollment.clientGoalClaimBinding` for a client continuation and
 `RequestAssignment.belongs` for membership of the current assignment.
 

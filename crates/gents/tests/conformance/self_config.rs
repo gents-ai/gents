@@ -6,9 +6,10 @@ use gents_lean_vocab::{
     lean_self_config_field_tables, lean_self_config_selection_cases, lean_sibling_tools_cases,
     LeanAgentCandidate, LeanAgentDecisionInputs, LeanSelfConfigCase, LeanSelfConfigPatchEntry,
 };
+use gents_tools::builtin::self_config::agent::{admit_sibling_tools_target, SiblingToolsTarget};
 use gents_tools::builtin::self_config::agent::{
-    admit_sibling_tools_target, decide_agent_operation, materialize_agent, AgentCandidate,
-    AgentCatalogView, AgentCreateRequest, AgentOperation, SiblingToolsTarget,
+    decide_agent_operation, materialize_agent, AgentActor, AgentCandidate, AgentCatalogView,
+    AgentCreateRequest, AgentOperation,
 };
 use gents_tools::builtin::self_config::{
     apply_tool_grant_selection, validate_tool_network_selection,
@@ -239,9 +240,16 @@ fn agent_catalog(inputs: &LeanAgentDecisionInputs) -> AgentCatalogView {
             .iter()
             .map(|agent| (agent.agent_did.clone(), agent.enabled))
             .collect(),
-        protected_ids: inputs.protected_ids.iter().cloned().collect(),
         default_id: inputs.default_id.clone(),
         published_profiles: inputs.published_profiles.iter().cloned().collect(),
+    }
+}
+
+fn agent_actor(inputs: &LeanAgentDecisionInputs) -> AgentActor {
+    AgentActor {
+        did: inputs.actor.did.clone(),
+        catalog: inputs.actor.catalog,
+        configures: inputs.actor.configures.iter().cloned().collect(),
     }
 }
 
@@ -259,12 +267,23 @@ fn agent_operation(inputs: &LeanAgentDecisionInputs) -> AgentOperation {
                 clone_from: Some(input.clone_from.clone()).filter(|source| !source.is_empty()),
             })
         }
-        "edit" => AgentOperation::Edit(entries_patch(
-            inputs
-                .edit_patch
-                .as_ref()
-                .unwrap_or_else(|| panic!("{}: edit without edit_patch", inputs.name)),
-        )),
+        "edit" => AgentOperation::Edit(
+            entries_patch(
+                inputs
+                    .edit_patch
+                    .as_ref()
+                    .unwrap_or_else(|| panic!("{}: edit without edit_patch", inputs.name)),
+            )
+            .into_iter()
+            .map(|(field, value)| match field.as_str() {
+                "enabled" | "tags" => {
+                    let value = value.map(parse_nested);
+                    (field, value)
+                }
+                _ => (field, value),
+            })
+            .collect(),
+        ),
         "disable" => AgentOperation::Disable,
         other => panic!("{}: unknown agent operation {other}", inputs.name),
     }
@@ -282,18 +301,26 @@ fn generated_agent_decision_cases_drive_production_agent_admission() {
             "duplicate {}",
             inputs.name
         );
-        assert_eq!(
-            decide_agent_operation(
-                &agent_catalog(inputs),
-                &agent_operation(inputs),
-                &inputs.target,
-                inputs.make_default,
-            )
-            .is_ok(),
-            case.accepted,
-            "{}: production agent admission",
-            inputs.name
+        let decision = decide_agent_operation(
+            &agent_catalog(inputs),
+            &agent_actor(inputs),
+            &agent_operation(inputs),
+            &inputs.target,
+            inputs.make_default,
         );
+        assert_eq!(
+            decision
+                .as_ref()
+                .err()
+                .map(|error| error.refusal().map(|refusal| refusal.as_str())),
+            case.refusal.as_deref().map(Some),
+            "{}: production agent admission (actor {:?}, front ends {:?}, accepted {}): {decision:?}",
+            inputs.name,
+            inputs.actor,
+            inputs.front_ends,
+            case.accepted
+        );
+        assert_eq!(decision.is_ok(), case.accepted, "{}", inputs.name);
     }
 }
 
@@ -376,6 +403,7 @@ fn generated_agent_materialization_cases_drive_production_agent_materialization(
         let candidate = decode_candidate(&case.candidate);
         let actual = materialize_agent(
             &agent_catalog(inputs),
+            &agent_actor(inputs),
             &agent_operation(inputs),
             &inputs.target,
             inputs.make_default,
@@ -427,7 +455,6 @@ fn generated_sibling_tools_cases_drive_production_tools_selection() {
         let existing = network_mode(&case.existing_network);
         let admitted = admit_sibling_tools_target(&SiblingToolsTarget {
             owner_matches: case.owner_matches,
-            protected: case.protected,
             shared_context: case.shared_context,
             shared_tools: case.shared_tools,
         })

@@ -1,22 +1,22 @@
 use std::path::Path;
 
 use anyhow::{anyhow, Context, Result};
-#[cfg(test)]
-use gents_protocol::request_input::RequestInput;
-#[cfg(test)]
-use gents_protocol::row::AgentRequestRow;
-pub(crate) use gents_tools::task_run::TaskRunOutput;
 use gents_automation::triggers::task_run::{
     enqueue_task_run as enqueue_task_run_owner, read_runnable_task,
 };
-use gents_tools::task_run::TaskRunOptions;
 #[cfg(test)]
 use gents_automation::triggers::task_run::{
     lookup_request_by_retry_key, prepare_task_run_goal_id, prepare_task_run_input,
     resolve_invocation_key,
 };
 #[cfg(test)]
+use gents_protocol::request_input::RequestInput;
+#[cfg(test)]
+use gents_protocol::row::AgentRequestRow;
+#[cfg(test)]
 use gents_store::graphql::escape_graphql_string;
+use gents_tools::task_run::TaskRunOptions;
+pub(crate) use gents_tools::task_run::TaskRunOutput;
 use serde_json::Value;
 
 use crate::cli::ConfigTaskRunArgs;
@@ -293,7 +293,8 @@ mod tests {
             },
         )?;
         let served = crate::shared::test_support::served_config(json!({
-            "node": { "node_did": did, "default_agent_did": "engineer" },
+            "node": { "node_did": did },
+            "default_agent_selection": { "node_did": did, "default_agent_did": "engineer" },
             "inference_backends": [{
                 "node_did": did,
                 "backend_id": "backend",

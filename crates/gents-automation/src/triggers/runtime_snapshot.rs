@@ -435,9 +435,7 @@ pub struct AgentExecutorStatus {
 }
 
 impl ActiveRuntimeSnapshot {
-    pub fn watcher_identities(
-        &self,
-    ) -> Result<Vec<Arc<dyn gents_store::identity::NodeIdentity>>> {
+    pub fn watcher_identities(&self) -> Result<Vec<Arc<dyn gents_store::identity::NodeIdentity>>> {
         let mut identities = self
             .agents
             .iter()

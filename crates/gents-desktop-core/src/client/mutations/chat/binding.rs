@@ -58,16 +58,10 @@ fn resolve_agent_did(
 
     let resolved = session_agent
         .or(requested)
-        .or_else(|| {
-            store
-                .nodes
-                .iter()
-                .find(|row| row.node_did == node_did)
-                .and_then(|row| normalize_optional_string(row.default_agent_did.as_deref()))
-        })
+        .or_else(|| store.selected_default_agent_did(node_did))
         .ok_or_else(|| {
             anyhow::anyhow!(
-                "no agent is bound to this session and Node {node_did} has no default_agent_did"
+                "no agent is bound to this session and Node {node_did} has no default agent selection"
             )
         })?
         .to_owned();

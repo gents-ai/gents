@@ -113,13 +113,22 @@ async fn publish_default_agent(
                 )
                 .await?
                 .expect("published Node");
-                node["default_agent_did"] = agent_did.into();
                 node["enabled"] = true.into();
-                let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-                    collection: gents_store::collection::Collection::Node,
-                    add: node.clone(),
-                    update: node,
-                }])?;
+                let selection = serde_json::to_value(gents_documents::DefaultAgentSelection::new(
+                    node_did, agent_did,
+                ))?;
+                let plan = DesiredStateApplyPlan::new(vec![
+                    DesiredStateApplyDocument {
+                        collection: gents_store::collection::Collection::Node,
+                        add: node.clone(),
+                        update: node,
+                    },
+                    DesiredStateApplyDocument {
+                        collection: gents_store::collection::Collection::DefaultAgentSelection,
+                        add: selection.clone(),
+                        update: selection,
+                    },
+                ])?;
                 apply_desired_state_plan(
                     txn,
                     &plan,

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use gents_protocol::agent_identity::AgentIdentityBinding;
+use gents_protocol::agent_identity::{AgentAdmissionFacts, AgentIdentityBinding};
 use identity::{Identity as _, RawIdentity};
 use zeroize::Zeroizing;
 
@@ -36,8 +36,12 @@ pub enum AgentProvisionError {
     Access(#[from] crate::config_client::ConfigClientError),
 }
 
-/// Allocate a fresh agent binding only after native authorization of the
-/// caller. It grants nothing: the Agent's baseline is projected from its
+/// The Node permission that is the agent catalog (Lean
+/// `SelfConfig.ActorGrants.catalog`): create, clone and choosing the default.
+const MANAGE_AGENTS: &str = "manage_agents";
+
+/// Allocate a fresh agent binding only after the caller is natively allowed
+/// the agent catalog (`manage_agents` on the Node). It grants nothing: the Agent's baseline is projected from its
 /// document as the publishing actor, in the publishing transaction.
 pub async fn provision_agent_identity_authorized(
     node: &Arc<defra_node::Node>,
@@ -74,7 +78,7 @@ pub async fn provision_agent_identity_authorized(
                         "Node",
                         &[doc_id.to_owned()],
                         defra_node::DocumentAccessMode::Named {
-                            permission: "update".to_owned(),
+                            permission: MANAGE_AGENTS.to_owned(),
                             node_permission: NodePermission::DocumentUpdate,
                         },
                     )
@@ -91,6 +95,153 @@ pub async fn provision_agent_identity_authorized(
         _ => return Err(AgentProvisionError::AuthorizationUnavailable),
     }
     provision_agent_identity(runtime).map_err(Into::into)
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AgentAdmissionObservationError {
+    #[error("the node DID does not name this runtime's node")]
+    NodeMismatch,
+    #[error(transparent)]
+    Identity(#[from] IdentityError),
+    #[error(transparent)]
+    Access(#[from] crate::config_client::ConfigClientError),
+}
+
+/// Observes, as the runtime, the native ACP grants `actor` holds for agent
+/// operations (Lean `SelfConfig.ActorGrants`) and the Node's current default
+/// Agent as the runtime reads it. It decides nothing: agent admission decides
+/// from these facts and DefraDB authorizes every write. A grant counts as held
+/// only when DefraDB answers `Allowed`; a denied or unavailable answer, or a
+/// document the runtime cannot find, is not held.
+pub async fn observe_agent_admission(
+    node: &Arc<defra_node::Node>,
+    node_did: &str,
+    actor: &identity::Did,
+    targets: &[String],
+) -> std::result::Result<AgentAdmissionFacts, AgentAdmissionObservationError> {
+    use crate::config_client::{ConfigAccess, ConfigClientError, NodePermission};
+    use gents_protocol::document_query::{
+        self as query,
+        fields::{
+            agent as agent_fields, default_agent_selection as default_fields, node as node_fields,
+        },
+        Filter, Query, Selection,
+    };
+    if node.node_identity_did() != Some(node_did) {
+        return Err(AgentAdmissionObservationError::NodeMismatch);
+    }
+    let runtime = identity::Did::new(node_did).map_err(IdentityError::from)?;
+    let facts = ConfigAccess::local_as(node.clone(), runtime)
+        .transact_readonly("agent.admission_facts", |txn| {
+            Box::pin(async move {
+                let allowed = |decisions: Vec<defra_node::DocumentAccessDecision>| {
+                    decisions
+                        .into_iter()
+                        .map(|decision| {
+                            matches!(decision, defra_node::DocumentAccessDecision::Allowed)
+                        })
+                        .collect::<Vec<_>>()
+                };
+                let nodes = txn
+                    .run(
+                        &Query::select(Selection::doc_id())
+                            .filter(Filter::eq(node_fields::NODE_DID, node_did))
+                            .limit(2)
+                            .render(),
+                    )
+                    .await?;
+                let catalog = match query::rows(&nodes, "Node") {
+                    [row] => match row["_docID"].as_str() {
+                        Some(doc_id) => allowed(
+                            txn.observe_document_access(
+                                actor,
+                                "Node",
+                                &[doc_id.to_owned()],
+                                defra_node::DocumentAccessMode::Named {
+                                    permission: MANAGE_AGENTS.to_owned(),
+                                    node_permission: NodePermission::DocumentUpdate,
+                                },
+                            )
+                            .await?,
+                        )
+                        .first()
+                        .copied()
+                        .unwrap_or(false),
+                        None => false,
+                    },
+                    _ => false,
+                };
+                let mut configures = Vec::new();
+                if !targets.is_empty() {
+                    let agents = txn
+                        .run(
+                            &Query::select(Selection::doc_id().field(agent_fields::AGENT_DID))
+                                .filter(Filter::eq(agent_fields::NODE_DID, node_did).and(
+                                    Filter::any_of(
+                                        agent_fields::AGENT_DID,
+                                        targets.iter().map(String::as_str),
+                                    ),
+                                ))
+                                .render(),
+                        )
+                        .await?;
+                    let found = query::rows(&agents, "Agent")
+                        .iter()
+                        .filter_map(|row| {
+                            Some((
+                                row["_docID"].as_str()?.to_owned(),
+                                query::get(row, agent_fields::AGENT_DID)?.to_owned(),
+                            ))
+                        })
+                        .collect::<Vec<_>>();
+                    if !found.is_empty() {
+                        let doc_ids = found
+                            .iter()
+                            .map(|(doc_id, _)| doc_id.clone())
+                            .collect::<Vec<_>>();
+                        let decisions = allowed(
+                            txn.observe_document_access(
+                                actor,
+                                "Agent",
+                                &doc_ids,
+                                defra_node::DocumentAccessMode::Named {
+                                    permission: "update".to_owned(),
+                                    node_permission: NodePermission::DocumentUpdate,
+                                },
+                            )
+                            .await?,
+                        );
+                        configures = found
+                            .into_iter()
+                            .zip(decisions)
+                            .filter_map(|((_, agent_did), held)| held.then_some(agent_did))
+                            .collect();
+                        configures.sort();
+                        configures.dedup();
+                    }
+                }
+                let selection = txn
+                    .run(
+                        &Query::select(Selection::new().field(default_fields::DEFAULT_AGENT_DID))
+                            .filter(Filter::eq(default_fields::NODE_DID, node_did))
+                            .limit(1)
+                            .render(),
+                    )
+                    .await?;
+                let default_agent_did = query::rows(&selection, "DefaultAgentSelection")
+                    .first()
+                    .and_then(|row| query::get(row, default_fields::DEFAULT_AGENT_DID))
+                    .filter(|did| !did.trim().is_empty())
+                    .map(str::to_owned);
+                Ok::<_, ConfigClientError>(AgentAdmissionFacts {
+                    catalog,
+                    configures,
+                    default_agent_did,
+                })
+            })
+        })
+        .await?;
+    Ok(facts)
 }
 
 /// Allocate a binding for an explicitly held executing Agent signer. Native
