@@ -58,12 +58,7 @@ def decodeReach (doc : Doc) : Option Reach := do
     | some "true" | none => some true
     | some "false" => some false
     | _ => none
-  let engineerTag ← match doc "tags" with
-    | some "[\"gents:engineer\"]" => some true
-    | some "[\"gents:engineer\",\"ui:engineer\"]" => some true
-    | some "[]" | some "[\"ui:engineer\"]" | none => some false
-    | _ => none
-  pure { enabled, engineerTag }
+  pure { enabled }
 
 /-- Tools `integrations` text for the plugin `acme/wf` with a job block: the
 specified `max_live` and policy mode `dynamic`. -/
@@ -313,7 +308,7 @@ def scenarios : List CaseRow := examplesToRows ++
     , target := .agent, guarded := true, validates := true
     , doc := [("agent_did", "default"), ("tags", "[\"gents:engineer\"]")]
     , patch := [("enabled", some "false")] }
-  , { name := "agent_guarded_engineer_tag_removal_rejected"
+  , { name := "agent_guarded_engineer_tag_removal_accepted"
     , target := .agent, guarded := true, validates := true
     , doc := [("agent_did", "default"), ("tags", "[\"gents:engineer\"]")]
     , patch := [("tags", some "[\"ui:engineer\"]")] }
@@ -625,108 +620,263 @@ theorem self_config_cases_cover_job_guard :
 
 def publishedProfiles : List String := ["fast", "deep"]
 
+/-! ### The node's ACP state for agent operations
+
+Every Agent is created by `Identity.Household.commitAgentCreation`. The User
+owns the Node; `admin` is an enrolled member holding `nodes#administrator`;
+`operator` is a person granted `administrator` on `worker` alone. The Engineer
+holds `config_writer` on itself (`gents init`) and owns `helper`, which it
+created. `lead` is an Agent holding the catalog through `nodes#administrator`:
+the grant the `node` category needs and that no Agent receives today
+(`SelfConfig.category_gaps`). `worker` holds no grant. -/
+def agentAcpState : Identity.Household.State :=
+  let base : Identity.Household.State :=
+    { objects := [⟨"nodes", "node", "user"⟩]
+    , relations := [⟨"nodes", "node", "administrator", .actor "admin"⟩,
+        ⟨"nodes", "node", "administrator", .actor "lead"⟩]
+    , enrolled := [] }
+  let created := [("default", "user"), ("engineer", "user"), ("worker", "user"),
+    ("idle", "user"), ("lead", "user"), ("helper", "engineer")].foldl
+    (fun s (id, creator) => Identity.Household.commitAgentCreation s id creator id "node" true)
+    base
+  { created with relations :=
+      ⟨"agents", "engineer", "config_writer", .actor "engineer"⟩ ::
+      ⟨"agents", "lead", "config_writer", .actor "lead"⟩ ::
+      ⟨"agents", "worker", "administrator", .actor "operator"⟩ :: created.relations }
+
+def agentCatalog : AgentCatalog :=
+  { agents := [⟨"default", true, []⟩, ⟨"engineer", true, ["gents:engineer"]⟩,
+      ⟨"worker", true, []⟩, ⟨"idle", false, []⟩, ⟨"lead", true, []⟩, ⟨"helper", true, []⟩]
+  , defaultId := some "default" }
+
+def emptyAgentCatalog : AgentCatalog :=
+  { agents := [], defaultId := none }
+
+def fixtureActor (did : String) (kind : ActorKind) : Actor :=
+  { did, kind
+  , grants := actorGrantsOf agentAcpState did "node" (agentCatalog.agents.map (·.id)) }
+
+def userActor : Actor := fixtureActor "user" .person
+def adminActor : Actor := fixtureActor "admin" .person
+def operatorActor : Actor := fixtureActor "operator" .person
+def strangerActor : Actor := fixtureActor "stranger" .person
+def engineerActor : Actor := fixtureActor "engineer" .agent
+def leadActor : Actor := fixtureActor "lead" .agent
+def workerActor : Actor := fixtureActor "worker" .agent
+
+/-- The grants each fixture actor holds, read from `agentAcpState` by native
+ACP evaluation: owner and administrator reach the catalog and every Agent; a
+per-Agent grant reaches that Agent alone; `config_writer` reaches the holder
+itself; ownership reaches the Agents an Agent created; nothing else does. -/
+theorem fixture_actor_grants :
+    [userActor, adminActor, operatorActor, strangerActor, engineerActor, leadActor,
+      workerActor].map (fun a => (a.did, a.grants)) =
+    [("user", ⟨true, ["default", "engineer", "worker", "idle", "lead", "helper"]⟩),
+     ("admin", ⟨true, ["default", "engineer", "worker", "idle", "lead", "helper"]⟩),
+     ("operator", ⟨false, ["worker"]⟩),
+     ("stranger", ⟨false, []⟩),
+     ("engineer", ⟨false, ["engineer", "helper"]⟩),
+     ("lead", ⟨true, ["default", "engineer", "worker", "idle", "lead", "helper"]⟩),
+     ("worker", ⟨false, []⟩)] := by
+  native_decide
+
+/-- A clone holds no category: after `commitAgentCreation` publishes it from
+an Engineer source, the clone's DID neither holds the catalog nor configures
+itself or its source. -/
+theorem clone_holds_no_category :
+    actorGrantsOf
+      (Identity.Household.commitAgentCreation agentAcpState "clone" "engineer" "clone" "node" true)
+      "clone" "node" ["clone", "engineer"] = ⟨false, []⟩ := by
+  native_decide
+
 structure AgentDecisionRow where
   name : String
-  catalog : AgentCatalog
+  catalog : AgentCatalog := agentCatalog
   profiles : List String := publishedProfiles
-  operation : AgentOperation
-  target : String
-  makeDefault : Bool := false
+  actor : Actor := userActor
+  request : AgentRequest
   deriving Repr
 
 structure AgentDecisionWitness where
   row : AgentDecisionRow
-  accepted : Bool
+  admission : AgentAdmission
   deriving Repr
 
-def agentCatalog : AgentCatalog :=
-  { agents := [("default", true), ("engineer", true), ("worker", true), ("idle", false)]
-  , protectedIds := ["engineer"]
-  , defaultId := some "default" }
-
-def emptyAgentCatalog : AgentCatalog :=
-  { agents := [], protectedIds := [], defaultId := none }
+def AgentDecisionWitness.accepted (w : AgentDecisionWitness) : Bool := w.admission.isOk
 
 def freshCreate : AgentCreateInput :=
   { name := "reviewer", systemPrompt := "Review diffs.", profile := "fast" }
 
+def cloneOf (source : String) : AgentCreateInput :=
+  { freshCreate with systemPrompt := "", profile := "deep", cloneFrom := source }
+
+def editOf (target : String) (f : AgentEditFields) (makeDefault : Bool := false) : AgentRequest :=
+  { operation := .edit f, target, makeDefault }
+
+def disableOf (target : String) (makeDefault : Bool := false) : AgentRequest :=
+  { operation := .disable, target, makeDefault }
+
+def createOf (target : String) (i : AgentCreateInput := freshCreate) (makeDefault : Bool := false) :
+    AgentRequest :=
+  { operation := .create i, target, makeDefault }
+
 def agentDecisionScenarios : List AgentDecisionRow :=
-  [ { name := "agent_default_disable_rejected"
-    , catalog := agentCatalog, operation := .disable, target := "default" }
-  , { name := "agent_protected_edit_rejected"
-    , catalog := agentCatalog, operation := .edit { profile := some (.set "deep") }
-    , target := "engineer" }
-  , { name := "agent_protected_disable_rejected"
-    , catalog := agentCatalog, operation := .disable, target := "engineer" }
-  , { name := "agent_non_default_disable_accepted"
-    , catalog := agentCatalog, operation := .disable, target := "worker" }
+  [ -- the lockout rules
+    { name := "agent_default_disable_rejected", request := disableOf "default" }
+  , { name := "agent_default_enabled_false_edit_rejected"
+    , request := editOf "default" { enabled := some false } }
   , { name := "agent_disable_while_designating_default_rejected"
-    , catalog := agentCatalog, operation := .disable, target := "worker", makeDefault := true }
-  , { name := "agent_unprotected_edit_accepted"
-    , catalog := agentCatalog, operation := .edit { profile := some (.set "deep") }
-    , target := "worker" }
+    , request := disableOf "worker" (makeDefault := true) }
+  , { name := "agent_enabled_false_edit_designating_default_rejected"
+    , request := editOf "worker" { enabled := some false } (makeDefault := true) }
+  , { name := "agent_choose_disabled_default_rejected", request := chooseDefault "idle" }
+  , { name := "agent_choose_disabled_default_enabling_accepted"
+    , request := editOf "idle" { enabled := some true } (makeDefault := true) }
+  , { name := "agent_choose_default_accepted", request := chooseDefault "worker" }
+  , { name := "agent_self_disable_rejected", actor := engineerActor
+    , request := disableOf "engineer" }
+  , { name := "agent_self_enabled_false_edit_rejected", actor := leadActor
+    , request := editOf "lead" { enabled := some false } }
+  , { name := "agent_non_default_disable_accepted", request := disableOf "worker" }
+    -- no protected agent
+  , { name := "agent_engineer_edit_accepted"
+    , request := editOf "engineer" { profile := some (.set "deep") } }
+  , { name := "agent_engineer_disable_accepted", request := disableOf "engineer" }
+  , { name := "agent_engineer_disabled_by_agent_accepted", actor := leadActor
+    , request := disableOf "engineer" }
+  , { name := "agent_engineer_drops_own_tag_accepted", actor := engineerActor
+    , request := editOf "engineer" { tags := some (.set "[]") } }
+    -- the one edit covers every Agent field
+  , { name := "agent_edit_context_description_tags_accepted"
+    , request := editOf "worker"
+        { contextId := some (.set "worker:context"), description := some (.set "Reviews.")
+        , tags := some (.set "[\"ui:reviewer\"]") } }
+  , { name := "agent_edit_context_clear_accepted"
+    , request := editOf "worker" { contextId := some .clear } }
+  , { name := "agent_edit_blank_context_rejected"
+    , request := editOf "worker" { contextId := some (.set " ") } }
+  , { name := "agent_reenable_accepted", request := editOf "idle" { enabled := some true } }
+  , { name := "agent_worker_edit_accepted"
+    , request := editOf "worker" { profile := some (.set "deep") } }
   , { name := "agent_edit_missing_rejected"
-    , catalog := agentCatalog, operation := .edit { profile := some (.set "deep") }
-    , target := "ghost" }
-  , { name := "agent_edit_omitted_fields_accepted"
-    , catalog := agentCatalog, operation := .edit {}, target := "worker" }
+    , request := editOf "ghost" { profile := some (.set "deep") } }
+  , { name := "agent_edit_omitted_fields_accepted", request := editOf "worker" {} }
   , { name := "agent_edit_name_only_without_profile_accepted"
-    , catalog := agentCatalog, operation := .edit { name := some (.set "Worker") }
-    , target := "worker" }
-  , { name := "agent_edit_name_clear_accepted"
-    , catalog := agentCatalog, operation := .edit { name := some .clear }, target := "worker" }
-  , { name := "agent_edit_blank_name_rejected"
-    , catalog := agentCatalog, operation := .edit { name := some (.set "") }
-    , target := "worker" }
+    , request := editOf "worker" { name := some (.set "Worker") } }
+  , { name := "agent_edit_name_clear_accepted", request := editOf "worker" { name := some .clear } }
+  , { name := "agent_edit_blank_name_rejected", request := editOf "worker" { name := some (.set "") } }
   , { name := "agent_edit_blank_prompt_rejected"
-    , catalog := agentCatalog, operation := .edit { systemPrompt := some (.set "  ") }
-    , target := "worker" }
-  , { name := "agent_edit_profile_clear_rejected"
-    , catalog := agentCatalog, operation := .edit { profile := some .clear }
-    , target := "worker" }
+    , request := editOf "worker" { systemPrompt := some (.set "  ") } }
+  , { name := "agent_edit_prompt_accepted"
+    , request := editOf "worker" { systemPrompt := some (.set "Review diffs.") } }
+  , { name := "agent_edit_profile_clear_rejected", request := editOf "worker" { profile := some .clear } }
   , { name := "agent_edit_unpublished_profile_rejected"
-    , catalog := agentCatalog, operation := .edit { profile := some (.set "ghost") }
-    , target := "worker" }
-  , { name := "agent_create_fresh_id_accepted"
-    , catalog := agentCatalog, operation := .create freshCreate, target := "reviewer" }
-  , { name := "agent_create_existing_id_rejected"
-    , catalog := agentCatalog, operation := .create freshCreate, target := "worker" }
+    , request := editOf "worker" { profile := some (.set "ghost") } }
+    -- create and clone
+  , { name := "agent_create_fresh_id_accepted", request := createOf "reviewer" }
+  , { name := "agent_create_as_default_accepted"
+    , request := createOf "reviewer" (makeDefault := true) }
+  , { name := "agent_create_existing_id_rejected", request := createOf "worker" }
   , { name := "agent_create_blank_profile_rejected"
-    , catalog := agentCatalog, operation := .create { freshCreate with profile := " " }
-    , target := "reviewer" }
+    , request := createOf "reviewer" { freshCreate with profile := " " } }
   , { name := "agent_create_unpublished_profile_rejected"
-    , catalog := agentCatalog, operation := .create { freshCreate with profile := "ghost" }
-    , target := "reviewer" }
+    , request := createOf "reviewer" { freshCreate with profile := "ghost" } }
   , { name := "agent_create_fresh_without_prompt_rejected"
-    , catalog := agentCatalog, operation := .create { freshCreate with systemPrompt := " " }
-    , target := "reviewer" }
+    , request := createOf "reviewer" { freshCreate with systemPrompt := " " } }
   , { name := "agent_create_fresh_empty_prompt_empty_catalog_rejected"
     , catalog := emptyAgentCatalog, profiles := ["fast"]
-    , operation := .create { name := "worker", systemPrompt := "", profile := "fast" }
-    , target := "worker" }
-  , { name := "agent_create_clone_inherits_prompt_accepted"
-    , catalog := agentCatalog
-    , operation := .create { freshCreate with systemPrompt := "", profile := "deep"
-                                            , cloneFrom := "worker" }
-    , target := "reviewer" }
+    , request := createOf "worker" { name := "worker", systemPrompt := "", profile := "fast" } }
+  , { name := "agent_create_clone_inherits_prompt_accepted", request := createOf "reviewer" (cloneOf "worker") }
+  , { name := "agent_create_clone_of_engineer_accepted"
+    , request := createOf "reviewer" (cloneOf "engineer") }
   , { name := "agent_create_clone_disabled_source_rejected"
-    , catalog := agentCatalog
-    , operation := .create { freshCreate with systemPrompt := "", profile := "deep"
-                                            , cloneFrom := "idle" }
-    , target := "reviewer" } ]
+    , request := createOf "reviewer" (cloneOf "idle") }
+    -- the same category rule for every actor, read from ACP
+  , { name := "agent_create_by_node_administrator_accepted", actor := adminActor
+    , request := createOf "reviewer" }
+  , { name := "agent_create_by_catalog_agent_accepted", actor := leadActor
+    , request := createOf "reviewer" }
+  , { name := "agent_create_without_catalog_person_rejected", actor := operatorActor
+    , request := createOf "reviewer" }
+  , { name := "agent_create_without_catalog_agent_rejected", actor := engineerActor
+    , request := createOf "reviewer" }
+  , { name := "agent_clone_without_catalog_agent_rejected", actor := engineerActor
+    , request := createOf "reviewer" (cloneOf "engineer") }
+  , { name := "agent_choose_default_without_catalog_rejected", actor := operatorActor
+    , request := chooseDefault "worker" }
+  , { name := "agent_choose_default_by_catalog_agent_accepted", actor := leadActor
+    , request := chooseDefault "worker" }
+  , { name := "agent_edit_by_per_agent_administrator_accepted", actor := operatorActor
+    , request := editOf "worker" { name := some (.set "Worker") } }
+  , { name := "agent_disable_by_per_agent_administrator_accepted", actor := operatorActor
+    , request := disableOf "worker" }
+  , { name := "agent_edit_foreign_without_grant_rejected", actor := operatorActor
+    , request := editOf "engineer" { name := some (.set "Builder") } }
+  , { name := "agent_edit_own_with_self_config_accepted", actor := engineerActor
+    , request := editOf "engineer" { name := some (.set "Builder") } }
+  , { name := "agent_edit_created_agent_by_owner_accepted", actor := engineerActor
+    , request := editOf "helper" { name := some (.set "Helper") } }
+  , { name := "agent_edit_other_agent_without_grant_rejected", actor := engineerActor
+    , request := editOf "worker" { name := some (.set "Worker") } }
+  , { name := "agent_edit_own_without_self_config_rejected", actor := workerActor
+    , request := editOf "worker" { name := some (.set "Worker") } }
+  , { name := "agent_disable_by_stranger_rejected", actor := strangerActor
+    , request := disableOf "worker" } ]
 
 def agentDecisionCases : List AgentDecisionWitness :=
   agentDecisionScenarios.map fun r =>
-    { row := r
-    , accepted := agentOperationAdmitted r.profiles r.catalog r.operation r.target
-        r.makeDefault }
+    { row := r, admission := agentAdmission r.profiles r.catalog r.actor r.request }
 
 theorem agent_decision_cases_regressions :
     (agentDecisionCases.filter (·.accepted)).map (·.row.name) =
-      ["agent_non_default_disable_accepted", "agent_unprotected_edit_accepted",
-       "agent_edit_omitted_fields_accepted",
+      ["agent_choose_disabled_default_enabling_accepted", "agent_choose_default_accepted",
+       "agent_non_default_disable_accepted", "agent_engineer_edit_accepted",
+       "agent_engineer_disable_accepted", "agent_engineer_disabled_by_agent_accepted",
+       "agent_engineer_drops_own_tag_accepted", "agent_edit_context_description_tags_accepted",
+       "agent_edit_context_clear_accepted", "agent_reenable_accepted",
+       "agent_worker_edit_accepted", "agent_edit_omitted_fields_accepted",
        "agent_edit_name_only_without_profile_accepted", "agent_edit_name_clear_accepted",
-       "agent_create_fresh_id_accepted", "agent_create_clone_inherits_prompt_accepted"] := by
+       "agent_edit_prompt_accepted", "agent_create_fresh_id_accepted",
+       "agent_create_as_default_accepted", "agent_create_clone_inherits_prompt_accepted",
+       "agent_create_clone_of_engineer_accepted", "agent_create_by_node_administrator_accepted",
+       "agent_create_by_catalog_agent_accepted", "agent_choose_default_by_catalog_agent_accepted",
+       "agent_edit_by_per_agent_administrator_accepted",
+       "agent_disable_by_per_agent_administrator_accepted",
+       "agent_edit_own_with_self_config_accepted", "agent_edit_created_agent_by_owner_accepted"] := by
+  native_decide
+
+/-- Each refused row is refused for the reason its name states. -/
+theorem agent_decision_refusals :
+    (agentDecisionCases.filterMap fun w => match w.admission with
+      | .error e => some (w.row.name, e)
+      | .ok _ => none) =
+      [("agent_default_disable_rejected", .defaultDisabled),
+       ("agent_default_enabled_false_edit_rejected", .defaultDisabled),
+       ("agent_disable_while_designating_default_rejected", .defaultDisabled),
+       ("agent_enabled_false_edit_designating_default_rejected", .defaultDisabled),
+       ("agent_choose_disabled_default_rejected", .defaultDisabled),
+       ("agent_self_disable_rejected", .selfLockout),
+       ("agent_self_enabled_false_edit_rejected", .selfLockout),
+       ("agent_edit_blank_context_rejected", .invalidInput),
+       ("agent_edit_missing_rejected", .targetMissing),
+       ("agent_edit_blank_name_rejected", .invalidInput),
+       ("agent_edit_blank_prompt_rejected", .invalidInput),
+       ("agent_edit_profile_clear_rejected", .invalidInput),
+       ("agent_edit_unpublished_profile_rejected", .invalidInput),
+       ("agent_create_existing_id_rejected", .targetExists),
+       ("agent_create_blank_profile_rejected", .invalidInput),
+       ("agent_create_unpublished_profile_rejected", .invalidInput),
+       ("agent_create_fresh_without_prompt_rejected", .invalidInput),
+       ("agent_create_fresh_empty_prompt_empty_catalog_rejected", .invalidInput),
+       ("agent_create_clone_disabled_source_rejected", .invalidInput),
+       ("agent_create_without_catalog_person_rejected", .catalogNotHeld),
+       ("agent_create_without_catalog_agent_rejected", .catalogNotHeld),
+       ("agent_clone_without_catalog_agent_rejected", .catalogNotHeld),
+       ("agent_choose_default_without_catalog_rejected", .catalogNotHeld),
+       ("agent_edit_foreign_without_grant_rejected", .agentNotHeld),
+       ("agent_edit_other_agent_without_grant_rejected", .agentNotHeld),
+       ("agent_edit_own_without_self_config_rejected", .agentNotHeld),
+       ("agent_disable_by_stranger_rejected", .agentNotHeld)] := by
   native_decide
 
 structure CandidateFixture where
@@ -765,29 +915,22 @@ def agentMaterializationScenarios : List AgentMaterializationRow :=
   [ { name := "materialize_fresh_create_without_prompt_nothing"
     , decision :=
         { name := "", catalog := emptyAgentCatalog, profiles := ["fast"]
-        , operation := .create { name := "worker", systemPrompt := "", profile := "fast" }
-        , target := "worker" } }
+        , request := createOf "worker" { name := "worker", systemPrompt := "", profile := "fast" } } }
   , { name := "materialize_fresh_create_with_prompt_session"
     , decision :=
         { name := "", catalog := emptyAgentCatalog, profiles := ["fast"]
-        , operation := .create { name := "worker", systemPrompt := "Work.", profile := "fast" }
-        , target := "worker" } }
+        , request := createOf "worker" { name := "worker", systemPrompt := "Work.", profile := "fast" } } }
   , { name := "materialize_edit_profile_clear_nothing"
-    , decision :=
-        { name := "", catalog := agentCatalog, operation := .edit { profile := some .clear }
-        , target := "worker" } }
+    , decision := { name := "", request := editOf "worker" { profile := some .clear } } }
   , { name := "materialize_edit_name_only_session"
-    , decision :=
-        { name := "", catalog := agentCatalog, operation := .edit { name := some (.set "W") }
-        , target := "worker" } }
+    , decision := { name := "", request := editOf "worker" { name := some (.set "W") } } }
   , { name := "materialize_disable_nothing"
-    , decision :=
-        { name := "", catalog := agentCatalog, operation := .disable, target := "worker" } } ]
+    , decision := { name := "", request := disableOf "worker" } } ]
 
 def agentMaterializationCases : List (String × Option Configuration.ResolvedSessionConfig) :=
   agentMaterializationScenarios.map fun r =>
-    (r.name, materializedAgent r.decision.profiles r.decision.catalog r.decision.operation
-      r.decision.target r.decision.makeDefault workerCandidate workerFixture.nodeDid)
+    (r.name, materializedAgent r.decision.profiles r.decision.catalog r.decision.actor
+      r.decision.request workerCandidate workerFixture.nodeDid)
 
 theorem agent_materialization_cases_regressions :
     (agentMaterializationCases.filter (·.2.isSome)).map (·.1) =
