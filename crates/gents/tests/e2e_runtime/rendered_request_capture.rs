@@ -3157,7 +3157,14 @@ impl OwnedCaptureFixture {
             docs.push((gents_store::collection::Collection::AgentContext, serde_json::json!({"node_did":root.did(),"context_id":"capture-context","compaction_id":"capture-compaction"})));
             docs.push((gents_store::collection::Collection::Compaction, serde_json::json!({"node_did":root.did(),"compaction_id":"capture-compaction","strategy":"StripThenSummarize","threshold":0.25})));
         } else {
-            docs[3].1.as_object_mut().unwrap().remove("context_id");
+            let (_, selected_agent) = docs
+                .iter_mut()
+                .find(|(collection, value)| {
+                    matches!(collection, gents_store::collection::Collection::Agent)
+                        && value["agent_did"] == binding.agent_did
+                })
+                .expect("the selected Agent document");
+            selected_agent.as_object_mut().unwrap().remove("context_id");
         }
         let plan = DesiredStateApplyPlan::new(
             docs.into_iter()

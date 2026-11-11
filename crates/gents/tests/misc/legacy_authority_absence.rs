@@ -188,7 +188,7 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
         .expect("signed direct materializer source boundary");
     assert!(!signed_direct_materializer.contains("add_AgentRequest(input:"));
     assert!(!signed_direct_materializer.contains("status: \"processing\""));
-    assert!(signed_direct_materializer.contains("Arc<dyn crate::store::identity::NodeIdentity>"));
+    assert!(signed_direct_materializer.contains("Arc<dyn gents_store::identity::NodeIdentity>"));
     assert!(signed_direct_materializer.contains("build_signed_client_request"));
     assert!(signed_direct_materializer.contains("submit_client_request"));
     assert!(
@@ -205,7 +205,7 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
     for (name, builder, source) in [
         (
             "CLI requests",
-            "gents::request::lifecycle::build_signed_client_request",
+            "gents_session::request::lifecycle::build_signed_client_request",
             include_str!("../../../gents-cli/src/request_helpers.rs"),
         ),
         (
@@ -215,7 +215,7 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
         ),
         (
             "desktop requests",
-            "gents::request::lifecycle::build_signed_client_request",
+            "gents_session::request::lifecycle::build_signed_client_request",
             concat!(
                 include_str!("../../../gents-desktop-core/src/client/mutations/chat/request.rs"),
                 include_str!(
