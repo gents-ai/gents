@@ -110,6 +110,7 @@ pub(super) async fn apply(txn: &ConfigApplyTxn<'_>, before: Capture) -> Result<(
 mod tests {
     use super::*;
     use crate::DesiredStateApplyDocument;
+    use gents_lean_vocab::families::workspace_callback_selection_visibility as family;
     use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
     use gents_store::identity::NodeIdentity;
     use serde_json::json;
@@ -129,6 +130,24 @@ mod tests {
             !gents_store::graphql::required_rows::<serde_json::Value>(&response, "Agent")?
                 .is_empty(),
         )
+    }
+
+    async fn observe<'a>(
+        url: &str,
+        keys: &[(&'a str, &dyn NodeIdentity)],
+        target_doc: &str,
+    ) -> Result<Vec<(&'a str, bool)>> {
+        let mut seen = Vec::new();
+        for (actor, key) in keys {
+            let response = client(url, *key)?
+                .execute(&format!(
+                    "{{Agent(filter:{{_docID:{{_eq:\"{}\"}}}}) {{_docID}}}}",
+                    gents_store::graphql::escape_graphql_string(target_doc)
+                ))
+                .await?;
+            seen.push((*actor, agent_visible(response)?));
+        }
+        Ok(seen)
     }
 
     #[test]
@@ -255,24 +274,13 @@ mod tests {
                 &identity::Did::new(creator.did())?,
             )
             .await?;
-        let cases = &gents_lean_vocab::lean_contract_snapshot().workspace_callback_selection_cases;
-        assert!(!cases.is_empty());
-        for case in cases {
-            let key: &dyn NodeIdentity = match case["actor"].as_str().unwrap() {
-                "user" => &user,
-                "creator" => creator.as_ref(),
-                "other" => &other,
-                actor => panic!("unknown actor {actor}"),
-            };
-            let response = client(&url, key)?
-                .execute(&format!(
-                    "{{Agent(filter:{{_docID:{{_eq:\"{}\"}}}}) {{_docID}}}}",
-                    gents_store::graphql::escape_graphql_string(&target_doc)
-                ))
-                .await?;
-            let visible = agent_visible(response)?;
-            assert_eq!(visible, case["before"].as_bool().unwrap(), "{case}");
-        }
+        let cases = family::cases();
+        let keys: [(&str, &dyn NodeIdentity); 3] = [
+            ("user", &user),
+            ("creator", creator.as_ref()),
+            ("other", &other),
+        ];
+        let before = observe(&url, &keys, &target_doc).await?;
         access
             .transact_write("test.workspace_selection.revoke", |txn| {
                 let (target_doc, callback_doc) = (&target_doc, &callback_doc);
@@ -302,27 +310,9 @@ mod tests {
                 })
             })
             .await?;
-        for case in cases {
-            let key: &dyn NodeIdentity = match case["actor"].as_str().unwrap() {
-                "user" => &user,
-                "creator" => creator.as_ref(),
-                "other" => &other,
-                actor => panic!("unknown actor {actor}"),
-            };
-            let response = client(&url, key)?
-                .execute(&format!(
-                    "{{Agent(filter:{{_docID:{{_eq:\"{}\"}}}}) {{_docID}}}}",
-                    gents_store::graphql::escape_graphql_string(&target_doc)
-                ))
-                .await?;
-            let visible = agent_visible(response)?;
-            assert_eq!(
-                visible,
-                case["after_revocation"].as_bool().unwrap(),
-                "{case}"
-            );
-        }
-        for (enabled, expected_key) in [(false, "after_disabled"), (true, "after_reenabled")] {
+        let after_revocation = observe(&url, &keys, &target_doc).await?;
+        let mut phases = Vec::new();
+        for enabled in [false, true] {
             let mut update = callback.clone();
             update["enabled"] = json!(enabled);
             let changed = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
@@ -343,22 +333,25 @@ mod tests {
                     })
                 })
                 .await?;
-            for case in cases {
-                let key: &dyn NodeIdentity = match case["actor"].as_str().unwrap() {
-                    "user" => &user,
-                    "creator" => creator.as_ref(),
-                    "other" => &other,
-                    actor => panic!("unknown actor {actor}"),
-                };
-                let response = client(&url, key)?
-                    .execute(&format!(
-                        "{{Agent(filter:{{_docID:{{_eq:\"{}\"}}}}) {{_docID}}}}",
-                        gents_store::graphql::escape_graphql_string(&target_doc)
-                    ))
-                    .await?;
-                let visible = agent_visible(response)?;
-                assert_eq!(visible, case[expected_key].as_bool().unwrap(), "{case}");
-            }
+            phases.push(observe(&url, &keys, &target_doc).await?);
+        }
+        let [after_disabled, after_reenabled]: [Vec<(&str, bool)>; 2] =
+            phases.try_into().expect("two enablement phases");
+        for case in cases {
+            let actor = case.input.actor.as_str();
+            let seen = |phase: &Vec<(&str, bool)>| {
+                phase
+                    .iter()
+                    .find(|(name, _)| *name == actor)
+                    .unwrap_or_else(|| panic!("unknown actor {actor}"))
+                    .1
+            };
+            case.check(family::Output {
+                before: seen(&before),
+                after_revocation: seen(&after_revocation),
+                after_disabled: seen(&after_disabled),
+                after_reenabled: seen(&after_reenabled),
+            });
         }
         node.shutdown().await?;
         Ok(())

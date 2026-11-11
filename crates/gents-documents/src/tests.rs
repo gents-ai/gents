@@ -625,11 +625,7 @@ fn default_agent_publication_matches_lean() {
     use gents_store::collection::Collection;
     use gents_store::identity::NodeIdentity;
     use serde_json::json;
-    let snapshot = gents_lean_vocab::lean_contract_snapshot();
-    let cases = snapshot.configuration_scope_cases["default_agent"]
-        .as_array()
-        .unwrap();
-    assert_eq!(cases.len(), 8);
+    use gents_lean_vocab::families::configuration_scope_default_agent_publication as family;
     let directory = tempfile::tempdir().unwrap();
     let alice =
         gents_store::identity::KeyIdentity::load_or_create(directory.path().join("alice"), None)
@@ -643,12 +639,12 @@ fn default_agent_publication_matches_lean() {
         "bob" => &bob,
         _ => panic!("unknown modeled principal {label}"),
     };
-    for case in cases {
-        let scope = principal(case["scope"].as_str().unwrap()).did();
-        let agent_owner = principal(case["agent_owner"].as_str().unwrap());
+    family::replay(|i| {
+        let scope = principal(i.scope.as_str()).did();
+        let agent_owner = principal(i.agent_owner.as_str());
         let binding = gents_store::identity::provision_agent_identity(agent_owner).unwrap();
-        let default = case["default_agent_did"].as_str().map(|id| {
-            if Some(id) == case["agent_did"].as_str() {
+        let default = i.default_agent_did.as_deref().map(|id| {
+            if id == i.agent_did {
                 binding.agent_did.as_str()
             } else {
                 missing.agent_did.as_str()
@@ -671,8 +667,8 @@ fn default_agent_publication_matches_lean() {
                 Collection::Agent,
                 json!({"node_did":agent_owner.did(),"agent_did":binding.agent_did,
                     "creation_nonce":binding.creation_nonce,
-                    "context_id":case["context_id"],"inference_profile_id":"profile",
-                    "enabled":case["enabled"]}),
+                    "context_id":i.context_id,"inference_profile_id":"profile",
+                    "enabled":i.enabled}),
             ),
             (Collection::Node, json!({"node_did":scope})),
             (
@@ -680,15 +676,10 @@ fn default_agent_publication_matches_lean() {
                 json!({"node_did":scope,"default_agent_did":default}),
             ),
         ];
-        let accepted = ConfigReferences::from_documents(scope, documents)
+        ConfigReferences::from_documents(scope, documents)
             .and_then(|refs| refs.validate())
-            .is_ok();
-        assert_eq!(
-            accepted,
-            case["publishable"].as_bool().unwrap() && case["context_resolves"].as_bool().unwrap(),
-            "{case}"
-        );
-    }
+            .is_ok()
+    });
 }
 
 #[test]

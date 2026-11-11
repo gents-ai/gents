@@ -1,6 +1,7 @@
 import Proofs.Documents.Configuration
 import Proofs.Documents.ConfigDefaults
 import Lean
+import Proofs.Conformance.Family
 
 namespace Conformance.ConfigurationScope
 open Configuration Lean
@@ -23,12 +24,6 @@ example : (resolveTask registry "bob" "task").toOption.map (·.inference.model) 
     some "bob-model" := by rfl
 example : resolveTask registry "absent" "task" = .error .missingTask := by rfl
 
-private def caseJson (owner : String) : Json := Json.mkObj
-  [("owner", toJson owner), ("task_id", toJson "task"),
-   ("result", (resolveTask registry owner "task").toOption.map (fun s => Json.mkObj
-      [("instructions", toJson s.context.instructions), ("model", toJson s.inference.model),
-       ("backend_id", toJson s.inference.backendId)]) |>.getD Json.null)]
-
 private def contextBoundsCases : List (Option Int × Option Int × Option Int) := [
   (some 872000, some 272000, some 872000),
   (some 872001, some 272000, some 872000),
@@ -39,10 +34,31 @@ private def contextBoundsCases : List (Option Int × Option Int × Option Int) :
   (some 872001, none, some 872000),
   (some 872001, some (-1), some 872000)]
 
-private def contextBoundsJson : Json := toJson (contextBoundsCases.map fun (selected, modelDefault, maximum) =>
-  Json.mkObj [("selected", toJson selected), ("default", toJson modelDefault),
-    ("maximum", toJson maximum),
-    ("allowed", toJson (ConfigDefaults.contextOverrideAllowed selected modelDefault maximum))])
+structure ContextLimit where
+  negative : Bool
+  magnitude : Nat
+  deriving ToJson
+
+private def ContextLimit.ofInt (n : Int) : ContextLimit := { negative := n < 0, magnitude := n.natAbs }
+
+private def ContextLimit.toInt (l : ContextLimit) : Int :=
+  if l.negative then -(l.magnitude : Int) else (l.magnitude : Int)
+
+structure ContextBoundsInput where
+  selected : Option ContextLimit
+  modelDefault : Option ContextLimit
+  maximum : Option ContextLimit
+  deriving ToJson
+
+@[conformance_family]
+def contextBounds : Conformance.Family ContextBoundsInput Bool where
+  inputs := contextBoundsCases.map fun (selected, modelDefault, maximum) =>
+    { selected := selected.map ContextLimit.ofInt
+      modelDefault := modelDefault.map ContextLimit.ofInt
+      maximum := maximum.map ContextLimit.ofInt }
+  model := fun i =>
+    ConfigDefaults.contextOverrideAllowed (i.selected.map ContextLimit.toInt)
+      (i.modelDefault.map ContextLimit.toInt) (i.maximum.map ContextLimit.toInt)
 
 private def defaultAgentCases :
     List (String × String × Bool × Option String × Option String) := [
@@ -55,34 +71,91 @@ private def defaultAgentCases :
   ("missing_default", "alice", true, some "context", some "absent"),
   ("foreign_default", "bob", true, some "context", some "coding")]
 
-private def defaultAgentJson : Json := toJson (defaultAgentCases.map
-  fun (name, owner, enabled, contextId, defaultId) =>
-    let reg : Registry := { registry with
-      agents := fun scope id => if scope = "alice" ∧ id = "coding"
-        then some ⟨owner, ⟨contextId, "profile", enabled⟩⟩ else none }
-    Json.mkObj [("name", toJson name), ("scope", toJson "alice"),
-      ("agent_owner", toJson owner), ("agent_did", toJson "coding"),
-      ("enabled", toJson enabled), ("context_id", toJson contextId),
-      ("default_agent_did", toJson defaultId),
-      ("publishable", toJson (defaultAgentPublishable reg "alice" defaultId)),
-      ("context_resolves", toJson (resolveContext reg "alice" contextId).toBool)])
+structure DefaultAgentInput where
+  name : String
+  scope : String
+  agentOwner : String
+  agentDid : String
+  enabled : Bool
+  contextId : Option String
+  defaultAgentDid : Option String
+  deriving ToJson
 
-private def authText : BackendAuth → String
-  | .unauthenticated => "{\"kind\":\"unauthenticated\"}"
-  | .apiKey key => s!"\{\"kind\":\"api_key\",\"key\":{(toJson key).compress}}"
-  | .credential id version => s!"\{\"kind\":\"credential\",\"id\":{(toJson id).compress},\"version\":{(toJson version).compress}}"
-  | .environment name => s!"\{\"kind\":\"environment\",\"variable\":{(toJson name).compress}}"
-  | .nodeOAuth none => "{\"kind\":\"node_oauth\"}"
-  | .nodeOAuth (some a) =>
-    s!"\{\"kind\":\"node_oauth\",\"account_ref\":{(toJson a).compress}}"
-  | .nodeOAuthPool allowOverage =>
-    s!"\{\"kind\":\"node_oauth_pool\",\"allow_overage\":{(toJson allowOverage).compress}}"
-  | .awsCredentials id secret none =>
-    s!"\{\"kind\":\"aws_credentials\",\"access_key_id\":{(toJson id).compress},\"secret_access_key\":{(toJson secret).compress}}"
-  | .awsCredentials id secret (some token) =>
-    s!"\{\"kind\":\"aws_credentials\",\"access_key_id\":{(toJson id).compress},\"secret_access_key\":{(toJson secret).compress},\"session_token\":{(toJson token).compress}}"
-  | .googleCredentials json =>
-    s!"\{\"kind\":\"google_credentials\",\"credentials_json\":{(toJson json).compress}}"
+@[conformance_family]
+def defaultAgentPublication : Conformance.Family DefaultAgentInput Bool where
+  inputs := defaultAgentCases.map fun (name, owner, enabled, contextId, defaultId) =>
+    { name, scope := "alice", agentOwner := owner, agentDid := "coding", enabled, contextId
+      defaultAgentDid := defaultId }
+  model := fun i =>
+    let reg : Registry := { registry with
+      agents := fun scope id => if scope = i.scope ∧ id = i.agentDid
+        then some ⟨i.agentOwner, ⟨i.contextId, "profile", i.enabled⟩⟩ else none }
+    defaultAgentPublishable reg i.scope i.defaultAgentDid &&
+      (resolveContext reg i.scope i.contextId).toBool
+
+structure OauthAuth where
+  kind : String
+  key : Option String := none
+  id : Option String := none
+  version : Option String := none
+  variable : Option String := none
+  accountRef : Option String := none
+  allowOverage : Option Bool := none
+  accessKeyId : Option String := none
+  secretAccessKey : Option String := none
+  sessionToken : Option String := none
+  credentialsJson : Option String := none
+  deriving ToJson
+
+private def OauthAuth.ofBackend : BackendAuth → OauthAuth
+  | .unauthenticated => { kind := "unauthenticated" }
+  | .apiKey key => { kind := "api_key", key := some key }
+  | .credential id version => { kind := "credential", id := some id, version := some version }
+  | .environment name => { kind := "environment", variable := some name }
+  | .nodeOAuth account => { kind := "node_oauth", accountRef := account }
+  | .nodeOAuthPool allowOverage => { kind := "node_oauth_pool", allowOverage := some allowOverage }
+  | .awsCredentials id secret token =>
+    { kind := "aws_credentials", accessKeyId := some id, secretAccessKey := some secret
+      sessionToken := token }
+  | .googleCredentials json => { kind := "google_credentials", credentialsJson := some json }
+
+private def OauthAuth.toBackend (a : OauthAuth) : BackendAuth :=
+  match a.kind with
+  | "unauthenticated" => .unauthenticated
+  | "api_key" => .apiKey (a.key.getD "")
+  | "credential" => .credential (a.id.getD "") (a.version.getD "")
+  | "environment" => .environment (a.variable.getD "")
+  | "node_oauth" => .nodeOAuth a.accountRef
+  | "node_oauth_pool" => .nodeOAuthPool (a.allowOverage.getD false)
+  | "aws_credentials" =>
+    .awsCredentials (a.accessKeyId.getD "") (a.secretAccessKey.getD "") a.sessionToken
+  | _ => .googleCredentials (a.credentialsJson.getD "")
+
+structure OauthRow where
+  owner : String
+  providerKind : String
+  account : Option String
+  enabled : Bool
+  deriving ToJson
+
+structure OauthResolved where
+  owner : String
+  account : Option String
+  deriving ToJson
+
+structure OauthInput where
+  name : String
+  scope : String
+  storedOwner : String
+  providerKind : String
+  auth : OauthAuth
+  rows : List OauthRow
+  deriving ToJson
+
+structure OauthOutput where
+  usesNodeOauth : Bool
+  resolved : List OauthResolved
+  deriving ToJson
 
 private def oauthRows : List OAuthAccountRow := [
   ⟨"alice", "ChatGptCodex", none, true⟩,
@@ -108,43 +181,36 @@ private def oauthAccountCases : List (String × String × String × String × Ba
   ("google_credentials_have_no_owner", "alice", "alice", "ClaudeGoogleCloud",
     .googleCredentials "{}")]
 
-private def oauthRowJson (row : OAuthAccountRow) : Json := Json.mkObj
-  [("owner", toJson row.owner), ("provider_kind", toJson row.kind),
-   ("account", toJson row.account), ("enabled", toJson row.enabled)]
+@[conformance_family]
+def oauthAccount : Conformance.Family OauthInput OauthOutput where
+  inputs := oauthAccountCases.map fun (name, scope, storedOwner, kind, auth) =>
+    { name, scope, storedOwner, providerKind := kind, auth := OauthAuth.ofBackend auth
+      rows := oauthRows.map fun r =>
+        { owner := r.owner, providerKind := r.kind, account := r.account, enabled := r.enabled } }
+  model := fun i =>
+    let auth := i.auth.toBackend
+    let rows : List OAuthAccountRow :=
+      i.rows.map fun r => ⟨r.owner, r.providerKind, r.account, r.enabled⟩
+    let resolved := fun (r : OAuthAccountRow) => ({ owner := r.owner, account := r.account } : OauthResolved)
+    { usesNodeOauth := (oauthLookupOwner i.scope auth).isSome
+      resolved :=
+        match auth with
+        | .nodeOAuth account => ((oauthResolve i.scope i.providerKind account rows).map resolved).toList
+        | .nodeOAuthPool _ => (oauthPool i.scope i.providerKind rows).map resolved
+        | _ => [] }
 
-private def oauthResolvedJson (scope kind : String) : BackendAuth → Json
-  | .nodeOAuth account =>
-    (oauthResolve scope kind account oauthRows).map oauthRowJson |>.getD Json.null
-  | .nodeOAuthPool _ => toJson ((oauthPool scope kind oauthRows).map oauthRowJson)
-  | _ => Json.null
+structure DefaultReplacementInput where
+  current : Option String
+  candidate : Option String
+  deriving ToJson
 
-private def oauthAccountJson : Json := Json.mkObj
-  [("rows", toJson (oauthRows.map oauthRowJson)),
-   ("cases", toJson (oauthAccountCases.map fun (name, scope, storedOwner, kind, auth) =>
-    Json.mkObj
-      [("name", toJson name), ("scope", toJson scope), ("stored_owner", toJson storedOwner),
-       ("provider_kind", toJson kind), ("auth", toJson (authText auth)),
-       ("owner", toJson (oauthLookupOwner scope auth)),
-       ("resolved", oauthResolvedJson scope kind auth)]))]
-
-private def defaultReplacementJson : Json := toJson (
-  ([none, some "coding"] : List (Option String)).flatMap fun current =>
-    ([none, some "coding", some "review"] : List (Option String)).map fun candidate =>
-      Json.mkObj [("current", toJson current), ("candidate", toJson candidate),
-        ("allowed", toJson (defaultAgentReplacementAllowed current candidate))])
-
-def casesJson : String := (Json.mkObj
-  [("documents", toJson (["alice", "bob"].map fun owner => Json.mkObj
-      [("node_did", toJson owner), ("task_id", toJson "task"),
-       ("agent_did", toJson "coding"), ("context_id", toJson "context"),
-       ("profile_id", toJson "profile"), ("backend_id", toJson "backend"),
-       ("instructions", toJson owner), ("model", toJson (owner ++ "-model")),
-       ("enabled", toJson true)])),
-   ("cases", toJson (["alice", "bob", "absent"].map caseJson)),
-   ("context_bounds", contextBoundsJson),
-   ("default_agent", defaultAgentJson),
-   ("oauth_account", oauthAccountJson),
-   ("default_replacement", defaultReplacementJson)]).compress
+@[conformance_family]
+def defaultReplacement : Conformance.Family DefaultReplacementInput Bool where
+  inputs :=
+    ([none, some "coding"] : List (Option String)).flatMap fun current =>
+      ([none, some "coding", some "review"] : List (Option String)).map fun candidate =>
+        { current, candidate }
+  model := fun i => defaultAgentReplacementAllowed i.current i.candidate
 
 private def advertisement (credentials : Option String) : DiscoveryObservation :=
   ⟨"backend", credentials, [⟨"advertised", none⟩]⟩

@@ -1,37 +1,8 @@
 use super::*;
 use clap::Parser;
-use serde::Deserialize;
+use gents_lean_vocab::families::initialization_initial_inference as family;
 
-#[derive(Deserialize, Debug)]
-struct SeedCase {
-    engineer: bool,
-    requested_model: Option<String>,
-    local_default: String,
-    preset: Option<String>,
-    preset_default: Option<String>,
-    concurrent: Option<i64>,
-    expected: Option<SeedPlan>,
-}
-
-#[derive(Deserialize, Debug)]
-struct SeedPlan {
-    model: Option<String>,
-    enabled: bool,
-    concurrent: Option<i64>,
-    effective_concurrent: i64,
-    context_override: Option<i64>,
-    output_override: Option<i64>,
-    records_probe: bool,
-    unselected_model_reason: Option<String>,
-    enabled_unselected_model_reason: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct Snapshot {
-    initial_inference_cases: Vec<SeedCase>,
-}
-
-fn parse_case(case: &SeedCase) -> InitArgs {
+fn parse_case(case: &family::SeedInput) -> InitArgs {
     let mut argv = vec!["gents".to_string(), "init".to_string()];
     if case.engineer {
         argv.push("--engineer".into());
@@ -61,10 +32,8 @@ fn parse_case(case: &SeedCase) -> InitArgs {
 
 #[tokio::test]
 async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned() -> Result<()> {
-    let snapshot: Snapshot = gents_lean_contract::load_contract_snapshot()?;
-    assert!(!snapshot.initial_inference_cases.is_empty());
-    for case in snapshot.initial_inference_cases {
-        let args = parse_case(&case);
+    for case in family::cases() {
+        let args = parse_case(&case.input);
         let home = gents::runtime::embedded::EmbeddedHome::create_temp("init-seed").await?;
         let identity = home.identity.clone();
         let owner = home.did();
@@ -84,43 +53,24 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
             None,
         )
         .await;
-        let Some(expected) = &case.expected else {
-            assert!(initialized.is_err(), "{case:?}");
+        let Ok(summary) = initialized else {
             assert!(
                 gents_inference::backends::registry::list_all_backends(&node)
                     .await?
                     .is_empty()
             );
             assert!(load_node(&node, owner).await?.is_none());
+            case.check(None);
             continue;
         };
-        let summary = initialized.with_context(|| format!("{case:?}"))?;
         let backends = gents_inference::backends::registry::list_all_backends(&node).await?;
-        assert_eq!(backends.len(), 1, "{case:?}");
+        assert_eq!(backends.len(), 1);
         let backend = &backends[0];
-        assert_eq!(backend.enabled, expected.enabled, "{case:?}");
-        assert_eq!(backend.max_concurrent, expected.concurrent, "{case:?}");
-        assert_eq!(
-            backend.effective_max_concurrent(),
-            expected.effective_concurrent
-        );
         let profile =
             gents_documents::load_inference_profile(&node, owner, &summary.inference_profile_id)
                 .await?
                 .expect("the agent's profile exists even before model selection");
-        assert_eq!(
-            (!profile.model_name.is_empty()).then_some(profile.model_name.as_str()),
-            expected.model.as_deref(),
-            "{case:?}",
-        );
-        assert_eq!(
-            profile.context_window, expected.context_override,
-            "{case:?}"
-        );
-        assert_eq!(
-            profile.max_output_tokens, expected.output_override,
-            "{case:?}"
-        );
+        let model = (!profile.model_name.is_empty()).then(|| profile.model_name.clone());
         let observation = gents_inference::backends::registry::lookup_backend_observation(
             &node,
             owner,
@@ -130,15 +80,11 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
         .expect("the backend exists");
         assert_eq!(
             observation.probe_status.is_some(),
-            expected.records_probe,
-            "{case:?}"
+            observation.last_probe.is_some()
         );
-        assert_eq!(
-            observation.last_probe.is_some(),
-            expected.records_probe,
-            "{case:?}"
-        );
-        if expected.model.is_none() {
+        let mut unselected_model_reason = None;
+        let mut enabled_unselected_model_reason = None;
+        if model.is_none() {
             let runtime = gents::Gents::from_default_agent_documents(
                 node.clone(),
                 identity.clone(),
@@ -153,11 +99,9 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
                 .unavailable_agents()
                 .get(&summary.default_agent_did)
                 .expect("the unselected agent remains visible for setup");
-            assert_eq!(
-                serde_json::to_value(unavailable.public_reason)?.as_str(),
-                expected.unselected_model_reason.as_deref(),
-                "{case:?}",
-            );
+            unselected_model_reason = serde_json::to_value(unavailable.public_reason)?
+                .as_str()
+                .map(str::to_owned);
             drop(runtime);
             let mut enabled_backend = backend.clone();
             enabled_backend.enabled = true;
@@ -184,11 +128,9 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
                 .unavailable_agents()
                 .get(&summary.default_agent_did)
                 .expect("an enabled backend still requires model selection");
-            assert_eq!(
-                serde_json::to_value(unavailable.public_reason)?.as_str(),
-                expected.enabled_unselected_model_reason.as_deref(),
-                "{case:?}",
-            );
+            enabled_unselected_model_reason = serde_json::to_value(unavailable.public_reason)?
+                .as_str()
+                .map(str::to_owned);
             drop(runtime);
             let steps = init_next_steps(&summary, Path::new("/srv/home"), false, false, false);
             assert!(
@@ -199,6 +141,17 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
                 "{steps:?}"
             );
         }
+        case.check(Some(family::SeedPlan {
+            model,
+            enabled: backend.enabled,
+            concurrent: backend.max_concurrent.map(|value| value as u64),
+            effective_concurrent: backend.effective_max_concurrent() as u64,
+            context_override: profile.context_window.map(|value| value as u64),
+            output_override: profile.max_output_tokens.map(|value| value as u64),
+            records_probe: observation.probe_status.is_some(),
+            unselected_model_reason,
+            enabled_unselected_model_reason,
+        }));
     }
     Ok(())
 }

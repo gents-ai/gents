@@ -741,8 +741,8 @@ def caseCoverage : List CoverageEntry :=
       "Binds callback rejection, lost receipt and a later failed retry to the shared transaction owner.")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "hosted_pack_evidence_cases"
-      "HostedPackEvidenceCases"
+      "family"
+      "contracts_pack_installation_hosted_evidence"
       "Binds client signer, exact create and update graphs, and relationship scope to an embedded transaction. Full plan validation, deletion and native denial remain to be exercised.")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
@@ -750,18 +750,18 @@ def caseCoverage : List CoverageEntry :=
       "PackWireLockCases")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "hosted_pack_schema_cases"
-      "HostedPackSchemaCases"
+      "family"
+      "contracts_pack_installation_hosted_schema"
       "Binds scope signatures to the model; native Node authorization is checked by the runtime admission owner.")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "hosted_pack_home_cases"
-      "HostedPackHomeCases"
+      "family"
+      "contracts_pack_installation_hosted_home"
       "Binds actual home record write and failure to modeled success; native commit and cancellation ordering are exercised by the transaction owner.")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "pack_document_ownership_cases"
-      "PackDocumentOwnershipCases")
+      "family"
+      "contracts_pack_installation_ownership")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "Proofs.Conformance.PackSourceSelection"
@@ -882,28 +882,28 @@ def caseCoverage : List CoverageEntry :=
       "The status consumer observes publication/router-generation writeback. Generated request acceptance, lifetime tracking and generation retirement need router/reconciler owner consumers; fixture-only arithmetic is not implementation coverage.")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "claude_platform_cases"
-      "ClaudePlatformCases")
+      "family"
+      "contracts_claude_platform_outcome")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "catalog_refresh_cases"
-      "CatalogRefreshCases")
+      "family"
+      "contracts_catalog_refresh_scenarios")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "request_terminal_selection_cases"
       "RequestTerminalSelectionCases")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "pack_identity_reference_cases"
-      "PackIdentityReferenceCases")
+      "family"
+      "contracts_pack_installation_identity_reference")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "pack_eval_subject_cases"
       "PackEvalSubjectCases")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "pack_identity_cases"
-      "PackIdentityCases")
+      "family"
+      "contracts_pack_installation_identity_plan")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "plugin_reference_cases"
@@ -1085,8 +1085,8 @@ def caseCoverage : List CoverageEntry :=
       "BackendProbeScheduleCases")
       "backend-health" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "inference_registry_cases"
-      "InferenceRegistryCases")
+      "family"
+      "inference_registry_admission")
       "inference-call" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "title_usage_cases"
@@ -1125,20 +1125,20 @@ def caseCoverage : List CoverageEntry :=
       "PairingReconcileSweepSchedulingCases")
       "pairing-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "client_installation_cases"
-      "ClientInstallationCases")
+      "family"
+      "client_installation_traces")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "client_installation_compatibility_cases"
-      "ClientInstallationCompatibilityCases")
+      "family"
+      "client_installation_compatibility")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "runtime_service_replacement_cases"
-      "RuntimeServiceReplacementCases")
+      "family"
+      "runtime_service_replacement_traces")
       "runtime-reconcile" [Surface.runtimeInternal, Surface.operatorUi]
   , tagged (consumerCoverage
-      "update_handoff_cases"
-      "UpdateHandoffCases")
+      "family"
+      "update_handoff_transitions")
       "runtime-reconcile" [Surface.runtimeInternal, Surface.operatorUi]
   , tagged (consumerCoverage
       "client_observation_scope_cases"
@@ -1237,12 +1237,12 @@ def caseCoverage : List CoverageEntry :=
       "Drives a real failed call without idempotency metadata and observes no retry or eviction. Explicit idempotency metadata and native-command cases are not exercised by this path.")
       "tool-call" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "claude_output_config_cases"
-      "ClaudeStructuredOutput")
+      "family"
+      "compaction_checkpoint_claude_output_config")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "checkpoint_fallback_cases"
-      "CompactionCheckpointRepresentation")
+      "family"
+      "compaction_checkpoint_fallback_checkpoint")
       "compaction" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "command_policy_cases"
@@ -1427,8 +1427,8 @@ def caseCoverage : List CoverageEntry :=
       "WorkspaceQuickstartSelectionCases")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerCoverage
-      "workspace_callback_selection_cases"
-      "WorkspaceCallbackSelectionCases")
+      "family"
+      "workspace_callback_selection_visibility")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerCoverage
       "pack_placement_reader_cases"
@@ -2007,11 +2007,6 @@ def caseCoverage : List CoverageEntry :=
       "transcript_conformance_cases"
       "TranscriptConformanceCases")
       "transcript" [Surface.operatorUi]
-  , tagged (followUpCoverage
-      "identity_structural_cases"
-      "IdentityStructuralCases"
-      "Exercise canonical owner-scoped registry validation; the deleted test-local well-formedness predicate was not implementation conformance.")
-      "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "identity_permission_cases"
       "IdentityPermissionCases"
@@ -2143,8 +2138,8 @@ def caseCoverage : List CoverageEntry :=
       "Generated compaction/fallback records bind exact private audit bytes and absent public live projection to native reconstruction. This is a read-only projection check; it does not establish provider-event capture, durable write admission, recovery transactions, title ownership, or ACP.")
       "canonical-output" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "prompt_assembly_claude_wire_start_cases"
-      "PromptAssemblyClaudeWireStartCases"
+      "family"
+      "claude_prompt_assembly_wire_start"
       "The four generated wire-start cases bind initial signature plus later delta, absent initial signature, ordered rejection of later thinking, and malformed signature type at the native SSE parser. The native test compares final content/error, not intermediate modeled steps or durable output capture.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
@@ -2169,8 +2164,8 @@ def caseCoverage : List CoverageEntry :=
       "Generated transitions drive persisted selections with policy fingerprints on one Task ID, stale revisions, missing reviewers, retained references, no-op writes and exhausted revisions. Concurrent locking and filesystem failure handling need adapter checks.")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "access_review_cases"
-      "AccessReviewCases"
+      "family"
+      "access_review_reply_decision, access_review_denial_trace, access_review_review_route, access_review_completion_acceptance, access_review_context_selection"
       "Generated JSON replies bind exact invocation IDs, complete decisions and UTF-8 byte limits. Context cases bind required-envelope limits and whole-entry selection in newest-first order, including fixed-width overflow boundaries. Traces bind denial windows and scoped routing. Native encoders must supply honest wire costs; signed review execution, physical request binding, cancellation, tool and hook exclusion, and reviewer accuracy require adapter checks.")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
@@ -2273,24 +2268,24 @@ def caseCoverage : List CoverageEntry :=
       "PromptAssemblyClaudeBodyCases")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "prompt_assembly_claude_attribution_cases"
-      "PromptAssemblyClaudeAttributionCases")
+      "family"
+      "claude_prompt_assembly_attribution")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "prompt_assembly_claude_cache_cases"
-      "PromptAssemblyClaudeCacheCases")
+      "family"
+      "claude_prompt_assembly_cache_placement")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "prompt_assembly_claude_origin_cases"
-      "PromptAssemblyClaudeOriginCases")
+      "family"
+      "claude_prompt_assembly_origin")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "prompt_assembly_claude_field_cases"
-      "PromptAssemblyClaudeFieldCases")
+      "family"
+      "claude_prompt_assembly_field_decision")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "prompt_assembly_claude_field_row_cases"
-      "PromptAssemblyClaudeFieldRowCases")
+      "family"
+      "claude_prompt_assembly_field_row")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "prompt_assembly_claude_stream_cases"
@@ -2358,8 +2353,8 @@ def caseCoverage : List CoverageEntry :=
       "RenderedCaptureCases")
       "rendered-capture" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "rendered_capture_storage_cases"
-      "RenderedCaptureStorageCases"
+      "family"
+      "contract_cases_rendered_capture_storage_resolution"
       "The native consumer checks full and delta codec reconstruction with an injected base and witness. It does not exercise DefraDB base lookup, authorization, or provider-send ordering.")
       "rendered-capture" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
@@ -2368,12 +2363,12 @@ def caseCoverage : List CoverageEntry :=
       "Checks durable create/load/conflict and capture citations. The exported send_permitted fence is not exercised: validate actual provider dispatch against durable reduction facts through the owned completion loop.")
       "compaction" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "rolling_compaction_cases"
-      "RollingCompactionCases")
+      "family"
+      "contract_cases_rolling_compaction_commit")
       "compaction" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "reduction_engine_cases"
-      "ReductionEngineCases")
+      "family"
+      "contract_cases_reduction_engine_outcome")
       "compaction" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "budget_rehydration_cases"
