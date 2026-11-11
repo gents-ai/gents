@@ -175,7 +175,7 @@ pub use page::{
 pub use plugin_source::{
     PluginSourceCase, PluginSourceDocument, MAX_PLUGIN_SOURCE_BYTES, PLUGIN_SOURCE_NAMESPACE,
 };
-pub use skill::SkillDocument;
+pub use skill::{SkillDocument, SKILL_FIELDS};
 
 #[cfg(test)]
 pub use event_trigger::count_trigger_cursor_batch_queries;

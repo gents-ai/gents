@@ -2,17 +2,15 @@ use anyhow::Result;
 use serde_json::{json, Value};
 
 use crate::config_writes::ConfigAccess;
-use crate::{CONFIG_SCHEMA_COLLECTIONS, SCHEMA_COLLECTION_CHECKS};
+use gents_store::collection::Collection;
 
 pub(super) async fn diagnose_schema_presence(access: &ConfigAccess) -> Vec<Value> {
     let mut results = Vec::new();
-    for (collection, field) in SCHEMA_COLLECTION_CHECKS {
-        let required_for_config = CONFIG_SCHEMA_COLLECTIONS.contains(collection);
-        let query = format!(
-            r#"{{ {collection}(limit: 1) {{ {field} }} }}"#,
-            collection = collection,
-            field = field
-        );
+    for collection in gents_protocol::schemas::ALL_COLLECTION_NAMES {
+        let required_for_config = Collection::ALL
+            .iter()
+            .any(|config| config.graphql_type() == *collection);
+        let query = format!(r#"{{ {collection}(limit: 1) {{ _docID }} }}"#);
         match access.execute(&query).await {
             Ok(_) => results.push(json!({
                 "collection": collection,

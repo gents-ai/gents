@@ -6,7 +6,8 @@ use serde_json::{json, Value};
 
 use crate::cli::*;
 use crate::config_writes::ConfigAccess;
-use crate::{print_json, EXPORT_SKILL_FIELDS};
+use crate::print_json;
+use gents_documents::SKILL_FIELDS;
 
 /// Applies `skill` through the desired-state owner, so a served endpoint
 /// signs it as the client. `null` fields clear stale values on update, and
@@ -60,7 +61,7 @@ async fn find_skills(access: &ConfigAccess, skill_id: &str) -> Result<Vec<Value>
     let skill_id = escape_graphql_string(skill_id);
     let response = access
         .execute(&format!(
-            r#"{{ Skill(filter: {{ skill_id: {{ _eq: "{skill_id}" }} }}) {{ {EXPORT_SKILL_FIELDS} }} }}"#
+            r#"{{ Skill(filter: {{ skill_id: {{ _eq: "{skill_id}" }} }}) {{ {SKILL_FIELDS} }} }}"#
         ))
         .await?;
     Ok(skill_rows(&response))
@@ -112,7 +113,7 @@ pub(super) async fn skill_list(args: SkillListArgs) -> Result<()> {
     let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
     let node_did = escape_graphql_string(&args.node_did);
     let query = format!(
-        r#"{{ Skill(filter: {{ node_did: {{ _eq: "{node_did}" }} }}) {{ {EXPORT_SKILL_FIELDS} }} }}"#
+        r#"{{ Skill(filter: {{ node_did: {{ _eq: "{node_did}" }} }}) {{ {SKILL_FIELDS} }} }}"#
     );
     let response = access.execute(&query).await?;
     let mut skills = skill_rows(&response);
@@ -134,7 +135,7 @@ pub(super) async fn skill_show(args: SkillShowArgs) -> Result<()> {
     let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
     let skill_id = escape_graphql_string(&args.skill_id);
     let query = format!(
-        r#"{{ Skill(filter: {{ skill_id: {{ _eq: "{skill_id}" }} }}, limit: 1) {{ {EXPORT_SKILL_FIELDS} }} }}"#
+        r#"{{ Skill(filter: {{ skill_id: {{ _eq: "{skill_id}" }} }}, limit: 1) {{ {SKILL_FIELDS} }} }}"#
     );
     let response = access.execute(&query).await?;
     match skill_rows(&response).into_iter().next() {
@@ -401,7 +402,7 @@ pub(super) async fn skill_export(args: SkillExportArgs) -> Result<()> {
     let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
     let node_did = escape_graphql_string(&args.node_did);
     let query = format!(
-        r#"{{ Skill(filter: {{ node_did: {{ _eq: "{node_did}" }} }}) {{ {EXPORT_SKILL_FIELDS} }} }}"#
+        r#"{{ Skill(filter: {{ node_did: {{ _eq: "{node_did}" }} }}) {{ {SKILL_FIELDS} }} }}"#
     );
     let response = access.execute(&query).await?;
     let skills = skill_rows(&response);

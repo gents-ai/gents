@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 
+/// Every Skill field a reader needs to rebuild a [`SkillDocument`].
+pub const SKILL_FIELDS: &str = "skill_id node_did name description instructions source_directory tool_refs display_name interface_json enabled created_at tags";
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]

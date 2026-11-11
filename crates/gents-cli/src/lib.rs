@@ -317,45 +317,6 @@ Examples:
   gents config export --root ./my-agent --home /path/to/home --bind-node-did home";
 pub(crate) const CONFIG_EXPORT_FORMAT: &str = "gents-config/v2";
 
-pub(crate) const SCHEMA_COLLECTION_CHECKS: &[(&str, &str)] = &[
-    ("Node", "node_did"),
-    ("Agent", "agent_did"),
-    ("AgentContext", "context_id"),
-    ("NodeRuntime", "node_did"),
-    ("Tools", "tools_id"),
-    ("InferenceProfile", "profile_id"),
-    ("InferenceBackendMetadata", "backend_id"),
-    ("BackendCredential", "credential_id"),
-    ("InferenceSampling", "sampling_id"),
-    ("InferenceExecution", "execution_id"),
-    ("InferenceRetryPolicy", "retry_policy_id"),
-    ("AgentRequest", "request_id"),
-    ("AgentOutputSegment", "request_doc_id"),
-    ("AgentSession", "session_id"),
-    ("AgentMessage", "message_key"),
-    ("AgentToolCall", "tool_call_key"),
-    ("CompactionEntry", "compaction_key"),
-    ("ProjectionAcpBinding", "binding_id"),
-    ("Task", "task_id"),
-    ("Schedule", "schedule_id"),
-    ("Trigger", "trigger_id"),
-    ("EventSource", "event_source_id"),
-    ("ToolServiceRegistry", "service_id"),
-];
-const CONFIG_SCHEMA_COLLECTIONS: &[&str] = &[
-    "Node",
-    "Agent",
-    "AgentContext",
-    "Tools",
-    "InferenceBackendMetadata",
-    "BackendCredential",
-    "InferenceProfile",
-    "InferenceSampling",
-    "InferenceExecution",
-    "InferenceRetryPolicy",
-];
-pub(crate) const EXPORT_SKILL_FIELDS: &str = "skill_id node_did name description instructions source_directory tool_refs display_name interface_json enabled created_at tags";
-
 pub use commands::prepare_runtime::{prepare_runtime_after_unlock, unlock_runtime_keys};
 
 /// Embedded editor launches must never trigger a system authentication dialog.
