@@ -505,7 +505,6 @@ mod usage_tests;
 mod tests {
     use super::*;
     use crate::auth::credential::BearerSource;
-    use crate::runtime::agent::PendingAgent;
     use gents_store::identity::KeyIdentity;
 
     async fn test_node() -> Arc<EmbeddedNode> {
@@ -526,8 +525,7 @@ mod tests {
             None,
         )
         .unwrap();
-        let mut agent =
-            PendingAgent::new("backend-client-table").build_with_identity_for_test(identity);
+        let mut agent = crate::test_support::resolved_agent(Arc::new(identity), None);
         agent.backend_provider_kind = kind;
         agent.openai_wire_api = wire_api;
         agent.backend_endpoint = "http://127.0.0.1:1/v1".to_string();
@@ -535,14 +533,15 @@ mod tests {
     }
 
     pub(super) fn held_test_agent(
-        db: &crate::support::TestDb,
+        db: &crate::test_support::TestDb,
         binding: &gents_protocol::agent_identity::AgentIdentityBinding,
         kind: BackendProviderKind,
         wire_api: gents_loop::openai_wire::OpenAiWireApi,
     ) -> ResolvedAgent {
-        let mut agent = PendingAgent::new("backend-client-table")
-            .with_identity_binding_for_test(binding.clone())
-            .build_with_identity_arc_for_test(db.node_identity.clone());
+        let mut agent = crate::test_support::resolved_agent(
+            db.node_identity.clone(),
+            Some(binding.clone()),
+        );
         agent.backend_provider_kind = kind;
         agent.openai_wire_api = wire_api;
         agent.backend_endpoint = "http://127.0.0.1:1/v1".to_owned();
@@ -749,7 +748,7 @@ mod tests {
     #[tokio::test]
     async fn backend_account_reference_builds_with_its_own_account() {
         let (db, _user, _access, binding) =
-            crate::test_support::root::signed_test_node("backend-client").await;
+            crate::test_support::signed_test_node("backend-client").await;
         let node = db.node.clone();
         for (kind, wire, provider) in [
             (
@@ -817,7 +816,7 @@ mod tests {
     #[tokio::test]
     async fn two_profiles_on_two_accounts_are_served_by_their_own() {
         let (db, _user, _access, binding) =
-            crate::test_support::root::signed_test_node("backend-client").await;
+            crate::test_support::signed_test_node("backend-client").await;
         let node = db.node.clone();
         for (kind, wire, provider) in [
             (
@@ -868,7 +867,7 @@ mod tests {
     #[tokio::test]
     async fn backend_account_reference_never_falls_back_to_the_original_account() {
         let (db, _user, _access, binding) =
-            crate::test_support::root::signed_test_node("backend-client").await;
+            crate::test_support::signed_test_node("backend-client").await;
         let node = db.node.clone();
         let mut codex = held_test_agent(
             &db,
@@ -906,7 +905,7 @@ mod tests {
     #[tokio::test]
     async fn each_oauth_provider_kind_yields_the_expected_client_variant() {
         let (db, _user, _access, binding) =
-            crate::test_support::root::signed_test_node("backend-client").await;
+            crate::test_support::signed_test_node("backend-client").await;
         let node = db.node.clone();
 
         let codex = held_test_agent(
@@ -1024,7 +1023,7 @@ mod tests {
     #[tokio::test]
     async fn a_signed_in_gateway_builds_from_its_stored_account() {
         let (db, _user, _access, binding) =
-            crate::test_support::root::signed_test_node("backend-client").await;
+            crate::test_support::signed_test_node("backend-client").await;
         let node = db.node.clone();
         let mut gateway = held_test_agent(
             &db,

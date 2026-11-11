@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use defra_node::Node as EmbeddedNode;
 
 use super::client::{current_context, AdmissionError};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 use super::client::{scope_request, AdmissionCallContext, CallKind};
 use super::config::BackendAdmissionConfig;
 use super::controller::{BackendAdmissionController, CapacityPool, InferenceCallRecord};
@@ -107,8 +107,8 @@ impl AdmissionRegistry {
         backends.retain(|_, entry| entry.admitting.is_some() || !entry.pool.is_retired());
     }
 
-    #[cfg(test)]
-    pub(crate) async fn acquire_with_connection_and_signer_for_test(
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub async fn acquire_with_connection_and_signer_for_test(
         &self,
         request_id: impl Into<String>,
         backend_id: impl Into<String>,

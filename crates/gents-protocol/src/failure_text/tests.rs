@@ -1,4 +1,5 @@
-use gents_protocol::failure_text::*;
+use super::*;
+use std::fmt;
 
 #[derive(Debug)]
 struct Layer {

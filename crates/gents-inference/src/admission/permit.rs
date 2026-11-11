@@ -11,7 +11,7 @@ use super::persistence::{persist_existing_call_terminal, ProviderCallUsage};
 use super::stream_guard::StreamGuardLifecycle;
 use gents_store::drop_cleanup::DropCleanup;
 
-pub(crate) struct AdmissionPermit {
+pub struct AdmissionPermit {
     node: Arc<EmbeddedNode>,
     permit: Option<PoolPermit>,
     call: InferenceCallRecord,

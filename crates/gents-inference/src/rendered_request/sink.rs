@@ -304,8 +304,8 @@ impl DefraRenderedRequestSink {
         Ok(())
     }
 
-    #[cfg(test)]
-    pub(crate) async fn create_stored_for_test(
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub async fn create_stored_for_test(
         &self,
         rendered: &RenderedCompletionRequest,
         request_json: &str,
@@ -862,7 +862,7 @@ pub fn defra_rendered_request_capture_factory_for_agent(
 
 /// Fixture factory for a claimed request whose lifecycle holds the Agent's
 /// managed signer; captures persist as that Agent, as in production.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub fn defra_rendered_request_capture_factory_for_signer(
     node: Arc<EmbeddedNode>,
     signer: gents_store::identity::ManagedAgentSigner,
@@ -892,5 +892,3 @@ fn capture_factory(sink: DefraRenderedRequestSink) -> RenderedRequestCaptureFact
     })
 }
 
-#[cfg(test)]
-mod tests;
