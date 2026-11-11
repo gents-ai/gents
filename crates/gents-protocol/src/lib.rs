@@ -19,6 +19,7 @@ pub mod mailbox_question;
 pub mod message;
 pub mod network_token;
 pub mod node_readiness;
+pub mod operations;
 pub mod output;
 pub mod peer_schema;
 pub mod plugin;

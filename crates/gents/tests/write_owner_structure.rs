@@ -1762,6 +1762,7 @@ const OWNER_MODULES: &[&str] = &[
     "crates/gents-protocol/src",
     "crates/gents-loop/src",
     "crates/gents-migration/src",
+    "crates/gents/src/operations",
     "crates/gents/src/store/config_client/common.rs",
     "crates/gents/src/store/config_client/error.rs",
     "crates/gents/src/store/config_client/graphql.rs",
@@ -2554,6 +2555,7 @@ const LAYERS: &[&[&str]] = &[
     &[
         "request", "session", "goal", "triggers", "tools", "plugin", "pack",
     ],
+    &["operations"],
     &["observe"],
     &["turn"],
     &["runtime"],
@@ -2793,5 +2795,7 @@ fn layer_edges_count_upward_and_peer_references_outside_tests() {
         ]
     );
     assert!(!layer_edge_violates("eval", "store"));
+    assert!(layer_edge_violates("tools", "operations"));
+    assert!(!layer_edge_violates("operations", "tools"));
     assert!(!layer_edge_violates("request", "agent"));
 }

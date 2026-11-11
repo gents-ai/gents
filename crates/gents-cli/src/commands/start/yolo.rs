@@ -4,10 +4,11 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, ensure, Context, Result};
 use gents::store::config_client::GraphqlEndpoint;
 use gents::store::graphql::escape_graphql_string;
-use gents::tools::builtin::self_config::{configure_agent, ConfigureAgentParams, StringUpdate};
 use gents_protocol::node_readiness::{
     AgentReadinessEntry, AgentReadinessState, NodeReadinessSnapshot,
 };
+use gents_protocol::operations::agent::{AgentCreateInput, AgentCreateOperation};
+use gents_protocol::operations::StringUpdate;
 use gents_protocol::row::{decode_node_readiness_snapshot, NodeReadinessRow};
 use serde_json::Value;
 
@@ -74,27 +75,28 @@ pub(super) async fn ensure_agent(
         .to_owned();
     let identity_binding = gents_desktop_core::agent_identity::provision(graphql, node_did).await?;
     let yolo = identity_binding.agent_did.clone();
-    let made = configure_agent(
+    let made = gents::operations::agent::create(
         &access,
         node_did,
-        &ConfigureAgentParams {
-            identity_binding: Some(identity_binding),
-            action: "clone".into(),
+        identity_binding,
+        &AgentCreateInput {
+            operation: AgentCreateOperation::Clone,
             clone_from: Some(source.clone()),
-            display_name: StringUpdate::Set(DISPLAY_NAME.into()),
+            display_name: DISPLAY_NAME.into(),
             description: StringUpdate::Set(DESCRIPTION.into()),
             system_prompt: StringUpdate::Set(SYSTEM_PROMPT.into()),
-            profile_id: StringUpdate::Set(profile_id),
-            ..Default::default()
+            profile_id,
+            preset: None,
+            root: StringUpdate::Omitted,
+            make_default: false,
         },
         &Default::default(),
     )
     .await?;
-    let made: Value = serde_json::from_str(&made).context("reading the made agent")?;
     ensure!(
-        made["agent_did"] == yolo.as_str(),
-        "the yolo agent was made as {}, not {yolo}",
-        made["agent_did"]
+        made.agent_did == yolo,
+        "the yolo agent was made as {:?}, not {yolo}",
+        made.agent_did
     );
     ensure_root_reader(&access, node_did, &yolo, &source).await?;
     grant_self_configuration(&access, node_did, &yolo, &source).await?;
