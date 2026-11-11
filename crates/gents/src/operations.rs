@@ -3,3 +3,5 @@
 //! none of them names this module.
 
 pub mod agent;
+pub mod request;
+pub mod session;

@@ -4,6 +4,8 @@
 
 pub mod agent;
 pub mod inference;
+pub mod request;
+pub mod session;
 
 /// The call that lets a caller correct a refused operation. Each front end
 /// renders it in its own syntax.

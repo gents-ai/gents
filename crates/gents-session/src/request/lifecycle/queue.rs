@@ -90,7 +90,9 @@ use mutation::session_request_create_mutation_at_hop_with_signer;
 use mutation::SessionRequestFields;
 pub use position::validate_position;
 pub(crate) use position::{effective_slots, InvalidQueuePosition};
-pub use submission::prepare_user_message_input;
+pub use submission::{
+    prepare_user_message_input, queue_user_message_input, UserMessageInputError,
+};
 
 #[derive(Debug)]
 pub struct EnqueuedBackgroundCompletionInput {

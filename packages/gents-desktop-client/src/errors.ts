@@ -1,7 +1,40 @@
 import type { BridgeError as GeneratedBridgeError } from "./generated/BridgeError.js";
 import type { BridgeErrorCode } from "./generated/BridgeErrorCode.js";
+import type { BridgeNextCall } from "./generated/BridgeNextCall.js";
+import type { BridgeNextCallKind } from "./generated/BridgeNextCallKind.js";
 
-export type BridgeErrorPayload = GeneratedBridgeError;
+type OperationFields = "operationCode" | "nextCall";
+
+export type BridgeErrorPayload = Omit<GeneratedBridgeError, OperationFields> &
+  Partial<Pick<GeneratedBridgeError, OperationFields>>;
+
+const NEXT_CALL_KINDS: Record<BridgeNextCallKind, true> = {
+  verb: true,
+  verbHelp: true,
+  resourceHelp: true,
+  inspect: true,
+  list: true,
+};
+
+function asNextCall(value: unknown): BridgeNextCall | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.kind === "string" &&
+    Object.hasOwn(NEXT_CALL_KINDS, record.kind) &&
+    typeof record.resource === "string" &&
+    (typeof record.verb === "string" || record.verb == null)
+  ) {
+    return {
+      kind: record.kind as BridgeNextCallKind,
+      resource: record.resource,
+      verb: (record.verb as string | null | undefined) ?? null,
+    };
+  }
+  return null;
+}
 
 const BRIDGE_ERROR_CODES: Record<BridgeErrorCode, true> = {
   clientNotRunning: true,
@@ -33,6 +66,8 @@ export class BridgeInvokeError extends Error {
   readonly code: BridgeErrorCode;
   readonly retryable: boolean;
   readonly endpoint: string | null;
+  readonly operationCode: string | null;
+  readonly nextCall: BridgeNextCall | null;
 
   constructor(payload: BridgeErrorPayload) {
     super(payload.message);
@@ -40,6 +75,8 @@ export class BridgeInvokeError extends Error {
     this.code = payload.code;
     this.retryable = payload.retryable;
     this.endpoint = payload.endpoint;
+    this.operationCode = payload.operationCode ?? null;
+    this.nextCall = payload.nextCall ?? null;
   }
 }
 
@@ -66,6 +103,11 @@ export function asBridgeErrorPayload(
       message: candidate.message,
       retryable: candidate.retryable,
       endpoint: candidate.endpoint as string | null,
+      operationCode:
+        typeof candidate.operationCode === "string"
+          ? candidate.operationCode
+          : null,
+      nextCall: asNextCall(candidate.nextCall),
     };
   }
   return null;

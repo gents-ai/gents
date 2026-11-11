@@ -85,6 +85,47 @@ impl BridgeErrorCode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum BridgeNextCallKind {
+    Verb,
+    VerbHelp,
+    ResourceHelp,
+    Inspect,
+    List,
+}
+
+/// The call an operation's refusal names, for the UI to offer as an action.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct BridgeNextCall {
+    pub kind: BridgeNextCallKind,
+    pub resource: String,
+    pub verb: Option<String>,
+}
+
+impl From<gents_protocol::operations::NextCall> for BridgeNextCall {
+    fn from(next_call: gents_protocol::operations::NextCall) -> Self {
+        use gents_protocol::operations::NextCall;
+        let (kind, resource, verb) = match next_call {
+            NextCall::Verb { resource, verb } => (BridgeNextCallKind::Verb, resource, Some(verb)),
+            NextCall::VerbHelp { resource, verb } => {
+                (BridgeNextCallKind::VerbHelp, resource, Some(verb))
+            }
+            NextCall::ResourceHelp { resource } => {
+                (BridgeNextCallKind::ResourceHelp, resource, None)
+            }
+            NextCall::Inspect { resource } => (BridgeNextCallKind::Inspect, resource, None),
+            NextCall::List { resource } => (BridgeNextCallKind::List, resource, None),
+        };
+        Self {
+            kind,
+            resource: resource.to_owned(),
+            verb: verb.map(str::to_owned),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct BridgeError {
@@ -92,6 +133,8 @@ pub struct BridgeError {
     pub message: String,
     pub retryable: bool,
     pub endpoint: Option<String>,
+    pub operation_code: Option<String>,
+    pub next_call: Option<BridgeNextCall>,
     #[serde(skip)]
     #[ts(skip)]
     transport_source: Option<std::sync::Arc<reqwest::Error>>,
@@ -103,6 +146,8 @@ impl PartialEq for BridgeError {
             && self.message == other.message
             && self.retryable == other.retryable
             && self.endpoint == other.endpoint
+            && self.operation_code == other.operation_code
+            && self.next_call == other.next_call
     }
 }
 impl Eq for BridgeError {}
@@ -114,7 +159,22 @@ impl BridgeError {
             message: message.into(),
             retryable: code.retryable(),
             endpoint: None,
+            operation_code: None,
+            next_call: None,
             transport_source: None,
+        }
+    }
+
+    pub fn operation(
+        code: BridgeErrorCode,
+        operation_code: &str,
+        message: impl Into<String>,
+        next_call: gents_protocol::operations::NextCall,
+    ) -> Self {
+        Self {
+            operation_code: Some(operation_code.to_owned()),
+            next_call: Some(next_call.into()),
+            ..Self::new(code, message)
         }
     }
 
@@ -237,6 +297,70 @@ pub fn admitted_agent_preview<R>(
         gents::operations::agent::AgentOutcome::Refused {
             message, next_call, ..
         } => Err(anyhow::anyhow!(refusal_message(&message, next_call))),
+    }
+}
+
+/// A refused or failed request operation with its code and next call carried
+/// to the UI.
+pub fn request_operation_failure(
+    error: gents_protocol::operations::request::RequestOperationError,
+) -> anyhow::Error {
+    use gents_protocol::operations::request::RequestOperationError as E;
+    let code = match &error {
+        E::NotFound { .. } => BridgeErrorCode::NotFound,
+        E::FieldRequired(_)
+        | E::ContentRequired
+        | E::QueueEntryOwned
+        | E::SessionAgentMismatch { .. }
+        | E::MailboxCause { .. }
+        | E::Ambiguous { .. }
+        | E::ReissueParentState { .. }
+        | E::ReissueNotInteractive { .. }
+        | E::RetryBudgetExhausted { .. }
+        | E::ReissueDeadlineClosed { .. }
+        | E::ReissueNotLatest { .. }
+        | E::InterruptTerminal { .. }
+        | E::IdentityConflict { .. }
+        | E::ConflictingActiveRequests { .. }
+        | E::NodeUnavailable { .. }
+        | E::NoDefaultAgent { .. }
+        | E::AgentUnavailable { .. } => BridgeErrorCode::InvalidArgument,
+        E::IdentityRequired => BridgeErrorCode::PermissionDenied,
+        E::WaitTimedOut { .. }
+        | E::OutputUnavailable { .. }
+        | E::SuccessorInvalid { .. }
+        | E::ReceiptMismatch { .. }
+        | E::InterruptNotLatched { .. }
+        | E::Unconfirmed { .. }
+        | E::Passthrough(_) => BridgeErrorCode::Unknown,
+    };
+    let bridge = BridgeError::operation(
+        code,
+        error.code(),
+        gents_protocol::error_chain::ErrorChain(&error).to_string(),
+        error.next_call(),
+    );
+    match error.into_passthrough() {
+        Ok(cause) => anyhow::Error::new(OperationCause(cause)),
+        Err(error @ E::Unconfirmed { .. }) => anyhow::Error::new(error),
+        Err(error) => anyhow::Error::new(error).context(bridge),
+    }
+}
+
+/// An owner's failure an operation passed through, kept in the `source()`
+/// chain so the transport classifiers reach it.
+#[derive(Debug)]
+struct OperationCause(Box<dyn std::error::Error + Send + Sync>);
+
+impl std::fmt::Display for OperationCause {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl std::error::Error for OperationCause {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.0.as_ref())
     }
 }
 

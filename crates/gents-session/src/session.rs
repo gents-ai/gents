@@ -66,8 +66,8 @@ pub use compaction_entries::{save_exact_compaction_entry, NewExactSessionCompact
 #[cfg(test)]
 pub(crate) use control::stage_session_resume_in_txn;
 pub use control::{
-    resume_session_with_access, stop_session_with_access, SessionExecutionWitness,
-    SessionStopReceipt,
+    resume_session_with_access, stop_session_with_access, SessionControlError,
+    SessionExecutionWitness, SessionStopReceipt,
 };
 pub use fork::message_tool_references;
 pub use fork::{
