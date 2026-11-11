@@ -8,7 +8,7 @@ use gents::inference::backends::registry::lookup_backend_observation_in_txn;
 use gents::store::config_client::{list_inference_backends_in_txn, ConfigAccess};
 use gents::store::graphql::escape_graphql_string;
 use gents_desktop_core::client::ClientCore;
-use gents_protocol::job::JobControlOutcome;
+use gents_protocol::job::{JobControlOutcome, JobState, JobView};
 use gents_protocol::process_control::{OperatorProcessControlRequest, ProcessControlOutcome};
 use tauri::State;
 
@@ -311,6 +311,40 @@ pub async fn desktop_job_control(
         ),
     }
     result
+}
+
+#[tauri::command]
+pub async fn desktop_jobs_list(
+    state: State<'_, DesktopAppState>,
+    node_did: String,
+    states: Option<Vec<JobState>>,
+    plugin: Option<String>,
+    session_id: Option<String>,
+) -> Result<Vec<JobView>, BridgeError> {
+    let core = current_core(&state)
+        .ok_or_else(|| BridgeError::untyped("desktop bridge core not initialized"))?;
+    crate::job_view::jobs_list(
+        &core,
+        &node_did,
+        crate::job_view::JobsListFilter {
+            states,
+            plugin,
+            session_id,
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn desktop_job_view(
+    state: State<'_, DesktopAppState>,
+    node_did: String,
+    address: Option<String>,
+    row_doc_id: Option<String>,
+) -> Result<JobView, BridgeError> {
+    let core = current_core(&state)
+        .ok_or_else(|| BridgeError::untyped("desktop bridge core not initialized"))?;
+    crate::job_view::job_view(&core, &node_did, address, row_doc_id).await
 }
 
 #[tauri::command]

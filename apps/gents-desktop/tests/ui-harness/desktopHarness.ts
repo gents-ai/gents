@@ -50,6 +50,7 @@ import type {
   TriggerView,
 } from "@source-inc/gents-desktop-client";
 import type { JobControlOutcome } from "@source-inc/gents-desktop-client/generated/JobControlOutcome";
+import type { JobView } from "@source-inc/gents-desktop-client/generated/JobView";
 import type { RequestOutcomeView } from "@source-inc/gents-desktop-client/generated/RequestOutcomeView";
 import type { MessageReconstructionView } from "@source-inc/gents-desktop-client/generated/MessageReconstructionView";
 import type { SessionContextView } from "@source-inc/gents-desktop-client/generated/SessionContextView";
@@ -518,6 +519,115 @@ function backgroundItems(): RenderedTimelineItem[] {
       ],
     },
   ];
+}
+
+const WORKFLOW_ROW = "doc-workflow-review";
+const WORKFLOW_PRIOR_ROW = "doc-workflow-review-prior";
+const WORKFLOW_STARTED_MS = Date.parse("2026-06-17T00:00:00.000Z");
+
+/** The workflow runs the harness node serves: a running review that resumed
+    an earlier one, which failed out of budget. */
+export function harnessWorkflowRuns(): JobView[] {
+  const pin = {
+    script_id: "a1b2c3d4e5f60718",
+    origin: "installed" as const,
+    engine_digest: "sha256:engine",
+    plugin_ref: "gents/review",
+    agent_budget: 4,
+    cwd: "~/src/gents",
+    chain_root_doc_id: WORKFLOW_PRIOR_ROW,
+  };
+  const scope: JobView["scope"] = {
+    session_id: "session-intro",
+    request_id: "request-intro",
+    node_did: NODE_DID,
+    requester_did: null,
+  };
+  return [
+    {
+      address: "session-intro:call-workflow-review",
+      row_doc_id: WORKFLOW_ROW,
+      session_id: "session-intro",
+      tool_call_id: "call-workflow-review",
+      scope,
+      handle: "review",
+      state: "running",
+      outcome: null,
+      pin: { ...pin, resume_of: WORKFLOW_PRIOR_ROW },
+      progress: harnessWorkflowProgress(),
+      children: [
+        {
+          slot: "verify",
+          attempt: 1,
+          session_id: "session-workflow-verify",
+          request_id: "request-workflow-verify",
+          state: "completed",
+          title: "Run the checks",
+          usage: { input: 9_000, output: 3_400, total: 12_400 },
+          duration_ms: 95_000,
+          target: "general",
+        },
+        {
+          slot: "review",
+          attempt: 1,
+          session_id: "session-workflow-review",
+          request_id: "request-workflow-review",
+          state: "live",
+          title: "Review the diff",
+          usage: { input: 30_000, output: 1_200, total: 31_200 },
+          duration_ms: 212_000,
+          target: "general",
+        },
+      ],
+      created_at: WORKFLOW_STARTED_MS,
+      adopted_at: WORKFLOW_STARTED_MS,
+      completed_at: null,
+    },
+    {
+      address: "session-intro:call-workflow-review-prior",
+      row_doc_id: WORKFLOW_PRIOR_ROW,
+      session_id: "session-intro",
+      tool_call_id: "call-workflow-review-prior",
+      scope,
+      handle: "review",
+      state: "failed",
+      outcome: {
+        code: "plugin_job_budget",
+        message: "The run spent its agent budget.",
+      },
+      pin: { ...pin, resume_of: null },
+      progress: harnessWorkflowProgress({
+        state: "running",
+        last_event: "agent 4 failed",
+        budget: { total: 4, spent: 4, remaining: 0 },
+      }),
+      children: [],
+      created_at: WORKFLOW_STARTED_MS - 3_600_000,
+      adopted_at: WORKFLOW_STARTED_MS - 3_600_000,
+      completed_at: WORKFLOW_STARTED_MS - 3_000_000,
+    },
+  ];
+}
+
+function harnessWorkflowProgress(
+  over: Partial<NonNullable<JobView["progress"]>> = {},
+): NonNullable<JobView["progress"]> {
+  return {
+    title: "Review the diff",
+    state: "running",
+    phases: [
+      { title: "plan", state: "done" },
+      { title: "review", state: "active" },
+      { title: "report", state: "pending" },
+    ],
+    active: [],
+    spawned: 2,
+    budget: { total: 4, spent: 2, remaining: 2 },
+    last_event: "agent 2 started",
+    observed_terminal_children: 1,
+    revision: 3,
+    ...over,
+  };
 }
 
 function harnessAssistantItem(
@@ -3823,6 +3933,25 @@ export function createDesktopUiHarness(
         AlreadyTerminal: { state: "completed" },
       };
       return outcome;
+    },
+    async listJobs({ nodeDid, states, plugin, sessionId }) {
+      if (nodeDid !== NODE_DID) return [];
+      return harnessWorkflowRuns().filter(
+        (run) =>
+          (!states?.length || states.includes(run.state)) &&
+          (!plugin || run.pin.plugin_ref === plugin) &&
+          (!sessionId || run.session_id === sessionId),
+      );
+    },
+    async getJobView(request) {
+      const run = harnessWorkflowRuns().find((candidate) =>
+        request.rowDocId
+          ? candidate.row_doc_id === request.rowDocId
+          : candidate.address === request.address,
+      );
+      if (!run || request.nodeDid !== NODE_DID)
+        throw new Error("This run is not visible on the node yet.");
+      return run;
     },
     async processControl() {
       throw new Error("Process control is unavailable in this fixture.");

@@ -24,6 +24,8 @@ import type { SessionGoalState } from "../generated/SessionGoalState.js";
 import type { OauthProvider } from "../transport.js";
 import type { DesktopJobControlRequest } from "../generated/DesktopJobControlRequest.js";
 import type { JobControlOutcome } from "../generated/JobControlOutcome.js";
+import type { JobState } from "../generated/JobState.js";
+import type { JobView } from "../generated/JobView.js";
 import type { OperatorProcessControlRequest } from "../generated/OperatorProcessControlRequest.js";
 import type { ProcessControlOutcome } from "../generated/ProcessControlOutcome.js";
 import type { ConfigComponentsApplyRequest } from "../generated/ConfigComponentsApplyRequest.js";
@@ -460,6 +462,21 @@ export type DesktopApiAdapter = {
   ) => Promise<InterruptRequestResult>;
   backgroundTool: (request: DesktopBackgroundToolRequest) => Promise<boolean>;
   jobControl: (request: DesktopJobControlRequest) => Promise<JobControlOutcome>;
+  /** the node's workflow runs, newest first; absent filters keep every row */
+  listJobs: (request: {
+    nodeDid: string;
+    states?: JobState[] | null;
+    plugin?: string | null;
+    sessionId?: string | null;
+  }) => Promise<JobView[]>;
+  /** one run by its address (`SESSION_ID:TOOL_CALL_ID`), or by its row id
+   *  when following a resume chain */
+  getJobView: (
+    request: { nodeDid: string } & (
+      | { address: string; rowDocId?: never }
+      | { rowDocId: string; address?: never }
+    ),
+  ) => Promise<JobView>;
   processControl: (
     request: OperatorProcessControlRequest,
   ) => Promise<ProcessControlOutcome>;

@@ -1141,6 +1141,58 @@ Denies the desktop_job_control command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-job-view`
+
+</td>
+<td>
+
+Enables the desktop_job_view command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-job-view`
+
+</td>
+<td>
+
+Denies the desktop_job_view command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-jobs-list`
+
+</td>
+<td>
+
+Enables the desktop_jobs_list command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-jobs-list`
+
+</td>
+<td>
+
+Denies the desktop_jobs_list command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-join-history-read`
 
 </td>
@@ -3993,7 +4045,7 @@ Authenticated peer enrollment, removal and rename, and ended access
 </td>
 <td>
 
-Operations snapshot, health, session provenance, MCP probe
+Operations snapshot, health, session provenance, MCP probe, workflow runs
 
 </td>
 </tr>

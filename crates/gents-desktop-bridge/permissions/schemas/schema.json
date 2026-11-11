@@ -811,6 +811,30 @@
           "markdownDescription": "Denies the desktop_job_control command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_job_view command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-job-view",
+          "markdownDescription": "Enables the desktop_job_view command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_job_view command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-job-view",
+          "markdownDescription": "Denies the desktop_job_view command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_jobs_list command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-jobs-list",
+          "markdownDescription": "Enables the desktop_jobs_list command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_jobs_list command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-jobs-list",
+          "markdownDescription": "Denies the desktop_jobs_list command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_join_history_read command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-join-history-read",
@@ -2131,10 +2155,10 @@
           "markdownDescription": "Authenticated peer enrollment, removal and rename, and ended access\n#### This permission set includes:\n\n- `allow-desktop-peer-enroll-status`\n- `allow-desktop-peer-remove`\n- `allow-desktop-peer-rename`\n- `allow-desktop-ended-access-dismiss`"
         },
         {
-          "description": "Operations snapshot, health, session provenance, MCP probe\n#### This permission set includes:\n\n- `allow-desktop-operations-snapshot`\n- `allow-desktop-session-provenance`\n- `allow-desktop-list-backends-with-health`\n- `allow-desktop-list-mcp-services-with-health`\n- `allow-desktop-probe-mcp-service`",
+          "description": "Operations snapshot, health, session provenance, MCP probe, workflow runs\n#### This permission set includes:\n\n- `allow-desktop-operations-snapshot`\n- `allow-desktop-session-provenance`\n- `allow-desktop-jobs-list`\n- `allow-desktop-job-view`\n- `allow-desktop-list-backends-with-health`\n- `allow-desktop-list-mcp-services-with-health`\n- `allow-desktop-probe-mcp-service`",
           "type": "string",
           "const": "operations-read",
-          "markdownDescription": "Operations snapshot, health, session provenance, MCP probe\n#### This permission set includes:\n\n- `allow-desktop-operations-snapshot`\n- `allow-desktop-session-provenance`\n- `allow-desktop-list-backends-with-health`\n- `allow-desktop-list-mcp-services-with-health`\n- `allow-desktop-probe-mcp-service`"
+          "markdownDescription": "Operations snapshot, health, session provenance, MCP probe, workflow runs\n#### This permission set includes:\n\n- `allow-desktop-operations-snapshot`\n- `allow-desktop-session-provenance`\n- `allow-desktop-jobs-list`\n- `allow-desktop-job-view`\n- `allow-desktop-list-backends-with-health`\n- `allow-desktop-list-mcp-services-with-health`\n- `allow-desktop-probe-mcp-service`"
         },
         {
           "description": "Interrupt request execution\n#### This permission set includes:\n\n- `allow-desktop-interrupt-request`\n- `allow-desktop-background-tool`\n- `allow-desktop-process-control`\n- `allow-desktop-job-control`",

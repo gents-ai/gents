@@ -277,6 +277,8 @@ export function createBridgeHttpAdapter(
       throw new Error("desktop_job_control is not served by the live bridge runner");
     },
     processControl: unsupported("processControl"),
+    listJobs: unsupported("listJobs"),
+    getJobView: unsupported("getJobView"),
   };
 }
 
