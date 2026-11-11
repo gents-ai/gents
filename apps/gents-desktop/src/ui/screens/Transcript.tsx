@@ -5,7 +5,7 @@ import {
   useTranscriptSends,
 } from "./session/ChatDeliveryFeedback";
 import { chatDraftRequest } from "../../hooks/chatDrafts";
-import type { TranscriptSend } from "../../hooks/chatDeliveryView";
+import { drawnInTranscript, type TranscriptSend } from "../../hooks/chatDeliveryView";
 import { splitSkillLines } from "@/lib/skillLines";
 import {
   Fragment,
@@ -14,6 +14,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -54,6 +55,7 @@ import {
   holdLive,
   lingerSentTurn,
   noDrawKeys,
+  requestOf,
   withSentTurns,
   type DrawKeys,
   type HeldLive,
@@ -763,6 +765,35 @@ export const TranscriptPanel = memo(function TranscriptPanel({
         : held.items,
     [rows.joined, held.items, localTurn, sessionKey, localQueued, keptItems],
   );
+  const keptNode = session?.nodeDid ?? selectedNodeDid;
+  const chatDrafts = stores.chat.use.chatDrafts();
+  /* which kept sends this view stands for, so the composer's feedback shows
+     exactly the others: before paint, so no send is drawn in both or
+     neither; nothing over a refused view */
+  const draws = useMemo(() => {
+    if (!sessionKey || rows.failure?.denied) return "";
+    const drawn = new Set(turns.map(requestOf));
+    return chatDrafts
+      .filter(
+        (draft) =>
+          drawnInTranscript(draft, keptNode, sessionKey) && drawn.has(draft.requestId),
+      )
+      .map((draft) => draft.requestId)
+      .join("\n");
+  }, [chatDrafts, keptNode, sessionKey, rows.failure?.denied, turns]);
+  useLayoutEffect(() => {
+    if (!sessionKey) return;
+    const published = {
+      nodeDid: keptNode,
+      sessionId: sessionKey,
+      requestIds: draws ? draws.split("\n") : [],
+    };
+    stores.chat.setState({ transcriptDraws: published });
+    return () => {
+      if (stores.chat.getState().transcriptDraws === published)
+        stores.chat.setState({ transcriptDraws: null });
+    };
+  }, [stores.chat, keptNode, sessionKey, draws]);
   const keysRef = useRef<DrawKeys>(noDrawKeys(sessionKey));
   const keys = useMemo(
     () => drawKeys(keysRef.current, turns, held.replacedBy, sessionKey),

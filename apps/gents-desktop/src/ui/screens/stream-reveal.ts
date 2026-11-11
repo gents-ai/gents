@@ -178,7 +178,8 @@ export function drawKeys(
   return next;
 }
 
-const requestOf = (item: RenderedTimelineItem): string | null => {
+/** The request a person's row was sent as, when it stands for one. */
+export const requestOf = (item: RenderedTimelineItem): string | null => {
   if (item.kind === "pendingUserTurn") return item.requestId;
   if (item.kind === "userMessage")
     return item.inputRequestId ?? (item.ownsTurn ? (item.requestId ?? null) : null);

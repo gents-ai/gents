@@ -38,6 +38,15 @@ export type ChatState = {
   /** the send this window saved whose attachment bytes it is still storing;
       a failed store refuses it, so it is not drawn as sent until then */
   storingSend: string | null;
+  /** the kept sends the open transcript draws a row for, as a bubble or as
+      the session's row; the composer's feedback shows every other one */
+  transcriptDraws: TranscriptDraws | null;
+};
+
+export type TranscriptDraws = {
+  nodeDid: string | null;
+  sessionId: string;
+  requestIds: readonly string[];
 };
 
 export type SentTurn = { sessionId: string; requestId: string; queued: boolean };
@@ -60,6 +69,7 @@ export function createChatStore(initial: Partial<ChatState> = {}) {
       ...loadChatDrafts(),
       sendDeadlineTick: 0,
       storingSend: null,
+      transcriptDraws: null,
       ...initial,
     })),
   );

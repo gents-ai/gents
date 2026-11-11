@@ -72,11 +72,18 @@ export function ChatDeliveryFeedback({
   const readError = stores.chat.use.chatDraftError();
   const sending = stores.chat.use.sending();
   const now = useSendDeadlineClock(stores.chat);
-  /* the open session's transcript draws its own sends */
-  const transcript = useSessionValue(
-    stores.session,
-    (state) => !mailboxItem && heldFor(state.session, sessionId, nodeDid) !== null,
-  );
+  const draws = stores.chat.use.transcriptDraws();
+  const storing = stores.chat.use.storingSend();
+  /* a send is shown once: here unless the open transcript draws its row,
+     and nowhere but the composer while its attachments are stored */
+  const shownElsewhere = (draft: ChatDraft) =>
+    !mailboxItem &&
+    drawnInTranscript(draft, nodeDid, sessionId) &&
+    (draft.requestId === storing ||
+      (draws !== null &&
+        draws.nodeDid === nodeDid &&
+        draws.sessionId === sessionId &&
+        draws.requestIds.includes(draft.requestId)));
   useEffect(() => {
     const reload = () => stores.chat.setState(loadChatDrafts());
     window.addEventListener("storage", reload);
@@ -99,9 +106,7 @@ export function ChatDeliveryFeedback({
         sessionId,
         mailboxItem?.itemId ?? null,
       )
-        .filter(
-          (draft) => !(transcript && drawnInTranscript(draft, nodeDid, sessionId)),
-        )
+        .filter((draft) => !shownElsewhere(draft))
         .map((draft) => {
           const status = sendStatus(draft, now);
           return (
