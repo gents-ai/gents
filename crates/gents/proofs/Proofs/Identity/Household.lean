@@ -48,12 +48,23 @@ exists, the session relationship also permits explicitly granted session readers
 to observe it. Inherited document permissions do not grant relation management:
 the document owner or a directly granted manager must perform those grants. Native
 collection bindings contain the policy ID. Adding resources changes that ID; existing
-bindings cannot be silently rewritten and require an explicit supported upgrade. -/
+bindings cannot be silently rewritten and require an explicit supported upgrade.
+
+`agent_manager` on a Node grants only `manage_agents`: the agent catalog
+(create and clone an Agent, choose the default Agent;
+`SelfConfig.categoryGroupings`). No other permission names it and no permission
+inherits `manage_agents` through a parent, so it confers none of
+`administrator`'s Node read, update or delete, nor the Agent, configuration and
+session permissions those confer through `parent`
+(`SelfConfig.agent_manager_is_catalog_only`). An administrator or the Node owner
+manages it. Decision (maintainer, 2026-11-11, #3656). -/
 def policy : List ResourceDefinition :=
   [ { name := "nodes"
-      relations := [⟨"administrator", ["actor"], ["administrator", "runtime_reader"]⟩, ⟨"runtime_reader", ["actor"], []⟩]
+      relations := [⟨"administrator", ["actor"], ["administrator", "runtime_reader", "agent_manager"]⟩,
+        ⟨"runtime_reader", ["actor"], []⟩, ⟨"agent_manager", ["actor"], []⟩]
       permissions := [permission "read" ["administrator", "runtime_reader"] [],
-        permission "update" ["administrator"] [], permission "delete" ["administrator"] []] }
+        permission "update" ["administrator"] [], permission "delete" ["administrator"] [],
+        permission "manage_agents" ["administrator", "agent_manager"] []] }
   , { name := "operations"
       relations := [⟨"parent", ["nodes"], []⟩]
       permissions := [permission "read" [] [("parent", "read")],

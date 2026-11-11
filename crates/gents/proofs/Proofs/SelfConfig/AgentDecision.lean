@@ -240,7 +240,7 @@ def AgentRequest.needsAgent (r : AgentRequest) : Bool :=
 
 /-- Why a request is refused. Each refusal names what the caller can change. -/
 inductive AgentRefusal where
-  /-- The actor lacks the catalog's grants (`nodes update`). -/
+  /-- The actor lacks the catalog's grants (`nodes manage_agents`). -/
   | catalogNotHeld
   /-- The actor lacks the agent category on the target (`agents update`). -/
   | agentNotHeld
