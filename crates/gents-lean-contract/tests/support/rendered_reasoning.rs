@@ -1,9 +1,5 @@
-#[allow(dead_code)]
-#[path = "../../../gents/src/lean_vocab_test/canonical_output.rs"]
-mod runtime_contract;
-
 use super::test_protocol::message::{AssistantContent, Message, Reasoning, ReasoningContent};
-use runtime_contract::{
+use gents_lean_vocab::{
     LeanCanonicalOutputProjectionCase, LeanCanonicalOutputView, LeanMessageBlock,
     LeanReasoningPart, LeanRenderedKind,
 };
@@ -46,7 +42,7 @@ pub(crate) fn generated_reasoning_cases() -> Vec<RenderedReasoningCase> {
             case.name
         );
         assert!(
-            matches!(&native.role, runtime_contract::LeanMessageRole::Assistant),
+            matches!(&native.role, gents_lean_vocab::LeanMessageRole::Assistant),
             "{}: generated reasoning message is not assistant-authored",
             case.name
         );

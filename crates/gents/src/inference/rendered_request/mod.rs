@@ -237,7 +237,12 @@ mod tests {
     async fn batched_base_read_decodes_through_local_and_embedded_access() {
         use crate::store::config_client::ConfigAccess;
         use crate::store::graphql::escape_graphql_string;
-        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
+        let node = std::sync::Arc::new(
+            crate::store::test_support::node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let access = ConfigAccess::local(node.clone());
         let value = serde_json::json!({"model":"m", "stream":false, "padding":"x".repeat(4096)});
@@ -291,7 +296,12 @@ mod tests {
         use crate::store::config_client::ConfigAccess;
         use crate::store::graphql::escape_graphql_string;
 
-        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
+        let node = std::sync::Arc::new(
+            crate::store::test_support::node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
         crate::ensure_runtime_schemas(&node).await.unwrap();
 
         async fn create_block(

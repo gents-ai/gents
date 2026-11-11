@@ -13,7 +13,7 @@ pub(crate) fn installed_echo() -> (tempfile::TempDir, InstalledPlugin) {
 
 #[test]
 fn staged_plugin_resolution_conforms_to_lean() {
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().pack_wire_lock_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().pack_wire_lock_cases;
     let (home, _) = installed_echo();
     let executor = PluginExecutor::new(Some(home.path().to_owned()));
     for case in cases {
@@ -1201,7 +1201,7 @@ mod bound {
 
 #[tokio::test]
 async fn generated_plugin_invocation_retry_revalidates_current_installation() {
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().plugin_resource_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().plugin_resource_cases;
     for case in cases["invocation"].as_array().unwrap() {
         let (home, original) = installed_plugin(ECHO_WAT, Some(crate::pack::BindAccess::Read));
         let mut executor = PluginExecutor::new(Some(home.path().to_owned()));
@@ -2136,7 +2136,7 @@ mod job_calls {
             )
             .await
             .unwrap();
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().plugin_job_opening_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().plugin_job_opening_cases;
         let expected = |name: &str| {
             cases.iter().find(|case| case["name"] == name).unwrap()["commits"]
                 .as_bool()

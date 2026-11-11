@@ -3,7 +3,7 @@ use gents::tools::native::{
 };
 use gents::FileToolMode;
 
-use crate::lean_vocab_test::lean_lsp_action_cases;
+use gents_lean_vocab::lean_lsp_action_cases;
 
 fn file_from_rank(rank: u8) -> FileToolMode {
     match rank {

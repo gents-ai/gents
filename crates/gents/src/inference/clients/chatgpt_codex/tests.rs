@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 async fn routing_affinity_matches_lean_owner() {
     use crate::inference::auth::http::OAuthHttpPolicy;
     use gents_loop::provider_input::routing_affinity::{scope, RoutingAffinity};
-    for case in &crate::lean_vocab_test::lean_contract_snapshot().routing_affinity_cases {
+    for case in &gents_lean_vocab::lean_contract_snapshot().routing_affinity_cases {
         let state = RoutingAffinity::start(
             case["codex"].as_bool().unwrap(),
             case["main"].as_bool().unwrap(),

@@ -9,7 +9,7 @@ use gents::runtime::agent::p2p_reconcile::{
 
 #[test]
 fn node_replication_matches_executable_scope_model() {
-    let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
+    let snapshot = gents_lean_vocab::lean_contract_snapshot();
     let template = resolve_template(CLIENT_TEMPLATE).expect("client template");
     for case in &snapshot.scope_node_route_cases {
         let direction = PairingDirection::parse(case["direction"].as_str().unwrap()).unwrap();
@@ -35,7 +35,7 @@ fn node_replication_matches_executable_scope_model() {
 
 #[test]
 fn protocol_routes_match_model_actions() {
-    let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
+    let snapshot = gents_lean_vocab::lean_contract_snapshot();
     let mut modeled = BTreeSet::new();
     for case in &snapshot.scope_template_cases {
         let id = case["id"].as_str().unwrap();
@@ -92,7 +92,7 @@ fn protocol_routes_match_model_actions() {
 
 #[test]
 fn runtime_data_has_no_replication_template_or_app_escape() {
-    let contracts = crate::lean_vocab_test::lean_identity_contracts();
+    let contracts = gents_lean_vocab::lean_identity_contracts();
     let allowed = &contracts[0].replicated_protocol_collections;
     assert_eq!(
         gents_protocol::schemas::REPLICATED_PROTOCOL_COLLECTION_NAMES

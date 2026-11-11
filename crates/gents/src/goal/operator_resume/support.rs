@@ -59,7 +59,7 @@ impl Fixture {
         user_owned_goal: bool,
     ) -> Self {
         let (db, user, user_access, binding) =
-            crate::test_support::signed_test_node("goal-operator").await;
+            crate::test_support::root::signed_test_node("goal-operator").await;
         let node = db.node.clone();
         let identity = db.node_identity.clone();
         let user = Arc::new(user);

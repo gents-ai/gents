@@ -768,7 +768,7 @@ impl gents_loop::request_lifecycle::RequestLifecycleControl for RequestLifecycle
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lean_vocab_test::{
+    use gents_lean_vocab::{
         assert_lean_contract_vocabulary_matches, assert_state_machine_contract_is_complete,
         lean_state_machine_contract, LeanContractVocabulary,
     };
@@ -958,7 +958,7 @@ mod tests {
             .unwrap(),
         );
         let node = Arc::new(
-            crate::test_support::node_builder()
+            crate::store::test_support::node_builder()
                 .data_path(tempdir.path())
                 .with_node_identity_did(root.did())
                 .build()
@@ -969,8 +969,13 @@ mod tests {
         let root_did = escape_graphql_string(root.did());
         crate::ConfigAccess::local(node.clone()).write("test.lifecycle.node", &format!(r#"mutation {{ create_Node(input: {{node_did: "{root_did}", display_name: "fixture", enabled: true}}) {{ _docID }} }}"#)).await.unwrap();
         let binding = crate::store::identity::provision_agent_identity(root.as_ref()).unwrap();
-        crate::test_support::install_test_agent_binding(&node, root.did(), "default", &binding)
-            .await;
+        crate::test_support::inference::install_test_agent_binding(
+            &node,
+            root.did(),
+            "default",
+            &binding,
+        )
+        .await;
         let agent =
             crate::store::identity::resolve_agent_identity(root.as_ref(), &binding).unwrap();
         let mut lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(

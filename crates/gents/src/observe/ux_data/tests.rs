@@ -20,7 +20,7 @@ const BOARD: &str = "acme/board/board";
 
 #[test]
 fn operator_ux_surface_checks_follow_model() {
-    let model = crate::lean_vocab_test::lean_identity_household_cases()
+    let model = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap();
@@ -537,7 +537,7 @@ async fn watch_stops_when_the_query_projection_changes() {
 #[tokio::test]
 async fn a_page_creates_through_the_declared_create_tool_and_reads_it_back() {
     let fixture = Fixture::new().await;
-    let model = crate::lean_vocab_test::lean_identity_household_cases()
+    let model = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap();
@@ -705,7 +705,7 @@ async fn cached_http_operator_query_refuses_after_native_reader_revocation() {
     let error = call(fixture.home.path(), &fixture.client_access, write)
         .await
         .unwrap_err();
-    let model = crate::lean_vocab_test::lean_identity_household_cases()
+    let model = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap();
@@ -783,7 +783,7 @@ async fn http_operator_signs_ux_create_from_the_verified_installed_pack() {
         "type BoardTask { title: String lane: String }",
     )
     .await;
-    let model = crate::lean_vocab_test::lean_identity_household_cases()
+    let model = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap();

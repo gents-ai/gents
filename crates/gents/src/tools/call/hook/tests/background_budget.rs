@@ -24,7 +24,7 @@ pub(super) async fn budget_hook_fixture(
         AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
     };
 
-    let (db, user, owner, binding) = crate::test_support::signed_test_node(name).await;
+    let (db, user, owner, binding) = crate::test_support::root::signed_test_node(name).await;
     let node = db.node.clone();
     let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
         .unwrap();
@@ -157,7 +157,7 @@ async fn assert_background_rows(
 
 #[tokio::test]
 async fn generated_background_budget_uses_accepted_dispatch() {
-    let witness = crate::lean_vocab_test::lean_r6_background_theorem_witnesses()
+    let witness = gents_lean_vocab::lean_r6_background_theorem_witnesses()
         .iter()
         .find(|w| w.witness_kind == "admission_bound")
         .expect("modeled admission bound");
@@ -209,7 +209,7 @@ async fn generated_background_budget_uses_accepted_dispatch() {
         executions.wait_for_completion(child).await;
     }
     assert_background_rows(&access, &request_id, witness.numeric_bound, "cancelled").await;
-    let batch = crate::lean_vocab_test::lean_r6_backgrounding_cases()
+    let batch = gents_lean_vocab::lean_r6_backgrounding_cases()
         .iter()
         .filter(|case| case.group == "budget_batch")
         .collect::<Vec<_>>();

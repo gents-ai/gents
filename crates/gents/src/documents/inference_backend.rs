@@ -343,7 +343,7 @@ mod selection_tests {
             "auth":{"kind":"credential", "id":"id", "version":"approved"}
         }))
         .unwrap();
-        let cases = crate::lean_vocab_test::lean_identity_household_cases();
+        let cases = gents_lean_vocab::lean_identity_household_cases();
         let modeled = cases
             .iter()
             .find(|case| case.name == "configuration-explicit-grants")

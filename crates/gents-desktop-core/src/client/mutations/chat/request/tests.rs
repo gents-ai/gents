@@ -14,7 +14,7 @@ use super::*;
 
 use crate::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 
-use super::lean_vocab_test::{
+use gents_lean_vocab::{
     assert_lean_transition_is_legal, lean_contract_snapshot, LeanSessionRecoveryCase,
 };
 

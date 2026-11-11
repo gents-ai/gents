@@ -55,7 +55,7 @@ fn cumulative_usage_keeps_start_counters_and_requires_message_stop() {
 
 #[test]
 fn identity_matches_lean_body_witness_head() {
-    let cases = crate::lean_vocab_test::lean_prompt_assembly_claude_body_cases();
+    let cases = gents_lean_vocab::lean_prompt_assembly_claude_body_cases();
     assert!(!cases.is_empty());
     for case in cases {
         assert_eq!(case.system[0], case.attribution, "{}", case.name);
@@ -65,7 +65,7 @@ fn identity_matches_lean_body_witness_head() {
 
 #[test]
 fn lean_effort_cases_drive_the_real_messages_request() {
-    for case in crate::lean_vocab_test::lean_prompt_assembly_claude_body_cases() {
+    for case in gents_lean_vocab::lean_prompt_assembly_claude_body_cases() {
         let mut request = echo_request();
         request.additional_params = Some(json!({
             (ADVERTISED_REASONING_EFFORTS_PARAM): case.supported_efforts,
@@ -923,7 +923,7 @@ fn thinking_start_emits_ordered_audit_observations() {
 
 #[test]
 fn generated_claude_wire_start_cases_drive_native_parser() {
-    use crate::lean_vocab_test::{
+    use gents_lean_vocab::{
         lean_prompt_assembly_claude_wire_start_cases, LeanClaudeReasoningPart,
         LeanClaudeStreamBlock,
     };

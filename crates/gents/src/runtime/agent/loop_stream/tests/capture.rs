@@ -51,7 +51,7 @@ async fn rendered_request_sink_runs_before_provider_stream() {
 
 #[tokio::test(start_paused = true)]
 async fn generated_rendered_capture_cases_fence_persist_before_send() {
-    let cases = crate::lean_vocab_test::lean_rendered_capture_cases();
+    let cases = gents_lean_vocab::lean_rendered_capture_cases();
     assert!(!cases.is_empty(), "Lean emitted no rendered-capture cases");
 
     for case in cases {
@@ -532,7 +532,7 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
         DefraRenderedRequestSink, ProvenanceManifest, RenderedRequestSource, CAPTURE_VERSION,
     };
 
-    let cases = crate::lean_vocab_test::lean_rendered_capture_cases();
+    let cases = gents_lean_vocab::lean_rendered_capture_cases();
     assert!(!cases.is_empty(), "Lean emitted no rendered-capture cases");
 
     // Captures are owned by the capturing Agent, so they are read as it.
@@ -574,7 +574,7 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
         let agent =
             crate::store::identity::resolve_agent_identity(root.as_ref(), &binding).unwrap();
         let agent_did = binding.agent_did.clone();
-        crate::test_support::install_test_agent_binding(
+        crate::test_support::inference::install_test_agent_binding(
             &node,
             &node_did,
             "Capture test agent",
@@ -823,7 +823,7 @@ async fn codex_affinity_survives_retry_tool_continuation_and_nested_compaction()
     assert_eq!(collected.error, None, "{collected:?}");
     assert!(current().is_none());
     let modeled_token = |name: &str| {
-        crate::lean_vocab_test::lean_contract_snapshot()
+        gents_lean_vocab::lean_contract_snapshot()
             .routing_affinity_cases
             .iter()
             .find(|case| case["name"].as_str() == Some(name))

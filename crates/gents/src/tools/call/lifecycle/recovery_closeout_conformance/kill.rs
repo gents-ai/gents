@@ -45,7 +45,7 @@ async fn kill_fixture(observation: &str) -> (PublishedAdmission, Option<String>)
 async fn generated_kill_cases_drive_the_session_message_kill() {
     use crate::session::tool_call_state::ToolCallState;
     use crate::tools::background::caused::KillOutcome;
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().session_message_kill_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().session_message_kill_cases;
     assert_eq!(cases.len(), 3);
     for case in cases {
         let (admission, caused_request_id) = kill_fixture(&case.observation).await;

@@ -119,7 +119,7 @@ async fn assert_genesis_signer(
 #[tokio::test]
 async fn held_client_and_agent_mcp_selection_isolation_rebind_and_rollback() -> Result<()> {
     let modeled = tokio::task::spawn_blocking(|| {
-        crate::lean_vocab_test::lean_identity_household_cases()
+        gents_lean_vocab::lean_identity_household_cases()
             .iter()
             .find(|case| case.name == "configuration-explicit-grants")
             .expect("MCP use model")

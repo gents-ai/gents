@@ -588,7 +588,7 @@ mod tests {
 
     #[test]
     fn fallback_matches_the_generated_model() {
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().backend_wake_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().backend_wake_cases;
         assert!(!cases.is_empty());
         for case in cases {
             let now = Utc.timestamp_millis_opt(case.now_ms).single().unwrap();
@@ -603,7 +603,7 @@ mod tests {
 
     #[test]
     fn expired_resume_reparking_matches_the_generated_model() {
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().backend_repark_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().backend_repark_cases;
         assert!(!cases.is_empty());
         for case in cases {
             assert_eq!(
@@ -637,7 +637,7 @@ mod tests {
 
     #[test]
     fn resumed_turn_matches_the_generated_model() {
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().backend_resumed_turn_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().backend_resumed_turn_cases;
         assert!(cases.iter().any(|case| case.next > 1));
         for case in cases {
             assert_eq!(
@@ -651,7 +651,7 @@ mod tests {
     #[test]
     fn parked_terminal_outcomes_match_the_generated_model() {
         use gents_protocol::request_lifecycle::RequestLifecycleState as State;
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().backend_parked_finalize_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().backend_parked_finalize_cases;
         assert!(cases
             .iter()
             .any(|case| case.allowed && case.outcome == State::Superseded));
@@ -670,7 +670,7 @@ mod tests {
 
     #[test]
     fn restored_capture_scope_allocation_matches_the_generated_model() {
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().backend_capture_scope_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().backend_capture_scope_cases;
         assert!(!cases.is_empty());
         for case in cases {
             assert_eq!(
@@ -689,7 +689,7 @@ mod tests {
 
     #[test]
     fn healthy_wakeup_matches_the_generated_model() {
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().backend_health_wake_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().backend_health_wake_cases;
         assert!(!cases.is_empty());
         for case in cases {
             let at = |millis| Utc.timestamp_millis_opt(millis).single().unwrap();

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use crate::test_support::EnvVarGuard;
+use crate::store::test_support::EnvVarGuard;
 
 mod workspace_file_permissions;
 #[cfg(unix)]
@@ -26,7 +26,7 @@ use super::shared::{
     ToolContext, ToolError, WorkspaceAuthority,
 };
 use super::*;
-use crate::lean_vocab_test::{
+use gents_lean_vocab::{
     lean_command_env_cases, lean_command_policy_case, lean_command_policy_cases,
     lean_command_sandbox_cases, LeanCommandPolicyCase,
 };
@@ -2666,7 +2666,7 @@ async fn backgrounded_bash_is_exempt_from_foreground_ceiling() {
 
 #[test]
 fn generated_artifact_mode_meet_cases_drive_command_effect_intersection() {
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().artifact_mode_meet_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().artifact_mode_meet_cases;
     assert_eq!(cases.len(), 16);
     for case in cases {
         let left = CommandExecutionMode::parse(case["left"].as_str().unwrap()).unwrap();
@@ -2705,7 +2705,7 @@ async fn artifact_command_without_runtime_grant_never_dispatches() {
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn generated_artifact_spawn_cases_drive_live_foreground_and_background_launches() {
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().artifact_spawn_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().artifact_spawn_cases;
     let fx = crate::tools::workspace::artifact_test_fixture(&[]).await;
     assert_eq!(cases.len(), 5);
     let mut exercised = 0;

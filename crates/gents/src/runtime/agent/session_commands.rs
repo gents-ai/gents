@@ -598,8 +598,8 @@ mod tests {
         let other =
             crate::store::identity::resolve_agent_identity(identity.as_ref(), &other_binding)
                 .unwrap();
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot()
-            .session_input_edit_native_discovery_cases;
+        let cases =
+            &gents_lean_vocab::lean_contract_snapshot().session_input_edit_native_discovery_cases;
         assert!(!cases.is_empty());
         for case in cases {
             let agent = match case["actor"].as_str().unwrap() {

@@ -24,7 +24,7 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Capture {
 }
 
 fn capture<T>(operation: impl FnOnce() -> T) -> (T, String) {
-    crate::test_support::enable_scoped_event_capture();
+    crate::test_support::root::enable_scoped_event_capture();
     let output = Capture::default();
     let subscriber = tracing_subscriber::fmt()
         .with_ansi(false)

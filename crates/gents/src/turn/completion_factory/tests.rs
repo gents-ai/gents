@@ -250,7 +250,7 @@ fn openrouter_additional_params_require_parameters() {
 
 #[test]
 fn generated_responses_storage_cases_drive_loop_config() {
-    use crate::lean_vocab_test::lean_prompt_assembly_responses_storage_cases;
+    use gents_lean_vocab::lean_prompt_assembly_responses_storage_cases;
 
     let cases = lean_prompt_assembly_responses_storage_cases();
     assert!(!cases.is_empty());
@@ -307,7 +307,7 @@ fn generated_responses_storage_cases_drive_loop_config() {
 #[test]
 fn generated_responses_effort_cases_drive_loop_config() {
     use crate::documents::inference_defaults::ReasoningEffort;
-    use crate::lean_vocab_test::lean_prompt_assembly_responses_effort_cases;
+    use gents_lean_vocab::lean_prompt_assembly_responses_effort_cases;
 
     let parse = |value: &String| ReasoningEffort::parse(value).expect("Lean effort");
     let cases = lean_prompt_assembly_responses_effort_cases();
@@ -695,7 +695,7 @@ fn prior_usage_decode_rejects_partial_or_negative_components() {
 
 #[tokio::test]
 async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
-    let cases = crate::lean_vocab_test::lean_budget_rehydration_cases();
+    let cases = gents_lean_vocab::lean_budget_rehydration_cases();
     assert_eq!(
         cases.len(),
         5,
@@ -703,7 +703,7 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
     );
     for case in cases {
         let (db, user, owner, binding) =
-            crate::test_support::signed_test_node("completion-budget-rehydration").await;
+            crate::test_support::root::signed_test_node("completion-budget-rehydration").await;
         let node = db.node.clone();
         let agent = agent_with_binding(
             db.node_identity.clone(),
@@ -997,7 +997,7 @@ async fn every_loop_config_arms_the_capture_scope_it_was_built_for() {
 
 #[test]
 fn generated_service_tier_cases_drive_loop_config() {
-    let cases = crate::lean_vocab_test::lean_prompt_assembly_service_tier_cases();
+    let cases = gents_lean_vocab::lean_prompt_assembly_service_tier_cases();
     assert!(!cases.is_empty());
     for case in cases {
         let family = BackendProviderKind::parse_optional(Some(&case.family)).expect("Lean family");
@@ -1240,7 +1240,7 @@ fn only_a_usable_newest_call_anchors_the_session() {
 #[tokio::test]
 async fn session_calibration_seeds_from_durable_inference_calls() {
     let (db, user, owner, binding) =
-        crate::test_support::signed_test_node("completion-session-calibration").await;
+        crate::test_support::root::signed_test_node("completion-session-calibration").await;
     let node = db.node.clone();
     let agent = agent_with_binding(
         db.node_identity.clone(),
@@ -1260,7 +1260,7 @@ async fn session_calibration_seeds_from_durable_inference_calls() {
     )
     .await
     .unwrap();
-    crate::test_support::install_test_agent_binding_with_access(
+    crate::test_support::inference::install_test_agent_binding_with_access(
         db.node_identity.did(),
         "Other calibration agent",
         &other_binding,

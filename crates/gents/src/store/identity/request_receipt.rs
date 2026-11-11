@@ -34,13 +34,14 @@ pub enum RequestReceiptError {
 
 type Result<T, E = RequestReceiptError> = std::result::Result<T, E>;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 thread_local! {
     static RECEIPT_VERIFICATION_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-#[cfg(test)]
-pub(crate) fn count_request_receipt_verifications<T, F>(operation: F) -> (T, usize)
+#[cfg(any(test, feature = "test-fixtures"))]
+#[doc(hidden)]
+pub fn count_request_receipt_verifications<T, F>(operation: F) -> (T, usize)
 where
     F: FnOnce() -> T,
 {
@@ -50,7 +51,7 @@ where
 }
 
 pub fn verify_request_receipt_signature(row: &AgentRequestRow) -> Result<()> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-fixtures"))]
     RECEIPT_VERIFICATION_COUNT.set(RECEIPT_VERIFICATION_COUNT.get() + 1);
     let admission = row_admission(row)?;
     admission.validate_canonical_fields()?;

@@ -83,7 +83,7 @@ async fn refresh_once(
 #[tokio::test]
 async fn refresh_fills_an_empty_key_from_the_refreshed_claims() {
     let (db, _user, _user_access, _binding) =
-        crate::test_support::signed_test_node("credential-refresh").await;
+        crate::test_support::root::signed_test_node("credential-refresh").await;
     let node = db.node.clone();
     let did = db.node_identity.did();
     let access = super::rows::runtime_credential_access(&node, did).unwrap();
@@ -100,7 +100,7 @@ async fn refresh_fills_an_empty_key_from_the_refreshed_claims() {
 #[tokio::test]
 async fn refresh_never_changes_a_present_key() {
     let (db, _user, _user_access, _binding) =
-        crate::test_support::signed_test_node("credential-refresh").await;
+        crate::test_support::root::signed_test_node("credential-refresh").await;
     let node = db.node.clone();
     let did = db.node_identity.did();
     let access = super::rows::runtime_credential_access(&node, did).unwrap();
@@ -117,7 +117,7 @@ async fn refresh_never_changes_a_present_key() {
 #[tokio::test]
 async fn refresh_leaves_the_key_empty_without_the_claim() {
     let (db, _user, _user_access, _binding) =
-        crate::test_support::signed_test_node("credential-refresh").await;
+        crate::test_support::root::signed_test_node("credential-refresh").await;
     let node = db.node.clone();
     let did = db.node_identity.did();
     let access = super::rows::runtime_credential_access(&node, did).unwrap();
@@ -162,7 +162,7 @@ where
 #[tokio::test]
 async fn a_refresh_racing_a_remove_does_not_revive_the_row() {
     let (db, _user, _user_access, _binding) =
-        crate::test_support::signed_test_node("credential-refresh").await;
+        crate::test_support::root::signed_test_node("credential-refresh").await;
     let node = db.node.clone();
     let did = db.node_identity.did();
     let access = super::rows::runtime_credential_access(&node, did).unwrap();
@@ -189,7 +189,7 @@ async fn a_refresh_racing_a_remove_does_not_revive_the_row() {
 #[tokio::test]
 async fn a_refresh_racing_a_disable_keeps_it_disabled() {
     let (db, _user, _user_access, _binding) =
-        crate::test_support::signed_test_node("credential-refresh").await;
+        crate::test_support::root::signed_test_node("credential-refresh").await;
     let node = db.node.clone();
     let did = db.node_identity.did();
     let access = super::rows::runtime_credential_access(&node, did).unwrap();
@@ -216,7 +216,7 @@ async fn a_refresh_racing_a_disable_keeps_it_disabled() {
 #[tokio::test]
 async fn a_refresh_racing_a_sign_in_keeps_the_sign_in() {
     let (db, _user, _user_access, _binding) =
-        crate::test_support::signed_test_node("credential-refresh").await;
+        crate::test_support::root::signed_test_node("credential-refresh").await;
     let node = db.node.clone();
     let did = db.node_identity.did();
     let access = super::rows::runtime_credential_access(&node, did).unwrap();
@@ -266,7 +266,7 @@ async fn a_refresh_racing_a_sign_in_keeps_the_sign_in() {
 #[tokio::test]
 async fn a_refresh_racing_a_replaced_sign_in_keeps_the_new_row() {
     let (db, _user, _user_access, _binding) =
-        crate::test_support::signed_test_node("credential-refresh").await;
+        crate::test_support::root::signed_test_node("credential-refresh").await;
     let node = db.node.clone();
     let did = db.node_identity.did();
     let access = super::rows::runtime_credential_access(&node, did).unwrap();
@@ -313,7 +313,7 @@ async fn a_refresh_racing_a_replaced_sign_in_keeps_the_new_row() {
 #[tokio::test]
 async fn a_refresh_adopts_a_replaced_document() {
     let (db, _user, _user_access, _binding) =
-        crate::test_support::signed_test_node("credential-refresh").await;
+        crate::test_support::root::signed_test_node("credential-refresh").await;
     let node = db.node.clone();
     let did = db.node_identity.did();
     let access = super::rows::runtime_credential_access(&node, did).unwrap();
@@ -385,7 +385,7 @@ async fn seed_upgraded_row(
 #[tokio::test]
 async fn upgraded_rows_keep_their_identity_and_fill_the_key_on_first_refresh() {
     let (db, _user, _user_access, _binding) =
-        crate::test_support::signed_test_node("credential-refresh").await;
+        crate::test_support::root::signed_test_node("credential-refresh").await;
     let node = db.node.clone();
     let did = db.node_identity.did();
     let access = super::rows::runtime_credential_access(&node, did).unwrap();

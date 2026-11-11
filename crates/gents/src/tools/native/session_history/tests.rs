@@ -48,7 +48,12 @@ fn usage_duration_requires_valid_provider_intervals_and_excludes_queue_time() {
 }
 
 async fn seeded_node() -> Arc<EmbeddedNode> {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identities = tempfile::tempdir().unwrap();
     let node_identity = pin_fixed_signing_identity(identities.path());

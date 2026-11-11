@@ -384,7 +384,7 @@ mod tests {
             node.verified_block_signer_did(&version.cid).await?,
             user.did()
         );
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().workspace_root_access_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().workspace_root_access_cases;
         assert!(!cases.is_empty());
         for case in cases {
             let key = match case["actor"].as_str().unwrap() {

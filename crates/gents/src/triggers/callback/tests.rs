@@ -65,7 +65,7 @@ fn workspace_agent_selection_is_configured_and_frozen() {
         crate::KeyIdentity::load_or_create(directory.path().join("integrator.key"), None).unwrap();
     let source = json!({"work_unit_id":"unit", "repository_id":"repo", "base_sha":"base", "branch":"topic",
         "owned_files":["src/a.rs"], "writer_agent_did":node.did(), "integrator_agent_did":node.did()});
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().workspace_agent_selection_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().workspace_agent_selection_cases;
     for case in cases {
         let selection = match case["name"].as_str().unwrap() {
             "missing" => None,
@@ -251,7 +251,7 @@ fn lean_journal(states: &[String]) -> Vec<ActionJournalEntry> {
 
 #[test]
 fn generated_recovery_and_denial_match_runtime_owners() {
-    let cases = crate::lean_vocab_test::lean_callback_recovery_cases();
+    let cases = gents_lean_vocab::lean_callback_recovery_cases();
     assert_eq!(cases.len(), 28, "Lean must emit the whole recovery matrix");
     for case in cases {
         let journal = lean_journal(&case.journal);
@@ -871,7 +871,7 @@ async fn workspace_reads_keep_the_held_agent_actor() {
     let node_access =
         crate::ConfigAccess::local_as(node.clone(), identity::Did::new(node_did).unwrap());
     let empty_access = crate::ConfigAccess::graphql_as("http://127.0.0.1:1/api/v0/graphql", "");
-    for case in &crate::lean_vocab_test::lean_contract_snapshot().callback_workspace_actor_cases {
+    for case in &gents_lean_vocab::lean_contract_snapshot().callback_workspace_actor_cases {
         let access = match case["actor"].as_str().unwrap() {
             "agent" => &agent_access,
             "node" => &node_access,
@@ -1627,8 +1627,7 @@ async fn callback_result_visibility_and_repair_match_the_executable_cursor_contr
         tokio_util::sync::CancellationToken::new(),
     );
     engine.snapshots = Some(super::test_snapshot());
-    let cases =
-        &crate::lean_vocab_test::lean_contract_snapshot().trigger_delivery["callback_visibility"];
+    let cases = &gents_lean_vocab::lean_contract_snapshot().trigger_delivery["callback_visibility"];
     let mut interrupted_after_grant = false;
     for case in cases.as_array().expect("Lean callback visibility cases") {
         let visible = case["visible"].as_bool().unwrap();
@@ -1945,7 +1944,7 @@ impl Backlog {
 #[tokio::test]
 async fn callback_claim_uses_modeled_selected_agent_grants() {
     let backlog = Backlog::registered().await;
-    let case = crate::lean_vocab_test::lean_identity_household_cases()
+    let case = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap();
@@ -2097,7 +2096,7 @@ async fn callback_claim_checks_enabled_and_invoke_only_before_admission() {
         .unwrap();
     let agent_rows = backlog.access.execute("{Agent {_docID}}").await.unwrap();
     let agent_doc = agent_rows["data"]["Agent"][0]["_docID"].as_str().unwrap();
-    let contract = crate::lean_vocab_test::lean_identity_household_cases()
+    let contract = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap();
@@ -2241,7 +2240,7 @@ async fn callback_claim_checks_enabled_and_invoke_only_before_admission() {
 
 #[test]
 fn callback_generation_covers_modeled_input_configuration() {
-    let case = crate::lean_vocab_test::lean_identity_household_cases()
+    let case = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap();
@@ -2309,7 +2308,7 @@ fn callback_generation_covers_modeled_input_configuration() {
 #[tokio::test]
 async fn callback_repository_placement_reads_with_selected_agent() -> anyhow::Result<()> {
     use crate::store::identity::NodeIdentity;
-    let contract = crate::lean_vocab_test::lean_identity_household_cases()
+    let contract = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap();
@@ -2442,7 +2441,7 @@ async fn callback_repository_placement_reads_with_selected_agent() -> anyhow::Re
 async fn callback_children_publish_atomically_and_duplicate_does_not_regrant() -> anyhow::Result<()>
 {
     use crate::store::identity::NodeIdentity;
-    let contract = crate::lean_vocab_test::lean_identity_household_cases()
+    let contract = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap();
@@ -2625,7 +2624,7 @@ async fn callback_claim_rechecks_modeled_source_visibility_and_generation() {
             .unwrap()
             .unwrap();
     let ids = backlog.config_ids().await;
-    let contract = crate::lean_vocab_test::lean_identity_household_cases()
+    let contract = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap();
@@ -2795,7 +2794,7 @@ async fn callback_module_plan_commits_only_with_modeled_native_authority() {
     let module_doc = module_row["data"]["CallbackModule"][0]["_docID"]
         .as_str()
         .unwrap();
-    let contract = crate::lean_vocab_test::lean_identity_household_cases()
+    let contract = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap();
@@ -2957,7 +2956,7 @@ async fn callback_cursor_waits_for_a_successful_claim() {
             .unwrap()
     }
 
-    let cases = &crate::lean_vocab_test::lean_identity_household_cases()
+    let cases = &gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap()
@@ -3238,8 +3237,7 @@ async fn callback_parent_requires_the_selected_authenticated_agent() {
         .unwrap();
     assert_eq!(visible["data"]["Agent"].as_array().unwrap().len(), 1);
 
-    let cases =
-        &crate::lean_vocab_test::lean_contract_snapshot().identity_callback_parent_actor_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().identity_callback_parent_actor_cases;
     assert_eq!(cases.len(), 3);
     for (index, case) in cases.iter().enumerate() {
         let actor = match case["actor"].as_str() {
@@ -3316,7 +3314,7 @@ async fn callback_parent_recovery_matches_modeled_interrupted_grant_and_revocati
     );
     let parents = access.execute("{ Agent { _docID } }").await.unwrap();
     let parent = parents["data"]["Agent"][0]["_docID"].as_str().unwrap();
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().identity_parent_publication_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().identity_parent_publication_cases;
     let mut consumed = 0;
     for case in cases.iter().filter(|case| {
         matches!(

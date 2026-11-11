@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use super::apply_txn::TxnBackend;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 use super::fault_injection::{
     fail_rollback_for_test, pause_embedded_finalization_for_test,
     post_commit_receipt_loss_for_test, EmbeddedFinalizationBoundary,
@@ -64,7 +64,7 @@ impl ConfigApplyTxn<'_> {
                             definitely_not_committed: true,
                         },
                     });
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-fixtures"))]
                 if result.is_ok() && post_commit_receipt_loss_for_test(self.operation) {
                     return Err(CommitFailure {
                         error: retry::transaction_storage_failure(
@@ -101,13 +101,13 @@ impl ConfigApplyTxn<'_> {
                 let started = Instant::now();
                 let result =
                     tokio::time::timeout(EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT, async {
-                        #[cfg(test)]
+                        #[cfg(any(test, feature = "test-fixtures"))]
                         pause_embedded_finalization_for_test(
                             EmbeddedFinalizationBoundary::BeforeCommit,
                         )
                         .await;
                         let result = node.commit_transaction(handle).await;
-                        #[cfg(test)]
+                        #[cfg(any(test, feature = "test-fixtures"))]
                         if result.is_ok() {
                             pause_embedded_finalization_for_test(
                                 EmbeddedFinalizationBoundary::AfterCommit,
@@ -128,7 +128,7 @@ impl ConfigApplyTxn<'_> {
                         definitely_not_committed: false,
                     }),
                     Ok(Ok(())) => {
-                        #[cfg(test)]
+                        #[cfg(any(test, feature = "test-fixtures"))]
                         if post_commit_receipt_loss_for_test(self.operation) {
                             return Err(CommitFailure {
                                 error: retry::transaction_storage_failure(
@@ -173,7 +173,7 @@ impl ConfigApplyTxn<'_> {
         {
             native_operations.wait_idle().await;
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-fixtures"))]
         if fail_rollback_for_test() {
             return Err(ConfigClientError::InjectedRollbackFailure);
         }
@@ -193,7 +193,7 @@ impl ConfigApplyTxn<'_> {
             } => graphql::txn_discard(endpoint, id, client).await,
             TxnBackend::Embedded { node, handle, .. } => {
                 match tokio::time::timeout(EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT, async {
-                    #[cfg(test)]
+                    #[cfg(any(test, feature = "test-fixtures"))]
                     pause_embedded_finalization_for_test(
                         EmbeddedFinalizationBoundary::BeforeRollback,
                     )
@@ -231,8 +231,9 @@ impl ConfigApplyTxn<'_> {
         self.rollback_on_drop = None;
     }
 
-    #[cfg(test)]
-    pub(crate) async fn commit(mut self) -> Result<()> {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    #[doc(hidden)]
+    pub async fn commit(mut self) -> Result<()> {
         let result = self.commit_inner().await;
         match &result {
             Ok(())
@@ -252,8 +253,9 @@ impl ConfigApplyTxn<'_> {
         result.map_err(|failure| failure.error)
     }
 
-    #[cfg(test)]
-    pub(crate) async fn discard(mut self) -> Result<()> {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    #[doc(hidden)]
+    pub async fn discard(mut self) -> Result<()> {
         self.rollback_inner().await
     }
 }

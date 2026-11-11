@@ -49,7 +49,7 @@ fn index_tree(repo: &Path, paths: &[String], changed: &[String], old: &str, new:
 
 #[test]
 fn generated_workspace_path_alias_cases_drive_real_git_delta() {
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().workspace_path_alias_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().workspace_path_alias_cases;
     assert_eq!(cases.len(), 5, "wire every emitted alias case");
     for case in cases {
         let paths =

@@ -1305,18 +1305,18 @@ mod tests {
         HealthCheckerOptions, HealthPersistenceContext, HealthStateInternal, McpAuthRefusal,
         McpHealthCheckService, ProbeEvent, ServiceHealth, ServiceHealthMap, ServiceModelInternal,
     };
-    use crate::lean_vocab_test::{lean_mcp_health_cases, LeanMcpHealthCase};
     use crate::store::config_client::ConfigAccess;
     use crate::store::identity::NodeIdentity;
     use crate::tools::mcp::pool::McpPool;
+    use gents_lean_vocab::{lean_mcp_health_cases, LeanMcpHealthCase};
 
     #[tokio::test]
     async fn service_health_publication_preserves_native_ownership_and_revocation(
     ) -> anyhow::Result<()> {
-        use crate::lean_vocab_test::{lean_identity_household_cases, LeanIdentityAction};
         use crate::store::config_client::{GraphqlEndpoint, NodePermission};
         use crate::NodeIdentity;
         use anyhow::Context;
+        use gents_lean_vocab::{lean_identity_household_cases, LeanIdentityAction};
 
         let model = lean_identity_household_cases()
             .iter()

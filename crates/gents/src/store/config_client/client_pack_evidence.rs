@@ -589,7 +589,7 @@ mod tests {
                 .build()
                 .await?,
         );
-        crate::ensure_runtime_schemas(&node).await?;
+        crate::store::schema::ensure_runtime_schemas(&node).await?;
         let user_access = ConfigAccess::local_as(node.clone(), user.did().parse()?);
         let node_access = ConfigAccess::local_as(node, runtime.did().parse()?);
         let user_did = identity::Did::new(user.did())?;
@@ -653,7 +653,7 @@ mod tests {
             })
             .await?;
         let cases = tokio::task::spawn_blocking(|| {
-            crate::lean_vocab_test::lean_contract_snapshot()
+            gents_lean_vocab::lean_contract_snapshot()
                 .hosted_pack_schema_cases
                 .clone()
         })
@@ -730,7 +730,7 @@ mod tests {
                 .build()
                 .await?,
         );
-        crate::ensure_runtime_schemas(&node).await?;
+        crate::store::schema::ensure_runtime_schemas(&node).await?;
         let access = ConfigAccess::local_as(node.clone(), actor.did().parse()?);
         let scope = PackApprovalScope {
             node_did: runtime.did().to_owned(),
@@ -765,7 +765,7 @@ mod tests {
         let other_evidence =
             prepare_pack_evidence(&other_access, &other_key, &scope, &create).await?;
         let cases = tokio::task::spawn_blocking(|| {
-            crate::lean_vocab_test::lean_contract_snapshot()
+            gents_lean_vocab::lean_contract_snapshot()
                 .hosted_pack_evidence_cases
                 .clone()
         })

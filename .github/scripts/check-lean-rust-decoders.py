@@ -104,7 +104,7 @@ def parse_fields(body):
         joined = ",".join(attrs)
         rename = re.search(r'rename\s*=\s*"([^"]+)"', joined)
         required_nullable = bool(re.search(
-            r'deserialize_with\s*=\s*"(?:crate::lean_vocab_test::)?required_nullable"', joined))
+            r'deserialize_with\s*=\s*"(?:crate::)?required_nullable"', joined))
         fields.append({
             "name": rename.group(1) if rename else name,
             "type": ty,
@@ -112,7 +112,7 @@ def parse_fields(body):
             "required_nullable": required_nullable,
             "unsupported": unsupported_serde(attrs, [
                 r'default', r'rename\s*=\s*"[^"]+"',
-                r'deserialize_with\s*=\s*"(?:crate::lean_vocab_test::)?required_nullable"',
+                r'deserialize_with\s*=\s*"(?:crate::)?required_nullable"',
             ]) + unsupported_non_serde(all_attrs) + (
                 ["required_nullable on non-Option field"]
                 if required_nullable and not ty.startswith("Option<") else []),
@@ -340,7 +340,7 @@ def main():
                         help="saved generator stdout; omitted, the contract is generated after lake build")
     args = parser.parse_args()
     items = {}
-    for source in sorted((args.root / "crates/gents/src/lean_vocab_test").glob("*.rs")):
+    for source in sorted((args.root / "crates/gents-lean-vocab/src").glob("*.rs")):
         items.update(parse_items(source.read_text()))
     try:
         if args.contract:

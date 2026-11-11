@@ -123,7 +123,7 @@ mod tests {
 
     #[test]
     fn visibility_matches_lean_for_direct_reads() {
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().inference_visibility_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().inference_visibility_cases;
         for case in cases {
             let sessions = case["sessions"].as_u64().unwrap() as usize;
             let requests = case["requests"].as_u64().unwrap() as usize;
@@ -146,7 +146,7 @@ mod tests {
 
     #[test]
     fn route_gate_matches_lean() {
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().inference_route_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().inference_route_cases;
         assert!(!cases.is_empty());
         for case in cases {
             let sessions = case["sessions"].as_u64().unwrap() as usize;

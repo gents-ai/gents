@@ -123,7 +123,7 @@ impl Launching {
                         read_desired_state_record_in_txn(txn, collection, self.owner(), id)
                             .await?
                             .context("document to delete")?;
-                    gents::test_support::delete_configuration_document(
+                    gents::store::test_support::delete_configuration_document(
                         txn,
                         collection.graphql_type(),
                         &doc_id,

@@ -368,9 +368,14 @@ mod cleanup_tests {
         use gents_protocol::enrollment::{
             encode_offer, EnrollmentOfferRecord, ENROLLMENT_PROTOCOL_VERSION,
         };
-        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+        let node = Arc::new(
+            crate::store::test_support::node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
         crate::ensure_runtime_schemas(&node).await.unwrap();
-        let identity = Arc::new(crate::test_support::held_runtime_identity(
+        let identity = Arc::new(crate::store::test_support::held_runtime_identity(
             node.node_identity_did().unwrap(),
         ));
         let access =

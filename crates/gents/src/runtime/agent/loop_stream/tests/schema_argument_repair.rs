@@ -38,7 +38,7 @@ impl ToolDyn for SchemaArgumentProbe {
 
 #[tokio::test]
 async fn generated_schema_argument_repair_cases_drive_owned_loop() {
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().schema_argument_repair_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().schema_argument_repair_cases;
     assert!(!cases.is_empty());
     let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
     let calls = Arc::new(AtomicUsize::new(0));
@@ -161,7 +161,7 @@ async fn config_container_repairs_preserve_native_validation_and_the_invalid_bud
     );
     let owner = identity.did().to_owned();
     let (node, hook, writer, mut lifecycle) = owned_test_hook_with_identity(identity.clone()).await;
-    let binding = crate::test_support::install_test_agent(&node, &owner, "general").await;
+    let binding = crate::test_support::inference::install_test_agent(&node, &owner, "general").await;
     let agent_did = binding.agent_did.clone();
     let grants = crate::tools::surface::SelfConfigToolConfig {
         enabled: true,

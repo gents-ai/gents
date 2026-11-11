@@ -1,5 +1,4 @@
 use super::ReplayAssociations;
-use crate::lean_vocab_test::lean_durable_reduction_cases;
 use defra_node::Node as EmbeddedNode;
 use gents::inference::llm::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
@@ -9,6 +8,7 @@ use gents::session::provider_context_reduction::{
     load_for_request, persist, reduction_key, rendered_capture_cites_reduction,
     NewProviderContextReduction,
 };
+use gents_lean_vocab::lean_durable_reduction_cases;
 use gents_protocol::rendered_request::{AssemblyBuildPath, AssemblyTrace, ProvenanceManifest};
 use gents_protocol::transcript::SourceBoundary;
 use serde_json::Value;

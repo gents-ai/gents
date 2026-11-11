@@ -473,9 +473,10 @@ fn built_ins_reject_the_removed_memory_setting() {
 
 #[tokio::test]
 async fn tools_document_round_trips_defra_query_fields() {
-    let (db, _user, access, _binding) =
-        crate::test_support::signed_test_node("tools_document_round_trips_defra_query_fields")
-            .await;
+    let (db, _user, access, _binding) = crate::test_support::root::signed_test_node(
+        "tools_document_round_trips_defra_query_fields",
+    )
+    .await;
     let node_did = db.node_identity.did();
 
     let doc = Tools {
@@ -547,7 +548,7 @@ async fn tools_document_round_trips_defra_query_fields() {
 #[tokio::test]
 async fn tools_update_can_clear_lsp_config() {
     let (db, _user, access, _binding) =
-        crate::test_support::signed_test_node("tools_update_can_clear_lsp_config").await;
+        crate::test_support::root::signed_test_node("tools_update_can_clear_lsp_config").await;
     let node_did = db.node_identity.did();
 
     let lsp = |config: Option<String>| Tools {
@@ -630,9 +631,10 @@ async fn tools_update_can_clear_lsp_config() {
 
 #[tokio::test]
 async fn tools_document_round_trips_read_only_commands() {
-    let (db, _user, access, _binding) =
-        crate::test_support::signed_test_node("tools_document_round_trips_read_only_commands")
-            .await;
+    let (db, _user, access, _binding) = crate::test_support::root::signed_test_node(
+        "tools_document_round_trips_read_only_commands",
+    )
+    .await;
     let node_did = db.node_identity.did();
 
     let doc = Tools {
@@ -691,7 +693,7 @@ async fn tools_document_round_trips_read_only_commands() {
 #[tokio::test]
 async fn tools_document_round_trips_write_tools() {
     let (db, _user, access, _binding) =
-        crate::test_support::signed_test_node("tools_document_round_trips_write_tools").await;
+        crate::test_support::root::signed_test_node("tools_document_round_trips_write_tools").await;
     let node_did = db.node_identity.did();
 
     let decls = vec![WriteToolDecl {
@@ -768,7 +770,7 @@ async fn tools_document_round_trips_write_tools() {
 
 #[tokio::test]
 async fn tools_document_round_trips_session_message_enablement() {
-    let (db, _user, access, _binding) = crate::test_support::signed_test_node(
+    let (db, _user, access, _binding) = crate::test_support::root::signed_test_node(
         "tools_document_round_trips_session_message_enablement",
     )
     .await;
@@ -817,7 +819,7 @@ async fn tools_document_round_trips_session_message_enablement() {
 #[tokio::test]
 async fn agent_description_round_trip_with_explicit_owner_fixture() {
     let (db, _user, access, binding) =
-        crate::test_support::signed_test_node("agent_description_round_trip").await;
+        crate::test_support::root::signed_test_node("agent_description_round_trip").await;
     let node_did = db.node_identity.did();
     let agent_did = &binding.agent_did;
 
@@ -905,7 +907,8 @@ async fn agent_description_round_trip_with_explicit_owner_fixture() {
 #[tokio::test]
 async fn inference_retry_policy_fields_round_trip() {
     let (db, _user, access, _binding) =
-        crate::test_support::signed_test_node("inference_retry_policy_fields_round_trip").await;
+        crate::test_support::root::signed_test_node("inference_retry_policy_fields_round_trip")
+            .await;
     let node_did = db.node_identity.did();
 
     let retry = InferenceRetryPolicy {
@@ -1207,7 +1210,7 @@ fn default_agent_publication_matches_lean() {
     use crate::Collection;
     use crate::NodeIdentity;
     use serde_json::json;
-    let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
+    let snapshot = gents_lean_vocab::lean_contract_snapshot();
     let cases = snapshot.configuration_scope_cases["default_agent"]
         .as_array()
         .unwrap();
@@ -1274,16 +1277,16 @@ async fn oauth_account_scope_matches_lean() {
         resolve_oauth_credential, resolve_oauth_pool, upsert_oauth_credential_on, AccountPick,
     };
     use crate::inference::backends::provider::{BackendProviderKind, BackendProviderOauthExt};
-    let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
+    let snapshot = gents_lean_vocab::lean_contract_snapshot();
     let lean = &snapshot.configuration_scope_cases["oauth_account"];
     let kind_of = |value: &serde_json::Value| -> BackendProviderKind {
         serde_json::from_value(value.clone()).unwrap()
     };
 
     let (local_db, _local_user, access, _local_agent) =
-        crate::test_support::signed_test_node("oauth-model-local").await;
+        crate::test_support::root::signed_test_node("oauth-model-local").await;
     let (foreign_db, _foreign_user, foreign_access, _foreign_agent) =
-        crate::test_support::signed_test_node("oauth-model-foreign").await;
+        crate::test_support::root::signed_test_node("oauth-model-foreign").await;
     let local_node = local_db.node_identity.did();
     let foreign_node = foreign_db.node_identity.did();
     assert_ne!(local_node, foreign_node);
@@ -1469,15 +1472,15 @@ async fn reference_loader_isolates_foreign_malformed_backends_and_rejects_owned_
     use crate::store::identity::NodeIdentity;
 
     let (db, _user, access, _binding) =
-        crate::test_support::signed_test_node("reference-owner-isolation").await;
+        crate::test_support::root::signed_test_node("reference-owner-isolation").await;
     let owner = db.node_identity.did();
     let foreign = tokio::task::spawn_blocking(|| {
-        crate::support::fixtures::test_identity("reference-foreign-node")
+        crate::store::test_support::test_identity("reference-foreign-node")
     })
     .await
     .unwrap();
     assert_ne!(owner, foreign.did());
-    crate::test_support::bootstrap_signed_test_node(&access, foreign.did()).await;
+    crate::test_support::documents::bootstrap_signed_test_node(&access, foreign.did()).await;
     for (node_did, id, auth) in [
         (owner, "good", "unauthenticated"),
         (foreign.did(), "bad", "invalid-auth"),
@@ -1561,7 +1564,7 @@ async fn reference_loader_isolates_foreign_malformed_backends_and_rejects_owned_
 
 #[test]
 fn cached_datastore_tool_matches_modeled_selection_and_visibility() {
-    let model = crate::lean_vocab_test::lean_identity_household_cases()
+    let model = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap();

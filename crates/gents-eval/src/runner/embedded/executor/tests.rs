@@ -44,7 +44,7 @@ pub(super) fn assert_failure_class(
     class: crate::EvidenceClass,
 ) {
     assert_eq!(observed, Some(kind));
-    let modeled = crate::lean_vocab_test::lean_eval_outcome_cases()
+    let modeled = gents_lean_vocab::lean_eval_outcome_cases()
         .iter()
         .find(|case| case.kind == kind.as_str() && case.provider_reason.is_none())
         .expect("the Lean model classifies every outcome without a provider reason");
@@ -70,7 +70,9 @@ fn a_trial_ceiling_grants_bash_only_when_the_definition_asks_for_it() {
         )
     );
     assert_eq!(
-        gents::test_support::tool_policy(&with).bash.execution_mode,
+        gents::test_support::tools::tool_policy(&with)
+            .bash
+            .execution_mode,
         CommandExecutionMode::WorkspaceWrite
     );
 }
@@ -359,7 +361,7 @@ async fn recollect_preserves_missing_terminal_evidence_as_infrastructure() {
     let row: gents_protocol::row::AgentRequestRow =
         serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
     let request = row.try_into().unwrap();
-    let mut lifecycle = gents::test_support::admitted_client_lifecycle(
+    let mut lifecycle = gents::test_support::session::admitted_client_lifecycle(
         home.node.clone(),
         home.identity.clone(),
         &request,

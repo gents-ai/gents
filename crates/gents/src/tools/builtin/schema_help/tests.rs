@@ -100,7 +100,12 @@ async fn apply(tool: &SchemaTool, mut value: Value) -> Value {
     call(tool, preview["next_call"]["args"].clone()).await
 }
 async fn node() -> Arc<EmbeddedNode> {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     crate::ensure_runtime_schemas(&node).await.unwrap();
     node
 }
@@ -122,7 +127,7 @@ async fn schema_preview_and_publication_expose_ignored_native_directives() {
     use crate::store::config_client::NodePermission;
 
     let (db, _user, _user_access, binding) =
-        crate::test_support::signed_test_node("schema-native-warnings").await;
+        crate::test_support::root::signed_test_node("schema-native-warnings").await;
     let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
         .unwrap();
     let admin = ConfigAccess::local_as(
@@ -214,7 +219,7 @@ async fn schema_preview_and_publication_expose_ignored_native_directives() {
 
 #[tokio::test]
 async fn schema_publication_matches_executable_lean_contract() {
-    for case in &crate::lean_vocab_test::lean_contract_snapshot().schema_publication_cases {
+    for case in &gents_lean_vocab::lean_contract_snapshot().schema_publication_cases {
         if !case["native_allowed"].as_bool().unwrap() {
             continue;
         }
@@ -283,7 +288,7 @@ async fn schema_publication_uses_agent_native_authority() {
     use crate::store::config_client::NodePermission;
     use crate::store::identity::{KeyIdentity, NodeIdentity};
 
-    for case in &crate::lean_vocab_test::lean_contract_snapshot().schema_publication_cases {
+    for case in &gents_lean_vocab::lean_contract_snapshot().schema_publication_cases {
         if case["grant"] != true || case["artifact"] != true || case["compatible"] != true {
             continue;
         }
@@ -429,7 +434,7 @@ async fn schema_view_and_materialization_use_managed_agent_authority() {
         .await
         .is_err());
 
-    let cases = crate::lean_vocab_test::lean_identity_household_cases();
+    let cases = gents_lean_vocab::lean_identity_household_cases();
     let group = cases
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")

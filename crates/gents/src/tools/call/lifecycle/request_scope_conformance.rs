@@ -60,7 +60,7 @@ async fn queue_snapshot(
 
 #[tokio::test]
 async fn generated_background_completion_queue_case_uses_accepted_session_messages() {
-    let case = crate::lean_vocab_test::lean_queue_deadline_case(
+    let case = gents_lean_vocab::lean_queue_deadline_case(
         "background_completion_notification_creates_no_agent_request",
     );
     assert_eq!(case.group, "completion_delivery");
@@ -82,7 +82,7 @@ async fn generated_background_completion_queue_case_uses_accepted_session_messag
     crate::store::schema::ensure_runtime_schemas(&node)
         .await
         .unwrap();
-    crate::test_support::install_test_agent(&node, node_did, "general").await;
+    crate::test_support::inference::install_test_agent(&node, node_did, "general").await;
     let parent_id = format!("queue-deadline-coalesce-parent-{}", uuid::Uuid::new_v4());
     let session_id = case.session_id.to_string();
     let mut parent = claimed_signed_request(&node, &parent_id, &session_id, &identity, None).await;

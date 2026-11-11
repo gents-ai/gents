@@ -1818,7 +1818,7 @@ mod tests {
             .await
             .unwrap();
         let binding = crate::store::identity::provision_agent_identity(target.as_ref()).unwrap();
-        crate::test_support::install_test_agent_binding(
+        crate::test_support::inference::install_test_agent_binding(
             &node,
             target.did(),
             "behavior-1",

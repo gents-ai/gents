@@ -32,7 +32,7 @@ impl CompletionModel for RecoveringProvider {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-        crate::test_support::capture_scripted_provider_request(&request, "backend-recovery")
+        crate::test_support::inference::capture_scripted_provider_request(&request, "backend-recovery")
             .await?;
         if !self.available.load(Ordering::SeqCst) {
             let error = CompletionError::ProviderError("HTTP status 503: unavailable".into());
@@ -232,7 +232,7 @@ impl CompletionModel for BufferedReasoningShutdownProvider {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-        crate::test_support::capture_scripted_provider_request(&request, "shutdown-reasoning")
+        crate::test_support::inference::capture_scripted_provider_request(&request, "shutdown-reasoning")
             .await?;
         let processed_two = self.processed_two.clone();
         let events: rig::streaming::StreamingResult<()> =
@@ -610,7 +610,7 @@ impl CompletionModel for LeaseLossProvider {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-        crate::test_support::capture_scripted_provider_request(&request, "lease-loss").await?;
+        crate::test_support::inference::capture_scripted_provider_request(&request, "lease-loss").await?;
         let events = vec![
             Ok(RawStreamingChoice::ToolCall(
                 rig::streaming::RawStreamingToolCall::new(
@@ -774,7 +774,7 @@ impl CompletionModel for NonTerminalProvider {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-        crate::test_support::capture_scripted_provider_request(&request, "scripted").await?;
+        crate::test_support::inference::capture_scripted_provider_request(&request, "scripted").await?;
 
         self.stream_calls.fetch_add(1, Ordering::SeqCst);
         if self.reasoning_prefix {

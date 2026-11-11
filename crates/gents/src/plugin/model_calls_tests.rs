@@ -456,7 +456,7 @@ fn malformed_model_calls_are_named() {
 #[tokio::test]
 async fn a_profile_resolves_to_its_chat_completions_endpoint() {
     let (db, user, _access, agent) =
-        crate::test_support::signed_test_node("plugin-model-profile").await;
+        crate::test_support::root::signed_test_node("plugin-model-profile").await;
     let node = db.node.clone();
     let owner = db.node_identity.did();
     let models = AccessModels(ConfigAccess::local(node.clone()));
@@ -485,7 +485,7 @@ async fn a_profile_resolves_to_its_chat_completions_endpoint() {
 
 #[tokio::test]
 async fn modeled_plugin_profile_uses_immediate_actor_and_rechecks_each_request() -> Result<()> {
-    let case = crate::lean_vocab_test::lean_identity_household_cases()
+    let case = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .expect("configuration model");
@@ -838,7 +838,7 @@ async fn model_tool_without_data_grant_passes_its_selected_agent() -> Result<()>
         }
     }
     let (db, client, owner, binding) =
-        crate::test_support::signed_test_node("plugin-model-selected-agent").await;
+        crate::test_support::root::signed_test_node("plugin-model-selected-agent").await;
     let node = db.node.clone();
     let root = db.node_identity.clone();
     let selected = crate::store::identity::resolve_agent_identity(root.as_ref(), &binding)?;

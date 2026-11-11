@@ -346,7 +346,7 @@ mod tests {
         use crate::store::config_client::{ConfigAccess, NodePermission};
         use crate::store::identity::NodeIdentity;
         let (db, user, access) =
-            crate::test_support::signed_test_node_without_agent("rebuilt-oauth-client").await;
+            crate::test_support::root::signed_test_node_without_agent("rebuilt-oauth-client").await;
         let node = db.node.clone();
         let did = db.node_identity.did();
         let runtime = ConfigAccess::local_as(node.clone(), did.parse().unwrap());

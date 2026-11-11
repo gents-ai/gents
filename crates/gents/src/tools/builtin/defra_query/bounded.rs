@@ -632,7 +632,7 @@ mod tests {
             &node, "test.scalar_filter.seed",
             r#"mutation { add_ScalarRecord(input: {text: "measurement", count: 86, measure: 0.5, enabled: false}) {_docID} }"#,
         ).await.unwrap();
-        for case in crate::lean_vocab_test::lean_write_input_cases() {
+        for case in gents_lean_vocab::lean_write_input_cases() {
             if case["nullable"] != false || case["required"] != true || case["filled"] != false {
                 continue;
             }

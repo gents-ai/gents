@@ -102,7 +102,7 @@ mod tests {
     async fn runtime_default_read_shares_agent_transaction_and_preserves_secret_acl(
     ) -> anyhow::Result<()> {
         let (db, user, user_access, binding) =
-            crate::test_support::signed_test_node("runtime-default-account").await;
+            crate::test_support::root::signed_test_node("runtime-default-account").await;
         let runtime = db.node_identity.as_ref();
         let signer = crate::store::identity::resolve_agent_identity(runtime, &binding)?;
         let agent = ConfigAccess::local_managed_agent(
@@ -123,7 +123,7 @@ mod tests {
                 })
             })
             .await?;
-        let model = crate::lean_vocab_test::lean_identity_household_cases()
+        let model = gents_lean_vocab::lean_identity_household_cases()
             .iter()
             .find(|case| case.name == "configuration-explicit-grants")
             .unwrap();

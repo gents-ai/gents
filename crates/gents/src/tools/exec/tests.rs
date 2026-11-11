@@ -7,7 +7,7 @@ use chrono::Utc;
 use tokio_util::sync::CancellationToken;
 
 use super::*;
-use crate::lean_vocab_test::{
+use gents_lean_vocab::{
     assert_lean_contract_vocabulary_matches, assert_lean_transition_is_legal,
     assert_state_machine_contract_is_complete, LeanContractVocabulary,
 };
@@ -656,7 +656,7 @@ async fn generated_process_stop_cases_drive_host_owner() {
             .find(|observation| observation.as_str() == name)
             .unwrap_or_else(|| panic!("unknown Lean process observation {name}"))
     };
-    let cases = crate::lean_vocab_test::lean_process_stop_cases();
+    let cases = gents_lean_vocab::lean_process_stop_cases();
     assert_eq!(cases.len(), 15);
     for case in cases.iter().filter(|case| !case.live_evidence.is_empty()) {
         let evidence = match case.live_evidence.as_str() {

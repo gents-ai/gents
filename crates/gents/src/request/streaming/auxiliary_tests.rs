@@ -16,14 +16,14 @@ use gents_protocol::output::{
 use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
 
 use super::{auxiliary, canonical, native_encoding, DefraStreamWriter};
-use crate::lean_vocab_test::{
+use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
+use crate::store::config_client::ConfigAccess;
+use gents_lean_vocab::{
     lean_auxiliary_output_cases, LeanAuxiliaryKind, LeanAuxiliaryOutputCase, LeanCanonicalClosure,
     LeanCanonicalSource, LeanCanonicalWriter, LeanMessageBlock, LeanMessagePublication,
     LeanMessageRole, LeanOutcome, LeanPayloadKind, LeanPresentation, LeanReasoningAuditResult,
     LeanReasoningPart,
 };
-use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
-use crate::store::config_client::ConfigAccess;
 use gents_protocol::output::rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
 
 struct TitleFixture {
@@ -46,7 +46,7 @@ async fn claimed_title_fixture() -> TitleFixture {
     let directory = tempfile::tempdir().unwrap();
     let identity = KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
     let node = Arc::new(
-        crate::test_support::node_builder()
+        crate::store::test_support::node_builder()
             .with_node_identity_did(identity.did())
             .build()
             .await
@@ -60,7 +60,7 @@ async fn claimed_title_fixture() -> TitleFixture {
         .write("test.title.node", &format!(r#"mutation {{ create_Node(input: {{node_did: "{root_did}", display_name: "fixture", enabled: true}}) {{ _docID }} }}"#))
         .await.unwrap();
     let binding = crate::store::identity::provision_agent_identity(&identity).unwrap();
-    crate::test_support::install_test_agent_binding(
+    crate::test_support::inference::install_test_agent_binding(
         &node,
         identity.did(),
         "title fixture",
@@ -1210,7 +1210,7 @@ async fn generated_auxiliary_cases_drive_non_claude_sink_audit_without_publicati
         }
         assert!(matches!(
             case.expected.public_view,
-            crate::lean_vocab_test::LeanCanonicalOutputView::Absent
+            gents_lean_vocab::LeanCanonicalOutputView::Absent
         ));
         let view = project_live(&LiveObservation {
             request_doc_id: &request.doc_id,

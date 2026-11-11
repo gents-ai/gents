@@ -429,7 +429,7 @@ async fn install_task_definition(harness: &Harness, seeded_splits: &[&str]) {
 #[tokio::test]
 async fn an_unexercised_task_target_is_refused_before_any_job_or_trial_is_created() {
     let (harness, pack) = task_harness().await;
-    let rows = &crate::lean_vocab_test::lean_optimization_cases().seed_coverage;
+    let rows = &gents_lean_vocab::lean_optimization_cases().seed_coverage;
     let scenarios = rows.iter().filter(|row| {
         matches!(
             row.name.as_str(),
@@ -495,7 +495,7 @@ async fn an_unexercised_task_target_is_refused_before_any_job_or_trial_is_create
 
 #[tokio::test]
 async fn exact_seed_failures_reject_candidates_before_validation() {
-    for row in &crate::lean_vocab_test::lean_optimization_cases().seed_rendering {
+    for row in &gents_lean_vocab::lean_optimization_cases().seed_rendering {
         if !matches!(
             row.name.as_str(),
             "missing_added_field"

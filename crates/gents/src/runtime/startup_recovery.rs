@@ -52,3 +52,8 @@ pub async fn run_startup_recovery_with_executions_and_identities(
         task_hooks,
     }
 }
+
+#[cfg(test)]
+mod task_hook_executor_tests;
+#[cfg(test)]
+mod task_hook_recovery_tests;

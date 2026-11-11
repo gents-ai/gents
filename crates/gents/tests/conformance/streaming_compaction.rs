@@ -109,7 +109,7 @@ fn generated_compaction_cursor_cases_pin_contract() {
     }
 }
 
-fn drive_compaction_reducer_case(case: &lean_vocab_test::LeanCompactionReducerCase) {
+fn drive_compaction_reducer_case(case: &gents_lean_vocab::LeanCompactionReducerCase) {
     assert!(case.legal, "compaction case {} should be legal", case.name);
 
     let input = compaction_messages_for_case(case);
@@ -191,7 +191,7 @@ fn drive_compaction_reducer_case(case: &lean_vocab_test::LeanCompactionReducerCa
 }
 
 fn apply_compaction_reducer(
-    case: &lean_vocab_test::LeanCompactionReducerCase,
+    case: &gents_lean_vocab::LeanCompactionReducerCase,
     input: Vec<Message>,
 ) -> Vec<Message> {
     match case.reducer.as_str() {
@@ -203,7 +203,7 @@ fn apply_compaction_reducer(
 }
 
 fn check_summarize_gate_and_split(
-    case: &lean_vocab_test::LeanCompactionReducerCase,
+    case: &gents_lean_vocab::LeanCompactionReducerCase,
     input: Vec<Message>,
 ) {
     let production_gate_open = gents::inference::compaction::safe_to_reduce(&input);
@@ -284,14 +284,16 @@ fn is_subsequence(needle: &[String], haystack: &[String]) -> bool {
         .all(|item| cursor.any(|candidate| candidate == item))
 }
 
-fn compaction_messages_for_case(case: &lean_vocab_test::LeanCompactionReducerCase) -> Vec<Message> {
+fn compaction_messages_for_case(
+    case: &gents_lean_vocab::LeanCompactionReducerCase,
+) -> Vec<Message> {
     case.input_rows
         .iter()
         .map(|row| match row {
-            lean_vocab_test::LeanCompactionInputRow::Ordinary { role, text } => {
+            gents_lean_vocab::LeanCompactionInputRow::Ordinary { role, text } => {
                 compaction_text_message(role, text)
             }
-            lean_vocab_test::LeanCompactionInputRow::AssistantToolCalls { role, call_ids } => {
+            gents_lean_vocab::LeanCompactionInputRow::AssistantToolCalls { role, call_ids } => {
                 assert_eq!(role, "assistant");
                 Message::Assistant {
                     request_id: None,
@@ -305,7 +307,7 @@ fn compaction_messages_for_case(case: &lean_vocab_test::LeanCompactionReducerCas
                         .collect(),
                 }
             }
-            lean_vocab_test::LeanCompactionInputRow::ToolResult { role, call_id } => {
+            gents_lean_vocab::LeanCompactionInputRow::ToolResult { role, call_id } => {
                 assert_eq!(role, "user");
                 compaction_tool_result_message(call_id, "large tool payload")
             }

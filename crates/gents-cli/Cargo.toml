@@ -154,6 +154,7 @@ db.workspace = true
 defra-core.workspace = true
 futures = "0.3"
 gents-lean-contract.workspace = true
+gents-lean-vocab.workspace = true
 portable-pty = "0.9"
 ratatui = { version = "0.30", default-features = false }
 tui-test-rs = "0.1.1"

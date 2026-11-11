@@ -1,7 +1,7 @@
 use super::{schedule_visibility, ScheduleSource, TriggerSource};
-use crate::lean_vocab_test::{lean_identity_household_cases, LeanIdentitySubject};
 use crate::store::config_client::{ConfigAccess, GraphqlEndpoint};
 use crate::store::identity::NodeIdentity;
+use gents_lean_vocab::{lean_identity_household_cases, LeanIdentitySubject};
 use serde_json::json;
 use std::sync::Arc;
 

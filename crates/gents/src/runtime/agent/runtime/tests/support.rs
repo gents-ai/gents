@@ -330,7 +330,7 @@ pub(super) async fn held_runtime_fixture_with_status(
     probe_status: &str,
 ) -> HeldRuntimeFixture {
     use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-    let (db, user, user_access, binding) = crate::test_support::signed_test_node(name).await;
+    let (db, user, user_access, binding) = crate::test_support::root::signed_test_node(name).await;
     let node_did = db.node_identity.did();
     let profile_id = format!("{}:inference", binding.agent_did);
     let docs = [

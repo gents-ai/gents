@@ -21,8 +21,8 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let binding = crate::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
     let admin = crate::ConfigAccess::local_as(node.clone(), identity::Did::new(did).unwrap());
-    crate::test_support::bootstrap_signed_test_node(&admin, did).await;
-    crate::test_support::install_test_agent_binding_with_access(
+    crate::test_support::documents::bootstrap_signed_test_node(&admin, did).await;
+    crate::test_support::inference::install_test_agent_binding_with_access(
         did,
         "workspace recovery",
         &binding,

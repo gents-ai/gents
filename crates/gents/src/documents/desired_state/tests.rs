@@ -35,7 +35,7 @@ const DEFAULT_REPLACEMENT_OWNER_DIDS: [&str; 6] = [
 
 #[test]
 fn modeled_removal_requires_the_exact_returned_document() {
-    let cases = &crate::lean_vocab_test::lean_identity_household_cases()
+    let cases = &gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .expect("configuration contract")
@@ -62,8 +62,8 @@ fn modeled_removal_requires_the_exact_returned_document() {
 
 #[tokio::test]
 async fn modeled_callback_configuration_publication_and_revocation() -> Result<()> {
-    use crate::lean_vocab_test::{lean_identity_household_cases, LeanIdentitySubject};
     use crate::NodeIdentity as _;
+    use gents_lean_vocab::{lean_identity_household_cases, LeanIdentitySubject};
     let case = lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
@@ -270,7 +270,7 @@ async fn register_config_schemas_dropping_unique_indexes(
     node: &EmbeddedNode,
     duplicate_collections: &[Collection],
 ) -> Result<()> {
-    crate::test_support::acp_policies::install_identity_acp_policies(node).await?;
+    crate::store::test_support::acp_policies::install_identity_acp_policies(node).await?;
     for (name, schema) in gents_protocol::schemas::RUNTIME_COLLECTION_NAMES
         .iter()
         .zip(gents_protocol::schemas::RUNTIME_ALL)
@@ -344,7 +344,7 @@ async fn ensure_owner_nodes(
             .as_array()
             .is_some_and(Vec::is_empty)
         {
-            crate::test_support::bootstrap_signed_test_node(access, owner).await;
+            crate::test_support::documents::bootstrap_signed_test_node(access, owner).await;
         }
     }
     Ok(())
@@ -374,7 +374,7 @@ async fn apply_with_counts(
 #[tokio::test]
 async fn ignored_wire_api_warns_once_per_changed_backend_through_common_apply_owner() -> Result<()>
 {
-    let node = Arc::new(crate::test_support::node_builder().build().await?);
+    let node = Arc::new(crate::store::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
     let access = runtime_access(&node)?;
     let capture = IgnoredWireWarningCapture::default();
@@ -406,7 +406,7 @@ async fn ignored_wire_api_warns_once_per_changed_backend_through_common_apply_ow
 
 #[tokio::test]
 async fn unchanged_desired_state_replay_does_not_add_document_commit() -> Result<()> {
-    let node = Arc::new(crate::test_support::node_builder().build().await?);
+    let node = Arc::new(crate::store::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
     let access = runtime_access(&node)?;
     let owner = "did:key:z6MknPW5yoqtbf72nEAqce5Rb6ubgcZVwFweMvPdQbYjNLv6";
@@ -508,7 +508,7 @@ fn plans_reject_unknown_fields_sparse_updates_and_scope_changes() {
 
 #[tokio::test]
 async fn replacement_resets_defaults_and_preserves_backend_observations() -> Result<()> {
-    let node = Arc::new(crate::test_support::node_builder().build().await?);
+    let node = Arc::new(crate::store::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
     let access = runtime_access(&node)?;
     let mut initial = backend(
@@ -569,7 +569,7 @@ async fn replacement_resets_defaults_and_preserves_backend_observations() -> Res
 
 #[tokio::test]
 async fn ambiguous_scope_aborts_transaction_including_prior_staged_writes() -> Result<()> {
-    let node = Arc::new(crate::test_support::node_builder().build().await?);
+    let node = Arc::new(crate::store::test_support::node_builder().build().await?);
     register_config_schemas_dropping_unique_indexes(&node, &[Collection::InferenceBackend]).await?;
     let access = runtime_access(&node)?;
     apply(
@@ -617,7 +617,7 @@ async fn ambiguous_scope_aborts_transaction_including_prior_staged_writes() -> R
 
 #[tokio::test]
 async fn read_records_pages_across_batches_and_omits_missing_ids() -> Result<()> {
-    let node = Arc::new(crate::test_support::node_builder().build().await?);
+    let node = Arc::new(crate::store::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
     let access = runtime_access(&node)?;
     let owner = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
@@ -651,7 +651,7 @@ async fn read_records_pages_across_batches_and_omits_missing_ids() -> Result<()>
 
 #[tokio::test]
 async fn desired_state_apply_batches_identity_reads_by_collection_and_owner() -> Result<()> {
-    let node = Arc::new(crate::test_support::node_builder().build().await?);
+    let node = Arc::new(crate::store::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
     let access = runtime_access(&node)?;
     let owner = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
@@ -708,7 +708,7 @@ async fn desired_state_apply_batches_identity_reads_by_collection_and_owner() ->
 
 #[tokio::test]
 async fn read_records_rejects_duplicate_live_documents_naming_them() -> Result<()> {
-    let node = Arc::new(crate::test_support::node_builder().build().await?);
+    let node = Arc::new(crate::store::test_support::node_builder().build().await?);
     register_config_schemas_dropping_unique_indexes(&node, &[Collection::InferenceBackend]).await?;
     let access = runtime_access(&node)?;
     let owner = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
@@ -774,7 +774,7 @@ fn cyclic_configuration(owner: &str, agent_did: &str) -> Vec<DesiredStateApplyDo
 
 #[tokio::test]
 async fn generated_default_replacements_preserve_runtime_startup_selection() -> Result<()> {
-    let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
+    let snapshot = gents_lean_vocab::lean_contract_snapshot();
     let cases = snapshot.configuration_scope_cases["default_replacement"]
         .as_array()
         .expect("Lean default replacement cases");
@@ -790,7 +790,7 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
     };
     for (index, case) in cases.iter().enumerate() {
         // Agent DIDs are globally unique, so each case gets its own store.
-        let node = Arc::new(crate::test_support::node_builder().build().await?);
+        let node = Arc::new(crate::store::test_support::node_builder().build().await?);
         register_config_schemas(&node).await?;
         let access = runtime_access(&node)?;
         let owner = DEFAULT_REPLACEMENT_OWNER_DIDS[index];
@@ -887,7 +887,7 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
 
 #[tokio::test]
 async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Result<()> {
-    let node = Arc::new(crate::test_support::node_builder().build().await?);
+    let node = Arc::new(crate::store::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
     let access = runtime_access(&node)?;
     let owner = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
@@ -1042,7 +1042,7 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
 
 #[tokio::test]
 async fn replacement_checks_actual_update_and_unchanged_duplicate_rows() -> Result<()> {
-    let node = Arc::new(crate::test_support::node_builder().build().await?);
+    let node = Arc::new(crate::store::test_support::node_builder().build().await?);
     register_config_schemas_dropping_unique_indexes(&node, &[Collection::AgentContext]).await?;
     let access = runtime_access(&node)?;
     let owner = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
@@ -1079,7 +1079,7 @@ async fn replacement_checks_actual_update_and_unchanged_duplicate_rows() -> Resu
 
 #[tokio::test]
 async fn expect_existing_documents_unchanged_rejects_drifted_live_rows() -> Result<()> {
-    let node = Arc::new(crate::test_support::node_builder().build().await?);
+    let node = Arc::new(crate::store::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
     let access = runtime_access(&node)?;
     let owner = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
@@ -1130,7 +1130,7 @@ fn expectation(owner: &str, id: &str, digest: Option<String>) -> DesiredStateExp
 const CAS_OWNER_DID: &str = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
 
 async fn cas_node() -> Result<(ConfigAccess, &'static str)> {
-    let node = Arc::new(crate::test_support::node_builder().build().await?);
+    let node = Arc::new(crate::store::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
     Ok((runtime_access(&node)?, CAS_OWNER_DID))
 }
@@ -1299,7 +1299,7 @@ async fn absent_expectations_are_checked_in_both_directions() -> Result<()> {
 
 #[tokio::test]
 async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
-    use crate::lean_vocab_test::lean_publish_if_cases;
+    use gents_lean_vocab::lean_publish_if_cases;
 
     fn doc_for(owner: &str, id: &str, content: &str) -> Value {
         renamed(owner, id, content)
@@ -1507,7 +1507,7 @@ fn rule_documents(
 
 #[tokio::test]
 async fn preview_rejects_a_context_window_above_the_advertised_maximum() -> Result<()> {
-    let node = Arc::new(crate::test_support::node_builder().build().await?);
+    let node = Arc::new(crate::store::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
     let access = runtime_access(&node)?;
     let owner = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
@@ -1603,7 +1603,7 @@ fn obligation_surface(
 }
 
 async fn obligation_node() -> Result<Arc<EmbeddedNode>> {
-    let node = Arc::new(crate::test_support::node_builder().build().await?);
+    let node = Arc::new(crate::store::test_support::node_builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
     node.add_collection(
         "type ObligationOutcome { text: String result: String expected_total: String total: Int ratio: Float32 amount: Float64 payload: JSON observed_at: DateTime required_observed_at: DateTime! attachment: Blob marker: ID flag: Boolean tags: [String] required_total: Int! required_label: String! required_tags: [String!] }",
@@ -1626,7 +1626,7 @@ async fn output_obligation_count_field_must_hold_a_count_on_the_target_collectio
         ("required_observed_at", "DateTime!"),
         ("marker", "ID"),
     ] {
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().count_carrier_cases["fields"];
+        let cases = &gents_lean_vocab::lean_contract_snapshot().count_carrier_cases["fields"];
         let case = cases
             .as_array()
             .unwrap()
@@ -1945,7 +1945,7 @@ async fn replacement_judges_the_count_field_of_the_update_payload() -> Result<()
 }
 
 async fn event_source_node() -> Result<Arc<EmbeddedNode>> {
-    let node = Arc::new(crate::test_support::node_builder().build().await?);
+    let node = Arc::new(crate::store::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
     node.add_collection(
         "type EventProbeSource { batch: String required_batch: String! result: String flag: Boolean tags: [String] total: Int expected_total: Int! ratio: Float32 amount: Float64 payload: JSON observed_at: DateTime required_observed_at: DateTime! attachment: Blob marker: ID }",
@@ -2021,7 +2021,7 @@ async fn event_source_count_field_must_hold_a_count_on_the_source_collection() -
         ("required_observed_at", "DateTime!"),
         ("marker", "ID"),
     ] {
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().count_carrier_cases["fields"];
+        let cases = &gents_lean_vocab::lean_contract_snapshot().count_carrier_cases["fields"];
         let case = cases
             .as_array()
             .unwrap()
@@ -2388,7 +2388,7 @@ async fn replacement_judges_the_count_field_of_the_event_source_update_payload()
 
 #[tokio::test]
 async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection() -> Result<()> {
-    let node = Arc::new(crate::test_support::node_builder().build().await?);
+    let node = Arc::new(crate::store::test_support::node_builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
     node.add_collection(
         "type PlainPing { message: String } type HandoffPing { handoff_id: String message: String } type NumberedPing { handoff_id: Int }",
@@ -2574,7 +2574,7 @@ fn every_fire_template_is_judged_with_its_field_named() -> Result<()> {
 #[tokio::test]
 async fn publication_applies_native_route_template_fields_the_schema_does_not_declare() -> Result<()>
 {
-    let node = Arc::new(crate::test_support::node_builder().build().await?);
+    let node = Arc::new(crate::store::test_support::node_builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
     let access = runtime_access(&node)?;
     let owner = "did:key:native-route-owner";
@@ -2621,7 +2621,7 @@ async fn publication_applies_native_route_template_fields_the_schema_does_not_de
 
 #[tokio::test]
 async fn modeled_node_binding_uses_runtime_visibility_without_changing_agent_actor() -> Result<()> {
-    use crate::lean_vocab_test::{
+    use gents_lean_vocab::{
         lean_identity_household_cases, LeanIdentityAction, LeanIdentitySubject,
     };
     let case = lean_identity_household_cases()
@@ -2663,7 +2663,7 @@ async fn modeled_node_binding_uses_runtime_visibility_without_changing_agent_act
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     let address = listener.local_addr()?;
     let node = Arc::new(
-        crate::test_support::node_builder()
+        crate::store::test_support::node_builder()
             .enable_signing()
             .with_http(defra_node::HttpConfig::with_listener(listener)?)
             .build()
@@ -2744,9 +2744,9 @@ async fn modeled_node_binding_uses_runtime_visibility_without_changing_agent_act
 
 #[tokio::test]
 async fn projection_binding_publication_follows_modeled_native_ownership() -> Result<()> {
-    use crate::lean_vocab_test::lean_identity_household_cases;
     use crate::store::config_client::{GraphqlEndpoint, NodePermission};
     use crate::NodeIdentity;
+    use gents_lean_vocab::lean_identity_household_cases;
 
     let model = lean_identity_household_cases()
         .iter()

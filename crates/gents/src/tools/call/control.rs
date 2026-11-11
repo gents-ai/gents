@@ -368,7 +368,7 @@ mod tests {
         // A second managed Agent of the same node: ACP hides the owner's rows.
         let binding =
             crate::store::identity::provision_agent_identity(admission.runtime.as_ref()).unwrap();
-        crate::test_support::install_test_agent_binding(
+        crate::test_support::inference::install_test_agent_binding(
             &admission.node,
             admission.runtime.did(),
             "foreign control Agent",
@@ -485,7 +485,7 @@ mod tests {
     /// Adapted from Ivan's #3264 stop races onto the owning cancellation path.
     #[tokio::test]
     async fn generated_stop_actions_select_the_durable_transition() {
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().process_stop_action_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().process_stop_action_cases;
         assert_eq!(cases.len(), 6);
         for case in cases {
             let state = case["state"].as_str().unwrap();
@@ -851,7 +851,7 @@ mod tests {
         use crate::tools::call::lifecycle::admission_fixture::{
             published_admission, PublishedAdmissionOptions,
         };
-        let modeled = crate::lean_vocab_test::lean_process_stop_cases()
+        let modeled = gents_lean_vocab::lean_process_stop_cases()
             .iter()
             .find(|case| case.before == "unowned" && case.after == "unowned")
             .expect("modeled unowned process");

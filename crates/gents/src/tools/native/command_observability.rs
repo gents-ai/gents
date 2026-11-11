@@ -66,7 +66,7 @@ mod tests {
 
     #[test]
     fn credential_failure_is_visible_at_error_level_and_rate_limited() {
-        crate::test_support::enable_scoped_event_capture();
+        crate::test_support::root::enable_scoped_event_capture();
         let counter = AtomicU64::new(0);
         let output = Capture::default();
         let subscriber = tracing_subscriber::fmt()
@@ -94,7 +94,7 @@ mod tests {
 
     #[test]
     fn refused_command_updates_policy_counter_without_logging_its_arguments() {
-        crate::test_support::enable_scoped_event_capture();
+        crate::test_support::root::enable_scoped_event_capture();
         let output = Capture::default();
         let subscriber = tracing_subscriber::fmt()
             .with_ansi(false)

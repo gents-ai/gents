@@ -310,7 +310,7 @@ mod tests {
 
     #[tokio::test]
     async fn generated_plugin_child_request_accounting_matches_execution_owner() {
-        let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
+        let snapshot = gents_lean_vocab::lean_contract_snapshot();
         let cases = snapshot.plugin_resource_cases["tool_effect_accounting"]
             .as_array()
             .unwrap();

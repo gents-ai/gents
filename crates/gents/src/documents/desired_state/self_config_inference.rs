@@ -121,7 +121,7 @@ mod tests {
     #[tokio::test]
     async fn user_grants_selected_backend_manager_without_backend_write() -> Result<()> {
         let (db, user, owner, binding) =
-            crate::test_support::signed_test_node("backend-selection-manager").await;
+            crate::test_support::root::signed_test_node("backend-selection-manager").await;
         let runtime = db.node_identity.did().to_owned();
         let agent_identity =
             crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)?;
@@ -163,7 +163,7 @@ mod tests {
             ).await })
         }).await?;
         let profile = crate::store::graphql::created_doc_id(&created, "InferenceProfile")?;
-        let case = crate::lean_vocab_test::lean_identity_household_cases()
+        let case = gents_lean_vocab::lean_identity_household_cases()
             .iter()
             .find(|case| case.name == "configuration-explicit-grants")
             .unwrap();
@@ -348,7 +348,7 @@ mod tests {
                 })
             })
             .await?;
-        let case = crate::lean_vocab_test::lean_identity_household_cases()
+        let case = gents_lean_vocab::lean_identity_household_cases()
             .iter()
             .find(|case| case.name == "configuration-explicit-grants")
             .unwrap();

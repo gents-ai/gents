@@ -8,7 +8,7 @@ use super::*;
 use crate::pack::{declared_paths, validate_manifest};
 
 fn fixture_pack_dir(name: &str) -> (tempfile::TempDir, std::path::PathBuf) {
-    crate::test_support::fixture_pack_copy(name, &serde_json::json!({}))
+    crate::test_support::pack::fixture_pack_copy(name, &serde_json::json!({}))
 }
 
 fn fixture_manifest_dir(name: &str) -> std::path::PathBuf {

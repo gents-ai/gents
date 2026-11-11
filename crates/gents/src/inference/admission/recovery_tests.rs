@@ -579,7 +579,7 @@ async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
 
     let (db, user, access, binding) =
-        crate::test_support::signed_test_node("inference-recovery-parent").await;
+        crate::test_support::root::signed_test_node("inference-recovery-parent").await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let agent =
@@ -741,7 +741,7 @@ async fn parent_recovery_lookup_uses_agent_native_authority() {
     };
 
     let (db, user, owner, binding) =
-        crate::test_support::signed_test_node("inference-recovery-native-authority").await;
+        crate::test_support::root::signed_test_node("inference-recovery-native-authority").await;
     let node = db.node.clone();
     let runtime = db.node_identity.clone();
     let agent = crate::store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();

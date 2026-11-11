@@ -209,7 +209,7 @@ mod invocation_correlation_tests {
 
     #[test]
     fn invocation_correlation_matches_lean() {
-        let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
+        let snapshot = gents_lean_vocab::lean_contract_snapshot();
         assert_eq!(snapshot.invocation_correlation_cases.len(), 16);
         for case in &snapshot.invocation_correlation_cases {
             assert_eq!(

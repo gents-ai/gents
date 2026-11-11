@@ -137,7 +137,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let node = std::sync::Arc::new(
-            crate::test_support::node_builder()
+            crate::store::test_support::node_builder()
                 .data_path(dir.path().join("node"))
                 .build()
                 .await

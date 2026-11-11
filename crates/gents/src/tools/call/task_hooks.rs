@@ -14,8 +14,14 @@ use crate::store::graphql::escape_graphql_string;
 use crate::tools::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
 use gents_protocol::row::AgentRequest;
 
+#[cfg(test)]
+#[path = "task_hooks/generated_policy_tests.rs"]
+mod generated_policy_tests;
 #[path = "task_hooks/records.rs"]
 mod records;
+#[cfg(test)]
+#[path = "task_hooks/test_support.rs"]
+pub(crate) mod test_support;
 #[cfg(test)]
 #[path = "task_hooks/tests.rs"]
 mod tests;

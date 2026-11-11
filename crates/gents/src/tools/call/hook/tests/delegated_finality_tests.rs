@@ -37,7 +37,7 @@ async fn fixture(name: &str) -> Fixture {
     let fixture_name = format!("finality-{name}");
     let db = crate::support::test_db(&fixture_name).await;
     let (db, user, user_access) =
-        crate::test_support::signed_test_node_without_agent_from_db(db, &fixture_name).await;
+        crate::test_support::root::signed_test_node_without_agent_from_db(db, &fixture_name).await;
     let node = db.node.clone();
     let runtime = db.node_identity.clone();
     let value = json!({"node_did": runtime.did(), "enabled": true});
@@ -85,7 +85,7 @@ async fn fixture(name: &str) -> Fixture {
     let docs: Vec<_> = [("parent", &parent), ("child", &child)]
         .into_iter()
         .flat_map(|(name, binding)| {
-            crate::test_support::test_agent_documents(runtime.did(), name, binding)
+            crate::test_support::documents::test_agent_documents(runtime.did(), name, binding)
         })
         .map(|(collection, value)| DesiredStateApplyDocument {
             collection,
@@ -247,7 +247,7 @@ async fn fixture(name: &str) -> Fixture {
 /// projects an Agent's baseline node grants from its live Agent document
 /// (`GrantSet::AgentBaseline`), so disabling the document revokes them.
 async fn set_parent_enabled(fixture: &Fixture, enabled: bool) {
-    let (collection, mut value) = crate::test_support::test_agent_documents(
+    let (collection, mut value) = crate::test_support::documents::test_agent_documents(
         fixture.runtime.did(),
         "parent",
         &fixture.parent_binding,
@@ -294,7 +294,7 @@ async fn observed(fixture: &Fixture) -> (String, Vec<serde_json::Value>) {
 }
 
 fn model(name: &str) -> serde_json::Value {
-    crate::lean_vocab_test::lean_contract_snapshot()
+    gents_lean_vocab::lean_contract_snapshot()
         .delegated_finality_cases
         .iter()
         .find(|case| case["name"] == name)
@@ -500,7 +500,7 @@ async fn cancelled_after_child_commit_recovers_relationships_in_the_actor_watche
 
 #[tokio::test]
 async fn existing_child_message_uses_calling_agent_native_claim() {
-    let modeled = crate::lean_vocab_test::lean_contract_snapshot();
+    let modeled = gents_lean_vocab::lean_contract_snapshot();
     let allowed = modeled
         .cross_actor_authorization_cases
         .iter()
@@ -513,11 +513,11 @@ async fn existing_child_message_uses_calling_agent_native_claim() {
         .unwrap();
     assert_eq!(
         allowed.decision,
-        crate::lean_vocab_test::LeanCrossActorDecision::Claimed
+        gents_lean_vocab::LeanCrossActorDecision::Claimed
     );
     assert_eq!(
         denied.decision,
-        crate::lean_vocab_test::LeanCrossActorDecision::Denied
+        gents_lean_vocab::LeanCrossActorDecision::Denied
     );
     for (active, deny) in [(false, false), (false, true), (true, true)] {
         let mut fixture = fixture(if active {

@@ -6,9 +6,6 @@ use serde::Deserialize;
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::store::graphql::escape_graphql_string;
 
-#[cfg(test)]
-mod auxiliary_repair_tests;
-
 const CHILD_COLLECTIONS: [&str; 5] = [
     "AgentMessage",
     "AgentOutputSegment",

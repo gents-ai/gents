@@ -599,7 +599,12 @@ mod tests {
 
     #[tokio::test]
     async fn fetches_complete_inference_provenance() {
-        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
+        let node = std::sync::Arc::new(
+            crate::store::test_support::node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
         let response = node
@@ -886,7 +891,7 @@ mod tests {
         let binding = crate::store::identity::provision_agent_identity(&root).unwrap();
         let agent = crate::store::identity::resolve_agent_identity(&root, &binding).unwrap();
         let node = std::sync::Arc::new(
-            crate::test_support::node_builder()
+            crate::store::test_support::node_builder()
                 .with_node_identity_did(root.did())
                 .build()
                 .await

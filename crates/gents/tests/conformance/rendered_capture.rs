@@ -4,7 +4,7 @@ use gents::inference::rendered_request::{
 };
 use serde_json::{json, Value};
 
-use crate::lean_vocab_test::{lean_rendered_capture_cases, lean_rendered_capture_key_cases};
+use gents_lean_vocab::{lean_rendered_capture_cases, lean_rendered_capture_key_cases};
 
 fn node_did(id: u64) -> String {
     format!("did:key:z6Mk-node-{id}")
@@ -304,7 +304,7 @@ fn generated_rendered_capture_cases_never_permit_an_uncaptured_send() {
 fn generated_capture_scope_cases_pin_the_shared_parser_and_order() {
     use gents::inference::rendered_request::{CaptureOrderKey, CaptureScope};
 
-    let scope_cases = crate::lean_vocab_test::lean_capture_scope_cases();
+    let scope_cases = gents_lean_vocab::lean_capture_scope_cases();
     assert!(
         !scope_cases.is_empty(),
         "Lean emitted no capture scope cases"
@@ -331,7 +331,7 @@ fn generated_capture_scope_cases_pin_the_shared_parser_and_order() {
         }
     }
 
-    let order_cases = crate::lean_vocab_test::lean_capture_order_cases();
+    let order_cases = gents_lean_vocab::lean_capture_order_cases();
     assert!(
         !order_cases.is_empty(),
         "Lean emitted no capture order cases"

@@ -664,7 +664,7 @@ mod tests {
 
     #[test]
     fn aged_completion_wake_moves_ahead_of_older_descendant() {
-        let witness = crate::lean_vocab_test::lean_r6_backgrounding_case(
+        let witness = gents_lean_vocab::lean_r6_backgrounding_case(
             "aged_background_wake_precedes_new_descendant",
         );
         assert!(witness.legal);
@@ -698,9 +698,8 @@ mod tests {
 
     #[test]
     fn fresh_completion_wake_preserves_fifo() {
-        let witness = crate::lean_vocab_test::lean_r6_backgrounding_case(
-            "fresh_background_wake_preserves_fifo",
-        );
+        let witness =
+            gents_lean_vocab::lean_r6_backgrounding_case("fresh_background_wake_preserves_fifo");
         assert!(!witness.legal);
         assert_eq!(witness.reason.as_deref(), Some("fifo"));
         let now = chrono::DateTime::parse_from_rfc3339("2026-08-12T22:00:00Z")

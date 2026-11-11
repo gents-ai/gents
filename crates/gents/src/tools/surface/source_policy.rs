@@ -46,3 +46,12 @@ impl ToolSourcePolicy for ToolCeiling {
             .filter(|id| !id.is_empty())
     }
 }
+
+#[cfg(test)]
+mod projection_tests;
+
+#[cfg(test)]
+mod runtime_projection_tests;
+
+#[cfg(test)]
+mod backend_protection_tests;

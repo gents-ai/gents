@@ -269,8 +269,8 @@ The actual serialized-request/threshold experiment
 remains `native.external-projected-request-threshold` in the implementation layer.
 
 The canonical output groups are registered in `tests/conformance/coverage.rs`.
-Native projection consumers live in `src/lean_vocab_test/canonical_presentation.rs`,
-and `src/lean_vocab_test/canonical_execution/native_adapter.rs` binds selected
+Native projection consumers live in `crates/gents-lean-vocab/src/canonical_presentation.rs`,
+and `src/runtime/agent/tests/canonical_execution_native_adapter.rs` binds selected
 execution scripts to native owners, including live partial publication and replay.
 The retired `streaming_response_cases` generator is no longer a runtime/test
 dependency. This is partial native coverage, not completion of every mapped seam;
@@ -752,7 +752,7 @@ Related implementation-facing doc:
 Rust conformance tests do not hand-maintain separate Lean parity tables for the
 core executable machines. This includes the aggregate-budget dispatch and
 charge cases consumed at the owned completion-loop boundary. The test helper
-in `src/lean_vocab_test.rs` runs:
+in `crates/gents-lean-vocab` runs:
 
 ```bash
 cd crates/gents/proofs

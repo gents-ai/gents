@@ -4,7 +4,7 @@ use crate::inference::backends::provider::BackendProviderKind;
 
 #[test]
 fn generated_claude_platform_cases_match_the_lean_owner() {
-    let cases = crate::lean_vocab_test::lean_claude_platform_cases();
+    let cases = gents_lean_vocab::lean_claude_platform_cases();
     assert!(!cases.is_empty());
     for case in cases {
         let name = case["name"].as_str().unwrap();

@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 
 fn modeled_case(name: &str) -> &'static Value {
-    crate::lean_vocab_test::lean_contract_snapshot()
+    gents_lean_vocab::lean_contract_snapshot()
         .goal_client_control_cases
         .iter()
         .find(|case| case["name"] == name)
@@ -198,7 +198,7 @@ async fn user_without_session_access_receives_the_modeled_refusal() {
     let owner_access = fixture.user_access();
     let requester = Arc::new(
         tokio::task::spawn_blocking(|| {
-            crate::support::fixtures::test_identity("goal-submission-denied-requester")
+            crate::store::test_support::test_identity("goal-submission-denied-requester")
         })
         .await
         .unwrap(),

@@ -11,17 +11,6 @@
 //! type. Lean models only the presence or count of a rider, so a protocol field
 //! the model does not carry (a prompt, a title, a write's body) is left empty.
 //! Composed wire traces carry the actual resolution table and raw ceilings.
-use crate::lean_vocab_test::{
-    lean_plugin_job_admission_cases, lean_plugin_job_adoption_cases,
-    lean_plugin_job_authority_cases, lean_plugin_job_control_cases, lean_plugin_job_key_cases,
-    lean_plugin_job_lineage_cases, lean_plugin_job_wire_cases, LeanPluginJobAdoptionCase,
-    LeanPluginJobAuthorityCase, LeanPluginJobCeiling, LeanPluginJobContext,
-    LeanPluginJobControlCase, LeanPluginJobControlEcho, LeanPluginJobExtras, LeanPluginJobGuestPin,
-    LeanPluginJobHostFacts, LeanPluginJobKill, LeanPluginJobObservation, LeanPluginJobOutput,
-    LeanPluginJobPin, LeanPluginJobPolicy, LeanPluginJobProcessScope, LeanPluginJobRecord,
-    LeanPluginJobResume, LeanPluginJobRootCall, LeanPluginJobRow, LeanPluginJobScope,
-    LeanPluginJobTarget, LeanPluginJobToolCall, LeanPluginJobWireCase, LeanPluginJobWireKind,
-};
 use gents::pack::home_install::{
     installer_provenance, record_after_install_via, recorded_provenance, InstalledVia,
 };
@@ -42,6 +31,17 @@ use gents::tools::background::job::origin::call_origin;
 use gents::tools::background::status::ProcessControlScope;
 use gents::tools::call::lifecycle::ToolRowKind;
 use gents::tools::surface::EndpointScope;
+use gents_lean_vocab::{
+    lean_plugin_job_admission_cases, lean_plugin_job_adoption_cases,
+    lean_plugin_job_authority_cases, lean_plugin_job_control_cases, lean_plugin_job_key_cases,
+    lean_plugin_job_lineage_cases, lean_plugin_job_wire_cases, LeanPluginJobAdoptionCase,
+    LeanPluginJobAuthorityCase, LeanPluginJobCeiling, LeanPluginJobContext,
+    LeanPluginJobControlCase, LeanPluginJobControlEcho, LeanPluginJobExtras, LeanPluginJobGuestPin,
+    LeanPluginJobHostFacts, LeanPluginJobKill, LeanPluginJobObservation, LeanPluginJobOutput,
+    LeanPluginJobPin, LeanPluginJobPolicy, LeanPluginJobProcessScope, LeanPluginJobRecord,
+    LeanPluginJobResume, LeanPluginJobRootCall, LeanPluginJobRow, LeanPluginJobScope,
+    LeanPluginJobTarget, LeanPluginJobToolCall, LeanPluginJobWireCase, LeanPluginJobWireKind,
+};
 use gents_protocol::job::keys::{
     decode_job_retry_key, job_message_key, job_session_id, job_spawn_key,
 };
@@ -581,7 +581,7 @@ fn generated_plugin_job_admission_cases_drive_admit_step() {
                     in_flight: trace.read.step_in_flight,
                 },
             );
-            let before = crate::lean_vocab_test::LeanPluginJobRecoveryRow {
+            let before = gents_lean_vocab::LeanPluginJobRecoveryRow {
                 running: facts.running,
                 terminal_children: facts.terminal_children,
                 observed: facts.observed,

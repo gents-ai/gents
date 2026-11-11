@@ -8,7 +8,7 @@ pub(crate) static TOKEN_URL_ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::co
 
 pub(crate) async fn test_node() -> Arc<EmbeddedNode> {
     let node = Arc::new(
-        crate::test_support::node_builder()
+        crate::store::test_support::node_builder()
             .build()
             .await
             .expect("embedded node"),

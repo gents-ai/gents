@@ -427,7 +427,7 @@ mod tests {
         gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
             None,tokio_util::sync::CancellationToken::new(),None,None,None,
             Some("book-run".into()),[("book_path".into(),"/books/one".into())].into(),false,async {
-                for case in crate::lean_vocab_test::lean_write_input_cases() {
+                for case in gents_lean_vocab::lean_write_input_cases() {
                     if case["filled"] != true { continue; }
                     let value = match case["actual"].as_str() {
                         None => None, Some("text")=>Some(json!("/books/other")),

@@ -15,7 +15,7 @@ use crate::inference::auth::credential::test_support::{
     one_shot_token_server, seed_credential, seed_credential_with_refresh_token, test_node,
     TOKEN_URL_ENV,
 };
-use crate::lean_vocab_test::lean_backend_health_cases;
+use gents_lean_vocab::lean_backend_health_cases;
 
 fn state_from_lean(name: &str, state: &str) -> BackendHealthState {
     match state {
@@ -108,9 +108,7 @@ fn generated_backend_health_cases_match_prober_transitions() {
 
 #[test]
 fn generated_backend_probe_schedule_cases_match_runtime_selection() {
-    fn configuration(
-        value: &crate::lean_vocab_test::LeanBackendProbeConfiguration,
-    ) -> InferenceBackend {
+    fn configuration(value: &gents_lean_vocab::LeanBackendProbeConfiguration) -> InferenceBackend {
         let mut backend = backend(
             &format!("backend-{}", value.backend_id),
             format!("http://localhost/revision-{}", value.revision),
@@ -119,7 +117,7 @@ fn generated_backend_probe_schedule_cases_match_runtime_selection() {
         backend
     }
 
-    for case in crate::lean_vocab_test::lean_backend_probe_schedule_cases() {
+    for case in gents_lean_vocab::lean_backend_probe_schedule_cases() {
         let mut schedule = ProbeSchedule::default();
         schedule.select(
             &case.known.iter().map(configuration).collect::<Vec<_>>(),
@@ -194,7 +192,7 @@ fn backend_fields_refine_the_modeled_probe_revision() {
         let mut schedule = ProbeSchedule::default();
         schedule.select(std::slice::from_ref(&base), true);
         for known_revision in [0, *revision] {
-            let modeled = crate::lean_vocab_test::lean_backend_probe_schedule_cases()
+            let modeled = gents_lean_vocab::lean_backend_probe_schedule_cases()
                 .iter()
                 .find(|case| {
                     !case.periodic

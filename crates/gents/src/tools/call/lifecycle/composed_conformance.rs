@@ -123,7 +123,7 @@ async fn teardown(admission: PublishedAdmission) {
 
 #[tokio::test]
 async fn generated_composed_invariants_use_canonical_admission_owner() {
-    let witnesses = crate::lean_vocab_test::lean_composed_invariant_witnesses();
+    let witnesses = gents_lean_vocab::lean_composed_invariant_witnesses();
     assert_eq!(witnesses.len(), 4);
     for witness in witnesses {
         let running = witness.tool_pre_state == "running";

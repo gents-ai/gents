@@ -3,7 +3,7 @@ use super::*;
 
 #[test]
 fn generated_command_isolation_matches_native_policy() {
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().command_isolation_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().command_isolation_cases;
     assert_eq!(cases.len(), 12);
     for value in cases {
         let mode: CommandExecutionMode = serde_json::from_value(value["mode"].clone()).unwrap();

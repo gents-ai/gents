@@ -662,8 +662,7 @@ mod tests {
 
     #[test]
     fn modeled_policy_exposure_controls_the_resource() {
-        for case in &crate::lean_vocab_test::lean_contract_snapshot().policy_resource_exposure_cases
-        {
+        for case in &gents_lean_vocab::lean_contract_snapshot().policy_resource_exposure_cases {
             let categories = case["categories"]
                 .as_array()
                 .unwrap()
@@ -681,7 +680,7 @@ mod tests {
 
     #[test]
     fn modeled_lockout_guard_matches_the_grant_owner() {
-        let lean = crate::lean_vocab_test::lean_contract_snapshot();
+        let lean = gents_lean_vocab::lean_contract_snapshot();
         let protected = lean.policy_lockout_cases["protected"]
             .as_array()
             .unwrap()

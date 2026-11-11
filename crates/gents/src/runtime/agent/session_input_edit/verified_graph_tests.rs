@@ -24,8 +24,7 @@ async fn verified_signer_as(
 
 #[tokio::test]
 async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> anyhow::Result<()> {
-    let cases =
-        &crate::lean_vocab_test::lean_contract_snapshot().session_input_edit_native_claim_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().session_input_edit_native_claim_cases;
     for case in cases {
         let directory = tempfile::tempdir()?;
         let root: Arc<dyn NodeIdentity> = Arc::new(KeyIdentity::load_or_create(

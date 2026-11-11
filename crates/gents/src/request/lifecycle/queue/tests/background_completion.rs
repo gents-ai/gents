@@ -1414,7 +1414,7 @@ async fn a_lower_hop_wake_never_consumes_a_higher_hop_notification() {
 async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() {
     let db = test_db("wake-hop-refusal").await;
     // Node is configuration, so the fixture's User signs the cap.
-    crate::test_support::set_test_node_field_as(
+    crate::test_support::documents::set_test_node_field_as(
         &db.user_access,
         db.node_did(),
         "max_request_hop",

@@ -12,7 +12,7 @@ impl InterruptionCapture {
         &self,
     ) -> impl tracing::Subscriber + Send + Sync {
         use tracing_subscriber::layer::SubscriberExt;
-        crate::test_support::enable_scoped_event_capture();
+        crate::test_support::root::enable_scoped_event_capture();
         tracing_subscriber::Registry::default().with(self.clone())
     }
 

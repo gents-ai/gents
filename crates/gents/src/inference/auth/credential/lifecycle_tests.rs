@@ -81,7 +81,8 @@ async fn access() -> (crate::support::TestDb, crate::KeyIdentity, ConfigAccess) 
     use crate::NodeIdentity;
 
     let (db, user, access) =
-        crate::test_support::signed_test_node_without_agent("credential-interactive-sign-in").await;
+        crate::test_support::root::signed_test_node_without_agent("credential-interactive-sign-in")
+            .await;
     let runtime = ConfigAccess::local_as(
         db.node.clone(),
         ::identity::Did::new(db.node_identity.did()).unwrap(),
@@ -365,7 +366,8 @@ async fn signed_account_delete_requires_user_document_delete_permission() {
     use crate::store::identity::NodeIdentity;
 
     let (db, user, access) =
-        crate::test_support::signed_test_node_without_agent("credential-delete-permission").await;
+        crate::test_support::root::signed_test_node_without_agent("credential-delete-permission")
+            .await;
     let node_did = db.node_identity.did();
     store(
         &access,

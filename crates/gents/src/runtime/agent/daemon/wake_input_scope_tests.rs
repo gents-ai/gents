@@ -28,7 +28,7 @@ struct ScopeFixture {
 impl ScopeFixture {
     async fn new(name: &str) -> Self {
         use crate::store::config_client::NodePermission;
-        let (db, user, client, binding) = crate::test_support::signed_test_node(name).await;
+        let (db, user, client, binding) = crate::test_support::root::signed_test_node(name).await;
         let agent =
             crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
                 .unwrap();
@@ -862,7 +862,7 @@ async fn claimed_background_wake_reads_user_session_as_selected_agent() {
     )
     .await
     .unwrap();
-    crate::test_support::install_test_agent_binding_with_access(
+    crate::test_support::inference::install_test_agent_binding_with_access(
         fixture.runtime.did(),
         "Other Agent",
         &other_binding,

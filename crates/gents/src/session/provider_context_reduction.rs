@@ -1852,7 +1852,12 @@ mod tests {
 
     #[tokio::test]
     async fn source_boundary_pins_bounded_canonical_high_water() {
-        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+        let node = Arc::new(
+            crate::store::test_support::node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
         crate::ensure_runtime_schemas(&node).await.unwrap();
         for sequence in [2, 1] {
             let mutation = format!(

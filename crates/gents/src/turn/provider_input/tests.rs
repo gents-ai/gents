@@ -637,7 +637,7 @@ async fn openai_responses_wire_body_leaves_include_to_the_server_default_store()
 
 #[tokio::test]
 async fn modeled_service_tiers_match_the_terminal_responses_body() {
-    for case in crate::lean_vocab_test::lean_prompt_assembly_service_tier_cases() {
+    for case in gents_lean_vocab::lean_prompt_assembly_service_tier_cases() {
         if !case.allowed || !matches!(case.family.as_str(), "OpenAiCompatible" | "ChatGptCodex") {
             continue;
         }

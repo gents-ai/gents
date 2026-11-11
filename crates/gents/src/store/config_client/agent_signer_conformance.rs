@@ -37,7 +37,7 @@ async fn managed_signing_selection_conforms_to_lean() {
     );
     let unconfigured_node = Arc::new(defra_node::Node::builder().build().await.unwrap());
     let cases = tokio::task::spawn_blocking(|| {
-        crate::lean_vocab_test::lean_contract_snapshot()
+        gents_lean_vocab::lean_contract_snapshot()
             .identity_agent_block_signing_cases
             .clone()
     })

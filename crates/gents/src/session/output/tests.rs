@@ -39,7 +39,7 @@ fn session_header_index_preserves_coordinate_observations() {
 
 #[test]
 fn current_input_selection_matches_lean_owner() {
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().current_input_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().current_input_cases;
     assert!(!cases.is_empty());
     for case in cases {
         let retained = case
@@ -360,7 +360,10 @@ async fn reused_scan_observes_payload_segments_replicated_after_their_close() {
     use gents_protocol::output::rows::{
         output_segment_create_variables, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
-    let node = crate::test_support::node_builder().build().await.unwrap();
+    let node = crate::store::test_support::node_builder()
+        .build()
+        .await
+        .unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let request = "doc-scan-gap";
     let create_segment = |segment: gents_protocol::output::OutputSegment| {

@@ -1,8 +1,3 @@
-use crate::lean_vocab_test::{
-    lean_agent_decision_cases, lean_agent_materialization_cases, lean_self_config_cases,
-    lean_self_config_field_tables, lean_self_config_selection_cases, lean_sibling_tools_cases,
-    LeanAgentCandidate, LeanAgentDecisionInputs, LeanSelfConfigCase, LeanSelfConfigPatchEntry,
-};
 use gents::documents::patch::{
     apply_patch, ensure_admissible, SelfConfigPatch, SelfConfigTarget, ALL_SELF_CONFIG_TARGETS,
 };
@@ -18,10 +13,15 @@ use gents::tools::builtin::self_config::{
     guard_tools_keep_grants, reselection_keeps_grants, OperatorGrants,
 };
 use gents::tools::native::CommandNetworkMode;
+use gents_lean_vocab::{
+    lean_agent_decision_cases, lean_agent_materialization_cases, lean_self_config_cases,
+    lean_self_config_field_tables, lean_self_config_selection_cases, lean_sibling_tools_cases,
+    LeanAgentCandidate, LeanAgentDecisionInputs, LeanSelfConfigCase, LeanSelfConfigPatchEntry,
+};
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
 
-fn doc_map(entries: &[crate::lean_vocab_test::LeanSelfConfigFieldValue]) -> Map<String, Value> {
+fn doc_map(entries: &[gents_lean_vocab::LeanSelfConfigFieldValue]) -> Map<String, Value> {
     entries
         .iter()
         .map(|entry| (entry.field.clone(), Value::String(entry.value.clone())))
@@ -126,7 +126,7 @@ pub(super) fn generated_self_config_cases_fence_patch_merge() {
                 }
                 SelfConfigTarget::AgentContext | SelfConfigTarget::Agent => {
                     let selected =
-                        |doc: &Option<Vec<crate::lean_vocab_test::LeanSelfConfigFieldValue>>| {
+                        |doc: &Option<Vec<gents_lean_vocab::LeanSelfConfigFieldValue>>| {
                             doc.as_deref()
                                 .map(|doc| typed_doc(SelfConfigTarget::Tools, doc))
                         };
@@ -176,9 +176,7 @@ pub(super) fn generated_self_config_cases_fence_patch_merge() {
     }
 }
 
-fn typed_backend(
-    backend: &crate::lean_vocab_test::LeanSelfConfigBackend,
-) -> gents::InferenceBackend {
+fn typed_backend(backend: &gents_lean_vocab::LeanSelfConfigBackend) -> gents::InferenceBackend {
     let id = parse_nested(backend.backend_id.clone().into());
     serde_json::from_value(serde_json::json!({
         "node_did": "did:key:node-a",
@@ -212,7 +210,7 @@ fn typed_merge(
 
 fn typed_doc(
     target: SelfConfigTarget,
-    entries: &[crate::lean_vocab_test::LeanSelfConfigFieldValue],
+    entries: &[gents_lean_vocab::LeanSelfConfigFieldValue],
 ) -> Map<String, Value> {
     let mut doc: Map<String, Value> = entries
         .iter()

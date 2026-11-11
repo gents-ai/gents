@@ -89,8 +89,9 @@ where
     retry::classified_transaction_conflict(error).is_some()
 }
 
-#[cfg(test)]
-pub(crate) fn classified_conflict_for_test() -> ConfigClientError {
+#[cfg(any(test, feature = "test-fixtures"))]
+#[doc(hidden)]
+pub fn classified_conflict_for_test() -> ConfigClientError {
     retry::transaction_conflict(write_telemetry::ConflictSource::StructuredCode)
 }
 
@@ -417,8 +418,9 @@ impl ConfigAccess {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn has_managed_agent_signer(&self) -> bool {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    #[doc(hidden)]
+    pub fn has_managed_agent_signer(&self) -> bool {
         matches!(self, Self::Local(local) if local.has_agent_signer())
     }
 

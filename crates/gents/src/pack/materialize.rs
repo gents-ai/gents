@@ -321,7 +321,7 @@ mod tests {
 
     fn assets_archive() -> crate::pack::archive::PackArchive {
         let (_guard, dir) =
-            crate::test_support::fixture_pack_copy("assets_fixture", &serde_json::json!({}));
+            crate::test_support::pack::fixture_pack_copy("assets_fixture", &serde_json::json!({}));
         let (bytes, _) = crate::pack::archive::pack_dir(&dir).unwrap();
         crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap()
     }

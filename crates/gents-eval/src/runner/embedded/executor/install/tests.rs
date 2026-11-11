@@ -19,7 +19,7 @@ async fn trigger_checkpoint_uses_selected_agent_visibility_and_advances_serial_a
     use gents::request::lifecycle::{
         build_signed_request, ExecutionOrigin, RequestSigner, TriggerLineage,
     };
-    use gents::test_support::checkpoint_prefix;
+    use gents::test_support::automation::checkpoint_prefix;
     use gents::triggers::task_fire_key;
     use gents_protocol::event_delivery::EventConsumer;
     use gents_protocol::trigger_delivery::{FireIdentity, TriggerFire};
@@ -136,7 +136,7 @@ async fn trigger_checkpoint_uses_selected_agent_visibility_and_advances_serial_a
             .as_str()
             .unwrap();
         let task_doc_id = response["data"]["Task"][0]["_docID"].as_str().unwrap();
-        let spec = gents::test_support::pending_agent_request_spec(
+        let spec = gents::test_support::automation::pending_agent_request_spec(
             owner,
             agent.did(),
             "work",
@@ -160,17 +160,17 @@ async fn trigger_checkpoint_uses_selected_agent_visibility_and_advances_serial_a
         let create = build_signed_request(spec, RequestSigner::Identity(agent))
             .await
             .unwrap();
-        let generation = gents::test_support::event_admission_generation(
+        let generation = gents::test_support::automation::event_admission_generation(
             &serde_json::from_value(json!({"node_did":owner, "event_source_id":"source", "source_collection":"CheckpointWork", "event_kind":"created"})).unwrap(),
             &serde_json::from_value(json!({"node_did":owner, "trigger_id":"trigger", "task_id":"task", "enabled":true, "concurrency":"queued_serial", "source":{"kind":"event", "event_source_id":"source"}})).unwrap(),
             &serde_json::from_value(json!({"node_did":owner, "task_id":"task", "agent_did":agent.did(), "prompt_template":"work"})).unwrap(),
-            &gents::test_support::EventConfigDocIds {
+            &gents::test_support::automation::EventConfigDocIds {
                 trigger: trigger_doc,
                 source: source_doc_id,
                 task: task_doc_id,
             },
         ).unwrap();
-        let prepared = gents::test_support::PreparedFire {
+        let prepared = gents::test_support::automation::PreparedFire {
             receipt: fire,
             target_existing: false,
             create_session: false,
@@ -178,7 +178,7 @@ async fn trigger_checkpoint_uses_selected_agent_visibility_and_advances_serial_a
             replace_prior: false,
             event_source_generation: Some(generation),
         };
-        gents::test_support::write_trigger_delivery_with_identity(
+        gents::test_support::automation::write_trigger_delivery_with_identity(
             node,
             ::identity::Did::new(agent.did()).unwrap(),
             &prepared,
@@ -216,7 +216,7 @@ async fn trigger_checkpoint_uses_selected_agent_visibility_and_advances_serial_a
             .unwrap()
             .is_none()
     );
-    let fixture = crate::lean_vocab_test::lean_identity_household_cases()
+    let fixture = gents_lean_vocab::lean_identity_household_cases()
         .first()
         .unwrap();
     let modeled_agent = &fixture
@@ -876,7 +876,7 @@ async fn session_fixtures_publish_only_declared_cross_agent_readers() {
 
 #[tokio::test]
 async fn expired_request_fixtures_are_signed_published_and_expired_without_inference() {
-    let transition = crate::lean_vocab_test::lean_request_transition_cases()
+    let transition = gents_lean_vocab::lean_request_transition_cases()
         .iter()
         .find(|case| case.from == "pending" && case.to == "dead")
         .expect("Lean models pending expiry");

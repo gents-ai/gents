@@ -148,7 +148,7 @@ mod tests {
     #[tokio::test]
     async fn serving_accounts_reads_backends_and_accounts() -> Result<()> {
         let did = "did:key:z6MkTestServing";
-        let node = Arc::new(crate::test_support::node_builder().build().await?);
+        let node = Arc::new(crate::store::test_support::node_builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
         let access = ConfigAccess::local_as(
             node.clone(),
@@ -158,7 +158,7 @@ mod tests {
             )
             .unwrap(),
         );
-        crate::test_support::bootstrap_signed_test_node(&access, did).await;
+        crate::test_support::documents::bootstrap_signed_test_node(&access, did).await;
         let oauth = |account_ref: Option<&str>| BackendAuth::NodeOAuth {
             account_ref: account_ref.map(str::to_owned),
         };
@@ -247,7 +247,7 @@ mod tests {
             AccountPick,
         };
         let did = "did:key:z6MkTestProfileEvents";
-        let node = Arc::new(crate::test_support::node_builder().build().await?);
+        let node = Arc::new(crate::store::test_support::node_builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
         let access = ConfigAccess::local_as(
             node.clone(),
@@ -257,7 +257,7 @@ mod tests {
             )
             .unwrap(),
         );
-        crate::test_support::bootstrap_signed_test_node(&access, did).await;
+        crate::test_support::documents::bootstrap_signed_test_node(&access, did).await;
         let spec = crate::inference::backends::setup::connection_spec(
             crate::inference::backends::setup::InferenceProviderId::Anthropic,
             crate::inference::backends::setup::InferenceAuthMethod::ClaudeOauth,
@@ -413,7 +413,7 @@ mod tests {
             set_account_enabled, store_sign_in, AccountState,
         };
         let did = "did:key:z6MkTestAgentAccounts";
-        let node = Arc::new(crate::test_support::node_builder().build().await?);
+        let node = Arc::new(crate::store::test_support::node_builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
         let access = ConfigAccess::local_as(
             node.clone(),
@@ -423,7 +423,7 @@ mod tests {
             )
             .unwrap(),
         );
-        crate::test_support::bootstrap_signed_test_node(&access, did).await;
+        crate::test_support::documents::bootstrap_signed_test_node(&access, did).await;
         let spec = crate::inference::backends::setup::connection_spec(
             crate::inference::backends::setup::InferenceProviderId::Anthropic,
             crate::inference::backends::setup::InferenceAuthMethod::ClaudeOauth,

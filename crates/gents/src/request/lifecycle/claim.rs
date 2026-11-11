@@ -2189,7 +2189,7 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
-        let contract = crate::lean_vocab_test::lean_contract_snapshot()
+        let contract = gents_lean_vocab::lean_contract_snapshot()
             .wake_input_cases
             .iter()
             .find(|case| case.name == "imported_notification_stays_in_history")

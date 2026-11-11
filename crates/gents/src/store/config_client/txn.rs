@@ -3,7 +3,7 @@ mod auto_commit;
 mod cursor;
 mod delete_confirmation;
 mod execute;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 mod fault_injection;
 mod finalize;
 mod gate;

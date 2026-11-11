@@ -296,7 +296,7 @@ pub(crate) mod tests {
 
     #[test]
     fn task_seed_coverage_matches_lean_for_canonical_pack_and_definition_inputs() {
-        let rows = &crate::lean_vocab_test::lean_optimization_cases().seed_coverage;
+        let rows = &gents_lean_vocab::lean_optimization_cases().seed_coverage;
         assert!(!rows.is_empty());
         for row in rows {
             let triggers: Vec<Value> = row

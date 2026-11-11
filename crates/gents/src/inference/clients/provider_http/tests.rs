@@ -427,7 +427,7 @@ async fn usage_capture_rejected_records_error_source_and_keeps_the_marker() {
 async fn usage_capture_requires_no_persistent_schema() {
     use crate::NodeIdentity;
     let identity = tokio::task::spawn_blocking(|| {
-        crate::support::fixtures::test_identity("provider-no-schema")
+        crate::store::test_support::test_identity("provider-no-schema")
     })
     .await
     .unwrap();

@@ -325,7 +325,7 @@ async fn non_deadline_request_terminalization_does_not_timeout_running_wait() {
 
 #[tokio::test]
 async fn generated_logical_output_obligation_cases_drive_signed_requests_and_durable_writes() {
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().logical_output_obligation_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().logical_output_obligation_cases;
     assert_eq!(cases.len(), 11);
     for case in cases {
         let temp = tempfile::tempdir().unwrap();

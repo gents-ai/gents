@@ -3,12 +3,12 @@ use super::{
     AwaitMode, ToolCallLifecycle,
 };
 use crate::goal::{load_canonical_goal_in_txn, set_goal_from_access};
-use crate::lean_vocab_test::{
-    lean_r6_backgrounding_case, lean_r6_backgrounding_cases, LeanR6BackgroundingCase,
-};
 use crate::store::config_client::ConfigAccess;
 use crate::store::graphql::escape_graphql_string;
 use anyhow::Context;
+use gents_lean_vocab::{
+    lean_r6_backgrounding_case, lean_r6_backgrounding_cases, LeanR6BackgroundingCase,
+};
 use gents_protocol::goal_status::GoalStatus;
 use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};
 use serde_json::{json, Value};
@@ -595,7 +595,7 @@ async fn background_wake_is_visible_to_the_owning_user_and_selected_agent() {
     }
 
     let stranger = tokio::task::spawn_blocking(|| {
-        crate::support::fixtures::test_identity("unrelated-wake-user")
+        crate::store::test_support::test_identity("unrelated-wake-user")
     })
     .await
     .unwrap();
@@ -607,7 +607,7 @@ async fn background_wake_is_visible_to_the_owning_user_and_selected_agent() {
     )
     .await
     .unwrap();
-    crate::test_support::install_test_agent_binding_with_access(
+    crate::test_support::inference::install_test_agent_binding_with_access(
         admission.runtime.did(),
         "Unrelated agent",
         &binding,

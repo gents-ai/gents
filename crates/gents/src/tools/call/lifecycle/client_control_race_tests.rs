@@ -276,7 +276,7 @@ async fn client_unverified_stop_preserves_running_tool() {
             token.clone(),
         )
         .unwrap();
-    let expected = crate::lean_vocab_test::lean_process_stop_cases()
+    let expected = gents_lean_vocab::lean_process_stop_cases()
         .iter()
         .find(|case| case.before == "running" && case.after == "running")
         .expect("Lean running process observation");
@@ -360,7 +360,7 @@ async fn client_cancels_released_native_future_without_process_record() {
     );
     worker.await.unwrap();
     let row = load_as_agent(&request_owner, &request, requester_did.as_deref()).await;
-    let expected = crate::lean_vocab_test::lean_process_stop_cases()
+    let expected = gents_lean_vocab::lean_process_stop_cases()
         .iter()
         .find(|case| case.before == "running" && case.after == "exited")
         .unwrap();

@@ -19,7 +19,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("Background", Module("conformance/background.rs")),
         ("BackendHealth", Module("conformance/backend_health.rs")),
         ("Callback", Module("conformance/callback_lifecycle.rs")),
-        ("CanonicalOutput", WorkspaceTest("crates/gents/src/lean_vocab_test/canonical_execution/native_adapter.rs")),
+        ("CanonicalOutput", WorkspaceTest("crates/gents/src/runtime/agent/tests/canonical_execution_native_adapter.rs")),
         ("Client", Module("conformance/client_runtime.rs")),
         (
             "ClientShell",
@@ -98,7 +98,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("Request", Module("conformance/request_lifecycle.rs")),
         (
             "RequestExecutionLease",
-            WorkspaceTest("crates/gents/src/lean_vocab_test/request_execution_lease_policy.rs"),
+            WorkspaceTest("crates/gents/src/request/lifecycle/execution_lease/tests/generated_policy.rs"),
         ),
         ("RuntimeReconcile", Module("conformance/client_runtime.rs")),
         (
@@ -139,7 +139,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ),
         (
             "TaskHooks",
-            WorkspaceTest("crates/gents/src/lean_vocab_test/task_hook_executor.rs"),
+            WorkspaceTest("crates/gents/src/runtime/startup_recovery/task_hook_executor_tests.rs"),
         ),
         (
             "ToolExecution",

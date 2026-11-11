@@ -1264,7 +1264,7 @@ mod tests {
 
     #[test]
     fn generated_storage_cases_drive_the_lossless_codec() {
-        let cases = crate::lean_vocab_test::lean_rendered_capture_storage_cases();
+        let cases = gents_lean_vocab::lean_rendered_capture_storage_cases();
         assert_eq!(
             cases.len(),
             13,

@@ -31,7 +31,7 @@ async fn usage_wiring_openai_compatible_records_under_the_backend_id() {
     let cache: std::sync::Arc<crate::inference::usage_observation::UsageCache> =
         std::sync::Arc::default();
     let (db, _user, _access, binding) =
-        crate::test_support::signed_test_node("backend-usage").await;
+        crate::test_support::root::signed_test_node("backend-usage").await;
     let node = db.node.clone();
     for (wire, backend_id) in [
         (crate::OpenAiWireApi::ChatCompletions, "backend-usage-chat"),

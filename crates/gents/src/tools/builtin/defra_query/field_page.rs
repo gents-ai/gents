@@ -118,7 +118,7 @@ mod tests {
     use super::*;
     #[test]
     fn field_pages_match_lean() {
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().field_read_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().field_read_cases;
         assert!(!cases.is_empty());
         for case in cases {
             let text: String = case["widths"]

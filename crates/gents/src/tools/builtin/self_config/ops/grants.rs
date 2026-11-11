@@ -199,7 +199,7 @@ mod lean_bound_tests {
 
     #[test]
     fn modeled_grant_bound_matches_the_owner() {
-        for case in &crate::lean_vocab_test::lean_contract_snapshot().policy_grant_bound_cases {
+        for case in &gents_lean_vocab::lean_contract_snapshot().policy_grant_bound_cases {
             let grants = |field: &str| OperatorGrants {
                 pack_install: false,
                 policy: case[field].as_bool().unwrap(),

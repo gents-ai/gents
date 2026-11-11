@@ -101,9 +101,14 @@ async fn explicit_file_image_push_refuses_runtime_local_collections() {
 
 #[tokio::test]
 async fn protocol_allowlist_rejects_local_data_before_transport() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     let admin = EmbeddedRemoteP2pAdmin::new(node);
-    for contract in crate::lean_vocab_test::lean_identity_contracts() {
+    for contract in gents_lean_vocab::lean_identity_contracts() {
         for name in gents_protocol::schemas::ALL_COLLECTION_NAMES
             .iter()
             .copied()

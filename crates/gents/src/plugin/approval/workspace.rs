@@ -602,8 +602,7 @@ mod tests {
         let home = directory.path().join("home");
         std::fs::create_dir(&home)?;
         let key = WorkspaceKey::canonical("node", "requester", "agent", directory.path())?;
-        let cases =
-            &crate::lean_vocab_test::lean_contract_snapshot().workspace_permission_write_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().workspace_permission_write_cases;
         assert!(!cases.is_empty());
         for raw in cases {
             let case: Case = serde_json::from_value(raw.clone())?;

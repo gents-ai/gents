@@ -168,18 +168,18 @@ async fn signed_claude_tool_round_trip_with_scope(
 
 #[tokio::test]
 async fn claude_messages_redacted_and_signed_tool_round_trip_through_owned_loop() {
-    let case = crate::lean_vocab_test::lean_prompt_assembly_claude_replay_cases()
+    let case = gents_lean_vocab::lean_prompt_assembly_claude_replay_cases()
         .iter()
         .find(|case| case.name == "streamed-signed-redacted-tool")
         .expect("Lean streamed signed/redacted/tool replay case");
     assert_eq!(case.outcome, "ok", "{}", case.name);
-    let expected_content = crate::lean_vocab_test::native_claude_replay_content(&case.blocks);
+    let expected_content = gents_lean_vocab::native_claude_replay_content(&case.blocks);
     let blocks = gents_loop::claude_messages_body::encode_assistant_content(&expected_content)
         .expect("modeled canonical blocks render as Messages input");
     let expected = case
         .replay
         .iter()
-        .map(crate::lean_vocab_test::LeanClaudeReplayBlock::native_json)
+        .map(gents_lean_vocab::LeanClaudeReplayBlock::native_json)
         .collect::<Vec<_>>();
     let kinds = expected
         .iter()

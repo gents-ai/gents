@@ -3,8 +3,6 @@ pub mod backend_protection;
 mod backend_protection_tests;
 pub mod file_lock;
 pub mod home;
-#[cfg(all(test, any(target_vendor = "apple", target_os = "linux")))]
-mod node_release_tests;
 pub(crate) mod plugin_delete_source;
 mod projection_policy;
 mod runtime_document_projection;

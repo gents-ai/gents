@@ -11,16 +11,21 @@ use crate::ensure_runtime_schemas;
 use crate::inference::admission::BackendAdmissionConfig;
 use crate::inference::backends::provider::BackendProviderKind;
 use crate::inference::resolved::{MaxTurnsProvenance, ResolvedAgent, DEFAULT_MAX_TURNS};
-use crate::lean_vocab_test::lean_runtime_reconcile_case;
 use crate::runtime::agent::PendingAgent;
 use crate::runtime::status::RuntimeStatusHandle;
 use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::{KeyIdentity, NodeIdentity as _, RuntimeNode};
 use crate::tools::surface::{AgentToolSurfaceConfig, ToolCeiling, ToolSurface};
+use gents_lean_vocab::lean_runtime_reconcile_case;
 use gents_protocol::row::AgentRequest;
 
 async fn test_node() -> Arc<defra_node::Node> {
-    Arc::new(crate::test_support::node_builder().build().await.unwrap())
+    Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    )
 }
 
 fn test_identity(name: &str) -> KeyIdentity {
@@ -882,7 +887,7 @@ async fn seed_fixture_agent_session(
 #[tokio::test]
 async fn generation_supervisor_restages_slot_on_api_key_rotation() {
     let (db, _user, _access, binding) =
-        crate::test_support::signed_test_node("reconcile-api-key-rotation").await;
+        crate::test_support::root::signed_test_node("reconcile-api-key-rotation").await;
     let node = db.node.clone();
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let node_did = db.node_identity.did().to_string();
@@ -1251,7 +1256,7 @@ async fn generation_supervisor_rotates_dispatcher_on_agent_change() {
         .node_identity_did()
         .expect("fixture node has an identity");
     // The NodeRuntime status row publishes under a visible, registered Node parent.
-    crate::test_support::ensure_test_node(&node, node_did).await;
+    crate::test_support::documents::ensure_test_node(&node, node_did).await;
     let runtime_status = runtime_status_handle(&node, node_did);
 
     let starts = Arc::new(StdMutex::new(RapidHashMap::<String, usize>::new()));
@@ -1404,7 +1409,7 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
         .node_identity_did()
         .expect("fixture node has an identity");
     // The NodeRuntime status row publishes under a visible, registered Node parent.
-    crate::test_support::ensure_test_node(&node, node_did).await;
+    crate::test_support::documents::ensure_test_node(&node, node_did).await;
     let runtime_status = runtime_status_handle(&node, node_did);
 
     let lineage = AgentLineage::provision("general");

@@ -12,7 +12,7 @@ use gents_loop::provider_input::ProviderInputProfile;
 use super::*;
 use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
 use crate::request::streaming::DefraStreamWriter;
-use crate::test_support::first_content;
+use crate::store::test_support::first_content;
 use crate::tools::call::hook::FailurePolicy;
 
 #[path = "stream_cadence_tests.rs"]
@@ -97,7 +97,7 @@ fn claude_signed_final_seals_preview_without_duplicating_bytes() {
 #[test]
 fn generated_reasoning_delta_cases_coalesce_native_parts() {
     use crate::inference::llm::message::ReasoningContent;
-    use crate::lean_vocab_test::{lean_reasoning_delta_cases, LeanReasoningDeltaPart as Part};
+    use gents_lean_vocab::{lean_reasoning_delta_cases, LeanReasoningDeltaPart as Part};
 
     for case in lean_reasoning_delta_cases() {
         let mut accumulator = AssistantTurnAccumulator::default();
@@ -599,7 +599,7 @@ async fn signed_run(name: &str, batch_interval: Duration) -> SignedRun {
         AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
     };
 
-    let (db, user, owner, binding) = crate::test_support::signed_test_node(name).await;
+    let (db, user, owner, binding) = crate::test_support::root::signed_test_node(name).await;
     let node = db.node.clone();
     let runtime_did = db.node_identity.did().to_owned();
     let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
@@ -1688,7 +1688,7 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
                     function: rig::completion::message::ToolFunction {
                         name: "describe_tool".to_string(),
                         arguments: serde_json::Value::String(
-                            crate::test_support::CORRUPT_TOOL_ARGS_589.to_string(),
+                            crate::store::test_support::CORRUPT_TOOL_ARGS_589.to_string(),
                         ),
                     },
                     signature: None,
@@ -1714,7 +1714,7 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
             "describe_tool",
             Some("call-1".to_string()),
             "internal-1",
-            crate::test_support::CORRUPT_TOOL_ARGS_589,
+            crate::store::test_support::CORRUPT_TOOL_ARGS_589,
         )
         .await,
         crate::inference::llm::ToolCallHookAction::Continue
@@ -1724,7 +1724,7 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
             "describe_tool",
             Some("call-1".to_string()),
             "internal-1",
-            crate::test_support::CORRUPT_TOOL_ARGS_589,
+            crate::store::test_support::CORRUPT_TOOL_ARGS_589,
             &crate::tools::call::lifecycle::ToolOutcome::Completed(
                 "described:list_hosts".to_string()
             ),

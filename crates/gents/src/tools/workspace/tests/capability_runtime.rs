@@ -20,7 +20,7 @@ async fn workspace_completion_requires_selected_managed_agent() {
             .await
             .unwrap(),
     );
-    for case in &crate::lean_vocab_test::lean_contract_snapshot().workspace_completion_actor_cases {
+    for case in &gents_lean_vocab::lean_contract_snapshot().workspace_completion_actor_cases {
         let actor = case["actor"].as_str().unwrap();
         let selected = if actor == "empty" { "" } else { agent.did() };
         let held: &dyn NodeIdentity = if actor == "agent" {
@@ -137,8 +137,7 @@ async fn workspace_completion_reads_keep_selected_agent_visibility() -> anyhow::
     let other_docs =
         super::super::runtime::load_docs_with_access(&other_access, "workspace", runtime.did())
             .await?;
-    for case in &crate::lean_vocab_test::lean_contract_snapshot().workspace_completion_access_cases
-    {
+    for case in &gents_lean_vocab::lean_contract_snapshot().workspace_completion_access_cases {
         let docs = match case["actor"].as_str().unwrap() {
             "agent" => &selected_docs,
             "other" => &other_docs,
@@ -558,7 +557,7 @@ async fn invisible_workspace_request_cannot_release_exclusive_binding() -> anyho
         first.did().parse()?,
         first.as_ref(),
     )?;
-    for case in &crate::lean_vocab_test::lean_contract_snapshot().workspace_liveness_cases {
+    for case in &gents_lean_vocab::lean_contract_snapshot().workspace_liveness_cases {
         let visible = case["visible"].as_bool().unwrap();
         let terminal = case["terminal"].as_bool().unwrap();
         let state = if terminal { "completed" } else { "pending" };
@@ -771,7 +770,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
     .is_err());
     assert_eq!(
         target.exists(),
-        crate::lean_vocab_test::lean_contract_snapshot().workspace_publication_cases
+        gents_lean_vocab::lean_contract_snapshot().workspace_publication_cases
             ["effect_after_failed_reservation"]
             .as_bool()
             .unwrap()
@@ -847,7 +846,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
         .is_empty();
     assert_eq!(
         visible,
-        crate::lean_vocab_test::lean_contract_snapshot().workspace_publication_cases
+        gents_lean_vocab::lean_contract_snapshot().workspace_publication_cases
             ["aborted_document_visible"]
             .as_bool()
             .unwrap()
@@ -879,7 +878,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
         .is_empty();
     assert_eq!(
         visible_after_retry,
-        crate::lean_vocab_test::lean_contract_snapshot().workspace_publication_cases
+        gents_lean_vocab::lean_contract_snapshot().workspace_publication_cases
             ["revoked_writer_restored"]
             .as_bool()
             .unwrap(),
@@ -916,7 +915,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
         .is_empty();
     assert_eq!(
         visible,
-        crate::lean_vocab_test::lean_contract_snapshot().workspace_publication_cases
+        gents_lean_vocab::lean_contract_snapshot().workspace_publication_cases
             ["revoked_reader_restored"]
             .as_bool()
             .unwrap()
@@ -974,7 +973,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
         .as_str()
         .unwrap()
         .to_owned();
-    for case in &crate::lean_vocab_test::lean_contract_snapshot().workspace_child_cases {
+    for case in &gents_lean_vocab::lean_contract_snapshot().workspace_child_cases {
         let actor = match case["actor"].as_str().unwrap() {
             "user" => user.did(),
             "creator" => creator.did(),
@@ -1016,7 +1015,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
             "{case}"
         );
     }
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().workspace_admission_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().workspace_admission_cases;
     assert_eq!(
         cases
             .iter()
@@ -1037,7 +1036,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
         other.did().parse()?,
         other.as_ref(),
     )?;
-    for case in &crate::lean_vocab_test::lean_contract_snapshot().workspace_cleanup_cases {
+    for case in &gents_lean_vocab::lean_contract_snapshot().workspace_cleanup_cases {
         let name = case["name"].as_str().unwrap();
         if name == "unauthorized" {
             writer_access.write("test.workspace.release", &format!(r#"mutation {{update_WorkspaceBinding(docID: "{}", input: {{lifecycle_state: "released"}}) {{_docID}}}}"#, binding_doc)).await?;
@@ -1071,7 +1070,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
     .await;
     assert_eq!(
         stale.is_ok(),
-        crate::lean_vocab_test::lean_contract_snapshot().workspace_publication_cases
+        gents_lean_vocab::lean_contract_snapshot().workspace_publication_cases
             ["stale_publication_allowed"]
             .as_bool()
             .unwrap(),
@@ -1099,7 +1098,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
     let args = serde_json::from_value(serde_json::json!({
         "binding_id":"tool-hidden", "workspace_id":"workspace", "workspace_doc_id":workspace_doc
     }))?;
-    let allowed = crate::lean_vocab_test::lean_contract_snapshot()
+    let allowed = gents_lean_vocab::lean_contract_snapshot()
         .workspace_datastore_write_cases
         .iter()
         .find(|case| case["collection"] == "WorkspaceBinding")
@@ -1156,7 +1155,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
             &workspace_doc,
         )
         .await?;
-    for case in &crate::lean_vocab_test::lean_contract_snapshot().workspace_child_revocation_cases {
+    for case in &gents_lean_vocab::lean_contract_snapshot().workspace_child_revocation_cases {
         let actor = match case["actor"].as_str().unwrap() {
             "user" => user.did(),
             "creator" => creator.did(),
@@ -1315,7 +1314,7 @@ async fn overlapping_native_workspace_fences_conflict(
     let rows = response["data"]["WorkspaceBinding"]
         .as_array()
         .context("binding inventory omitted rows")?;
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().workspace_admission_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().workspace_admission_cases;
     let expected = cases
         .iter()
         .find(|case| case["complete"] == true && case["occupied"] == false)

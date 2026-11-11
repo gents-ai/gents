@@ -575,8 +575,8 @@ mod tests {
     #[test]
     fn generated_modeled_closure_input_selects_exact_native_manifest() {
         fn assert_input(
-            input: &crate::lean_vocab_test::LeanSessionClosureInput,
-            expected_documents: Option<&Vec<crate::lean_vocab_test::LeanSessionClosureDocumentKey>>,
+            input: &gents_lean_vocab::LeanSessionClosureInput,
+            expected_documents: Option<&Vec<gents_lean_vocab::LeanSessionClosureDocumentKey>>,
         ) {
             let request = &input.request;
             let target_session = request.session.as_str();
@@ -644,7 +644,7 @@ mod tests {
                     },
                 })
                 .collect::<Vec<_>>();
-            let owner = |modeled: &crate::lean_vocab_test::LeanSessionClosureOwner| {
+            let owner = |modeled: &gents_lean_vocab::LeanSessionClosureOwner| {
                 modeled.owner.unwrap().to_string()
             };
             let segments = input
@@ -871,7 +871,7 @@ mod tests {
             assert_eq!(selected, expected);
         }
 
-        let cases = crate::lean_vocab_test::lean_file_inventory_closure_cases();
+        let cases = gents_lean_vocab::lean_file_inventory_closure_cases();
         for name in [
             "fork_copy_without_origin",
             "fork_copy_preferred_over_visible_origin",

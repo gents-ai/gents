@@ -38,7 +38,7 @@ async fn message_ids(db: &TestDb, key: &str) -> Vec<String> {
 
 #[tokio::test]
 async fn canonical_publication_wakes_whatever_goal_owns_the_session() {
-    let cases = crate::lean_vocab_test::lean_r6_backgrounding_cases()
+    let cases = gents_lean_vocab::lean_r6_backgrounding_cases()
         .iter()
         .filter(|case| case.group == "completion_continuation_owner")
         .filter_map(|case| Some((case, case.goal_status.as_deref()?)))

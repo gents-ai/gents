@@ -1,4 +1,4 @@
-use super::lean_vocab_test::lean_mcp_health_cases;
+use gents_lean_vocab::lean_mcp_health_cases;
 use gents_protocol::row::ToolServiceHealthStateRow;
 
 use crate::commands::mcp_health::view_from_row;

@@ -1,13 +1,10 @@
-#[path = "../../gents/src/lean_vocab_test/support.rs"]
-mod runtime_contract;
-
 #[path = "../../gents/tests/support/conformance_consumers.rs"]
 mod consumer_registry;
 
 #[test]
 fn generated_contract_decodes_into_runtime_snapshot() {
     let json = gents_lean_contract::load_contract_json().expect("generate Lean contracts");
-    let snapshot: runtime_contract::LeanContractSnapshot =
+    let snapshot: gents_lean_vocab::LeanContractSnapshot =
         serde_json::from_str(&json).expect("decode current contracts with runtime fixture types");
     assert!(!snapshot.generated_by.is_empty());
     assert!(!snapshot.vocabularies.is_empty());
@@ -16,7 +13,7 @@ fn generated_contract_decodes_into_runtime_snapshot() {
 
 #[test]
 fn generated_consumers_resolve_to_registered_tests() {
-    let snapshot: runtime_contract::LeanContractSnapshot =
+    let snapshot: gents_lean_vocab::LeanContractSnapshot =
         gents_lean_contract::load_contract_snapshot().expect("decode Lean contracts");
     let declared = snapshot
         .coverage_ledger
@@ -41,7 +38,7 @@ fn generated_snapshot_rejects_missing_or_unknown_categories() {
     let keys: Vec<_> = object.keys().cloned().collect();
     for key in keys {
         let removed = object.remove(&key).unwrap();
-        let result = serde_json::from_value::<runtime_contract::LeanContractSnapshot>(
+        let result = serde_json::from_value::<gents_lean_vocab::LeanContractSnapshot>(
             serde_json::Value::Object(object.clone()),
         );
         assert!(
@@ -54,5 +51,5 @@ fn generated_snapshot_rejects_missing_or_unknown_categories() {
         "unrecognized_contract_category".into(),
         serde_json::json!([]),
     );
-    assert!(serde_json::from_value::<runtime_contract::LeanContractSnapshot>(value).is_err());
+    assert!(serde_json::from_value::<gents_lean_vocab::LeanContractSnapshot>(value).is_err());
 }

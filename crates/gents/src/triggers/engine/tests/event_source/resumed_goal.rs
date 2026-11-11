@@ -20,7 +20,7 @@ async fn resumed_goal_tool_output_reaches_correlation_keyed_event_trigger() {
         agent.as_ref(),
     )
     .unwrap();
-    crate::test_support::create_agent_owned_session(
+    crate::test_support::session::create_agent_owned_session(
         &access,
         identity.did(),
         "resumed-event-session",

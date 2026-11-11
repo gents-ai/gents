@@ -1550,7 +1550,7 @@ pub(super) async fn generated_queue_deadline_cases_pin_r4a_contract_rows() {
     }
 }
 
-async fn drive_queue_deadline_case(case: &lean_vocab_test::LeanQueueDeadlineConformanceCase) {
+async fn drive_queue_deadline_case(case: &gents_lean_vocab::LeanQueueDeadlineConformanceCase) {
     match case.name.as_str() {
         "active_request_blocks_later_same_session_claim" => {
             drive_active_request_blocks_later_same_session_claim(case).await;
@@ -1698,7 +1698,7 @@ async fn fetch_queue_runtime_snapshot(
 }
 
 fn assert_pre_queue_snapshot(
-    case: &lean_vocab_test::LeanQueueDeadlineConformanceCase,
+    case: &gents_lean_vocab::LeanQueueDeadlineConformanceCase,
     snapshot: &QueueRuntimeSnapshot,
 ) {
     assert_eq!(
@@ -1714,7 +1714,7 @@ fn assert_pre_queue_snapshot(
 }
 
 fn assert_post_queue_snapshot(
-    case: &lean_vocab_test::LeanQueueDeadlineConformanceCase,
+    case: &gents_lean_vocab::LeanQueueDeadlineConformanceCase,
     snapshot: &QueueRuntimeSnapshot,
 ) {
     assert_eq!(
@@ -1771,7 +1771,7 @@ fn lifecycle_for(
 }
 
 async fn drive_active_request_blocks_later_same_session_claim(
-    case: &lean_vocab_test::LeanQueueDeadlineConformanceCase,
+    case: &gents_lean_vocab::LeanQueueDeadlineConformanceCase,
 ) {
     let db = test_db("queue-deadline-active-blocks").await;
     let actors = support::agent_requests::RequestActors::new(&db).await;
@@ -1844,7 +1844,7 @@ async fn drive_active_request_blocks_later_same_session_claim(
 }
 
 async fn drive_terminal_active_allows_next_pending_same_session_claim(
-    case: &lean_vocab_test::LeanQueueDeadlineConformanceCase,
+    case: &gents_lean_vocab::LeanQueueDeadlineConformanceCase,
 ) {
     let db = test_db("queue-deadline-terminal-allows").await;
     let actors = support::agent_requests::RequestActors::new(&db).await;
@@ -1924,7 +1924,7 @@ async fn drive_terminal_active_allows_next_pending_same_session_claim(
 }
 
 async fn drive_cancel_drains_automated_wakeups_preserves_user_pending(
-    case: &lean_vocab_test::LeanQueueDeadlineConformanceCase,
+    case: &gents_lean_vocab::LeanQueueDeadlineConformanceCase,
 ) {
     let db = test_db("queue-deadline-cancel-drain").await;
     let actors = support::agent_requests::RequestActors::new(&db).await;
@@ -2003,7 +2003,7 @@ async fn drive_cancel_drains_automated_wakeups_preserves_user_pending(
 }
 
 async fn drive_claim_preserves_explicit_deadline(
-    case: &lean_vocab_test::LeanQueueDeadlineConformanceCase,
+    case: &gents_lean_vocab::LeanQueueDeadlineConformanceCase,
 ) {
     let db = test_db("queue-deadline-explicit-deadline").await;
     let actors = support::agent_requests::RequestActors::new(&db).await;

@@ -74,11 +74,11 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
             continue;
         }
         let (db, user, access, binding) =
-            crate::test_support::signed_test_node("generated-goal-start").await;
+            crate::test_support::root::signed_test_node("generated-goal-start").await;
         let node = db.node.clone();
         let identity = db.node_identity.clone();
         let foreign = tokio::task::spawn_blocking(|| {
-            crate::support::fixtures::test_identity("goal-start-foreign")
+            crate::store::test_support::test_identity("goal-start-foreign")
         })
         .await
         .unwrap();
@@ -91,7 +91,7 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
         )
         .await
         .unwrap();
-        crate::test_support::install_test_agent_binding_with_access(
+        crate::test_support::inference::install_test_agent_binding_with_access(
             identity.did(),
             "second goal agent",
             &other_binding,
@@ -903,7 +903,7 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
 
 #[test]
 fn modeled_client_goal_actor_binding_requires_the_transaction_signer() {
-    let model = crate::lean_vocab_test::lean_identity_household_cases()
+    let model = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .expect("identity conformance case");
@@ -924,7 +924,7 @@ async fn client_goal_control_cannot_publish_user_graph_as_the_agent() {
     use crate::request::lifecycle::{
         build_signed_client_request, ExecutionOrigin, RequestIdentity, RequestSigner, RequestSpec,
     };
-    let modeled = crate::lean_vocab_test::lean_identity_household_cases()
+    let modeled = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap()
@@ -934,7 +934,7 @@ async fn client_goal_control_cannot_publish_user_graph_as_the_agent() {
         .unwrap();
     for replacement in [false, true] {
         let (db, user, client, binding) =
-            crate::test_support::signed_test_node("goal-actor-fence").await;
+            crate::test_support::root::signed_test_node("goal-actor-fence").await;
         let node = db.node.clone();
         let runtime = db.node_identity.clone();
         let agent =
@@ -1054,16 +1054,17 @@ async fn client_goal_control_cannot_publish_user_graph_as_the_agent() {
             "both fresh and replacement writes must remain absent"
         );
 
-        let cases = &crate::lean_vocab_test::lean_identity_household_cases()
+        let cases = &gents_lean_vocab::lean_identity_household_cases()
             .iter()
             .find(|case| case.name == "configuration-explicit-grants")
             .unwrap()
             .client_goal_graph_handoff_cases;
         assert_eq!(cases.len(), 7);
-        let foreign =
-            tokio::task::spawn_blocking(|| crate::support::fixtures::test_identity("goal-foreign"))
-                .await
-                .unwrap();
+        let foreign = tokio::task::spawn_blocking(|| {
+            crate::store::test_support::test_identity("goal-foreign")
+        })
+        .await
+        .unwrap();
         for case in cases.iter().filter(|case| case["replacing"] == replacement) {
             let requester: &dyn NodeIdentity = if case["authorized"] == false {
                 &foreign

@@ -1,9 +1,9 @@
 use super::*;
-use crate::lean_vocab_test::{lean_plugin_job_recovery_cases, LeanPluginJobRecoveryRow};
 use gents::tools::background::job::admit::{is_stalled, Refusal};
 use gents::tools::background::job::recovery::{
     step_invocation_allowed, tick_action, RecoveryFacts, TickAction,
 };
+use gents_lean_vocab::{lean_plugin_job_recovery_cases, LeanPluginJobRecoveryRow};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use std::collections::BTreeMap;
 use support::agent_requests::{RequestActors, RequestSeed};
@@ -156,7 +156,7 @@ async fn generated_plugin_job_recovery_cases_drive_redrive_owner() {
     }
 }
 
-fn assert_recovery_case_metadata(case: &lean_vocab_test::LeanRecoverySweepCase) {
+fn assert_recovery_case_metadata(case: &gents_lean_vocab::LeanRecoverySweepCase) {
     let expected_cadence = if rust_periodic_recovery_sweep_ids().contains(case.sweep_id.as_str()) {
         "periodic"
     } else {
@@ -199,7 +199,7 @@ fn assert_recovery_case_metadata(case: &lean_vocab_test::LeanRecoverySweepCase) 
 }
 
 fn assert_periodic_recovery_registry_matches_lean(
-    cases: &[lean_vocab_test::LeanRecoverySweepCase],
+    cases: &[gents_lean_vocab::LeanRecoverySweepCase],
 ) {
     let mut lean_periodic_by_id = BTreeMap::new();
     for case in cases.iter().filter(|case| case.cadence == "periodic") {
@@ -253,7 +253,7 @@ fn rust_periodic_recovery_sweep_ids() -> BTreeSet<&'static str> {
         .collect()
 }
 
-async fn drive_recovery_sweep_case(case: &lean_vocab_test::LeanRecoverySweepCase) {
+async fn drive_recovery_sweep_case(case: &gents_lean_vocab::LeanRecoverySweepCase) {
     if case.collection == "AgentToolCall" {
         return;
     }
@@ -456,7 +456,7 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
     }
 }
 
-async fn drive_request_recovery_case(case: &lean_vocab_test::LeanRecoverySweepCase) {
+async fn drive_request_recovery_case(case: &gents_lean_vocab::LeanRecoverySweepCase) {
     let db = test_db(&format!("recovery-sweep-{}", case.name)).await;
     let actors = RequestActors::new(&db).await;
     let request_id = format!("{}-request", case.name);
@@ -505,7 +505,7 @@ async fn drive_request_recovery_case(case: &lean_vocab_test::LeanRecoverySweepCa
     );
 }
 
-async fn drive_inference_call_recovery_case(case: &lean_vocab_test::LeanRecoverySweepCase) {
+async fn drive_inference_call_recovery_case(case: &gents_lean_vocab::LeanRecoverySweepCase) {
     let db = test_db(&format!("recovery-sweep-{}", case.name)).await;
     let actors = RequestActors::new(&db).await;
     let request_id = format!("{}-request", case.name);

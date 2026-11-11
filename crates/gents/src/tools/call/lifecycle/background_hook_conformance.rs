@@ -106,22 +106,22 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
         AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
     };
 
-    let originating = crate::lean_vocab_test::lean_r6_backgrounding_case(
+    let originating = gents_lean_vocab::lean_r6_backgrounding_case(
         "originating_request_without_matching_requester_is_denied",
     );
     let absent =
-        crate::lean_vocab_test::lean_r6_backgrounding_case("absent_requester_next_turn_authorized");
+        gents_lean_vocab::lean_r6_backgrounding_case("absent_requester_next_turn_authorized");
     let empty =
-        crate::lean_vocab_test::lean_r6_backgrounding_case("empty_requester_does_not_alias_absent");
-    let same_requester = crate::lean_vocab_test::lean_r6_backgrounding_case(
+        gents_lean_vocab::lean_r6_backgrounding_case("empty_requester_does_not_alias_absent");
+    let same_requester = gents_lean_vocab::lean_r6_backgrounding_case(
         "read_process_same_requester_next_turn_authorized",
     );
-    let admission_case = crate::lean_vocab_test::lean_agent_request_admission_cases()
+    let admission_case = gents_lean_vocab::lean_agent_request_admission_cases()
         .iter()
         .find(|case| case.name == "local-self-absent-requester")
         .unwrap();
     let (db, user, client, binding) =
-        crate::test_support::signed_test_node("background-hook-scope").await;
+        crate::test_support::root::signed_test_node("background-hook-scope").await;
     let node = db.node.clone();
     let runtime = db.node_identity.clone();
     let agent = crate::store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();

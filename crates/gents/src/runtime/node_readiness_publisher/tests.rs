@@ -62,7 +62,7 @@ impl NodeReadinessWriter for ControlledWriter {
 
 #[tokio::test(start_paused = true)]
 async fn generated_readiness_publication_traces_write_only_semantic_changes() {
-    let cases = crate::lean_vocab_test::lean_readiness_publication_cases();
+    let cases = gents_lean_vocab::lean_readiness_publication_cases();
     assert_eq!(cases.len(), 2);
     for case in cases {
         let (attempts_tx, mut attempts_rx) = mpsc::unbounded_channel();
@@ -274,7 +274,12 @@ async fn saturated_command_queue_cannot_block_owner_close_forever() {
 }
 
 async fn test_publisher() -> (NodeReadinessPublisherOwner, NodeReadinessPublisherHandle) {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let node_did = node
         .node_identity_did()
@@ -282,7 +287,7 @@ async fn test_publisher() -> (NodeReadinessPublisherOwner, NodeReadinessPublishe
         .to_owned();
     // Readiness is published under the Node document; production creates it
     // through the runtime owner's signed access before the publisher starts.
-    crate::test_support::ensure_test_node(&node, &node_did).await;
+    crate::test_support::documents::ensure_test_node(&node, &node_did).await;
     NodeReadinessPublisherHandle::start(node, node_did)
 }
 
@@ -672,7 +677,7 @@ async fn readiness_parent_recovery_matches_native_owner_and_model() {
         assert!(!acp.is_doc_registered(policy, resource, id).await.unwrap());
     }
 
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().identity_readiness_recovery_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().identity_readiness_recovery_cases;
     let mut checked = 0;
     for case in cases.iter().filter(|case| {
         matches!(
@@ -879,7 +884,7 @@ async fn readiness_parent_recovery_matches_native_owner_and_model() {
             if case["name"] == "owner-unknown" {
                 verify_native_owner(&runtime_access, "NodeReadiness", &doc, None).await;
             }
-            let model = crate::lean_vocab_test::lean_contract_snapshot()
+            let model = gents_lean_vocab::lean_contract_snapshot()
                 .identity_readiness_observation_cases
                 .iter()
                 .find(|model| model["name"] == observation_name)
@@ -967,12 +972,17 @@ async fn readiness_parent_recovery_matches_native_owner_and_model() {
     }
     assert_eq!(checked, 7);
 
-    let unbound = crate::lean_vocab_test::lean_contract_snapshot()
+    let unbound = gents_lean_vocab::lean_contract_snapshot()
         .identity_readiness_preflight_cases
         .iter()
         .find(|case| case["name"] == "unbound")
         .unwrap();
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     let unbound_sdl = gents_protocol::schemas::NODE_READINESS.replace(
         &format!(
             " @policy(id: \"{}\", resource: \"operations\")",

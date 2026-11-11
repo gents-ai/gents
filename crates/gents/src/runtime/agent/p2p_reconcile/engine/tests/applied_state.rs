@@ -144,7 +144,7 @@ fn nullable_graphql_arrays_emit_null_when_empty() {
 
 #[tokio::test]
 async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> anyhow::Result<()> {
-    use crate::lean_vocab_test::lean_contract_snapshot;
+    use gents_lean_vocab::lean_contract_snapshot;
     use crate::store::config_client::{
         ConfigAccess, GraphqlEndpoint, NodePermission, PairingObservation, PairingReadReason,
     };

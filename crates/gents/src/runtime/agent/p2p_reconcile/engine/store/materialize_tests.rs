@@ -221,7 +221,7 @@ async fn expired_authority_rolls_back_the_whole_materialization_transaction() {
 #[tokio::test]
 async fn client_owned_route_can_name_a_remote_node_without_a_local_node_document() {
     use crate::NodeIdentity;
-    let model = &crate::lean_vocab_test::lean_contract_snapshot().identity_desired_publisher_cases;
+    let model = &gents_lean_vocab::lean_contract_snapshot().identity_desired_publisher_cases;
     let allowed = model.iter().find(|case| case["name"] == "client").unwrap()["allowed"]
         .as_bool()
         .unwrap();
@@ -252,7 +252,7 @@ async fn client_owned_route_can_name_a_remote_node_without_a_local_node_document
     let result = rows(&node).await;
     let row = result.iter().find(|row| row["_docID"] == doc).unwrap();
     assert_eq!(row["node_did"], remote.did());
-    let before = crate::lean_vocab_test::lean_contract_snapshot()
+    let before = gents_lean_vocab::lean_contract_snapshot()
         .identity_deferred_operation_cases
         .iter()
         .find(|case| case["name"] == "before-node")

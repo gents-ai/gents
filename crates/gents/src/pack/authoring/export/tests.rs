@@ -115,7 +115,7 @@ async fn rows(access: &ConfigAccess, query: &str) -> Value {
 #[tokio::test]
 async fn a_live_app_exports_installs_on_a_second_node_and_is_adopted_where_it_came_from() {
     let (origin, origin_user, origin_access, worker) =
-        crate::test_support::signed_test_node("pack-export-origin").await;
+        crate::test_support::root::signed_test_node("pack-export-origin").await;
     let owner = origin.node_identity.did().to_owned();
     let context_id = format!("{}:context", worker.agent_did);
     let tools_id = format!("{}:tools", worker.agent_did);
@@ -261,7 +261,7 @@ async fn a_live_app_exports_installs_on_a_second_node_and_is_adopted_where_it_ca
 
     // A second node holds none of it: the install creates the whole app.
     let (second, second_user, second_access) =
-        crate::test_support::signed_test_node_without_agent("pack-export-second").await;
+        crate::test_support::root::signed_test_node_without_agent("pack-export-second").await;
     let second_owner = second.node_identity.did().to_owned();
     grant_schema(&second, &second_user).await;
     apply(
@@ -439,7 +439,7 @@ async fn a_live_app_exports_installs_on_a_second_node_and_is_adopted_where_it_ca
 #[tokio::test]
 async fn a_reference_a_pack_cannot_carry_refuses_the_export_by_name() {
     let (origin, _user, access, worker) =
-        crate::test_support::signed_test_node("pack-export-refusal").await;
+        crate::test_support::root::signed_test_node("pack-export-refusal").await;
     let owner = origin.node_identity.did().to_owned();
     let context_id = format!("{}:context", worker.agent_did);
     apply(
@@ -495,7 +495,7 @@ async fn a_reference_a_pack_cannot_carry_refuses_the_export_by_name() {
 #[tokio::test]
 async fn a_page_and_a_plugin_source_export_with_the_surface_the_page_is_granted() {
     let (origin, user, access, _worker) =
-        crate::test_support::signed_test_node("pack-export-live-documents").await;
+        crate::test_support::root::signed_test_node("pack-export-live-documents").await;
     let owner = origin.node_identity.did().to_owned();
     grant_schema(&origin, &user).await;
     access.add_collection(SDL).await.unwrap();
@@ -586,7 +586,7 @@ async fn a_page_and_a_plugin_source_export_with_the_surface_the_page_is_granted(
 #[tokio::test]
 async fn a_collection_with_defaults_and_a_full_text_index_exports_and_searches_where_it_installs() {
     let (origin, user, access, _worker) =
-        crate::test_support::signed_test_node("pack-export-fulltext").await;
+        crate::test_support::root::signed_test_node("pack-export-fulltext").await;
     let owner = origin.node_identity.did().to_owned();
     grant_schema(&origin, &user).await;
     access
@@ -622,7 +622,8 @@ async fn a_collection_with_defaults_and_a_full_text_index_exports_and_searches_w
     let (bytes, _) = pack_dir(&report.dir).unwrap();
     let archive = PackArchive::from_bytes(&bytes).unwrap();
     let (second, second_user, second_access) =
-        crate::test_support::signed_test_node_without_agent("pack-export-fulltext-second").await;
+        crate::test_support::root::signed_test_node_without_agent("pack-export-fulltext-second")
+            .await;
     grant_schema(&second, &second_user).await;
     install(
         &second,
@@ -665,7 +666,7 @@ async fn a_collection_with_defaults_and_a_full_text_index_exports_and_searches_w
 #[tokio::test]
 async fn a_plugin_built_on_the_node_exports_as_the_packs_plugin_and_runs_where_it_installs() {
     let (origin, _user, access, worker) =
-        crate::test_support::signed_test_node("pack-export-plugin").await;
+        crate::test_support::root::signed_test_node("pack-export-plugin").await;
     let owner = origin.node_identity.did().to_owned();
     let tools_id = format!("{}:tools", worker.agent_did);
     let source = "module.exports = (input) => ({ n: input.n * 2 });\n";
@@ -769,7 +770,8 @@ async fn a_plugin_built_on_the_node_exports_as_the_packs_plugin_and_runs_where_i
     let archive = PackArchive::from_bytes(&bytes).unwrap();
 
     let (second, second_user, second_access) =
-        crate::test_support::signed_test_node_without_agent("pack-export-plugin-second").await;
+        crate::test_support::root::signed_test_node_without_agent("pack-export-plugin-second")
+            .await;
     let second_owner = second.node_identity.did().to_owned();
     apply(
         &second_access,

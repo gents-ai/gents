@@ -1256,11 +1256,11 @@ mod relationship_publication_tests {
 mod invoke_session_isolation_tests {
     use std::sync::Arc;
 
-    use crate::lean_vocab_test::{
-        lean_identity_household_cases, LeanIdentityAction, LeanIdentitySubject,
-    };
     use crate::store::config_client::{ConfigAccess, NodePermission};
     use crate::store::identity::NodeIdentity;
+    use gents_lean_vocab::{
+        lean_identity_household_cases, LeanIdentityAction, LeanIdentitySubject,
+    };
 
     async fn create_session(
         access: &ConfigAccess,

@@ -1,8 +1,8 @@
 use super::support::*;
 use super::*;
-use crate::lean_vocab_test::lean_runtime_reconcile_case;
 use crate::runtime::agent::runtime::router::{RouterInputs, RouterWaitState, RuntimeAdmissionGate};
 use crate::runtime::node_readiness_publisher::{FatalNodeReadinessWrite, NodeReadinessWriter};
+use gents_lean_vocab::lean_runtime_reconcile_case;
 use rapidhash::{HashMapExt, RapidHashMap};
 
 struct CountingWatcher {
@@ -62,7 +62,7 @@ fn routed_snapshot(
 #[tokio::test]
 async fn invalid_execution_origin_route_rejection_terminalizes_without_stopping_router() {
     let (db, _user, _access, binding) =
-        crate::test_support::signed_test_node("invalid-origin-route").await;
+        crate::test_support::root::signed_test_node("invalid-origin-route").await;
     let node = db.node.clone();
     let root = db.node_identity.clone();
     let agent = crate::store::identity::resolve_agent_identity(root.as_ref(), &binding).unwrap();
@@ -130,7 +130,7 @@ async fn invalid_execution_origin_route_rejection_terminalizes_without_stopping_
 #[tokio::test]
 async fn closing_admission_cancels_a_send_to_a_full_executor_queue() {
     let (db, _user, _user_access, binding) =
-        crate::test_support::signed_test_node("runtime-router").await;
+        crate::test_support::root::signed_test_node("runtime-router").await;
     let node = db.node.clone();
     let node_did = db.node_identity.did().to_owned();
     let agent_did = binding.agent_did;
@@ -209,7 +209,7 @@ async fn closing_admission_cancels_a_send_to_a_full_executor_queue() {
 #[tokio::test]
 async fn snapshot_change_reroutes_request_blocked_on_old_executor_queue() {
     let (db, _user, user_access, binding) =
-        crate::test_support::signed_test_node("runtime-router").await;
+        crate::test_support::root::signed_test_node("runtime-router").await;
     let node = db.node.clone();
     let node_did = db.node_identity.did().to_owned();
     let agent_did = binding.agent_did;
@@ -304,7 +304,7 @@ async fn snapshot_change_reroutes_request_blocked_on_old_executor_queue() {
 #[tokio::test]
 async fn router_generation_write_failure_closes_admission_before_dequeue_or_dispatch() {
     let (db, _user, _user_access, binding) =
-        crate::test_support::signed_test_node("runtime-router").await;
+        crate::test_support::root::signed_test_node("runtime-router").await;
     let node = db.node.clone();
     let node_did = db.node_identity.did().to_owned();
     let agent_did = binding.agent_did;
@@ -479,7 +479,7 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
     assert!(router.legal);
 
     let (db, _user, _user_access, binding) =
-        crate::test_support::signed_test_node("runtime-router").await;
+        crate::test_support::root::signed_test_node("runtime-router").await;
     let node = db.node.clone();
     let node_did = db.node_identity.did().to_owned();
     let agent_did = binding.agent_did;

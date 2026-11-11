@@ -8,7 +8,7 @@ use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
 
 use super::*;
 use crate::ensure_runtime_schemas;
-use crate::lean_vocab_test::{
+use gents_lean_vocab::{
     assert_lean_contract_vocabulary_matches, assert_lean_transition_is_legal,
     assert_state_machine_contract_is_complete, lean_process_transition_cases,
     lean_runtime_reconcile_case, LeanContractVocabulary, LeanLifecycleTransitionCase,
@@ -31,7 +31,12 @@ struct NodeReadinessRow {
 }
 
 async fn test_node() -> Arc<defra_node::Node> {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let did = node.node_identity_did().unwrap();
     let access = crate::store::config_client::ConfigAccess::local_as(
@@ -54,9 +59,9 @@ async fn test_node() -> Arc<defra_node::Node> {
 #[tokio::test]
 async fn runtime_status_publication_preserves_native_ownership_and_revocation() -> anyhow::Result<()>
 {
-    use crate::lean_vocab_test::{lean_identity_household_cases, LeanIdentityAction};
     use crate::store::config_client::{ConfigAccess, GraphqlEndpoint, NodePermission};
     use crate::NodeIdentity;
+    use gents_lean_vocab::{lean_identity_household_cases, LeanIdentityAction};
 
     let model = lean_identity_household_cases()
         .iter()
@@ -818,7 +823,7 @@ async fn goal_settled_uses_live_runtime_status_cases() {
     let node = test_node().await;
     let node_did = node.node_identity_did().unwrap().to_owned();
     let status = RuntimeStatusHandle::new(node, node_did);
-    for case in &crate::lean_vocab_test::lean_contract_snapshot().identity_readiness_settled_cases {
+    for case in &gents_lean_vocab::lean_contract_snapshot().identity_readiness_settled_cases {
         {
             let mut row = status.state.lock().await;
             row.reconcile_phase = if case["idle"].as_bool().unwrap() {

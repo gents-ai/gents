@@ -1129,7 +1129,7 @@ async fn generated_snapshot_demotions_preserve_healthy_agents() {
         .unwrap();
     let template = baseline.agents.values().next().unwrap();
     let surface = baseline.tool_surfaces.values().next().unwrap();
-    let cases = crate::lean_vocab_test::lean_snapshot_demotion_cases();
+    let cases = gents_lean_vocab::lean_snapshot_demotion_cases();
     assert_eq!(cases.len(), 6);
     for case in cases {
         let runnable = ids(&case["runnable"]);

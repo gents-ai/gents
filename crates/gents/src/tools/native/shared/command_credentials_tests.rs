@@ -51,7 +51,7 @@ async fn run(
 
 #[tokio::test]
 async fn generated_bounded_sandboxes_deny_credentials_and_default_network() {
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().command_isolation_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().command_isolation_cases;
     let folder = tempfile::tempdir().unwrap();
     let root = folder.path().canonicalize().unwrap();
     let home = root.join("user");

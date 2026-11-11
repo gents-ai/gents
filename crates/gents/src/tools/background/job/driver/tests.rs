@@ -871,7 +871,7 @@ async fn stepper_wat(wat: &str) -> Stepper {
     for agent in ["a", "b"] {
         // Each target's Agent is a real signed fixture Agent of the runtime owner.
         let binding = super::super::input::tests::fresh_agent_binding();
-        crate::test_support::install_test_agent_binding_with_access(
+        crate::test_support::inference::install_test_agent_binding_with_access(
             node_did(),
             &format!("Target fixture agent {agent}"),
             &binding,
@@ -1624,8 +1624,8 @@ async fn recovery_hold_and_deferred_step_keep_runtime_retirement_busy() {
 
 #[tokio::test]
 async fn generated_plugin_job_wake_cases_keep_the_selected_agent() {
-    use crate::lean_vocab_test::{lean_plugin_job_wake_cases, LeanPluginJobWakeOutcome};
     use futures::FutureExt;
+    use gents_lean_vocab::{lean_plugin_job_wake_cases, LeanPluginJobWakeOutcome};
 
     let cases = lean_plugin_job_wake_cases();
     assert!(cases

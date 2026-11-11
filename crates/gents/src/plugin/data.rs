@@ -626,7 +626,12 @@ mod tests {
 
     #[tokio::test]
     async fn agent_data_caller_never_uses_a_node_identity() {
-        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+        let node = Arc::new(
+            crate::store::test_support::node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
         let runtime = node.node_identity_did().unwrap().to_owned();
         let routing = "did:key:routing";
         assert!(DataCaller::for_agent(node.clone(), routing, &runtime).is_err());

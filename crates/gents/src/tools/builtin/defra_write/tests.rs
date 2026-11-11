@@ -10,7 +10,7 @@ use crate::store::config_client::ConfigAccess;
 
 #[test]
 fn write_confirmation_matches_modeled_result() {
-    let model = crate::lean_vocab_test::lean_identity_household_cases()
+    let model = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap();
@@ -61,7 +61,7 @@ fn write_confirmation_matches_modeled_result() {
 
 #[test]
 fn native_input_admission_matches_lean() {
-    let cases = crate::lean_vocab_test::lean_write_input_cases();
+    let cases = gents_lean_vocab::lean_write_input_cases();
     assert_eq!(cases.len(), 256);
     for case in cases {
         let base = match case["expected"].as_str().unwrap() {
@@ -171,7 +171,7 @@ async fn rejects_a_persisted_protected_collection_at_execution() {
 async fn rejects_client_publication_mutations() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     let mut protected = decl();
-    protected.collection = crate::lean_vocab_test::lean_contract_snapshot()
+    protected.collection = gents_lean_vocab::lean_contract_snapshot()
         .client_publication_protected_collection
         .clone();
     let tool = BoundedWriteTool::new(ConfigAccess::local(node), protected);
@@ -648,7 +648,7 @@ async fn count_field_type_decides_whether_a_refused_obligation_can_register() {
 
 #[tokio::test]
 async fn generated_count_carriers_bind_admission_parser_and_storage() {
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().count_carrier_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().count_carrier_cases;
     let fields = cases["fields"].as_array().unwrap();
     let values = cases["values"].as_array().unwrap();
     assert!(!fields.is_empty() && !values.is_empty());
@@ -660,7 +660,12 @@ async fn generated_count_carriers_bind_admission_parser_and_storage() {
             "parser: {case}"
         );
     }
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     for (index, case) in fields.iter().enumerate() {
         let schema = case["schema"].as_str().unwrap();
         let admitted = case["accepted"].as_bool().unwrap();

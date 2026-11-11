@@ -42,10 +42,6 @@ mod service_update;
 mod shared;
 mod telemetry;
 
-#[cfg(test)]
-#[path = "../../gents/src/lean_vocab_test/support.rs"]
-pub(crate) mod lean_vocab_test;
-
 use cli::*;
 
 use config_bundle::*;

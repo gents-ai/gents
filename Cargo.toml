@@ -17,6 +17,7 @@ members = [
     "crates/gents-desktop-bridge",
     "crates/gents-desktop-core",
     "crates/gents-lean-contract",
+    "crates/gents-lean-vocab",
     "crates/gents-loop",
     "crates/gents-migration",
     "crates/gents-lenses/fixture_add_label",
@@ -94,6 +95,7 @@ gents-schemas = { path = "crates/gents-schemas" }
 gents-desktop-core = { path = "crates/gents-desktop-core" }
 gents-desktop-bridge = { path = "crates/gents-desktop-bridge" }
 gents-lean-contract = { path = "crates/gents-lean-contract" }
+gents-lean-vocab = { path = "crates/gents-lean-vocab" }
 # Keep DefraDB defaults off: Gents selects Iroh P2P and Lens execution without
 # SourceHub ACP or the legacy libp2p transport (defradb.rs#1431-#1435).
 defra-node = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "ce4b566a5860f4ca6e858101d53ce8f413f8d957", default-features = false }

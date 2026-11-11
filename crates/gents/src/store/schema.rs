@@ -89,7 +89,7 @@ mod legacy_backend_tests {
 
     #[tokio::test]
     async fn legacy_history_preflight_leaves_existing_document_untouched() -> anyhow::Result<()> {
-        let node = Arc::new(crate::test_support::node_builder().build().await?);
+        let node = Arc::new(crate::store::test_support::node_builder().build().await?);
         let access = crate::store::config_client::ConfigAccess::local(node.clone());
         let unbound = gents_protocol::schemas::INFERENCE_BACKEND.replace(
             &format!(
@@ -129,7 +129,7 @@ mod legacy_backend_tests {
     #[tokio::test]
     async fn unbound_legacy_schema_is_refused_even_when_no_rows_are_visible() -> anyhow::Result<()>
     {
-        let node = crate::test_support::node_builder().build().await?;
+        let node = crate::store::test_support::node_builder().build().await?;
         let unbound = gents_protocol::schemas::INFERENCE_BACKEND.replace(
             &format!(
                 " @policy(id: \"{}\", resource: \"secret_configuration\")",
@@ -156,7 +156,7 @@ mod legacy_backend_tests {
 
     #[tokio::test]
     async fn fresh_baseline_installs_private_legacy_schema() -> anyhow::Result<()> {
-        let node = Arc::new(crate::test_support::node_builder().build().await?);
+        let node = Arc::new(crate::store::test_support::node_builder().build().await?);
         ensure_runtime_schemas(&node).await?;
         let collection = node
             .get_collection(gents_protocol::schemas::INFERENCE_BACKEND_NAME)?
@@ -166,7 +166,7 @@ mod legacy_backend_tests {
                 policy.id == gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID
                     && policy.resource_name == "secret_configuration"
             });
-        let modeled = crate::lean_vocab_test::lean_identity_household_cases()
+        let modeled = gents_lean_vocab::lean_identity_household_cases()
             .iter()
             .find(|case| case.name == "configuration-explicit-grants")
             .unwrap();
@@ -187,9 +187,11 @@ mod legacy_backend_tests {
         let directory = tempfile::tempdir()?;
         let key = directory.path().join("node.key");
         let did = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
-            Ok(crate::KeyIdentity::load_or_create(key, None)?
-                .did()
-                .to_owned())
+            Ok(
+                crate::store::identity::KeyIdentity::load_or_create(key, None)?
+                    .did()
+                    .to_owned(),
+            )
         })
         .await??;
         let data = directory.path().join("data");

@@ -1607,7 +1607,7 @@ pub(crate) async fn verify_resumed_claim_version(
 #[cfg(test)]
 #[test]
 fn resumed_claim_admission_matches_the_generated_model() {
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().backend_resume_admission_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().backend_resume_admission_cases;
     assert!(!cases.is_empty());
     for case in cases {
         let facts = ResumeClaimFacts {
@@ -1672,7 +1672,7 @@ mod tests {
 
     #[test]
     fn generated_client_claim_queue_candidates_match_the_model() {
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().request_input_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().request_input_cases;
         for case in cases {
             let input: gents_protocol::request_input::RequestInput =
                 serde_json::from_value(case["input"].clone()).unwrap();
@@ -1773,7 +1773,7 @@ mod tests {
         async fn new(name: &str) -> Self {
             let db = crate::support::test_db(name).await;
             let (db, _user, user, binding) =
-                crate::test_support::signed_test_node_from_db(db, name).await;
+                crate::test_support::root::signed_test_node_from_db(db, name).await;
             let runtime = db.node_identity.clone();
             let agent =
                 crate::store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
@@ -2467,7 +2467,7 @@ mod tests {
 
     #[test]
     fn version_skewed_refused_row_keeps_its_refusal_and_warns_on_the_skipped_projection() {
-        crate::test_support::enable_scoped_event_capture();
+        crate::test_support::root::enable_scoped_event_capture();
         let captured = Arc::new(std::sync::Mutex::new(String::new()));
         let subscriber = tracing_subscriber::fmt()
             .with_max_level(tracing::Level::WARN)
@@ -2717,7 +2717,12 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_trigger_source_requires_current_trigger_and_target_policy() {
-        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
+        let node = std::sync::Arc::new(
+            crate::store::test_support::node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
         ensure_runtime_schemas(&node).await.unwrap();
         let response = node
             .execute(
@@ -2816,3 +2821,9 @@ mod tests {
         .is_err());
     }
 }
+
+#[cfg(test)]
+mod auxiliary_repair_tests;
+
+#[cfg(test)]
+mod auxiliary_binding_contract_tests;

@@ -427,7 +427,7 @@ async fn scripted_daemon(
 /// its own turn.
 #[tokio::test]
 async fn generated_retry_selection_cases_bind_to_the_daemon() {
-    let cases = crate::lean_vocab_test::lean_retry_selection_cases();
+    let cases = gents_lean_vocab::lean_retry_selection_cases();
     assert!(!cases.is_empty());
     for case in cases {
         assert_eq!(case.selected.len(), 1, "{}: one queued message", case.name);

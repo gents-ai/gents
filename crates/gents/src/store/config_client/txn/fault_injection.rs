@@ -159,7 +159,7 @@ pub(super) async fn pause_embedded_finalization_for_test(boundary: EmbeddedFinal
 }
 
 impl ConfigApplyTxn<'_> {
-    pub(crate) async fn with_embedded_before_commit_pause<F>(
+    pub async fn with_embedded_before_commit_pause<F>(
         reached: Arc<tokio::sync::Notify>,
         release: Arc<tokio::sync::Notify>,
         future: F,
@@ -176,7 +176,7 @@ impl ConfigApplyTxn<'_> {
             .await
     }
 
-    pub(crate) async fn with_embedded_commit_ack_pause<F>(
+    pub async fn with_embedded_commit_ack_pause<F>(
         reached: Arc<tokio::sync::Notify>,
         future: F,
     ) -> F::Output
@@ -188,7 +188,7 @@ impl ConfigApplyTxn<'_> {
             .await
     }
 
-    pub(crate) async fn with_owned_local_operation_pause<F>(
+    pub async fn with_owned_local_operation_pause<F>(
         reached: Arc<tokio::sync::Notify>,
         release: Arc<tokio::sync::Notify>,
         future: F,
@@ -208,7 +208,7 @@ impl ConfigApplyTxn<'_> {
             .await
     }
 
-    pub(crate) async fn with_owned_local_operation_completion<F>(
+    pub async fn with_owned_local_operation_completion<F>(
         reached: Arc<tokio::sync::Notify>,
         release: Arc<tokio::sync::Notify>,
         completed: Arc<tokio::sync::Notify>,
@@ -232,7 +232,7 @@ impl ConfigApplyTxn<'_> {
     /// Like [`Self::with_successful_mutation_failure_at`], also returning the
     /// transaction operation of each successful mutation in order, so a test
     /// can target a mutation by the owner that issued it.
-    pub(crate) async fn with_successful_mutation_failure_and_trace<F>(
+    pub async fn with_successful_mutation_failure_and_trace<F>(
         fail_after: Option<usize>,
         future: F,
     ) -> (F::Output, Vec<Option<&'static str>>)
@@ -253,7 +253,7 @@ impl ConfigApplyTxn<'_> {
         (output, trace)
     }
 
-    pub(crate) async fn with_successful_mutation_failure_at<F>(
+    pub async fn with_successful_mutation_failure_at<F>(
         fail_after: Option<usize>,
         future: F,
     ) -> (F::Output, usize)
@@ -282,7 +282,7 @@ impl ConfigApplyTxn<'_> {
         (output, fault.count.load(Ordering::Relaxed))
     }
 
-    pub(crate) async fn assert_every_mutation_rolls_back<T, E, S, A, AF, O, OF>(
+    pub async fn assert_every_mutation_rolls_back<T, E, S, A, AF, O, OF>(
         mut attempt: A,
         observe: O,
     ) -> (T, usize)
@@ -334,14 +334,14 @@ impl ConfigApplyTxn<'_> {
         }
     }
 
-    pub(crate) async fn with_post_commit_receipt_loss<F>(future: F) -> (F::Output, bool)
+    pub async fn with_post_commit_receipt_loss<F>(future: F) -> (F::Output, bool)
     where
         F: Future,
     {
         Self::with_post_commit_receipt_loss_for_operation(None, future).await
     }
 
-    pub(crate) async fn with_post_commit_receipt_loss_for_operation<F>(
+    pub async fn with_post_commit_receipt_loss_for_operation<F>(
         operation: Option<&'static str>,
         future: F,
     ) -> (F::Output, bool)
@@ -369,7 +369,7 @@ impl ConfigApplyTxn<'_> {
         (output, fault.receipt_fired.load(Ordering::Relaxed))
     }
 
-    pub(crate) async fn with_successful_mutation_pause_at<F>(
+    pub async fn with_successful_mutation_pause_at<F>(
         after: usize,
         reached: Arc<tokio::sync::Notify>,
         release: Arc<tokio::sync::Notify>,
@@ -383,7 +383,7 @@ impl ConfigApplyTxn<'_> {
         (output, fired)
     }
 
-    pub(crate) async fn with_successful_mutation_pause_and_count<F>(
+    pub async fn with_successful_mutation_pause_and_count<F>(
         after: usize,
         reached: Arc<tokio::sync::Notify>,
         release: Arc<tokio::sync::Notify>,
@@ -397,7 +397,7 @@ impl ConfigApplyTxn<'_> {
 
     /// Pauses after every successful mutation of `future`'s transactions, every
     /// attempt included, until each pause is released.
-    pub(crate) async fn with_each_successful_mutation_pause<F>(
+    pub async fn with_each_successful_mutation_pause<F>(
         reached: Arc<tokio::sync::Notify>,
         release: Arc<tokio::sync::Notify>,
         future: F,
@@ -457,7 +457,7 @@ impl ConfigApplyTxn<'_> {
         )
     }
 
-    pub(crate) async fn with_write_gate_observation<F>(
+    pub async fn with_write_gate_observation<F>(
         queued: Arc<tokio::sync::Notify>,
         acquired: Arc<AtomicBool>,
         future: F,
@@ -487,7 +487,7 @@ impl ConfigApplyTxn<'_> {
         SUCCESSFUL_MUTATION_FAULT.scope(fault, future).await
     }
 
-    pub(crate) async fn with_read_storage_failure<F>(marker: &'static str, future: F) -> F::Output
+    pub async fn with_read_storage_failure<F>(marker: &'static str, future: F) -> F::Output
     where
         F: Future,
     {
@@ -509,7 +509,7 @@ impl ConfigApplyTxn<'_> {
         SUCCESSFUL_MUTATION_FAULT.scope(fault, future).await
     }
 
-    pub(crate) async fn with_read_pause<F>(
+    pub async fn with_read_pause<F>(
         marker: &'static str,
         reached: Arc<tokio::sync::Notify>,
         future: F,
@@ -535,7 +535,7 @@ impl ConfigApplyTxn<'_> {
         SUCCESSFUL_MUTATION_FAULT.scope(fault, future).await
     }
 
-    pub(crate) async fn with_native_operation_pause<F>(
+    pub async fn with_native_operation_pause<F>(
         reached: Arc<tokio::sync::Notify>,
         release: Arc<tokio::sync::Notify>,
         future: F,
@@ -561,7 +561,7 @@ impl ConfigApplyTxn<'_> {
         SUCCESSFUL_MUTATION_FAULT.scope(fault, future).await
     }
 
-    pub(crate) async fn with_rollback_failure_retry_boundary<F>(
+    pub async fn with_rollback_failure_retry_boundary<F>(
         reached: Arc<tokio::sync::Notify>,
         cleanup_scheduled: Arc<AtomicBool>,
         future: F,

@@ -12,7 +12,7 @@ use super::fixtures::{completion_obligations, update_request};
 #[tokio::test]
 async fn generated_registered_background_owner_stop_cases_use_live_worker() {
     for session_stopped in [false, true] {
-        let cases = crate::lean_vocab_test::lean_recovery_sweep_cases();
+        let cases = gents_lean_vocab::lean_recovery_sweep_cases();
         let left = cases
             .iter()
             .find(|case| case.name == "registered_background_tool_left_to_worker_deferred")
@@ -129,7 +129,7 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
                 tool_root: None,
             },
         );
-        let modeled = crate::lean_vocab_test::lean_session_control_cases()
+        let modeled = gents_lean_vocab::lean_session_control_cases()
             .iter()
             .find(|case| case["name"] == "resume_waits_for_owned_background")
             .expect("Lean session-control model includes owned-background settlement");
@@ -299,7 +299,7 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
 #[cfg(unix)]
 #[tokio::test]
 async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() {
-    let modeled = crate::lean_vocab_test::lean_session_control_cases()
+    let modeled = gents_lean_vocab::lean_session_control_cases()
         .iter()
         .find(|case| case["name"] == "resume_waits_for_owned_background")
         .expect("Lean session-control model includes owned-background settlement");

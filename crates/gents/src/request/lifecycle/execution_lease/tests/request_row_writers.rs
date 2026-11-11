@@ -16,7 +16,7 @@ async fn renewal_fixture() -> (
     DateTime<Utc>,
     DateTime<Utc>,
 ) {
-    let case = crate::lean_vocab_test::lean_request_execution_lease_observed_cases()
+    let case = gents_lean_vocab::lean_request_execution_lease_observed_cases()
         .iter()
         .find(|case| case.name == "recovery_invalidates_admitted_renewal")
         .unwrap();

@@ -3,7 +3,12 @@ use super::*;
 const ARGS: &str = r#"{"file_path":"/tmp/transcript-contract.txt"}"#;
 
 async fn fixture(name: &str) -> (Arc<defra_node::Node>, DefraSessionHook, String, String) {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session = hook.session_id().await.unwrap();
@@ -111,7 +116,7 @@ fn results(messages: &[Message]) -> Vec<&str> {
 }
 
 async fn completed(name: &str) -> (Arc<defra_node::Node>, DefraSessionHook, String) {
-    let case = crate::lean_vocab_test::lean_transcript_case(name);
+    let case = gents_lean_vocab::lean_transcript_case(name);
     let (node, hook, session, request) = fixture(name).await;
     publish_claimed_authored_input(
         &hook,
@@ -142,8 +147,7 @@ async fn completed(name: &str) -> (Arc<defra_node::Node>, DefraSessionHook, Stri
 
 #[tokio::test]
 async fn generated_transcript_cases_drive_reachable_native_canonical_owners() {
-    let ordering =
-        crate::lean_vocab_test::lean_transcript_case("ordering_user_assistant_tool_result");
+    let ordering = gents_lean_vocab::lean_transcript_case("ordering_user_assistant_tool_result");
     let (node, hook, session) = completed(&ordering.name).await;
     let rows = history(&hook, &session).await;
     assert_eq!(rows.len(), ordering.post_message_count);
@@ -186,16 +190,15 @@ async fn generated_transcript_cases_drive_reachable_native_canonical_owners() {
         ordering.post_in_flight_count
     );
 
-    let dedupe = crate::lean_vocab_test::lean_transcript_case("dedupe_duplicate_reuses_sequence");
+    let dedupe = gents_lean_vocab::lean_transcript_case("dedupe_duplicate_reuses_sequence");
     assert_eq!(dedupe.action, "observe_duplicate_tool_result");
     assert!(dedupe.expected_duplicate_reused_sequence);
 
     let distinct =
-        crate::lean_vocab_test::lean_transcript_case("distinct_result_ids_append_distinct_rows");
+        gents_lean_vocab::lean_transcript_case("distinct_result_ids_append_distinct_rows");
     assert_eq!(distinct.action, "append_distinct_tool_result");
     assert!(!distinct.expected_pair_closed);
-    let parallel =
-        crate::lean_vocab_test::lean_transcript_case("parallel_results_share_assistant_turn");
+    let parallel = gents_lean_vocab::lean_transcript_case("parallel_results_share_assistant_turn");
     assert_eq!(
         parallel.action,
         "publish_once_dispatch_in_order_then_complete_each_parallel_result"
@@ -245,7 +248,7 @@ async fn generated_transcript_cases_drive_reachable_native_canonical_owners() {
         );
     }
 
-    let pair = crate::lean_vocab_test::lean_transcript_case("completed_tool_pair_closed");
+    let pair = gents_lean_vocab::lean_transcript_case("completed_tool_pair_closed");
     let (_node, hook, session) = completed(&pair.name).await;
     let id = format!("result-{}", pair.logical_result_id);
     assert_eq!(
@@ -258,7 +261,7 @@ async fn generated_transcript_cases_drive_reachable_native_canonical_owners() {
         pair.post_in_flight_count
     );
 
-    let abandon = crate::lean_vocab_test::lean_transcript_case("drop_abandon_not_strong_drain");
+    let abandon = gents_lean_vocab::lean_transcript_case("drop_abandon_not_strong_drain");
     let (_node, hook, session, _) = fixture(&abandon.name).await;
     let (_, ids) = accept_turn(
         &hook,

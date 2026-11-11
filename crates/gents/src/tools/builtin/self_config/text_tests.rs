@@ -1665,7 +1665,7 @@ async fn saved_config_audit_reports_broken_references_without_mutation_and_refus
     assert!(refused_edit.contains("is unavailable"), "{refused_edit}");
     assert_eq!(before, access.execute(&query).await.unwrap());
     fixture.grant_user_native_admin().await;
-    let modeled = &crate::lean_vocab_test::lean_identity_household_cases()
+    let modeled = &gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .expect("configuration model")
@@ -1798,7 +1798,7 @@ async fn saved_config_audit_is_node_scoped_and_does_not_require_preview() {
         .await
         .unwrap();
     let access = fixture.user_access();
-    crate::test_support::bootstrap_signed_test_node(access, foreign.did()).await;
+    crate::test_support::documents::bootstrap_signed_test_node(access, foreign.did()).await;
     let node_response = access
         .execute(&format!(
             r#"{{ Node(filter: {{node_did: {{_eq: "{}"}}}}) {{ _docID }} }}"#,

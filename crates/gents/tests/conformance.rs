@@ -18,14 +18,12 @@ use serde_json::{json, Value};
 
 #[path = "../src/inference/admission/slot_accounting.rs"]
 mod admission_slot_accounting;
-#[path = "../src/lean_vocab_test/support.rs"]
-mod lean_vocab_test;
 mod support;
 
 use admission_slot_accounting::{
     reconstructed_running_slot_count, slot_contribution, InferenceCallSlotRow,
 };
-use lean_vocab_test::{
+use gents_lean_vocab::{
     assert_lean_transition_is_illegal, assert_lean_transition_is_legal,
     assert_lifecycle_transition_cases_partition, assert_state_machine_contract_is_complete,
     lean_backend_health_cases, lean_client_agent_readiness_cases, lean_command_env_case,

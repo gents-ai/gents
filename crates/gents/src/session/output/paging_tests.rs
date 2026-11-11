@@ -10,7 +10,7 @@ use gents_protocol::output::*;
 
 #[tokio::test]
 async fn transaction_payload_reads_cross_pages_and_reject_conflicting_segments() {
-    let builder = tokio::task::spawn_blocking(crate::test_support::node_builder)
+    let builder = tokio::task::spawn_blocking(crate::store::test_support::node_builder)
         .await
         .unwrap();
     let node = Arc::new(builder.build().await.unwrap());

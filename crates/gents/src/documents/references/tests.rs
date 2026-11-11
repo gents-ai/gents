@@ -3,7 +3,7 @@ use serde_json::json;
 
 #[test]
 fn modeled_affected_validation_preserves_visible_dependencies() {
-    let case = crate::lean_vocab_test::lean_identity_household_cases()
+    let case = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .expect("configuration contract");
@@ -312,7 +312,7 @@ async fn event_args_rejection_rolls_back_the_whole_configuration_plan() {
     use crate::documents::{read_desired_state_record_in_txn, DesiredStateApplyPlan};
     use crate::NodeIdentity;
     let (db, user, access, default) =
-        crate::test_support::signed_test_node("event-args-rollback").await;
+        crate::test_support::root::signed_test_node("event-args-rollback").await;
     let owner = db.node_identity.did().to_owned();
     let binding = crate::store::identity::provision_agent_identity_authorized(
         &db.node,

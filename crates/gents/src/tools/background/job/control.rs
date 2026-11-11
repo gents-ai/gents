@@ -939,7 +939,7 @@ mod tests {
 
     #[tokio::test]
     async fn kill_reads_children_that_committed_after_the_recovery_snapshot() {
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().plugin_job_commit_kill_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().plugin_job_commit_kill_cases;
         assert!(!cases.is_empty());
         for (index, case) in cases.iter().enumerate() {
             let cause = match case["cause"].as_str().unwrap() {
@@ -1132,7 +1132,7 @@ mod tests {
 
     #[test]
     fn generated_kill_actions_are_lean_kill_action() {
-        let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
+        let snapshot = gents_lean_vocab::lean_contract_snapshot();
         assert_eq!(snapshot.session_message_kill_cases.len(), 3);
         for case in &snapshot.session_message_kill_cases {
             let observation: KillObservation =
@@ -1144,8 +1144,8 @@ mod tests {
 
     #[test]
     fn generated_kill_observations_are_lean_observe_caused() {
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot()
-            .session_message_kill_observation_cases;
+        let cases =
+            &gents_lean_vocab::lean_contract_snapshot().session_message_kill_observation_cases;
         assert_eq!(cases.len(), 5);
         for case in cases {
             let caused = case.caused.as_ref().map(|facts| CausedFacts {

@@ -31,7 +31,7 @@ async fn accepted_background_panic_terminalizes_and_notifies_before_release() {
     };
 
     let (db, user, owner, binding) =
-        crate::test_support::signed_test_node("hook-background-panic").await;
+        crate::test_support::root::signed_test_node("hook-background-panic").await;
     let node = db.node.clone();
     let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
         .unwrap();

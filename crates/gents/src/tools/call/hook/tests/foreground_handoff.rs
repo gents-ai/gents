@@ -57,7 +57,7 @@ async fn background_request_observation_uses_selected_agent_authority() {
     assert!(node_view.is_err() || node_view.unwrap()["data"]["AgentToolCall"] == json!([]));
 
     let foreign = tokio::task::spawn_blocking(|| {
-        crate::support::fixtures::test_identity("foreground-observation-foreign")
+        crate::store::test_support::test_identity("foreground-observation-foreign")
     })
     .await
     .unwrap();
@@ -70,8 +70,8 @@ async fn background_request_observation_uses_selected_agent_authority() {
 #[cfg(unix)]
 #[tokio::test]
 async fn foreground_background_handoff_keeps_the_same_process_after_parent_completion() {
-    use crate::lean_vocab_test::{LeanCanonicalExecutionCase, LeanCanonicalExecutionOperation};
-    let modeled = crate::lean_vocab_test::lean_contract_snapshot()
+    use gents_lean_vocab::{LeanCanonicalExecutionCase, LeanCanonicalExecutionOperation};
+    let modeled = gents_lean_vocab::lean_contract_snapshot()
         .canonical_execution_gate_cases
         .iter()
         .find(|case| {
@@ -110,7 +110,12 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
         .unwrap()
         .success());
     let pid_file = dir.path().join("pid");
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(&node).await.unwrap();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session = hook.session_id().await.unwrap();
@@ -193,7 +198,7 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
         .background_with_receipt(&receipt)
         .await
         .unwrap();
-    let capacity = crate::lean_vocab_test::lean_r6_backgrounding_case(
+    let capacity = gents_lean_vocab::lean_r6_backgrounding_case(
         "background_tool_budget_count_8_rejects_spawn",
     )
     .max_backgrounded;
@@ -348,7 +353,12 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
 
 #[tokio::test]
 async fn cancellation_winning_handoff_clears_the_request_and_cancels_the_same_execution() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(&node).await.unwrap();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session = hook.session_id().await.unwrap();
@@ -427,7 +437,12 @@ async fn cancellation_winning_handoff_clears_the_request_and_cancels_the_same_ex
 
 #[tokio::test]
 async fn refused_foreground_handoff_can_be_retried() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(&node).await.unwrap();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session = hook.session_id().await.unwrap();
@@ -528,13 +543,18 @@ async fn refused_foreground_handoff_can_be_retried() {
 
 #[tokio::test]
 async fn concurrent_background_starts_on_one_request_fill_exactly_the_ceiling() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(&node).await.unwrap();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session = hook.session_id().await.unwrap();
     let deadline = Utc::now() + chrono::Duration::seconds(30);
     bind_interruptible_request(&hook, "concurrent-parent", &session, deadline).await;
-    let capacity = crate::lean_vocab_test::lean_r6_backgrounding_case(
+    let capacity = gents_lean_vocab::lean_r6_backgrounding_case(
         "background_tool_budget_count_8_rejects_spawn",
     )
     .max_backgrounded;
@@ -608,18 +628,22 @@ async fn concurrent_background_starts_on_one_request_fill_exactly_the_ceiling() 
 #[tokio::test]
 async fn interrupted_foreground_with_unverified_exit_remains_background_controlled() {
     use crate::tools::exec::ownership::test_support::OwnedTestProcess;
-    let expected = crate::lean_vocab_test::lean_process_stop_cases()
+    let expected = gents_lean_vocab::lean_process_stop_cases()
         .iter()
         .find(|case| case.before == "running" && case.after == "running")
         .unwrap();
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(&node).await.unwrap();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session = hook.session_id().await.unwrap();
     let deadline = Utc::now() + chrono::Duration::minutes(5);
     bind_interruptible_request(&hook, "unverified-parent", &session, deadline).await;
-    let recovery =
-        crate::lean_vocab_test::lean_r6_backgrounding_case("recovery_transfer_at_capacity");
+    let recovery = gents_lean_vocab::lean_r6_backgrounding_case("recovery_transfer_at_capacity");
     for index in 0..recovery.pre_live_count {
         let mut occupied = accepted_hook_tool_lifecycle(
             &hook,
@@ -733,8 +757,7 @@ async fn interrupted_foreground_with_unverified_exit_remains_background_controll
 #[tokio::test]
 async fn failed_recovery_handoff_retains_physical_owner_until_periodic_recovery() {
     use crate::tools::exec::ownership::test_support::OwnedTestProcess;
-    let modeled =
-        crate::lean_vocab_test::lean_r6_backgrounding_case("recovery_transfer_at_capacity");
+    let modeled = gents_lean_vocab::lean_r6_backgrounding_case("recovery_transfer_at_capacity");
     let home = tempfile::tempdir().unwrap();
     let root = KeyIdentity::load_or_create(home.path().join("node.key"), None).unwrap();
     let node = Arc::new(
@@ -834,7 +857,7 @@ async fn failed_recovery_handoff_retains_physical_owner_until_periodic_recovery(
         .await;
     assert_eq!(count, 1);
     assert!(failed.is_err());
-    let receipt_model = crate::lean_vocab_test::lean_process_stop_cases()
+    let receipt_model = gents_lean_vocab::lean_process_stop_cases()
         .iter()
         .find(|case| case.live_evidence == "exited" && case.worker_released)
         .unwrap();
@@ -858,11 +881,16 @@ async fn failed_recovery_handoff_retains_physical_owner_until_periodic_recovery(
 
 #[tokio::test]
 async fn confirmation_before_worker_release_keeps_typed_stop_receipt() {
-    let modeled = crate::lean_vocab_test::lean_process_stop_cases()
+    let modeled = gents_lean_vocab::lean_process_stop_cases()
         .iter()
         .find(|case| case.live_evidence == "exited" && case.worker_released)
         .unwrap();
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(&node).await.unwrap();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session = hook.session_id().await.unwrap();
@@ -912,7 +940,12 @@ async fn confirmation_before_worker_release_keeps_typed_stop_receipt() {
 
 #[tokio::test]
 async fn interruption_before_native_registration_cancels_without_starting_process() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(&node).await.unwrap();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session = hook.session_id().await.unwrap();
@@ -945,12 +978,17 @@ async fn interruption_before_native_registration_cancels_without_starting_proces
 
 #[tokio::test]
 async fn interrupt_sweep_preserves_confirmed_timeout_intent() {
-    let modeled = crate::lean_vocab_test::lean_process_stop_cases()
+    let modeled = gents_lean_vocab::lean_process_stop_cases()
         .iter()
         .find(|case| case.live_evidence == "exited" && case.worker_released)
         .unwrap();
     assert!(modeled.preserve_timeout);
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(&node).await.unwrap();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session = hook.session_id().await.unwrap();

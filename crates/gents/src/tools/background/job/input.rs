@@ -797,8 +797,8 @@ pub(crate) mod tests {
     pub(crate) async fn open_with_agent() -> Arc<EmbeddedNode> {
         let node = open().await;
         let owner = ConfigAccess::local_as(node.clone(), identity::Did::new(node_did()).unwrap());
-        crate::test_support::bootstrap_signed_test_node(&owner, node_did()).await;
-        crate::test_support::install_test_agent_binding_with_access(
+        crate::test_support::documents::bootstrap_signed_test_node(&owner, node_did()).await;
+        crate::test_support::inference::install_test_agent_binding_with_access(
             node_did(),
             "Job fixture agent",
             agent_binding(),

@@ -50,9 +50,9 @@ mod tests {
         use gents_protocol::session::{SessionProvenance, SessionTitle, SessionTitleSource};
 
         let (first, user_a, access_a, binding_a) =
-            crate::test_support::signed_test_node("timeline-scope-a").await;
+            crate::test_support::root::signed_test_node("timeline-scope-a").await;
         let (second, user_b, access_b, binding_b) =
-            crate::test_support::signed_test_node("timeline-scope-b").await;
+            crate::test_support::root::signed_test_node("timeline-scope-b").await;
         let owner_a = first.node_identity.did();
         let owner_b = second.node_identity.did();
         assert_ne!(owner_a, owner_b);

@@ -2,7 +2,12 @@ use super::*;
 
 #[tokio::test]
 async fn event_source_reads_seed_and_group_as_selected_agent() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     node.add_collection("type SelectionProbe { kind: String @index message: String }")
         .await
         .unwrap();
@@ -68,7 +73,12 @@ async fn event_source_reads_seed_and_group_as_selected_agent() {
 
 #[tokio::test]
 async fn startup_seeding_covers_every_document_beyond_the_former_cap() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(&node).await.unwrap();
     let ids =
         crate::triggers::engine::event_delivery::source_scan::tests::create_source_documents(&node)
@@ -312,7 +322,12 @@ async fn event_source_acknowledges_exact_configuration_after_subscription_setup(
 
 #[tokio::test]
 async fn event_source_retries_schema_visibility_before_subscription_readiness() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let snapshot = snapshot_with_event_triggers(
         1,
@@ -349,7 +364,12 @@ async fn event_source_retries_schema_visibility_before_subscription_readiness() 
 
 #[tokio::test]
 async fn event_source_does_not_acknowledge_failed_seeding_on_later_generations() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let triggers = RapidHashMap::from_iter([(
         "missing".into(),
@@ -379,7 +399,12 @@ async fn event_source_does_not_acknowledge_failed_seeding_on_later_generations()
 
 #[tokio::test]
 async fn event_source_repairs_failed_seed_on_later_reconcile_before_readiness() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let triggers = RapidHashMap::from_iter([(
         "eventual".into(),
@@ -800,7 +825,12 @@ async fn admit_selected_event(
 
 #[tokio::test]
 async fn event_source_reconciles_subscriptions_on_generation_bump() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
     let task = resolved_task("ignored");
@@ -1216,7 +1246,12 @@ async fn per_group_timeout_uses_durable_first_seen_clock() {
 
 #[tokio::test]
 async fn correlation_populated_after_create_remains_eligible_for_delivery() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     node.add_collection(
         r#"type DeferredCorrelationMember {
@@ -1300,7 +1335,7 @@ async fn correlation_populated_after_create_remains_eligible_for_delivery() {
 
 #[tokio::test]
 async fn generated_sibling_delivery_case_preserves_pending_correlation() {
-    use crate::lean_vocab_test::{lean_event_delivery_transition_cases, LeanEventDeliveryAction};
+    use gents_lean_vocab::{lean_event_delivery_transition_cases, LeanEventDeliveryAction};
 
     let cases = lean_event_delivery_transition_cases();
     let case = cases
@@ -1425,7 +1460,12 @@ async fn generated_sibling_delivery_case_preserves_pending_correlation() {
 
 #[tokio::test]
 async fn startup_seed_defers_only_the_incomplete_trigger_on_a_shared_document() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     node.add_collection(
         r#"type SeededMixedCorrelationMember {
@@ -1605,7 +1645,12 @@ fn group_state_identity_changes_only_with_membership_definition() {
 
 #[tokio::test]
 async fn generation_bump_recovers_only_when_group_membership_definition_changes() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     node.add_collection(
         r#"type RecoveryFingerprintMember {
@@ -1895,7 +1940,12 @@ async fn create_event_trigger_doc(
 
 #[tokio::test]
 async fn concurrent_trigger_fire_count_updates_are_not_lost() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let trigger_id = "trigger-concurrent-fire-count";
     create_event_trigger_doc(&node, trigger_id, "task-webhook", "WebhookEvent").await;
@@ -2200,7 +2250,12 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
 
 #[tokio::test]
 async fn event_source_skips_event_for_doc_already_seen_at_subscribe() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
     let webhook_sdl = r#"
@@ -2517,7 +2572,12 @@ async fn event_source_tries_all_triggers_when_first_filter_misses() {
 
 #[tokio::test]
 async fn event_source_reconcile_excludes_invalid_source_collection_identifiers() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
     let task = resolved_task("ignored");

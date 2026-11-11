@@ -53,7 +53,7 @@ mod tests {
 
     #[test]
     fn selected_subject_resolution_matches_lean() {
-        for case in crate::lean_vocab_test::lean_pack_eval_subject_cases() {
+        for case in gents_lean_vocab::lean_pack_eval_subject_cases() {
             let selected = case.selected.as_ref().map(|binding| SubjectAgent {
                 slot: binding.slot.clone(),
                 agent_did: binding.agent_did.clone(),

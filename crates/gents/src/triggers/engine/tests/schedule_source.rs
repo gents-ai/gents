@@ -186,7 +186,12 @@ fn interval_cadence_json() -> serde_json::Value {
 
 #[tokio::test]
 async fn schedule_cursor_batch_matches_exact_owner_reads_and_isolates_scope_errors() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let owner_a = schedule_test_behavior().node_did().to_owned();
     let owner_b = "did:test:schedule-cursor-other-owner";
@@ -237,7 +242,12 @@ async fn schedule_cursor_batch_matches_exact_owner_reads_and_isolates_scope_erro
 
 #[tokio::test]
 async fn schedule_cursor_batches_more_than_one_chunk() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let owner = schedule_test_behavior().node_did().to_owned();
     let scopes = (0..128)
@@ -609,7 +619,12 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
 
 #[tokio::test]
 async fn schedule_source_next_fire_honors_cancellation_token() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
     let snapshot = snapshot_with_schedules(RapidHashMap::new());
@@ -1089,7 +1104,12 @@ async fn schedule_source_seeds_cron_next_run_at_without_immediate_fire() {
 
 #[tokio::test]
 async fn schedule_source_next_fire_survives_idle_ticks_until_cancelled() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
     let snapshot = snapshot_with_schedules(RapidHashMap::new());

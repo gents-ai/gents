@@ -10,7 +10,7 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
 {
     use crate::store::config_client::{ConfigAccess, GraphqlEndpoint, NodePermission};
     use anyhow::Context;
-    let model = &crate::lean_vocab_test::lean_contract_snapshot().identity_receiver_grant_cases;
+    let model = &gents_lean_vocab::lean_contract_snapshot().identity_receiver_grant_cases;
     let expected = model
         .iter()
         .find(|case| case["sender_granted"] == true && case["delivered"] == false)
@@ -80,8 +80,7 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
             )
             .await?;
     }
-    let receiver_model =
-        &crate::lean_vocab_test::lean_contract_snapshot().identity_replica_grant_cases;
+    let receiver_model = &gents_lean_vocab::lean_contract_snapshot().identity_replica_grant_cases;
     let case = |name: &str| {
         receiver_model
             .iter()
@@ -441,7 +440,7 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     let public = http(admin_address, &outsider)?
         .execute(&public_query)
         .await?;
-    let public_expected = crate::lean_vocab_test::lean_contract_snapshot()
+    let public_expected = gents_lean_vocab::lean_contract_snapshot()
         .identity_discovery_policy_cases
         .iter()
         .find(|case| case["name"] == "outsider-read")
@@ -492,7 +491,7 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         )
     };
     let discovery_cases =
-        &crate::lean_vocab_test::lean_contract_snapshot().identity_discovery_policy_cases;
+        &gents_lean_vocab::lean_contract_snapshot().identity_discovery_policy_cases;
     let discovery_expected = |name: &str| {
         discovery_cases
             .iter()
@@ -537,7 +536,7 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         txn.commit().await?;
     }
     let writer_cases =
-        &crate::lean_vocab_test::lean_contract_snapshot().identity_local_registry_writer_cases;
+        &gents_lean_vocab::lean_contract_snapshot().identity_local_registry_writer_cases;
     let modeled_runtime = writer_cases
         .iter()
         .find(|case| case["name"] == "user-owner")

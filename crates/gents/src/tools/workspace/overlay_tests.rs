@@ -853,7 +853,7 @@ async fn generated_artifact_admission_cases_drive_live_binding_and_launch_policy
         assert!(!result.has_errors(), "{mutation}: {:?}", result.errors);
     }
 
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().artifact_admission_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().artifact_admission_cases;
     assert_eq!(cases.len(), 13);
     for case in cases {
         let name = case["name"].as_str().unwrap();

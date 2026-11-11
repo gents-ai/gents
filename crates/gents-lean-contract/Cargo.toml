@@ -17,6 +17,7 @@ chrono.workspace = true
 crypto.workspace = true
 defra-core.workspace = true
 defra-node = { workspace = true, features = ["native"] }
+gents-lean-vocab.workspace = true
 gents-protocol.workspace = true
 gents-schemas.workspace = true
 hex = "0.4"

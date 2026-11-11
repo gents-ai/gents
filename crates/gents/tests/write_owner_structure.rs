@@ -2632,6 +2632,7 @@ fn source_top(relative: &str) -> Option<&str> {
 #[derive(Default)]
 struct CrateTopVisitor {
     targets: Vec<String>,
+    include_tests: bool,
 }
 
 impl CrateTopVisitor {
@@ -2677,7 +2678,7 @@ impl CrateTopVisitor {
 
 impl<'ast> Visit<'ast> for CrateTopVisitor {
     fn visit_item(&mut self, item: &'ast syn::Item) {
-        if !item_cfg_test(item) {
+        if self.include_tests || !item_cfg_test(item) {
             visit::visit_item(self, item);
         }
     }
@@ -2850,6 +2851,48 @@ fn store_names_no_sibling_module() {
     assert!(
         violations.is_empty(),
         "store leaf ratchet failed:\n{}",
+        violations.join("\n")
+    );
+}
+
+/// Store's own tests leave with the store crate, so they too name only
+/// `crate::store` and external crates: a test that needs a higher module is a
+/// test of that module's use of the store and lives there.
+#[test]
+fn store_tests_name_no_sibling_module() {
+    let root = repo_root();
+    let mut sources = Vec::new();
+    rust_sources(&root.join("crates/gents/src/store"), &mut sources);
+    sources.push(root.join("crates/gents/src/store.rs"));
+    sources.sort();
+    let mut violations = Vec::new();
+    for path in sources {
+        let source = std::fs::read_to_string(&path).expect("read Rust source");
+        let syntax = syn::parse_file(&source)
+            .unwrap_or_else(|error| panic!("parse {}: {error}", path.display()));
+        let mut visitor = CrateTopVisitor {
+            include_tests: true,
+            ..CrateTopVisitor::default()
+        };
+        visitor.visit_file(&syntax);
+        let targets = visitor
+            .targets
+            .into_iter()
+            .filter(|target| target != "store")
+            .collect::<BTreeSet<_>>();
+        if !targets.is_empty() {
+            violations.push(format!(
+                "{}: crate::{{{}}}",
+                path.strip_prefix(&root)
+                    .expect("source is in repository")
+                    .display(),
+                targets.into_iter().collect::<Vec<_>>().join(", ")
+            ));
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "store test sources name a sibling module or a crate-root re-export; move the test to the module it tests or name the item through crate::store:\n{}",
         violations.join("\n")
     );
 }

@@ -304,7 +304,7 @@ mod ownership_tests {
 
     #[test]
     fn document_ownership_matches_executable_model() {
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().pack_document_ownership_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().pack_document_ownership_cases;
         assert_eq!(cases.len(), 12);
         for case in cases {
             let coordinate = case["coordinate"].as_str().unwrap();

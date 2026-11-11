@@ -10,7 +10,7 @@ struct CycleFixture {
 impl CycleFixture {
     async fn new() -> Self {
         let (db, user_identity, user, _binding) =
-            crate::test_support::signed_test_node("health-cycle").await;
+            crate::test_support::root::signed_test_node("health-cycle").await;
         let runtime = crate::inference::auth::credential::runtime_credential_access(
             &db.node,
             db.node_identity.did(),
@@ -525,7 +525,8 @@ async fn runtime_probe_cycle_scopes_same_named_backends_to_its_node() {
     let mut foreign = fixture.backend("same", "http://127.0.0.1:1/v1".into());
     let foreign_db = crate::support::test_db("health-foreign-node").await;
     foreign.node_did = foreign_db.node_identity.did().to_owned();
-    crate::test_support::bootstrap_signed_test_node(&fixture.user, &foreign.node_did).await;
+    crate::test_support::documents::bootstrap_signed_test_node(&fixture.user, &foreign.node_did)
+        .await;
     fixture.seed(&local, "unknown").await;
     fixture.write(&foreign).await;
     let admin = crate::ConfigAccess::local_as(

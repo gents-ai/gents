@@ -5,10 +5,10 @@ use serde_json::json;
 
 use super::{apply_selection_changes, selected_ids, Change};
 use crate::documents::config_projection;
-use crate::lean_vocab_test::lean_identity_household_cases;
 use crate::store::config_client::ConfigAccess;
 use crate::store::identity::NodeIdentity;
 use crate::Collection;
+use gents_lean_vocab::lean_identity_household_cases;
 
 /// A canonical document whose required fields the fixture does not exercise
 /// hold placeholders; `fields` override them.

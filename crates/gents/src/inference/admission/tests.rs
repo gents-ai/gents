@@ -15,7 +15,7 @@ use super::{
     terminal_failure_reason_observer, AdmissionCallContext, AdmissionRegistry,
     BackendAdmissionConfig, CallKind,
 };
-use crate::lean_vocab_test::{
+use gents_lean_vocab::{
     assert_lean_contract_vocabulary_set_matches, assert_lean_transition_is_illegal,
     assert_lean_transition_is_legal, assert_state_machine_contract_is_complete,
     lean_fleet_slot_accounting_case, lean_inference_slot_accounting_cases, lean_vocabulary_values,
@@ -29,7 +29,7 @@ pub(super) async fn test_node() -> (
 ) {
     lean_inference_slot_accounting_cases();
     let (db, _user, _access, binding) =
-        crate::test_support::signed_test_node("inference-admission").await;
+        crate::test_support::root::signed_test_node("inference-admission").await;
     let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
         .unwrap();
     let signer = agent.managed_agent_signer().unwrap();

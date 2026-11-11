@@ -40,7 +40,8 @@ impl rig::completion::CompletionModel for RootReadModel {
     {
         use std::sync::atomic::Ordering;
 
-        crate::test_support::capture_scripted_provider_request(&request, "scripted").await?;
+        crate::test_support::inference::capture_scripted_provider_request(&request, "scripted")
+            .await?;
         if !request.tools.iter().any(|tool| tool.name == "read_file") {
             let stream: rig::streaming::StreamingResult<()> = Box::pin(futures::stream::iter([
                 Ok(rig::streaming::RawStreamingChoice::Message(
@@ -103,7 +104,7 @@ pub(super) async fn grant_modeled_direct_sets(
     use crate::store::identity::GrantSet;
     let wanted = recipient.to_owned();
     let case = tokio::task::spawn_blocking(move || {
-        crate::lean_vocab_test::lean_contract_snapshot()
+        gents_lean_vocab::lean_contract_snapshot()
             .identity_grant_recipient_cases
             .iter()
             .find(|case| case.recipient == wanted)
@@ -139,7 +140,7 @@ pub(super) async fn grant_engineer_tool_source_permissions(
 ) {
     use crate::store::config_client::NodePermission;
     let permissions = tokio::task::spawn_blocking(|| {
-        let model = crate::lean_vocab_test::lean_identity_household_cases()
+        let model = gents_lean_vocab::lean_identity_household_cases()
             .iter()
             .find(|case| case.name == "configuration-explicit-grants")
             .expect("configuration contract");
@@ -183,7 +184,8 @@ pub(super) struct SelfConfigFixture {
 
 impl SelfConfigFixture {
     pub(super) async fn new(name: &str) -> Self {
-        let (db, _user, user_access, binding) = crate::test_support::signed_test_node(name).await;
+        let (db, _user, user_access, binding) =
+            crate::test_support::root::signed_test_node(name).await;
         let agent =
             crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
                 .expect("fixture Agent is derived from the held runtime");
@@ -235,7 +237,7 @@ impl SelfConfigFixture {
         )
         .await
         .unwrap();
-        crate::test_support::install_test_agent_binding_with_access(
+        crate::test_support::inference::install_test_agent_binding_with_access(
             self.db.node_identity.did(),
             display_name,
             &binding,
@@ -677,7 +679,7 @@ async fn config_tool_access_follows_the_modeled_managed_route() {
     )
     .unwrap();
     let cases = tokio::task::spawn_blocking(|| {
-        crate::lean_vocab_test::lean_contract_snapshot()
+        gents_lean_vocab::lean_contract_snapshot()
             .identity_agent_block_signing_cases
             .clone()
     })
@@ -1044,7 +1046,8 @@ async fn build_registers_gated_family() {
 
 #[tokio::test]
 async fn pack_install_uses_current_node_and_inference_chain() {
-    let (home, plugins) = crate::test_support::home_with_fixture_pack("plugin_documents_fixture");
+    let (home, plugins) =
+        crate::test_support::toolcalls::home_with_fixture_pack("plugin_documents_fixture");
     let (fixture, tools) = signed_pack_tool("pack-install", plugins).await;
     let node_did = fixture.node_did();
     let coordinator = fixture.install_sibling("coordinator").await;
@@ -1159,7 +1162,7 @@ async fn pack_install_uses_current_node_and_inference_chain() {
     );
 
     let (_staged_root, staged) =
-        crate::test_support::fixture_pack_copy("plugin_documents_fixture", &json!({}));
+        crate::test_support::pack::fixture_pack_copy("plugin_documents_fixture", &json!({}));
     let manifest_path = staged.join("manifest.json");
     let mut manifest: Value =
         serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
@@ -1367,7 +1370,8 @@ async fn config_call(
 /// with where a just-built pack is, not an OS error and a home path.
 #[tokio::test]
 async fn a_digest_the_store_does_not_hold_points_at_the_built_pack_file() {
-    let (home, plugins) = crate::test_support::home_with_fixture_pack("documents_fixture");
+    let (home, plugins) =
+        crate::test_support::toolcalls::home_with_fixture_pack("documents_fixture");
     let (_fixture, tools) = signed_pack_tool("pack-absent-digest", plugins).await;
     let absent = format!("sha256:{}", "ab".repeat(32));
     for verb in ["update", "install"] {
@@ -1397,7 +1401,8 @@ async fn a_digest_the_store_does_not_hold_points_at_the_built_pack_file() {
 
 #[tokio::test]
 async fn pack_list_pages_the_packs_the_home_store_holds() {
-    let (_home, plugins) = crate::test_support::home_with_fixture_pack("documents_fixture");
+    let (_home, plugins) =
+        crate::test_support::toolcalls::home_with_fixture_pack("documents_fixture");
     let (_fixture, tools) = signed_pack_tool("pack-list", plugins).await;
     let page: Value =
         serde_json::from_str(&config_call(&tools, &["pack", "list"]).await.unwrap()).unwrap();
@@ -1439,7 +1444,8 @@ async fn pack_list_pages_the_packs_the_home_store_holds() {
 
 #[tokio::test]
 async fn pack_list_reports_a_damaged_archive_as_an_error_row() {
-    let (home, plugins) = crate::test_support::home_with_fixture_pack("documents_fixture");
+    let (home, plugins) =
+        crate::test_support::toolcalls::home_with_fixture_pack("documents_fixture");
     let (_fixture, tools) = signed_pack_tool("pack-list-damaged", plugins).await;
     let page: Value =
         serde_json::from_str(&config_call(&tools, &["pack", "list"]).await.unwrap()).unwrap();
@@ -1466,8 +1472,10 @@ static PACK_REGISTRY_ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new
 #[tokio::test]
 async fn pack_update_without_a_version_asks_the_registry_and_fails_loudly_offline() {
     let _registry_lock = PACK_REGISTRY_ENV.lock().await;
-    let _registry = crate::test_support::EnvVarGuard::set("GENTS_REGISTRY", "http://127.0.0.1:9");
-    let (_home, plugins) = crate::test_support::home_with_fixture_pack("documents_fixture");
+    let _registry =
+        crate::store::test_support::EnvVarGuard::set("GENTS_REGISTRY", "http://127.0.0.1:9");
+    let (_home, plugins) =
+        crate::test_support::toolcalls::home_with_fixture_pack("documents_fixture");
     let (_fixture, tools) = signed_pack_tool("pack-update-offline", plugins).await;
     let error = config_call(
         &tools,
@@ -1497,7 +1505,8 @@ async fn pack_update_without_a_version_asks_the_registry_and_fails_loudly_offlin
 
 #[tokio::test]
 async fn pack_install_refuses_a_pack_shipped_job_block() {
-    let (_guard, dir) = crate::test_support::fixture_pack_copy("documents_fixture", &json!({}));
+    let (_guard, dir) =
+        crate::test_support::pack::fixture_pack_copy("documents_fixture", &json!({}));
     let config_path = dir.join("pack_config.json");
     let mut pack_config: Value =
         serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
@@ -1505,7 +1514,7 @@ async fn pack_install_refuses_a_pack_shipped_job_block() {
         json!({"plugins": [{"plugin": "acme/runner", "job": {"agent_targets": ["wf-run"]}}]});
     pack_config["agent_targets"] = json!([{"target_id": "wf-run", "target_node_did": "did:key:foreign", "agent_did": "fixture-worker", "name": "wf-run"}]);
     std::fs::write(&config_path, serde_json::to_vec(&pack_config).unwrap()).unwrap();
-    let (_home, plugins) = crate::test_support::home_with_pack_dir(&dir);
+    let (_home, plugins) = crate::test_support::toolcalls::home_with_pack_dir(&dir);
     let (fixture, tools) = signed_pack_tool("pack-job-block", plugins.clone()).await;
     let slot = format!("worker={}:inference", fixture.agent_did());
     let argv = [
@@ -1533,13 +1542,14 @@ async fn pack_install_refuses_a_pack_shipped_job_block() {
 
 #[tokio::test]
 async fn pack_install_refuses_tools_naming_an_unresolved_plugin() {
-    let (_guard, dir) = crate::test_support::fixture_pack_copy("documents_fixture", &json!({}));
+    let (_guard, dir) =
+        crate::test_support::pack::fixture_pack_copy("documents_fixture", &json!({}));
     let config_path = dir.join("pack_config.json");
     let mut pack_config: Value =
         serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
     pack_config["tools"][0]["integrations"] = json!({"plugins": [{"plugin": "acme/missing"}]});
     std::fs::write(&config_path, serde_json::to_vec(&pack_config).unwrap()).unwrap();
-    let (_home, plugins) = crate::test_support::home_with_pack_dir(&dir);
+    let (_home, plugins) = crate::test_support::toolcalls::home_with_pack_dir(&dir);
     let (fixture, tools) = signed_pack_tool("pack-unresolved-plugin", plugins).await;
     let slot = format!("worker={}:inference", fixture.agent_did());
     let error = format!(
@@ -3899,8 +3909,8 @@ fn take_agent_tool(
 
 #[tokio::test]
 async fn user_owned_node_default_rejects_agent_update_and_accepts_user() {
-    use crate::lean_vocab_test::{LeanIdentityAction, LeanIdentitySubject};
-    let model = crate::lean_vocab_test::lean_identity_household_cases()
+    use gents_lean_vocab::{LeanIdentityAction, LeanIdentitySubject};
+    let model = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "user-node-agents-mixed-session-ownership-policy-followup")
         .unwrap();
@@ -4475,7 +4485,8 @@ async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_locko
         .await
         .unwrap();
     let foreign = other.did().to_owned();
-    crate::test_support::bootstrap_signed_test_node(fixture.user_access(), &foreign).await;
+    crate::test_support::documents::bootstrap_signed_test_node(fixture.user_access(), &foreign)
+        .await;
     let tools_id = format!("{}:tools", fixture.agent_did());
     let document = json!({"node_did": foreign, "tools_id": tools_id});
     let plan = crate::documents::DesiredStateApplyPlan::new(vec![
@@ -4975,7 +4986,7 @@ async fn backend_self_config_protects_raw_keys_in_writes_reads_and_diffs() {
     )];
     assert!(core.preview(backend_request(raw.clone())).await.is_err());
     assert!(core.apply(backend_request(raw)).await.is_err());
-    let model = crate::lean_vocab_test::lean_self_config_cases()
+    let model = gents_lean_vocab::lean_self_config_cases()
         .iter()
         .find(|case| case.name == "backend_credential_to_raw_key_rejected")
         .unwrap();
@@ -5084,7 +5095,7 @@ async fn unrelated_backend_patch_keeps_environment_reference_unresolved() {
     )]))
     .await
     .unwrap();
-    let _variable = crate::test_support::EnvVarGuard::set(VARIABLE, SENTINEL);
+    let _variable = crate::store::test_support::EnvVarGuard::set(VARIABLE, SENTINEL);
 
     for patch in [
         vec![("name".into(), Some(json!("Renamed inference")))],
@@ -5222,7 +5233,7 @@ async fn backend_choice_uses_runtime_visible_default_in_agent_transaction() {
     )
     .await
     .unwrap();
-    let model = crate::lean_vocab_test::lean_identity_household_cases()
+    let model = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap();
@@ -6682,7 +6693,7 @@ async fn modeled_resource_reads_use_resource_category_and_native_access() {
         .await
         .unwrap();
     let cases =
-        &crate::lean_vocab_test::lean_contract_snapshot().self_config_resource_read_exposure_cases;
+        &gents_lean_vocab::lean_contract_snapshot().self_config_resource_read_exposure_cases;
     assert!(!cases.is_empty());
     for case in cases {
         let categories = case["categories"]
@@ -6772,7 +6783,7 @@ async fn automation_read_preserves_native_selected_agent_visibility() {
         })
         .await
         .unwrap();
-    let expected = crate::lean_vocab_test::lean_identity_household_cases()
+    let expected = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap()
@@ -6828,7 +6839,7 @@ async fn pack_search_uses_registry_pagination_without_installing() {
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     let _registry =
-        crate::test_support::EnvVarGuard::set("GENTS_REGISTRY", format!("http://{address}"));
+        crate::store::test_support::EnvVarGuard::set("GENTS_REGISTRY", format!("http://{address}"));
     let (fixture, tools) = signed_pack_tool("registry-search", test_plugins()).await;
     let tool = tools.iter().find(|t| t.name() == CONFIG_TOOL_NAME).unwrap();
     let first: Value = serde_json::from_str(
@@ -6869,9 +6880,10 @@ async fn pack_search_uses_registry_pagination_without_installing() {
 
 #[tokio::test]
 async fn pack_documents_install_and_release_documents_dependencies() {
-    let (home, plugins) = crate::test_support::home_with_fixture_pack("dependent_fixture");
+    let (home, plugins) =
+        crate::test_support::toolcalls::home_with_fixture_pack("dependent_fixture");
     let (_fixture, directory) =
-        crate::test_support::fixture_pack_copy("dependee_fixture", &json!({}));
+        crate::test_support::pack::fixture_pack_copy("dependee_fixture", &json!({}));
     let (bytes, _) = crate::pack::archive::pack_dir(&directory).unwrap();
     crate::pack::store::PackStore::new(home.path())
         .import(&bytes[..], None)
@@ -6929,7 +6941,7 @@ async fn pack_install_blocks_a_dependency_plugin_without_operator_authority() {
         std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
     };
     let (_dependee, dependee_dir) =
-        crate::test_support::fixture_pack_copy("dependee_fixture", &json!({}));
+        crate::test_support::pack::fixture_pack_copy("dependee_fixture", &json!({}));
     std::fs::create_dir_all(dependee_dir.join("plugins")).unwrap();
     let wat = crate::plugin::test_fixtures::constant_output_wat(b"{}");
     std::fs::write(
@@ -6958,8 +6970,8 @@ async fn pack_install_blocks_a_dependency_plugin_without_operator_authority() {
         }]);
     });
     let (_dependent, dependent_dir) =
-        crate::test_support::fixture_pack_copy("dependent_fixture", &json!({}));
-    let (home, plugins) = crate::test_support::home_with_pack_dir(&dependent_dir);
+        crate::test_support::pack::fixture_pack_copy("dependent_fixture", &json!({}));
+    let (home, plugins) = crate::test_support::toolcalls::home_with_pack_dir(&dependent_dir);
     let (bytes, _) = crate::pack::archive::pack_dir(&dependee_dir).unwrap();
     crate::pack::store::PackStore::new(home.path())
         .import(&bytes[..], None)
@@ -7002,13 +7014,13 @@ async fn pack_install_blocks_a_dependency_plugin_without_operator_authority() {
 #[tokio::test]
 async fn an_agent_decides_what_a_pack_does_with_documents_edited_live() {
     let (_fixture, directory) =
-        crate::test_support::fixture_pack_copy("documents_fixture", &json!({}));
+        crate::test_support::pack::fixture_pack_copy("documents_fixture", &json!({}));
     let manifest_path = directory.join("manifest.json");
     let mut manifest: Value =
         serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
     manifest.as_object_mut().unwrap().remove("schemas");
     std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-    let (_home, plugins) = crate::test_support::home_with_pack_dir(&directory);
+    let (_home, plugins) = crate::test_support::toolcalls::home_with_pack_dir(&directory);
     let (fixture, tools) = signed_pack_tool("pack-edited-documents", plugins).await;
     let slot = format!("worker={}:inference", fixture.agent_did());
     let pack = "fixture/documents_fixture";
@@ -7155,13 +7167,13 @@ async fn an_agent_decides_what_a_pack_does_with_documents_edited_live() {
 #[tokio::test]
 async fn pack_document_installation_uses_existing_lifecycle() {
     let (_fixture, directory) =
-        crate::test_support::fixture_pack_copy("documents_fixture", &json!({}));
+        crate::test_support::pack::fixture_pack_copy("documents_fixture", &json!({}));
     let manifest_path = directory.join("manifest.json");
     let mut manifest: Value =
         serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
     manifest.as_object_mut().unwrap().remove("schemas");
     std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-    let (_home, plugins) = crate::test_support::home_with_pack_dir(&directory);
+    let (_home, plugins) = crate::test_support::toolcalls::home_with_pack_dir(&directory);
     let (fixture, tools) = signed_pack_tool("inspect-documents-pack", plugins).await;
     let did = fixture.db.node_identity.did();
     let slot = format!("worker={}:inference", fixture.agent_did());
@@ -7998,7 +8010,7 @@ async fn public_prompt_edits_require_an_existing_unshared_context_without_partia
 
 #[tokio::test]
 async fn modeled_job_policy_updates_follow_native_tools_authorization() {
-    let cases = &crate::lean_vocab_test::lean_self_config_selection_cases().job_guard_cases;
+    let cases = &gents_lean_vocab::lean_self_config_selection_cases().job_guard_cases;
     let native_cases: Vec<_> = cases
         .iter()
         .filter(|case| case.name.starts_with("native_agent_update_"))
@@ -8242,7 +8254,7 @@ async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
     // The own-only grant leaves the sibling with the Agent baseline and no NAC
     // relation operation, so the held-bounded rule refuses each new tool
     // source; an edit that projects no new source needs no relation authority.
-    let household = &crate::lean_vocab_test::lean_identity_household_cases()
+    let household = &gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .expect("configuration model");
@@ -8624,7 +8636,7 @@ async fn native_pack_local_paths_and_approval_fail_closed() {
 #[tokio::test]
 async fn native_pack_local_path_installs_mixed_documents_pack_with_fenced_plugin_authority() {
     let (fixture, directory) =
-        crate::test_support::fixture_pack_copy("documents_fixture", &json!({}));
+        crate::test_support::pack::fixture_pack_copy("documents_fixture", &json!({}));
     let manifest_path = directory.join("manifest.json");
     let mut manifest: Value =
         serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
@@ -8666,7 +8678,7 @@ async fn native_pack_local_path_installs_mixed_documents_pack_with_fenced_plugin
     let artifact = fixture.path().join("local_mixed.pack");
     std::fs::write(&artifact, &bytes).unwrap();
 
-    let (home, plugins) = crate::test_support::home_with_pack_dir(&directory);
+    let (home, plugins) = crate::test_support::toolcalls::home_with_pack_dir(&directory);
     let (agent_fixture, tools) =
         pack_tool_with_local_read("local-mixed-documents", plugins, fixture.path()).await;
     let node = &agent_fixture.db.node;
@@ -8975,7 +8987,8 @@ async fn install_chat_account_fences(fixture: &SelfConfigFixture) {
 /// and an account-free backend install.
 #[tokio::test]
 async fn pack_documents_install_refuses_non_default_account_inference_bindings() {
-    let (_home, plugins) = crate::test_support::home_with_fixture_pack("documents_fixture");
+    let (_home, plugins) =
+        crate::test_support::toolcalls::home_with_fixture_pack("documents_fixture");
     let (fixture, tools) = signed_pack_tool("documents-account-fence", plugins).await;
     install_chat_account_fences(&fixture).await;
     // The User publishes the fenced profiles under the Node; the Agent reads

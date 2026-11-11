@@ -134,7 +134,7 @@ fn error(results: &Map<String, Value>, id: &str) -> String {
 
 #[test]
 fn generated_plugin_network_cases_drive_admission() {
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().plugin_resource_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().plugin_resource_cases;
     let cases = cases["network"].as_array().unwrap();
     assert!(!cases.is_empty());
     for case in cases {

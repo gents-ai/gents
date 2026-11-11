@@ -4,7 +4,7 @@ use gents_protocol::session::SessionArchiveVisibility;
 
 #[test]
 fn authorized_archive_transitions_match_executed_model() {
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot()
+    let cases = &gents_lean_vocab::lean_contract_snapshot()
         .session_document_cases
         .archive;
     assert!(!cases.is_empty());
@@ -412,7 +412,7 @@ async fn concurrent_archive_calls_commit_one_revision() {
             .await
             .unwrap(),
     );
-    crate::test_support::acp_policies::install_identity_acp_policies(&node)
+    crate::store::test_support::acp_policies::install_identity_acp_policies(&node)
         .await
         .unwrap();
     node.add_collection(gents_protocol::schemas::AGENT_SESSION)

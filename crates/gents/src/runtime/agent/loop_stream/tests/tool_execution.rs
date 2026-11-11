@@ -1,7 +1,7 @@
 #[tokio::test]
 async fn dispatch_receipt_loss_gates_real_hook_loop_invocation() {
     let cases =
-        &crate::lean_vocab_test::lean_contract_snapshot().canonical_dispatch_observation_cases;
+        &gents_lean_vocab::lean_contract_snapshot().canonical_dispatch_observation_cases;
     let cases: Vec<_> = cases
         .iter()
         .filter(|case| case.inputs[0].policy_allows)
@@ -190,7 +190,7 @@ impl PolicyDeniedOwner {
 
 #[tokio::test]
 async fn policy_rejection_settles_pending_call_without_dispatch_election() {
-    let cases: Vec<_> = crate::lean_vocab_test::lean_contract_snapshot()
+    let cases: Vec<_> = gents_lean_vocab::lean_contract_snapshot()
         .canonical_dispatch_observation_cases
         .iter()
         .filter_map(|case| {
@@ -1638,7 +1638,7 @@ async fn allow_general_agent_target(
 
 #[tokio::test]
 async fn generated_child_admission_cases_drive_real_dispatcher() {
-    let cases = crate::lean_vocab_test::lean_contract_snapshot().plugin_resource_cases
+    let cases = gents_lean_vocab::lean_contract_snapshot().plugin_resource_cases
         ["child_admission"]
         .as_array()
         .unwrap();

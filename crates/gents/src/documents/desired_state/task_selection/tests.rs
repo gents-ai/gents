@@ -6,10 +6,10 @@ use serde_json::json;
 use super::{apply_task_selections, selected_agent};
 use crate::documents::desired_state::selection::tests::canonical;
 use crate::documents::desired_state::selection::{apply_selection_changes, Change};
-use crate::lean_vocab_test::lean_identity_household_cases;
 use crate::store::config_client::ConfigAccess;
 use crate::store::identity::NodeIdentity;
 use crate::Collection;
+use gents_lean_vocab::lean_identity_household_cases;
 
 #[test]
 fn task_selection_edge_is_the_task_target_agent() -> Result<()> {
@@ -65,7 +65,7 @@ async fn task_and_agent_target_visibility_follows_modeled_native_selection() -> 
     let old_policy = gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID;
     // Configuration publication reads every configuration collection, so the
     // node declares them all, configuration under the modeled policy.
-    crate::test_support::acp_policies::install_identity_acp_policies(&node).await?;
+    crate::store::test_support::acp_policies::install_identity_acp_policies(&node).await?;
     for (name, schema) in gents_protocol::schemas::RUNTIME_COLLECTION_NAMES
         .iter()
         .zip(gents_protocol::schemas::RUNTIME_ALL)

@@ -6,8 +6,7 @@ fn names(tuples: &[EnrollmentGrantTuple]) -> Vec<&'static str> {
 
 #[test]
 fn derived_tuples_match_lean() {
-    let contract =
-        &crate::lean_vocab_test::lean_contract_snapshot().identity_enrollment_grant_cases;
+    let contract = &gents_lean_vocab::lean_contract_snapshot().identity_enrollment_grant_cases;
     let expected: Vec<&str> = contract["derived"]
         .as_array()
         .unwrap()
@@ -25,8 +24,7 @@ fn derived_tuples_match_lean() {
 /// a revocation removes exactly what `plan_withdrawal` returns.
 #[test]
 fn grant_and_revocation_planners_replay_lean_traces() {
-    let contract =
-        &crate::lean_vocab_test::lean_contract_snapshot().identity_enrollment_grant_cases;
+    let contract = &gents_lean_vocab::lean_contract_snapshot().identity_enrollment_grant_cases;
     let cases = contract["cases"].as_array().unwrap();
     assert!(!cases.is_empty());
     for case in cases {

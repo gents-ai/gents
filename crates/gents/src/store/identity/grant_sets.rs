@@ -199,4 +199,4 @@ pub enum GrantSetError {
 
 #[cfg(test)]
 #[path = "grant_sets_tests.rs"]
-mod tests;
+pub(crate) mod tests;

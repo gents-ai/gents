@@ -457,14 +457,14 @@ mod tests {
                 .build()
                 .await?,
         );
-        crate::test_support::acp_policies::install_identity_acp_policies(&node).await?;
+        crate::store::test_support::acp_policies::install_identity_acp_policies(&node).await?;
         Ok(node)
     }
 
     #[tokio::test]
     async fn directory_retracts_own_publications_and_preserves_foreign_sources() -> Result<()> {
         let cases =
-            &crate::lean_vocab_test::lean_contract_snapshot().identity_directory_publication_cases;
+            &gents_lean_vocab::lean_contract_snapshot().identity_directory_publication_cases;
         let mut checked = 0;
         for case in cases.iter().filter(|case| case["name"] != "failed-delete") {
             checked += 1;
@@ -565,7 +565,7 @@ mod tests {
                 Ok(())
             }
         }
-        let case = crate::lean_vocab_test::lean_contract_snapshot()
+        let case = gents_lean_vocab::lean_contract_snapshot()
             .identity_directory_publication_cases
             .iter()
             .find(|case| case["name"] == "failed-delete")

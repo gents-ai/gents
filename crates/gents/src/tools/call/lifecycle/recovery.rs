@@ -813,7 +813,7 @@ mod tests {
             RecoveryOutcome::SessionStopped => "sessionStopped",
         };
         let mut checked = 0;
-        for case in crate::lean_vocab_test::lean_restart_disposition_cases() {
+        for case in gents_lean_vocab::lean_restart_disposition_cases() {
             // A missing parent defers classification; every resolvable
             // parent observation reaches the orphan classifier alike.
             if !matches!(
@@ -823,7 +823,7 @@ mod tests {
                 continue;
             }
             if case.await_mode != "background"
-                || case.kind != crate::lean_vocab_test::LeanRestartRowKind::Native
+                || case.kind != gents_lean_vocab::LeanRestartRowKind::Native
             {
                 continue;
             }
@@ -850,7 +850,7 @@ mod tests {
             }
             checked += 1;
         }
-        for case in crate::lean_vocab_test::lean_recovery_sweep_cases() {
+        for case in gents_lean_vocab::lean_recovery_sweep_cases() {
             let (Some(process), Some(false), Some(task_deleted)) = (
                 case.process_outcome.as_deref(),
                 case.execution_registered,
@@ -880,7 +880,7 @@ mod tests {
             checked += 1;
         }
         let mut registered_session_stop_cases = 0;
-        for case in crate::lean_vocab_test::lean_recovery_sweep_cases() {
+        for case in gents_lean_vocab::lean_recovery_sweep_cases() {
             if case.execution_registered != Some(true) || case.owner_session_stopped != Some(true) {
                 continue;
             }

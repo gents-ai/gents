@@ -7,7 +7,7 @@ use gents::session::mailbox::{
     MailboxStampContext, MailboxStatus, MAILBOX_CLOSE_COLLECTIONS,
 };
 
-use crate::lean_vocab_test::{
+use gents_lean_vocab::{
     assert_state_machine_contract_is_complete, lean_state_machine_contract, lean_vocabulary_values,
 };
 

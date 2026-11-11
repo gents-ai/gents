@@ -210,7 +210,7 @@ mod creation_exposure_tests {
     #[test]
     fn modeled_agent_creation_exposure_controls_the_command() {
         for case in
-            &crate::lean_vocab_test::lean_contract_snapshot().identity_agent_creation_exposure_cases
+            &gents_lean_vocab::lean_contract_snapshot().identity_agent_creation_exposure_cases
         {
             let mut categories = BTreeSet::new();
             if case["node_category"].as_bool().unwrap() {
@@ -234,7 +234,7 @@ mod creation_exposure_tests {
 #[cfg(test)]
 mod scope_tests {
     use super::*;
-    use crate::lean_vocab_test::LeanSelfConfigScopeCases;
+    use gents_lean_vocab::LeanSelfConfigScopeCases;
 
     fn categories(names: &[String]) -> BTreeSet<String> {
         names.iter().cloned().collect()
@@ -243,7 +243,7 @@ mod scope_tests {
     #[test]
     fn modeled_edit_scope_cases_drive_production_gate() {
         let LeanSelfConfigScopeCases { edit, .. } =
-            &crate::lean_vocab_test::lean_contract_snapshot().self_config_scope_cases;
+            &gents_lean_vocab::lean_contract_snapshot().self_config_scope_cases;
         assert!(!edit.is_empty());
         for case in edit {
             let scope = match case.scope.as_str() {
@@ -266,7 +266,7 @@ mod scope_tests {
             categories,
             default_categories,
             ..
-        } = &crate::lean_vocab_test::lean_contract_snapshot().self_config_scope_cases;
+        } = &gents_lean_vocab::lean_contract_snapshot().self_config_scope_cases;
         let sorted = |names: &[&str]| {
             let mut names: Vec<String> = names.iter().map(|name| (*name).to_owned()).collect();
             names.sort();
@@ -289,7 +289,7 @@ mod scope_tests {
     #[test]
     fn engineer_preset_is_the_modeled_engineer_group() {
         let LeanSelfConfigScopeCases { groups, .. } =
-            &crate::lean_vocab_test::lean_contract_snapshot().self_config_scope_cases;
+            &gents_lean_vocab::lean_contract_snapshot().self_config_scope_cases;
         let modeled = groups
             .iter()
             .find(|case| case.name == "engineer")
@@ -310,7 +310,7 @@ mod scope_tests {
     #[test]
     fn yolo_group_is_the_engineer_preset() {
         let LeanSelfConfigScopeCases { groups, .. } =
-            &crate::lean_vocab_test::lean_contract_snapshot().self_config_scope_cases;
+            &gents_lean_vocab::lean_contract_snapshot().self_config_scope_cases;
         let modeled = groups
             .iter()
             .find(|case| case.name == "yolo")
@@ -329,7 +329,7 @@ mod scope_tests {
     fn modeled_effective_groups_and_scope_of_drive_production_helpers() {
         let LeanSelfConfigScopeCases {
             groups, scope_of, ..
-        } = &crate::lean_vocab_test::lean_contract_snapshot().self_config_scope_cases;
+        } = &gents_lean_vocab::lean_contract_snapshot().self_config_scope_cases;
         for case in groups {
             assert_eq!(
                 may_create_agent(&categories(&case.effective)),

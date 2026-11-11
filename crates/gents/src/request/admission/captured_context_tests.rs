@@ -145,7 +145,7 @@ async fn generated_captures_use_signed_storage_and_fresh_admission() {
     .await
     .unwrap();
     let mut observed = 0;
-    for (index, case) in crate::lean_vocab_test::lean_contract_snapshot()
+    for (index, case) in gents_lean_vocab::lean_contract_snapshot()
         .request_input_cases
         .iter()
         .enumerate()

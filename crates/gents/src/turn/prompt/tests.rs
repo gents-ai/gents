@@ -1,6 +1,6 @@
 use super::*;
 use crate::inference::llm::message::AssistantContent;
-use crate::test_support::first_content;
+use crate::store::test_support::first_content;
 use gents_loop::claude_messages_body::ReplayTag;
 use gents_protocol::output::OutputSource;
 use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};

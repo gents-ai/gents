@@ -19,7 +19,7 @@ Do not duplicate changing versions in instructions.
 | Provider turn execution and input assembly | `crates/gents-loop/src/` |
 | Eval and optimization drivers | `crates/gents-eval/` |
 | Canonical wire types and database vocabulary | `crates/gents-protocol/`, `crates/gents-schemas/` |
-| Executable models and model-driven contracts | `crates/gents/proofs/`, `crates/gents-lean-contract/` |
+| Executable models and model-driven contracts | `crates/gents/proofs/`, `crates/gents-lean-contract/`, `crates/gents-lean-vocab/` |
 | CLI and installed editor helpers | `crates/gents-cli/`, `crates/gents-client-host/`, `crates/gents-media-host/` |
 | Desktop application | `apps/gents-desktop/` |
 | Shared desktop client and presentation | `crates/gents-desktop-core/`, `crates/gents-desktop/`, `packages/` |

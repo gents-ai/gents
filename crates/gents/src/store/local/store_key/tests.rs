@@ -138,8 +138,9 @@ async fn encrypted_local_budget_accepts_and_reopens_a_megabyte_document() {
 async fn an_encrypted_store_keeps_credential_tokens_off_disk_and_reopens_with_its_key() {
     let temp = tempfile::tempdir().unwrap();
     let identity =
-        crate::KeyIdentity::load_or_create(temp.path().join("identity.key"), None).unwrap();
-    let node_did = crate::NodeIdentity::did(&identity);
+        crate::store::identity::KeyIdentity::load_or_create(temp.path().join("identity.key"), None)
+            .unwrap();
+    let node_did = crate::store::identity::NodeIdentity::did(&identity);
     let (record, key, key_file) = file_key(&temp);
     assert_eq!(record.custody, StoreKeyCustody::File);
     let data = temp.path().join("data");
@@ -281,8 +282,10 @@ async fn a_plaintext_home_upgrades_without_changing_identity_or_documents() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     std::fs::create_dir_all(&home).unwrap();
-    let identity = crate::KeyIdentity::load_or_create(home.join("identity.key"), None).unwrap();
-    let node_did = crate::NodeIdentity::did(&identity);
+    let identity =
+        crate::store::identity::KeyIdentity::load_or_create(home.join("identity.key"), None)
+            .unwrap();
+    let node_did = crate::store::identity::NodeIdentity::did(&identity);
     std::fs::write(
         crate::store::local::home::init_config_path(&home),
         serde_json::to_vec(&serde_json::json!({

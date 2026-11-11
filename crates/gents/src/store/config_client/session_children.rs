@@ -12,9 +12,6 @@ pub(crate) use ownership::{
     recover_agent_session_child_relationships_with_access,
 };
 
-#[cfg(test)]
-mod auxiliary_binding_contract_tests;
-
 /// Capture the physical session while creating a child so its creator can
 /// restore the native parent relationship after the document commits.
 pub(crate) async fn session_child_binding_in_txn(

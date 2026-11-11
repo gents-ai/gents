@@ -6,7 +6,7 @@ use defra_node::QueryRequest;
 use serde_json::{json, Value};
 
 use super::apply_txn::TxnBackend;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 use super::fault_injection::{after_successful_mutation_for_test, SUCCESSFUL_MUTATION_FAULT};
 use super::native::execute_owned_native;
 use super::{graphql, graphql_api_base, retry, ConfigApplyTxn, ConfigClientError, Result};
@@ -48,8 +48,9 @@ impl ConfigApplyTxn<'_> {
 
     /// External native deletion can invalidate physical session targets while
     /// product session deletion remains deferred.
-    #[cfg(test)]
-    pub(crate) async fn delete_session_for_native_fixture(&self, doc_id: &str) -> Result<()> {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    #[doc(hidden)]
+    pub async fn delete_session_for_native_fixture(&self, doc_id: &str) -> Result<()> {
         let TxnBackend::Http { endpoint, .. } = &self.backend else {
             return Err(ConfigClientError::ClientConfigurationDeleteInvalid);
         };
@@ -67,8 +68,9 @@ impl ConfigApplyTxn<'_> {
 
     /// A session administrator's signed deletion of an Agent-written session
     /// child, for fixtures that remove receipts beneath a delivered session.
-    #[cfg(test)]
-    pub(crate) async fn delete_session_child_for_native_fixture(
+    #[cfg(any(test, feature = "test-fixtures"))]
+    #[doc(hidden)]
+    pub async fn delete_session_child_for_native_fixture(
         &self,
         collection: &str,
         doc_id: &str,
@@ -93,8 +95,9 @@ impl ConfigApplyTxn<'_> {
 
     /// A requester's own signed deletion of its AgentRequest, for fixtures that
     /// observe a request removed beneath its working Agent.
-    #[cfg(test)]
-    pub(crate) async fn delete_request_for_native_fixture(&self, doc_id: &str) -> Result<()> {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    #[doc(hidden)]
+    pub async fn delete_request_for_native_fixture(&self, doc_id: &str) -> Result<()> {
         let TxnBackend::Http { endpoint, .. } = &self.backend else {
             return Err(ConfigClientError::ClientConfigurationDeleteInvalid);
         };
@@ -159,7 +162,7 @@ impl ConfigApplyTxn<'_> {
                 .await?;
                 self.affected_documents
                     .fetch_add(graphql::affected_documents(&result), Ordering::Relaxed);
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-fixtures"))]
                 after_successful_mutation_for_test(self.operation).await?;
                 result
             }
@@ -261,7 +264,7 @@ impl ConfigApplyTxn<'_> {
         .await?;
         self.affected_documents
             .fetch_add(graphql::affected_documents(&response), Ordering::Relaxed);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-fixtures"))]
         after_successful_mutation_for_test(self.operation).await?;
         Ok(response)
     }
@@ -330,7 +333,7 @@ impl ConfigApplyTxn<'_> {
         .await?;
         self.affected_documents
             .fetch_add(graphql::affected_documents(&response), Ordering::Relaxed);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-fixtures"))]
         after_successful_mutation_for_test(self.operation).await?;
         Ok(response)
     }
@@ -795,7 +798,7 @@ impl ConfigApplyTxn<'_> {
                 }
             }
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-fixtures"))]
         if !document.trim_start().starts_with("mutation")
             && SUCCESSFUL_MUTATION_FAULT
                 .try_with(|fault| {
@@ -889,7 +892,7 @@ impl ConfigApplyTxn<'_> {
         if document.trim_start().starts_with("mutation") {
             self.affected_documents
                 .fetch_add(graphql::affected_documents(&response), Ordering::Relaxed);
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-fixtures"))]
             after_successful_mutation_for_test(self.operation).await?;
         }
         Ok(response)
@@ -1264,7 +1267,7 @@ impl ConfigApplyTxn<'_> {
                 crate::store::graphql::mutation_affected_documents(&response) as u64,
                 Ordering::Relaxed,
             );
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-fixtures"))]
             after_successful_mutation_for_test(self.operation).await?;
         }
         Ok(response)
@@ -1329,8 +1332,7 @@ mod owner_registration_model_tests {
 
     #[test]
     fn http_registration_observations_match_executed_model() {
-        let cases =
-            &crate::lean_vocab_test::lean_contract_snapshot().identity_owner_registration_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().identity_owner_registration_cases;
         assert!(!cases.is_empty());
         for case in cases {
             let row = HttpOwnerObservation {

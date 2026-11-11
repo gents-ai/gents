@@ -637,7 +637,7 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
     let request = &rows["data"]["AgentRequest"][0];
     assert_eq!(session["agent_did"], agent_did);
     let goal_links = tokio::task::spawn_blocking(|| {
-        crate::lean_vocab_test::lean_contract_snapshot()
+        gents_lean_vocab::lean_contract_snapshot()
             .goal_link_cases
             .clone()
     })
@@ -804,7 +804,7 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
     );
 
     let modeled = tokio::task::spawn_blocking(|| {
-        crate::lean_vocab_test::lean_task_goal_publication_cases()
+        gents_lean_vocab::lean_task_goal_publication_cases()
             .iter()
             .find(|case| case.name == "positive_budget_uses_atomic_goal_publication")
             .unwrap()
@@ -1295,7 +1295,7 @@ async fn group_marker_is_read_by_selected_held_agent_without_node_visibility() {
     .await
     .unwrap();
     let owner = db.node_identity.did().to_owned();
-    crate::test_support::install_test_agent_binding_with_access(
+    crate::test_support::inference::install_test_agent_binding_with_access(
         &owner,
         "other group Agent",
         &binding,
@@ -2039,7 +2039,7 @@ async fn goal_task_workspace_activation_retry_is_idempotent() {
     let goal = access.execute(&format!(r#"{{Goal(filter: {{session_id: {{_eq: "{session}"}}}}) {{creator_did parent_linked assignment_root_request_doc_id}}}}"#)).await.unwrap();
     assert_eq!(goal["data"]["Goal"][0]["creator_did"], agent_did);
     let modeled_link = tokio::task::spawn_blocking(|| {
-        crate::lean_vocab_test::lean_contract_snapshot()
+        gents_lean_vocab::lean_contract_snapshot()
             .goal_link_cases
             .iter()
             .find(|case| {

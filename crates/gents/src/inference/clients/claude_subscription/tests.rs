@@ -159,7 +159,7 @@ async fn fixture_queue_serves_one_body_per_call_then_asks_the_bearer() {
 #[tokio::test]
 async fn build_without_a_credential_fails_closed_with_the_login_hint() {
     let (db, _user, _user_access, _binding) =
-        crate::test_support::signed_test_node("claude-missing").await;
+        crate::test_support::root::signed_test_node("claude-missing").await;
     let node = db.node.clone();
     let did = db.node_identity.did();
     let err = ClaudeSubscriptionClient::build(std::sync::Arc::default(), node, did, None)
@@ -175,7 +175,7 @@ async fn build_without_a_credential_fails_closed_with_the_login_hint() {
 #[tokio::test]
 async fn build_with_a_seeded_credential_yields_a_shared_bearer() {
     let (db, _user, _user_access, _binding) =
-        crate::test_support::signed_test_node("claude-subscription").await;
+        crate::test_support::root::signed_test_node("claude-subscription").await;
     let node = db.node.clone();
     let did = db.node_identity.did();
     let credential_access =
@@ -211,7 +211,7 @@ async fn build_with_a_seeded_credential_yields_a_shared_bearer() {
 #[tokio::test]
 async fn stale_credential_refreshes_once_through_the_claude_token_endpoint() {
     let (db, _user, _user_access, _binding) =
-        crate::test_support::signed_test_node("claude-subscription").await;
+        crate::test_support::root::signed_test_node("claude-subscription").await;
     let node = db.node.clone();
     let did = db.node_identity.did();
     let credential_access =
@@ -312,7 +312,7 @@ fn anthropic_api_key_is_a_shared_key_kind_on_the_messages_wire() {
 #[tokio::test]
 async fn usage_wiring_claude_built_client_holds_its_account_reporter() {
     let (db, _user, _user_access, _binding) =
-        crate::test_support::signed_test_node("claude-usage").await;
+        crate::test_support::root::signed_test_node("claude-usage").await;
     let node = db.node.clone();
     let did = db.node_identity.did();
     let credential = crate::inference::auth::credential::OAuthCredential {

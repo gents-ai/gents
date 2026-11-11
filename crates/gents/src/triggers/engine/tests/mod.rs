@@ -17,11 +17,6 @@ use crate::documents::automation::{ResolvedEventTrigger, ResolvedSchedule, Resol
 use crate::documents::{ConcurrencyMode, ScheduleCadence};
 use crate::ensure_runtime_schemas;
 use crate::inference::resolved::{ResolvedAgent, SamplingConfig};
-use crate::lean_vocab_test::{
-    assert_lean_to_defradb_vocabulary_matches, lean_event_group_case_count, lean_event_group_cases,
-    lean_trigger_dispatch_case_count, lean_trigger_dispatch_cases, LeanTriggerDispatchCase,
-    LeanVocabulary,
-};
 use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::{KeyIdentity, RuntimeNode};
 use crate::tools::surface::AgentToolSurfaceConfig;
@@ -32,6 +27,11 @@ use crate::triggers::engine::production_materializer::{
 use crate::triggers::engine::schedule_source::ScheduleSource;
 use crate::triggers::runtime_snapshot::{ActiveRuntimeSnapshot, ResolvedRuntimeSnapshot};
 use crate::BackendProviderKind;
+use gents_lean_vocab::{
+    assert_lean_to_defradb_vocabulary_matches, lean_event_group_case_count, lean_event_group_cases,
+    lean_trigger_dispatch_case_count, lean_trigger_dispatch_cases, LeanTriggerDispatchCase,
+    LeanVocabulary,
+};
 
 type MaterializeCall = (Option<String>, TriggerKind, String);
 
@@ -642,7 +642,7 @@ pub(super) async fn signed_materializer_agent(
     crate::ConfigAccess,
     Arc<ResolvedAgent>,
 ) {
-    let (db, user, access, binding) = crate::test_support::signed_test_node(name).await;
+    let (db, user, access, binding) = crate::test_support::root::signed_test_node(name).await;
     let template = tokio::task::spawn_blocking(|| integration_test_agent("materializer-template"))
         .await
         .expect("build test agent template");

@@ -83,7 +83,7 @@ async fn keyed_delivery(
 #[tokio::test]
 async fn fires_for_one_key_admit_before_it_exists_and_share_one_session() {
     let (db, _user, _user_access, binding) =
-        crate::test_support::signed_test_node("keyed-session-fires").await;
+        crate::test_support::root::signed_test_node("keyed-session-fires").await;
     let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
         .unwrap();
     let owner = db.node_identity.did().to_owned();
@@ -335,8 +335,7 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
     assert_eq!(before["data"]["TriggerFire"].as_array().unwrap().len(), 0);
     assert_eq!(before["data"]["AgentRequest"].as_array().unwrap().len(), 0);
     assert_eq!(before["data"]["AgentSession"].as_array().unwrap().len(), 0);
-    let cases =
-        &crate::lean_vocab_test::lean_contract_snapshot().identity_task_session_publication_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().identity_task_session_publication_cases;
     let modeled = |name: &str| cases.iter().find(|case| case["name"] == name).unwrap();
     let aborted: anyhow::Result<()> = access
         .transact_write("test.task.abort_after_session_relationships", |txn| {
@@ -436,7 +435,7 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
         .unwrap();
     assert_eq!(session["data"]["AgentSession"].as_array().unwrap().len(), 1);
     let session = &session["data"]["AgentSession"][0];
-    let modeled = crate::lean_vocab_test::lean_contract_snapshot()
+    let modeled = gents_lean_vocab::lean_contract_snapshot()
         .session_document_cases
         .projection
         .iter()
@@ -486,7 +485,7 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
         user_sessions["data"]["AgentSession"][0]["relationships_pending"],
         false
     );
-    let household = crate::lean_vocab_test::lean_identity_household_cases()
+    let household = gents_lean_vocab::lean_identity_household_cases()
         .first()
         .expect("modeled household");
     let modeled_user = &household
@@ -507,7 +506,7 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
             .actions
             .iter()
             .find_map(|action| match action {
-                crate::lean_vocab_test::LeanIdentityAction::Check {
+                gents_lean_vocab::LeanIdentityAction::Check {
                     actor: checked,
                     resource,
                     id,
@@ -558,7 +557,7 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
         "completed"
     );
     let session_doc = session["_docID"].as_str().unwrap();
-    let trace = crate::lean_vocab_test::lean_contract_snapshot()
+    let trace = gents_lean_vocab::lean_contract_snapshot()
         .identity_publication_cases
         .iter()
         .find(|case| case["name"] == "interrupted_then_repaired")
@@ -621,7 +620,7 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
     let receipt_doc = receipt["data"]["TriggerFire"][0]["_docID"]
         .as_str()
         .unwrap();
-    let receipt_contract = crate::lean_vocab_test::lean_identity_household_cases()
+    let receipt_contract = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap();

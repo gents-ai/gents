@@ -227,8 +227,9 @@ impl<'a> ConfigApplyTxn<'a> {
         .await
     }
 
-    #[cfg(test)]
-    pub(crate) async fn begin_execution_renewal_for_test_with_signer(
+    #[cfg(any(test, feature = "test-fixtures"))]
+    #[doc(hidden)]
+    pub async fn begin_execution_renewal_for_test_with_signer(
         node: &Arc<EmbeddedNode>,
         identity: Did,
         signer: crate::store::identity::ManagedAgentSigner,
@@ -246,8 +247,9 @@ impl<'a> ConfigApplyTxn<'a> {
         .await
     }
 
-    #[cfg(test)]
-    pub(crate) async fn begin_local(
+    #[cfg(any(test, feature = "test-fixtures"))]
+    #[doc(hidden)]
+    pub async fn begin_local(
         node: &Arc<EmbeddedNode>,
         identity: Option<Did>,
     ) -> Result<ConfigApplyTxn<'static>> {
@@ -261,8 +263,9 @@ impl<'a> ConfigApplyTxn<'a> {
         .await
     }
 
-    #[cfg(test)]
-    pub(crate) async fn begin_local_with_signer(
+    #[cfg(any(test, feature = "test-fixtures"))]
+    #[doc(hidden)]
+    pub async fn begin_local_with_signer(
         node: &Arc<EmbeddedNode>,
         actor: Did,
         signer: crate::store::identity::ManagedAgentSigner,

@@ -17,7 +17,7 @@ fn generated_operator_path_cases_protect_names_and_file_aliases() {
         single_linked: bool,
     }
 
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().operator_path_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().operator_path_cases;
     assert_eq!(cases.len(), 29);
     for value in cases {
         let case: Case = serde_json::from_value(value.clone()).unwrap();

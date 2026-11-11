@@ -299,12 +299,12 @@ mod tests {
     #[tokio::test]
     async fn configured_agent_targets_grant_exactly_session_writer() {
         let (db, user, user_access) =
-            crate::test_support::signed_test_node_without_agent("agent-target-access").await;
+            crate::test_support::root::signed_test_node_without_agent("agent-target-access").await;
         let runtime = db.node_identity.clone();
         let node_did = runtime.did().to_owned();
         let user_did = identity::Did::new(user.did()).unwrap();
         let remote_node = tokio::task::spawn_blocking(|| {
-            crate::support::fixtures::test_identity("agent-target-access-remote")
+            crate::store::test_support::test_identity("agent-target-access-remote")
         })
         .await
         .unwrap();
@@ -343,7 +343,7 @@ mod tests {
         let mut setup: Vec<_> = bindings
             .iter()
             .flat_map(|(name, binding)| {
-                crate::test_support::test_agent_documents(&node_did, name, binding)
+                crate::test_support::documents::test_agent_documents(&node_did, name, binding)
             })
             .collect();
         setup.extend([
@@ -371,7 +371,7 @@ mod tests {
             db.node.clone(),
             identity::Did::new(node_did.clone()).unwrap(),
         );
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().agent_target_access_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().agent_target_access_cases;
         assert_eq!(cases.len(), 8);
         for (index, case) in cases.iter().enumerate() {
             let state = case["state"].as_str().unwrap();

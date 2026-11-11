@@ -41,7 +41,7 @@ async fn approved_enrollment_does_not_open_peer_request_replication() {
 
     // Enrollment publication requires the host's own Node, owned by its
     // runtime identity.
-    crate::test_support::ensure_test_node(&host, &host_did).await;
+    crate::test_support::documents::ensure_test_node(&host, &host_did).await;
     let coordinator_p2p = coordinator.p2p().expect("coordinator P2P enabled");
     let coordinator_peer = coordinator_p2p
         .local_peer_id()

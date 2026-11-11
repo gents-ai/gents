@@ -4277,6 +4277,7 @@ dependencies = [
  "gents-claude",
  "gents-fs-runner",
  "gents-lean-contract",
+ "gents-lean-vocab",
  "gents-loop",
  "gents-migration",
  "gents-protocol",
@@ -4455,6 +4456,7 @@ dependencies = [
  "gents-eval",
  "gents-fs-runner",
  "gents-lean-contract",
+ "gents-lean-vocab",
  "gents-protocol",
  "gents-shell",
  "hostname",
@@ -4577,6 +4579,7 @@ dependencies = [
  "gents-cli",
  "gents-desktop-core",
  "gents-lean-contract",
+ "gents-lean-vocab",
  "gents-protocol",
  "heck 0.5.0",
  "hostname",
@@ -4623,6 +4626,7 @@ dependencies = [
  "gents",
  "gents-desktop-core",
  "gents-lean-contract",
+ "gents-lean-vocab",
  "gents-migration",
  "gents-protocol",
  "identity",
@@ -4697,6 +4701,7 @@ dependencies = [
  "futures",
  "gents",
  "gents-lean-contract",
+ "gents-lean-vocab",
  "gents-protocol",
  "glob",
  "identity",
@@ -4754,6 +4759,7 @@ dependencies = [
  "crypto",
  "defra-core",
  "defra-node",
+ "gents-lean-vocab",
  "gents-protocol",
  "gents-schemas",
  "hex",
@@ -4761,6 +4767,19 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "gents-lean-vocab"
+version = "1.0.0-rc2"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "gents-lean-contract",
+ "gents-protocol",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 
@@ -4792,6 +4811,7 @@ dependencies = [
  "futures",
  "gents-claude",
  "gents-lean-contract",
+ "gents-lean-vocab",
  "gents-protocol",
  "rand 0.9.2",
  "rapidhash",
@@ -4857,6 +4877,7 @@ dependencies = [
  "chrono",
  "ciborium",
  "gents-lean-contract",
+ "gents-lean-vocab",
  "gents-schemas",
  "graphql-parser",
  "rapidhash",

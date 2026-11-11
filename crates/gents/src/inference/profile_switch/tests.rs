@@ -45,7 +45,7 @@ fn provision_agents(
     did: &str,
     names: &[&'static str],
 ) -> BTreeMap<&'static str, AgentIdentityBinding> {
-    let root = crate::test_support::held_runtime_identity(did);
+    let root = crate::store::test_support::held_runtime_identity(did);
     names
         .iter()
         .map(|name| {
@@ -73,12 +73,17 @@ impl Fixture {
     /// The node's held runtime root is the native admin and the Node owner, so
     /// every fixture document is written by that signed actor.
     async fn build(accounts: &[&'static str]) -> Self {
-        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+        let node = Arc::new(
+            crate::store::test_support::node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
         let did_owned = node.node_identity_did().unwrap().to_owned();
         let did = did_owned.as_str();
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let access = ConfigAccess::local_as(node.clone(), identity::Did::new(did).unwrap());
-        crate::test_support::bootstrap_signed_test_node(&access, did).await;
+        crate::test_support::documents::bootstrap_signed_test_node(&access, did).await;
         for (provider, name) in [
             (CLAUDE_OAUTH_PROVIDER, "Claude"),
             (XAI_OAUTH_PROVIDER, "Grok"),
@@ -441,7 +446,7 @@ async fn next_turns_use_the_target_credentials() {
         );
         let mut behavior = PendingAgent::new(agent_did)
             .with_identity_binding_for_test(fixture.agents[name].clone())
-            .build_with_identity_for_test(crate::test_support::held_runtime_identity(&did));
+            .build_with_identity_for_test(crate::store::test_support::held_runtime_identity(&did));
         behavior.backend_id = fields.backend_id;
         behavior.backend_provider_kind = fields.backend_provider_kind;
         behavior.openai_wire_api = fields.openai_wire_api;
@@ -629,12 +634,17 @@ async fn the_plan_holds_no_secret() {
 async fn a_bound_plugin_slot_counts_and_keeps_serving_after_the_switch() {
     use crate::plugin::model_binding::{AccessModels, ModelBinding, ModelResolver};
     use crate::plugin::store;
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     let did_owned = node.node_identity_did().unwrap().to_owned();
     let did = did_owned.as_str();
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let access = ConfigAccess::local_as(node.clone(), identity::Did::new(did).unwrap());
-    crate::test_support::bootstrap_signed_test_node(&access, did).await;
+    crate::test_support::documents::bootstrap_signed_test_node(&access, did).await;
     let fixture = Fixture {
         cache: Default::default(),
         node: node.clone(),

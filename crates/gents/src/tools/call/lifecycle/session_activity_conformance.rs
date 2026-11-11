@@ -38,7 +38,7 @@ fn observation(
 
 #[tokio::test]
 async fn tool_publications_follow_lean_session_activity() {
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot()
+    let cases = &gents_lean_vocab::lean_contract_snapshot()
         .session_document_cases
         .projection;
     let cases: Vec<_> = cases

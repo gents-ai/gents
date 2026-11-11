@@ -834,7 +834,7 @@ mod tests {
         use gents::NodeIdentity;
 
         let modeled =
-            &crate::lean_vocab_test::lean_contract_snapshot().identity_optimization_promotion_cases;
+            &gents_lean_vocab::lean_contract_snapshot().identity_optimization_promotion_cases;
         let expected = |name: &str| {
             modeled
                 .iter()

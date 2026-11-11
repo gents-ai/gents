@@ -1,8 +1,13 @@
-#[path = "../../gents/src/lean_vocab_test/canonical_output.rs"]
-mod runtime_contract;
-
 use std::collections::BTreeSet;
 
+use gents_lean_vocab::{
+    LeanAuxiliaryKind, LeanAuxiliaryOutputCase, LeanCanonicalClosure, LeanCanonicalMessage,
+    LeanCanonicalOutputProjectionCase, LeanCanonicalOutputView as View, LeanCanonicalSegment,
+    LeanCanonicalSource, LeanCanonicalWriter, LeanMedia, LeanMediaData, LeanMediaKind,
+    LeanMessageBlock, LeanMessagePublication, LeanMessageRole, LeanOutcome, LeanPayloadKind,
+    LeanPayloadSpec, LeanPresentation, LeanPresentationPart, LeanReasoningAuditCase,
+    LeanReasoningAuditResult, LeanReasoningPart, LeanReasoningSignatureCase, LeanResultPart,
+};
 use gents_protocol::output::live::{
     project_live, reconstruct_dense_prefix, DensePrefixError, LiveObservation, LiveTarget,
     LiveView, OwnerLiveness,
@@ -18,14 +23,6 @@ use gents_protocol::output::{
     StreamDeclaration, StreamPayload, TerminalOutput, ToolResultPart, TranscriptMessage,
 };
 use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
-use runtime_contract::{
-    LeanAuxiliaryKind, LeanAuxiliaryOutputCase, LeanCanonicalClosure, LeanCanonicalMessage,
-    LeanCanonicalOutputProjectionCase, LeanCanonicalOutputView as View, LeanCanonicalSegment,
-    LeanCanonicalSource, LeanCanonicalWriter, LeanMedia, LeanMediaData, LeanMediaKind,
-    LeanMessageBlock, LeanMessagePublication, LeanMessageRole, LeanOutcome, LeanPayloadKind,
-    LeanPayloadSpec, LeanPresentation, LeanPresentationPart, LeanReasoningAuditCase,
-    LeanReasoningAuditResult, LeanReasoningPart, LeanReasoningSignatureCase, LeanResultPart,
-};
 
 const EXERCISABLE_VIEWS: [&str; 2] = ["published", "conflicted"];
 
@@ -200,7 +197,7 @@ fn lean_role(role: &LeanMessageRole) -> MessageRole {
 
 fn lean_payload_kind(
     kind: &LeanPayloadKind,
-    tool: Option<&runtime_contract::LeanToolIdentity>,
+    tool: Option<&gents_lean_vocab::LeanToolIdentity>,
     media_kind: Option<&LeanMediaKind>,
 ) -> StreamPayload {
     match kind {
@@ -1140,12 +1137,12 @@ fn generated_auxiliary_cases_drive_native_audit_and_public_projection() {
                 .terminal_selection
                 .as_ref()
                 .map(|selection| match selection {
-                    runtime_contract::LeanTerminalSelection::Message { id } => {
+                    gents_lean_vocab::LeanTerminalSelection::Message { id } => {
                         TerminalOutput::Message {
                             message_doc_id: nat(*id),
                         }
                     }
-                    runtime_contract::LeanTerminalSelection::NoMessage => TerminalOutput::NoMessage,
+                    gents_lean_vocab::LeanTerminalSelection::NoMessage => TerminalOutput::NoMessage,
                 });
         let actual_view = project_live(&LiveObservation {
             request_doc_id: &request_doc_id,

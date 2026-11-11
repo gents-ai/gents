@@ -68,7 +68,7 @@ impl PrivateSessionFixture {
 #[tokio::test]
 async fn resolve_agent_rejects_missing_or_blank_explicit_selection() {
     let (db, _user, _access, _binding) =
-        crate::test_support::signed_test_node("agent-resolution-blank").await;
+        crate::test_support::root::signed_test_node("agent-resolution-blank").await;
     let node = db.node.clone();
     for selected in [None, Some(""), Some("   ")] {
         assert!(
@@ -87,7 +87,7 @@ async fn explicit_agent_resolution_matches_lean_binding_cases() {
         "existing-A-requested-B-rejected",
         "existing-A-requested-A-accepted",
     ] {
-        let case = crate::lean_vocab_test::lean_runtime_reconcile_case(name);
+        let case = gents_lean_vocab::lean_runtime_reconcile_case(name);
         let fixture = PrivateSessionFixture::new().await;
         let bound = if case.pre_session_agent.is_some() && !case.legal {
             fixture.other.did()
@@ -109,7 +109,7 @@ async fn explicit_agent_resolution_matches_lean_binding_cases() {
 #[tokio::test]
 async fn private_session_selection_is_actor_scoped_and_matches_lean() {
     let fixture = PrivateSessionFixture::new().await;
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().runtime_session_selection_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().runtime_session_selection_cases;
     assert_eq!(cases.len(), 3);
     for case in cases {
         let name = case["name"].as_str().unwrap();

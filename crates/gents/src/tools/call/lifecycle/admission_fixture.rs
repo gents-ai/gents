@@ -380,7 +380,7 @@ pub(crate) async fn ensure_managed_fixture_session(
         return crate::store::identity::resolve_agent_identity(root, &binding).unwrap();
     }
     let binding = crate::store::identity::provision_agent_identity(root).unwrap();
-    crate::test_support::install_test_agent_binding(
+    crate::test_support::inference::install_test_agent_binding(
         node,
         root.did(),
         "admission fixture",
@@ -571,7 +571,8 @@ pub async fn published_admission_with_owner(
     };
     let home = crate::runtime::embedded::EmbeddedHome::create_retained_with_p2p(&path, p2p).await?;
     let db = crate::support::test_db_from_home(home);
-    let (db, user, owner, binding) = crate::test_support::signed_test_node_from_db(db, &name).await;
+    let (db, user, owner, binding) =
+        crate::test_support::root::signed_test_node_from_db(db, &name).await;
     let node = db.node.clone();
     let runtime = db.node_identity.clone();
     let node_did = runtime.did().to_owned();
@@ -579,7 +580,7 @@ pub async fn published_admission_with_owner(
         let paired_name = format!("{name}-paired-client");
         Some(
             tokio::task::spawn_blocking(move || {
-                crate::support::fixtures::test_identity(&paired_name)
+                crate::store::test_support::test_identity(&paired_name)
             })
             .await?,
         )

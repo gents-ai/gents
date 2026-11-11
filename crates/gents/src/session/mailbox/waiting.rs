@@ -87,7 +87,7 @@ mod tests {
 
     #[test]
     fn waiting_questions_follow_the_model_and_keep_the_exact_parent_scope() {
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().mailbox_question_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().mailbox_question_cases;
         let now = "2030-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
         for case in cases {
             let payload = json!({

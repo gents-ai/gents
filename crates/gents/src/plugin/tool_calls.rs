@@ -367,8 +367,7 @@ mod tests {
 
     #[tokio::test]
     async fn generated_tool_call_bounds_and_grants() {
-        let cases =
-            &crate::lean_vocab_test::lean_contract_snapshot().plugin_resource_cases["tool_calls"];
+        let cases = &gents_lean_vocab::lean_contract_snapshot().plugin_resource_cases["tool_calls"];
         for case in cases["supported"].as_array().unwrap() {
             let expected = case["expected"].as_bool().unwrap();
             let names: Vec<&str> = match case["route"].as_str().unwrap() {

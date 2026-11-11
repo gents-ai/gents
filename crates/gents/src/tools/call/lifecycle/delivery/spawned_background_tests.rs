@@ -20,9 +20,9 @@ use gents_protocol::output::{
 
 #[test]
 fn generated_terminal_diagnostic_cases_bind_native_presentation() {
-    use crate::lean_vocab_test::LeanTerminalDiagnosticPresentationExpected;
+    use gents_lean_vocab::LeanTerminalDiagnosticPresentationExpected;
 
-    let cases = crate::lean_vocab_test::lean_terminal_diagnostic_presentation_cases();
+    let cases = gents_lean_vocab::lean_terminal_diagnostic_presentation_cases();
     assert_eq!(
         cases.len(),
         10,
@@ -57,7 +57,7 @@ fn generated_terminal_diagnostic_cases_bind_native_presentation() {
                     .expect("valid native diagnostic input");
                 assert_eq!(
                     actual,
-                    crate::lean_vocab_test::native_presentation(presentation)
+                    gents_lean_vocab::native_presentation(presentation)
                         .expect("modeled presentation translates"),
                     "{}: native terminal diagnostic presentation diverged",
                     case.name
@@ -133,7 +133,7 @@ async fn tool_delivery_rows(
 
 #[tokio::test]
 async fn spawn_receipt_survives_modeled_publication_contention() {
-    let witness = crate::lean_vocab_test::lean_r6_background_theorem_witnesses()
+    let witness = gents_lean_vocab::lean_r6_background_theorem_witnesses()
         .iter()
         .find(|w| w.witness_kind == "receipt_contention")
         .expect("executable receipt contention witness");
@@ -206,13 +206,13 @@ async fn terminal_point_selection_retains_state_and_tool_identity_fences() {
 
 #[tokio::test]
 async fn failed_streaming_tool_preserves_raw_prefix_and_publishes_terminal_failure() {
-    let case = crate::lean_vocab_test::lean_terminal_diagnostic_presentation_cases()
+    let case = gents_lean_vocab::lean_terminal_diagnostic_presentation_cases()
         .iter()
         .find(|case| case.name == "whole_prefix_then_cause")
         .expect("generated terminal diagnostic fixture");
     let raw = String::from_utf8(case.raw.clone()).unwrap();
     let cause = String::from_utf8(case.cause.clone()).unwrap();
-    let crate::lean_vocab_test::LeanTerminalDiagnosticPresentationExpected::Ok { rendered, .. } =
+    let gents_lean_vocab::LeanTerminalDiagnosticPresentationExpected::Ok { rendered, .. } =
         &case.expected
     else {
         panic!("generated valid terminal diagnostic result");
@@ -648,13 +648,13 @@ async fn interrupted_tool_diagnostic_follows_the_configured_output_budget() {
 
 #[test]
 fn generated_terminal_diagnostic_replay_cases_bind_native_replay() {
-    let cases = crate::lean_vocab_test::lean_terminal_diagnostic_replay_cases();
+    let cases = gents_lean_vocab::lean_terminal_diagnostic_replay_cases();
     assert_eq!(cases.len(), 12, "all generated replay shapes must be bound");
     assert!(cases.iter().any(|case| case.accepted) && cases.iter().any(|case| !case.accepted));
     for case in cases {
         let raw = String::from_utf8(case.raw.clone()).expect("valid replay source");
         let cause = String::from_utf8(case.cause.clone()).expect("valid replay cause");
-        let stored = crate::lean_vocab_test::native_presentation(&case.stored)
+        let stored = gents_lean_vocab::native_presentation(&case.stored)
             .expect("modeled presentation translates");
         assert_eq!(
             diagnostic_replay_matches(&raw, &cause, &stored).expect("replay check"),

@@ -1,5 +1,5 @@
 use super::*;
-use crate::lean_vocab_test::{
+use gents_lean_vocab::{
     lean_canonical_dispatch_observation_cases, lean_canonical_execution_gate_cases,
     lean_canonical_output_projection_cases, lean_canonical_payload_presentation_cases,
     lean_canonical_spawned_target_rejection_cases, lean_canonical_worker_capacity_cases,
@@ -9,7 +9,7 @@ use crate::lean_vocab_test::{
     lean_task_goal_publication_cases, lean_task_goal_recovery_cases,
     lean_terminal_diagnostic_presentation_cases, lean_terminal_diagnostic_replay_cases,
 };
-use crate::lean_vocab_test::{lean_plugin_reference_cases, lean_snapshot_demotion_cases};
+use gents_lean_vocab::{lean_plugin_reference_cases, lean_snapshot_demotion_cases};
 
 pub(super) fn lean_executable_contracts_cover_initial_domains() {
     for domain in [
@@ -2238,7 +2238,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "GoalReadinessGateCases".to_string(),
         ));
     }
-    if !crate::lean_vocab_test::lean_contract_snapshot()
+    if !gents_lean_vocab::lean_contract_snapshot()
         .goal_claimed_readiness_cases
         .is_empty()
     {
@@ -2773,4 +2773,4 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         unreferenced_consumers
     );
 }
-use crate::lean_vocab_test::lean_composed_invariant_witnesses;
+use gents_lean_vocab::lean_composed_invariant_witnesses;

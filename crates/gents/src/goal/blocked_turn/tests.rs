@@ -552,7 +552,8 @@ async fn embedded() -> (
         RequestSpec,
     };
 
-    let (db, user, access, primary) = crate::test_support::signed_test_node("blocked-turn").await;
+    let (db, user, access, primary) =
+        crate::test_support::root::signed_test_node("blocked-turn").await;
     let node_did = db.node_identity.did();
     ConfigAccess::local_as(db.node.clone(), identity::Did::new(node_did).unwrap())
         .grant_node_permission(
@@ -568,7 +569,7 @@ async fn embedded() -> (
     )
     .await
     .unwrap();
-    crate::test_support::install_test_agent_binding_with_access(
+    crate::test_support::inference::install_test_agent_binding_with_access(
         node_did,
         "Sibling agent",
         &sibling,
