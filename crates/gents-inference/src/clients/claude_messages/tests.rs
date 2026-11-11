@@ -836,74 +836,57 @@ fn thinking_start_emits_ordered_audit_observations() {
 }
 
 #[test]
-fn generated_claude_wire_start_cases_drive_native_parser() {
-    use gents_lean_vocab::{
-        lean_prompt_assembly_claude_wire_start_cases, LeanClaudeReasoningPart,
-        LeanClaudeStreamBlock,
-    };
+fn claude_wire_start_cases_drive_native_parser() {
+    use gents_lean_vocab::families::claude_prompt_assembly_wire_start as family;
 
-    let cases = lean_prompt_assembly_claude_wire_start_cases();
-    assert!(!cases.is_empty(), "Lean emitted no Claude wire-start cases");
-    for case in cases {
-        let mut block = json!({"type":"thinking","thinking":case.start.thinking});
-        if case.start.signature_present {
-            block["signature"] = case.start.signature.clone();
+    family::replay::<String, String, String, String, String>(|i| {
+        let mut block = json!({"type":"thinking","thinking":i.thinking});
+        if let Some(signature) = &i.signature {
+            block["signature"] = match signature.kind.as_str() {
+                "text" => json!(signature.text),
+                "number" => json!(signature.number),
+                other => panic!("unsupported modeled signature {other}"),
+            };
         }
         let mut sse = format!(
             "data: {}\n\n",
-            json!({"type":"content_block_start","index":case.start.index,"content_block":block})
+            json!({"type":"content_block_start","index":i.index,"content_block":block})
         );
-        for event in &case.later {
-            let index = event.index.expect("modeled Claude block index");
+        for event in &i.later {
             let payload = match event.kind.as_str() {
-                "signatureDelta" => json!({
-                    "type":"content_block_delta", "index":index,
+                "signature_delta" => json!({
+                    "type":"content_block_delta", "index":event.index,
                     "delta":{"type":"signature_delta", "signature":event.fragment.as_deref().expect("modeled signature")}
                 }),
-                "thinkingDelta" => json!({
-                    "type":"content_block_delta", "index":index,
+                "thinking_delta" => json!({
+                    "type":"content_block_delta", "index":event.index,
                     "delta":{"type":"thinking_delta", "thinking":event.fragment.as_deref().expect("modeled thinking")}
                 }),
-                "contentStop" => json!({"type":"content_block_stop", "index":index}),
-                other => panic!("{}: unsupported modeled wire event {other}", case.name),
+                "content_stop" => json!({"type":"content_block_stop", "index":event.index}),
+                other => panic!("unsupported modeled wire event {other}"),
             };
             sse.push_str(&format!("data: {payload}\n\n"));
         }
-        let parsed = parse_messages_sse_typed(&sse, &RapidHashSet::new());
-        match case.expected.kind.as_str() {
-            "wireError" => assert!(
-                matches!(
-                    parsed,
-                    Err(MessagesParseError::MalformedThinking {
-                        cause: ThinkingParseCause::Malformed(
-                            "thinking start signature is not text"
-                        )
-                    })
-                ),
-                "{}",
-                case.name
-            ),
-            "contentError" => {
-                let expected = case
-                    .expected
-                    .error
-                    .as_deref()
-                    .expect("modeled content error");
-                assert_eq!(expected, "signatureOrder", "{}", case.name);
-                assert!(
-                    matches!(
-                        parsed,
-                        Err(MessagesParseError::MalformedThinking {
-                            cause: ThinkingParseCause::SignatureOrder
-                        })
-                    ),
-                    "{}",
-                    case.name
-                );
-            }
-            "ok" => {
-                let events = parsed.unwrap_or_else(|error| panic!("{}: {error}", case.name));
-                let observed: Vec<LeanClaudeStreamBlock> = events
+        match parse_messages_sse_typed(&sse, &RapidHashSet::new()) {
+            Err(MessagesParseError::MalformedThinking {
+                cause: ThinkingParseCause::Malformed("thinking start signature is not text"),
+            }) => family::StartOutcome {
+                kind: "wire_error".into(),
+                error: None,
+                content: Vec::new(),
+            },
+            Err(MessagesParseError::MalformedThinking {
+                cause: ThinkingParseCause::SignatureOrder,
+            }) => family::StartOutcome {
+                kind: "content_error".into(),
+                error: Some("signatureOrder".into()),
+                content: Vec::new(),
+            },
+            Err(error) => panic!("unmodeled wire-start failure: {error}"),
+            Ok(events) => family::StartOutcome {
+                kind: "ok".into(),
+                error: None,
+                content: events
                     .iter()
                     .filter_map(|event| {
                         let RawStreamingChoice::Reasoning { content, .. } = event else {
@@ -912,12 +895,12 @@ fn generated_claude_wire_start_cases_drive_native_parser() {
                         let ReasoningContent::Text { text, signature } =
                             crate::llm::rig_compat::from_rig_reasoning_part(content)
                         else {
-                            panic!("{}: modeled text reasoning", case.name)
+                            panic!("modeled text reasoning")
                         };
-                        Some(LeanClaudeStreamBlock {
+                        Some(family::StartBlock {
                             kind: "reasoning".into(),
                             value: None,
-                            parts: Some(vec![LeanClaudeReasoningPart {
+                            parts: Some(vec![family::StartPart {
                                 kind: "text".into(),
                                 payload: text,
                                 signature,
@@ -927,21 +910,10 @@ fn generated_claude_wire_start_cases_drive_native_parser() {
                             arguments: None,
                         })
                     })
-                    .collect();
-                assert_eq!(
-                    observed,
-                    case.expected
-                        .content
-                        .as_ref()
-                        .expect("modeled content")
-                        .as_slice(),
-                    "{}",
-                    case.name
-                );
-            }
-            other => panic!("{}: unknown modeled wire outcome {other}", case.name),
+                    .collect(),
+            },
         }
-    }
+    });
 }
 
 #[test]
