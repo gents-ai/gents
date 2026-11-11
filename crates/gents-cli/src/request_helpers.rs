@@ -371,7 +371,7 @@ pub(crate) async fn prepare_agent_request_with_input(
                     gents_session::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
                 ),
             }),
-            ..gents::RequestSpec::new(
+            ..gents_session::request::lifecycle::RequestSpec::new(
                 gents_protocol::request_admission::RequestPurpose::Normal,
                 gents_session::request::lifecycle::RequestIdentity {
                     request_id: request_id.clone(),
