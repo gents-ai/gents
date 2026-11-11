@@ -21,8 +21,10 @@ import { keepSendDeadlineClock } from "../../src/hooks/sendDeadlineClock";
 import { loadChatDrafts } from "../../src/hooks/chatDrafts";
 import {
   deliveryAffordances,
+  keptRow,
   sendStatus,
   type DeliveryAffordances,
+  type KeptRow,
   type SendStatus,
 } from "../../src/hooks/chatDeliveryView";
 import { acceptedChat } from "../chat-delivery-fixture";
@@ -34,6 +36,12 @@ type ViewCase = Omit<DeliveryAffordances, "view"> & {
   status: SendStatus;
   mailbox: boolean;
   view: DeliveryAffordances["view"];
+};
+type RowCase = {
+  status: SendStatus;
+  mailbox: boolean;
+  observed: boolean;
+  row: KeptRow | null;
 };
 type Snapshot = {
   status: SendStatus | null;
@@ -65,7 +73,11 @@ async function leanCases() {
     ["env", "lean", "--run", "Proofs/Conformance/ClientOptimisticSend.lean"],
     { cwd, timeout: 240_000, maxBuffer: 64 * 1024 * 1024 },
   );
-  return JSON.parse(stdout) as { views: ViewCase[]; traces: Trace[] };
+  return JSON.parse(stdout) as {
+    views: ViewCase[];
+    rows: RowCase[];
+    traces: Trace[];
+  };
 }
 
 const flush = async () => {
@@ -224,6 +236,16 @@ it("derives the send view and actions from the Lean optimistic send owner", asyn
       deliveryAffordances(status, mailbox),
       `${status} mailbox=${mailbox}`,
     ).toEqual(expected);
+}, 300_000);
+
+it("draws a kept message's transcript row from the Lean optimistic send owner", async () => {
+  const { rows } = await leanCases();
+  expect(rows).toHaveLength(16);
+  for (const { status, mailbox, observed, row } of rows)
+    expect(
+      keptRow(status, mailbox, observed),
+      `${status} mailbox=${mailbox} observed=${observed}`,
+    ).toBe(row);
 }, 300_000);
 
 it("runs chatDelivery through every Lean optimistic send trace", async () => {

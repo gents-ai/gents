@@ -9,6 +9,9 @@ export type SendStatus = "pending" | "confirmed" | "failed" | "discarded";
 
 export type DeliveryView = "sending" | "delivered" | "failed" | "hidden";
 
+/** What a kept message draws as its own transcript row (Lean `keptRow`). */
+export type KeptRow = Extract<DeliveryView, "sending" | "failed">;
+
 export type DeliveryAffordances = {
   view: DeliveryView;
   retry: boolean;
@@ -60,4 +63,16 @@ export function deliveryAffordances(
     case "discarded":
       return { view: "hidden", retry: false, discard: false, blocksComposer: false };
   }
+}
+
+/** The row a kept message draws in its session's transcript, bound to Lean
+ * `keptRow`: sending or failed until the session is observed holding its
+ * identity (`sessionHoldsRequest`), whose own row then stands for it. */
+export function keptRow(
+  status: SendStatus,
+  mailbox: boolean,
+  observed: boolean,
+): KeptRow | null {
+  if (mailbox || observed) return null;
+  return status === "pending" ? "sending" : status === "failed" ? "failed" : null;
 }
