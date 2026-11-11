@@ -624,7 +624,7 @@ async fn explicit_stop_pauses_the_goal() {
     )
     .await
     .unwrap();
-    let receipt = crate::session_control::stop_session_with_access(
+    let receipt = gents_session::session::stop_session_with_access(
         &node,
         &owner(&message),
         &caused.node_did,

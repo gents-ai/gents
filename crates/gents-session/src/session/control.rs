@@ -68,7 +68,7 @@ pub async fn stop_session_with_access(
                     "session stop latch was not committed to the selected session"
                 );
                 let drained_request_ids =
-                    gents_session::request::lifecycle::queue::drain_all_pending_session_requests_in_txn(
+                    crate::request::lifecycle::queue::drain_all_pending_session_requests_in_txn(
                         txn,
                         &session_id,
                         &node_did,
@@ -77,7 +77,7 @@ pub async fn stop_session_with_access(
                     )
                     .await?;
                 let interrupted_request_id =
-                    gents_session::request::interrupt::interrupt_active_session_in_txn(
+                    crate::request::interrupt::interrupt_active_session_in_txn(
                         txn,
                         &session_id,
                         &node_did,
@@ -85,7 +85,7 @@ pub async fn stop_session_with_access(
                     )
                     .await?;
                 if interrupted_request_id.is_none() {
-                    gents_session::request::hooks::points::session_halt(txn, &node_did, &session_id)
+                    crate::request::hooks::points::session_halt(txn, &node_did, &session_id)
                         .await?;
                 }
                 Ok(SessionStopReceipt {
@@ -103,6 +103,20 @@ pub async fn stop_session_with_access(
         .await
 }
 
+/// The process-local witnesses that a session's executions have settled.
+/// They observe the hosting runtime's own execution owners; a fresh owner
+/// witnesses nothing, so callers pass the runtime's.
+pub trait SessionExecutionWitness: Send + Sync {
+    /// Tool-call document IDs of the background executions this process runs.
+    fn active_tool_call_doc_ids(&self) -> Vec<String>;
+
+    /// The retained process ownership records. Blocking: reads host records.
+    fn process_records(&self) -> Result<Vec<crate::exec::ownership::ProcessRecord>>;
+
+    /// Row document IDs of the plugin job steps executing in this process.
+    fn in_flight_job_row_ids(&self) -> Vec<String>;
+}
+
 /// Resume uses the target node runtime's existing execution registry and job driver as quiescence
 /// witnesses; callers must not substitute fresh owners. This relies on the one-active-runtime-per-
 /// node operating convention while process and job ownership is checked with the session latch.
@@ -112,8 +126,7 @@ pub async fn resume_session_with_access(
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
-    background_executions: gents_toolcalls::call::hook::BackgroundExecutionRegistry,
-    job_driver: Arc<gents_toolcalls::background::job::driver::JobDriver>,
+    executions: Arc<dyn SessionExecutionWitness>,
 ) -> Result<()> {
     anyhow::ensure!(
         !session_id.trim().is_empty() && !node_did.trim().is_empty(),
@@ -146,8 +159,7 @@ pub async fn resume_session_with_access(
             let node_did = node_did.clone();
             let session_id = session_id.clone();
             let requester_did = requester_did.clone();
-            let background_executions = background_executions.clone();
-            let job_driver = job_driver.clone();
+            let executions = executions.clone();
             Box::pin(async move {
                 let owner =
                     gents_store::config_client::agent_session::load_agent_session_row_in_txn(
@@ -163,8 +175,7 @@ pub async fn resume_session_with_access(
                     &node_did,
                     &session_id,
                     requester_did.as_deref(),
-                    &background_executions,
-                    &job_driver,
+                    &executions,
                 )
                 .await?;
                 let response = {
@@ -190,16 +201,59 @@ pub async fn resume_session_with_access(
                         == Some(&serde_json::Value::String(owner.doc_id.clone())),
                     "session resume latch was not cleared on the selected session"
                 );
-                crate::goal::stage_session_resume_in_txn(
-                    txn,
-                    identity.as_ref(),
-                    &node_did,
-                    &session_id,
-                )
-                .await
+                stage_session_resume_in_txn(txn, identity.as_ref(), &node_did, &session_id).await
             })
         })
         .await
+}
+
+/// Core's resume rule, then `control.session.resume`: an interrupted or claimed
+/// execution must settle before any plugin restages the session's work.
+pub(crate) async fn stage_session_resume_in_txn(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    identity: &dyn gents_store::identity::NodeIdentity,
+    node_did: &str,
+    session_id: &str,
+) -> Result<()> {
+    anyhow::ensure!(
+        !session_request_unsettled_in_txn(txn, node_did, session_id).await?,
+        "session work is still settling; retry resume after the interrupted request terminates"
+    );
+    crate::request::hooks::points::session_resume(txn, identity, node_did, session_id).await
+}
+
+/// Whether any request of the session is an execution that has not settled
+/// (claimed, running or interrupted and not yet terminal).
+async fn session_request_unsettled_in_txn(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    node_did: &str,
+    session_id: &str,
+) -> Result<bool> {
+    let response = txn
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}) {{ lifecycle_state }} }}"#,
+            gents_store::graphql::escape_graphql_string(node_did),
+            gents_store::graphql::escape_graphql_string(session_id),
+        ))
+        .await?;
+    let rows = response
+        .pointer("/data/AgentRequest")
+        .and_then(serde_json::Value::as_array)
+        .context("request query omitted rows")?;
+    for row in rows {
+        let state: Option<gents_protocol::request_lifecycle::RequestLifecycleState> =
+            serde_json::from_value(
+                row.get("lifecycle_state")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null),
+            )?;
+        if state.is_some_and(
+            gents_protocol::request_lifecycle::RequestLifecycleState::is_unsettled_execution,
+        ) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 async fn ensure_session_executions_settled_in_txn(
@@ -207,8 +261,7 @@ async fn ensure_session_executions_settled_in_txn(
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
-    background_executions: &gents_toolcalls::call::hook::BackgroundExecutionRegistry,
-    job_driver: &gents_toolcalls::background::job::driver::JobDriver,
+    executions: &Arc<dyn SessionExecutionWitness>,
 ) -> Result<()> {
     let scope = gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
     let unsettled = session_tool_call_exists_in_txn(
@@ -221,23 +274,17 @@ async fn ensure_session_executions_settled_in_txn(
     anyhow::ensure!(!unsettled, "session-owned request or tool execution is still settling; retry agent_resume after agent_session_read reports completion");
 
     anyhow::ensure!(
-        !session_doc_exists_in_txn(
-            txn,
-            &scope,
-            background_executions.active_tool_call_doc_ids()
-        )
-        .await?,
+        !session_doc_exists_in_txn(txn, &scope, executions.active_tool_call_doc_ids()).await?,
         "session-owned background execution is still active; retry agent_resume after it settles"
     );
-    let executions = background_executions.clone();
+    let witness = Arc::clone(executions);
     let unexited = tokio::task::spawn_blocking(move || {
         Ok::<_, anyhow::Error>(
-            executions
-                .try_process_record_list()?
+            witness
+                .process_records()?
                 .into_iter()
                 .filter(|record| {
-                    record.identity.observe()
-                        != gents_session::exec::ownership::ProcessObservation::Exited
+                    record.identity.observe() != crate::exec::ownership::ProcessObservation::Exited
                 })
                 .map(|record| record.tool_call_doc_id)
                 .collect::<Vec<_>>(),
@@ -253,7 +300,7 @@ async fn ensure_session_executions_settled_in_txn(
         "session-owned process has not been observed exited; retry agent_resume after settlement"
     );
     anyhow::ensure!(
-        !session_doc_exists_in_txn(txn, &scope, job_driver.in_flight_row_ids()).await?,
+        !session_doc_exists_in_txn(txn, &scope, executions.in_flight_job_row_ids()).await?,
         "session-owned plugin job is still executing; retry agent_resume after its step settles"
     );
     Ok(())

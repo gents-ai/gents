@@ -118,8 +118,9 @@ latch always commits. A failed read of Goal state blocks an interrupt today
 two here because resume is refusable and halting is not. -/
 def controlSessionHalt : Point := ⟨"control.session.halt", [.staging], .mustCommit⟩
 
-/-- Staging around resume: Goals restages. Resume starts work, so a plugin
-may refuse it. Quiescence witnesses read process state and are core. -/
+/-- Staging around resume: Goals restages, creating its continuation through
+core's `request.create` (`Hooks.Resume`). Resume starts work, so a plugin may
+refuse it. Quiescence witnesses read process state and are core. -/
 def controlSessionResume : Point := ⟨"control.session.resume", [.staging], .mayRefuse⟩
 
 /-- A prepared verdict bound to the physical call and canonical arguments. -/

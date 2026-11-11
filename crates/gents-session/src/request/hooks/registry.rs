@@ -9,6 +9,7 @@ use super::prepared::Decider;
 use super::queue_scope::{ScopeAnswers, SessionRequests};
 use super::stage::Plugin;
 use gents_store::config_client::ConfigApplyTxn;
+use gents_store::identity::NodeIdentity;
 
 /// `request.terminal.stage`: a request reached a terminal state in this
 /// transaction. The terminal always commits.
@@ -60,16 +61,41 @@ pub struct SessionHalt {
     pub at: String,
 }
 
+/// `control.session.resume`: core cleared the session's stop latch in this
+/// transaction after its own quiescence rule held. Resume starts work, so a
+/// plugin may refuse it and the whole resume is not applied.
+#[derive(Debug, Clone)]
+pub struct SessionResume {
+    pub node_did: String,
+    pub session_id: String,
+    pub at: String,
+}
+
+/// What the caller of a lifecycle point holds for core's own operations and
+/// never shows a plugin: the plugin's effects name an operation and its
+/// arguments, and core performs it with this context under the transaction's
+/// actor. `signer` is core's signing identity for that actor, when the caller
+/// holds one.
+#[derive(Clone, Copy, Default)]
+pub struct OperationContext<'a> {
+    pub signer: Option<&'a dyn NodeIdentity>,
+}
+
 /// A named core operation a plugin may request as an effect (Lean
 /// `Hooks.Host.perform`). Core performs it in the lifecycle transaction, under
-/// that transaction's actor, from the arguments alone and core's own state.
-/// Its checks precede its first write, so a refused operation leaves the
-/// transaction as it found it.
+/// that transaction's actor, from the arguments alone, core's own state and
+/// the caller's `OperationContext`. Its checks precede its first write, so a
+/// refused operation leaves the transaction as it found it.
 #[async_trait::async_trait]
 pub trait CoreOperation: Send + Sync {
     fn name(&self) -> &'static str;
 
-    async fn perform(&self, txn: &ConfigApplyTxn<'_>, args: &Value) -> anyhow::Result<()>;
+    async fn perform(
+        &self,
+        txn: &ConfigApplyTxn<'_>,
+        context: OperationContext<'_>,
+        args: &Value,
+    ) -> anyhow::Result<()>;
 }
 
 /// The bundled plugins at each point, in the fixed order the composition root
@@ -81,6 +107,7 @@ pub struct Registry {
     pub queue_scope: Vec<Plugin<QueueScopeAsk, ScopeAnswers>>,
     pub request_terminal: Vec<Plugin<RequestTerminal, ()>>,
     pub session_halt: Vec<Plugin<SessionHalt, ()>>,
+    pub session_resume: Vec<Plugin<SessionResume, ()>>,
     pub operations: Vec<Arc<dyn CoreOperation>>,
 }
 

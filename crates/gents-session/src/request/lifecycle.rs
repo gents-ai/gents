@@ -67,6 +67,7 @@ pub(crate) use session_message_presentation::session_message_display_body_with_c
 mod query;
 pub mod queue;
 mod recovery;
+pub mod requested_create;
 #[cfg(test)]
 pub use recovery::{
     recover_expired_generation_with_access_for_test, RecoveryResult, RecoverySelectionChoice,

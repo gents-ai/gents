@@ -3,9 +3,10 @@ use super::native::TxnHost;
 use super::prepared::{admit, inputs_digest, prepare, Binding, Stale};
 use super::queue_scope::{QueueScopes, SessionRequests};
 use super::registry::{
-    AdmitShown, ClaimCandidate, QueueScopeAsk, Registry, RequestTerminal, SessionHalt,
+    AdmitShown, ClaimCandidate, OperationContext, QueueScopeAsk, Registry, RequestTerminal,
+    SessionHalt, SessionResume,
 };
-use super::stage::{gate, stage_dropping, HookError, Staged};
+use super::stage::{gate, stage, stage_dropping, HookError, Staged};
 use crate::request::admission::{
     load_exact_parent_request, required_row_string, AdmissionResult, AgentRequestAdmissionError,
 };
@@ -59,7 +60,7 @@ pub async fn request_terminal(
         at: at.to_owned(),
     };
     let registry = Registry::for_transaction(txn)?;
-    let host = TxnHost::new(txn, &registry);
+    let host = TxnHost::new(txn, &registry, OperationContext::default());
     let staged = stage_dropping(&host, &registry.request_terminal, &event)
         .await
         .map_err(surface)?;
@@ -80,11 +81,41 @@ pub async fn session_halt(
         at: chrono::Utc::now().to_rfc3339(),
     };
     let registry = Registry::for_transaction(txn)?;
-    let host = TxnHost::new(txn, &registry);
+    let host = TxnHost::new(txn, &registry, OperationContext::default());
     let staged = stage_dropping(&host, &registry.session_halt, &event)
         .await
         .map_err(surface)?;
     report_owed("control.session.halt", session_id, &staged);
+    Ok(())
+}
+
+/// `control.session.resume` (may refuse). Called in the transaction that
+/// cleared the session's stop latch, after core's own quiescence rule held.
+/// A plugin's refusal aborts the resume with the plugin's reason as the error.
+/// `signer` is core's signing identity for the transaction's actor; core's
+/// operations the plugins request use it, the plugins never see it.
+pub async fn session_resume(
+    txn: &ConfigApplyTxn<'_>,
+    signer: &dyn gents_store::identity::NodeIdentity,
+    node_did: &str,
+    session_id: &str,
+) -> anyhow::Result<()> {
+    let event = SessionResume {
+        node_did: node_did.to_owned(),
+        session_id: session_id.to_owned(),
+        at: chrono::Utc::now().to_rfc3339(),
+    };
+    let registry = Registry::for_transaction(txn)?;
+    let host = TxnHost::new(
+        txn,
+        &registry,
+        OperationContext {
+            signer: Some(signer),
+        },
+    );
+    stage(&host, &registry.session_resume, &event)
+        .await
+        .map_err(surface)?;
     Ok(())
 }
 
@@ -94,7 +125,7 @@ pub async fn claim_gate(
     event: &ClaimCandidate,
 ) -> anyhow::Result<ClaimVerdict> {
     let registry = Registry::for_transaction(txn)?;
-    let host = TxnHost::new(txn, &registry);
+    let host = TxnHost::new(txn, &registry, OperationContext::default());
     Ok(combine(
         gate(&host, &registry.claim_gate, event)
             .await
@@ -181,7 +212,7 @@ pub async fn queue_scope(
         asked,
     };
     let registry = Registry::for_transaction(txn)?;
-    let host = TxnHost::new(txn, &registry);
+    let host = TxnHost::new(txn, &registry, OperationContext::default());
     let answers = gate(&host, &registry.queue_scope, &event)
         .await
         .map_err(surface)?;

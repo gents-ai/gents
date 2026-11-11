@@ -172,7 +172,7 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
                 r#"lifecycle_state: "completed""#,
             )
             .await;
-            crate::session::stop_session_with_access(
+            gents_session::session::stop_session_with_access(
                 &node,
                 &tool.access().unwrap(),
                 &node_did,
@@ -181,14 +181,16 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
             )
             .await
             .unwrap();
-            let first_resume = crate::session::resume_session_with_access(
+            let first_resume = gents_session::session::resume_session_with_access(
                 &node,
                 &tool.access().unwrap(),
                 &node_did,
                 &session_id,
                 tool.requester_did(),
-                registry.clone(),
-                job_driver.clone(),
+                std::sync::Arc::new(crate::call::hook::RuntimeExecutionWitness {
+                    background_executions: registry.clone(),
+                    job_driver: job_driver.clone(),
+                }),
             )
             .await;
             assert_eq!(
@@ -235,14 +237,16 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
             deleted.name
         );
         if session_stopped {
-            crate::session::resume_session_with_access(
+            gents_session::session::resume_session_with_access(
                 &node,
                 &tool.access().unwrap(),
                 &node_did,
                 &session_id,
                 tool.requester_did(),
-                registry.clone(),
-                job_driver.clone(),
+                std::sync::Arc::new(crate::call::hook::RuntimeExecutionWitness {
+                    background_executions: registry.clone(),
+                    job_driver: job_driver.clone(),
+                }),
             )
             .await
             .expect("resume succeeds after the existing recovery owner verifies process exit");
@@ -363,7 +367,7 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
     );
     release_reservation_tx.send(()).unwrap();
     reservation_released_rx.await.unwrap();
-    let stop = crate::session::stop_session_with_access(
+    let stop = gents_session::session::stop_session_with_access(
         &admission.node,
         &tool.access().unwrap(),
         &node_did,
@@ -404,14 +408,16 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
             tool_root: None,
         },
     );
-    let blocked = crate::session::resume_session_with_access(
+    let blocked = gents_session::session::resume_session_with_access(
         &admission.node,
         &tool.access().unwrap(),
         &node_did,
         &session_id,
         tool.requester_did(),
-        registry.clone(),
-        job_driver.clone(),
+        std::sync::Arc::new(crate::call::hook::RuntimeExecutionWitness {
+            background_executions: registry.clone(),
+            job_driver: job_driver.clone(),
+        }),
     )
     .await;
     assert_eq!(
@@ -446,14 +452,16 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
         })
         .await
         .unwrap();
-    crate::session::resume_session_with_access(
+    gents_session::session::resume_session_with_access(
         &admission.node,
         &tool.access().unwrap(),
         &node_did,
         &other_session,
         None,
-        registry.clone(),
-        job_driver.clone(),
+        std::sync::Arc::new(crate::call::hook::RuntimeExecutionWitness {
+            background_executions: registry.clone(),
+            job_driver: job_driver.clone(),
+        }),
     )
     .await
     .expect("an unrelated session is not blocked by this process record");
@@ -478,14 +486,16 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
         process.observe(),
         gents_session::exec::ownership::ProcessObservation::Running
     );
-    crate::session::resume_session_with_access(
+    gents_session::session::resume_session_with_access(
         &admission.node,
         &tool.access().unwrap(),
         &node_did,
         &session_id,
         tool.requester_did(),
-        registry,
-        job_driver,
+        std::sync::Arc::new(crate::call::hook::RuntimeExecutionWitness {
+            background_executions: registry,
+            job_driver,
+        }),
     )
     .await
     .expect("resume succeeds after the registered process owner records exit");
