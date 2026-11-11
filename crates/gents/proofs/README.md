@@ -600,6 +600,8 @@ and either tested at the Rust boundary or treated as an external assumption.
 
 ## Structure
 
+Every module belongs to one layer: the Rust crate it specifies (`shared` for gents-protocol, gents-loop and gents-claude; `clients` for the desktop and CLI; `conformance` for emitters, the ledger and the contract programs). `.github/scripts/lean-import-layers.json` assigns the layers, lists them bottom to top with the layers each may import, and records modules placed away from their Rust owner with the reason. `lake build importLayers` rejects an import that points up the layering.
+
 Provider-input assembly for Claude: the body's `system[]` blocks (attribution, identity, joined prompt) and cache breakpoints, the attribution header's field gates, tools omission, and SSE tool-block accumulation, are modelled and witnessed; byte framing, the `cc_version` fingerprint, usage and headers are Rust-tested.
 
 | File | Contents |

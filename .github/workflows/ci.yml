@@ -499,6 +499,11 @@ jobs:
           python3 .github/scripts/test-lean-import-closure.py
           cd crates/gents/proofs && lake build importClosure
 
+      - name: Check proof import layers
+        run: |
+          python3 .github/scripts/test-lean-import-layers.py
+          cd crates/gents/proofs && lake build importLayers
+
       - name: Build proofs
         working-directory: crates/gents/proofs
         run: lake build
