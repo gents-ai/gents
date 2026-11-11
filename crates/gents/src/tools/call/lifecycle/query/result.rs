@@ -856,7 +856,7 @@ async fn load_accepted_tool_call_inner(
                     && call.await_mode.as_deref() == Some("background"),
                 "spawned tool lacks its spawn_process owner"
             );
-            let input: crate::tools::background::status::BackgroundToolArgs =
+            let input: crate::tools::native::background_args::BackgroundToolArgs =
                 serde_json::from_str(&parent_args)?;
             anyhow::ensure!(
                 input.tool_name == call.tool_name,

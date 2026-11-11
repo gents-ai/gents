@@ -204,7 +204,7 @@ async fn client_output_snapshot_reads_full_retained_window_without_widening_mode
         &access,
         &scope,
         &registry.live_outputs.registry,
-        crate::tools::background::status::r4c_args::ReadToolOutputArgs {
+        crate::tools::native::background_args::ReadToolOutputArgs {
             tool_call_id: "large-output".into(),
             offset: 0,
             max_tokens: 1024,

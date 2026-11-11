@@ -7,9 +7,9 @@ use serde_json::json;
 use tracing::Instrument;
 
 use crate::session::tool_call_state::CancelCause;
-use crate::tools::background::status::r4c_args::{ListBackgroundToolsArgs, ReadToolOutputArgs};
-use crate::tools::background::status::{
-    BackgroundToolArgs, CancelToolArgs, ProcessControlScope, ReadToolOutputOutcome, WaitToolArgs,
+use crate::tools::background::status::{ProcessControlScope, ReadToolOutputOutcome};
+use crate::tools::native::background_args::{
+    BackgroundToolArgs, CancelToolArgs, ListBackgroundToolsArgs, ReadToolOutputArgs, WaitToolArgs,
 };
 use crate::tools::call::lifecycle::query::load_tool_call_result;
 use crate::tools::call::lifecycle::{FailureClass, ToolCallLifecycle};

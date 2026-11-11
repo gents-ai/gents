@@ -12,6 +12,7 @@ use anyhow::Result;
 use rapidhash::RapidHashMap;
 
 mod args;
+pub mod background_args;
 mod bash_tools;
 mod cli_tool;
 pub mod command_observability;

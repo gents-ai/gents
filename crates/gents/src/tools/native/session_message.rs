@@ -16,8 +16,9 @@ use crate::session::message::{
     AgentInterruptArgs, AgentListArgs, AgentMessageArgs, AgentNewArgs, AgentSessionListArgs,
     AgentSessionReadArgs,
 };
-use crate::tools::background::status::r4c_args::{ListBackgroundToolsArgs, ReadToolOutputArgs};
-use crate::tools::background::status::{BackgroundToolArgs, CancelToolArgs, WaitToolArgs};
+use crate::tools::native::background_args::{
+    BackgroundToolArgs, CancelToolArgs, ListBackgroundToolsArgs, ReadToolOutputArgs, WaitToolArgs,
+};
 use crate::tools::surface::BackgroundToolConfig;
 
 use super::shared::ToolError;

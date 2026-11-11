@@ -1,5 +1,4 @@
 mod final_output;
-pub(crate) mod r4c_args;
 pub mod status_projection;
 
 use crate::inference::llm::message::{AssistantContent, Message, Text};
@@ -13,9 +12,10 @@ use gents_protocol::output::rows::{
 };
 use gents_protocol::output::{OutputSource, OutputWriter, PayloadRef};
 
-use self::r4c_args::{
-    ListBackgroundToolsArgs, ListBackgroundToolsEntry, ListBackgroundToolsResponse,
-    ListStatusFilter, ReadToolOutputArgs, ReadToolOutputResponse,
+use crate::tools::native::background_args::{
+    BackgroundToolArgs, CancelToolArgs, ListBackgroundToolsArgs, ListBackgroundToolsEntry,
+    ListBackgroundToolsResponse, ListStatusFilter, ReadToolOutputArgs, ReadToolOutputResponse,
+    WaitToolArgs,
 };
 pub(crate) use gents_loop::live_output::{
     LiveOutputStream, LiveToolOutputRegistry, LiveToolOutputWriter,
@@ -43,27 +43,6 @@ impl ProcessControlScope {
             && self.node_did == owner_node_did
             && self.requester_did.as_deref() == owner_requester_did
     }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct BackgroundToolArgs {
-    pub tool_name: String,
-    pub args: serde_json::Map<String, serde_json::Value>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct WaitToolArgs {
-    pub tool_call_id: String,
-    #[serde(default)]
-    pub timeout_secs: Option<u64>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct CancelToolArgs {
-    pub tool_call_id: String,
-    #[serde(default)]
-    pub reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
