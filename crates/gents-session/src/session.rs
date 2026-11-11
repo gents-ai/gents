@@ -98,7 +98,7 @@ pub use output::{
 };
 #[cfg(test)]
 pub use query::load_session_agent_did;
-pub(crate) use query::require_session;
+pub use query::require_session;
 pub use query::session_is_stopped;
 pub use query::session_stopped_in_txn;
 pub use query::{client_requester_scope, public_request_filter};

@@ -108,7 +108,7 @@ impl RuntimeServiceAdmission {
             .map_err(|_| RetirementError::Unavailable)?;
         Ok(state.phase != Phase::Accepting)
     }
-    pub(crate) fn admit(&self) -> Result<RuntimeServiceWork, RetirementError> {
+    pub fn admit(&self) -> Result<RuntimeServiceWork, RetirementError> {
         let mut state = self
             .0
             .state

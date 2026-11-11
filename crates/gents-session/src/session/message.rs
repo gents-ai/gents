@@ -29,7 +29,7 @@ pub mod plan;
 mod target;
 
 pub use body::{load_configured_task, render_body, render_task_body};
-pub(crate) use commit::commit;
+pub use commit::commit;
 pub use commit::{
     load_receipt, stage_planned_write_in_txn, CommitError, SessionMessageCall,
     SessionMessageReceipt, ToolCallTerminal,

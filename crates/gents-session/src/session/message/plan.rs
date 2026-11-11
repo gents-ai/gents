@@ -29,7 +29,7 @@ pub struct Plan {
 }
 
 impl Plan {
-    pub(crate) async fn sign_agent_creation(
+    pub async fn sign_agent_creation(
         &mut self,
         node_did: &str,
         parent: &gents_protocol::request_input::RequestInput,
@@ -47,11 +47,11 @@ impl Plan {
         );
         crate::request::admission::sign_agent_request_create(signer, create).await
     }
-    pub(crate) fn hop(&self) -> u32 {
+    pub fn hop(&self) -> u32 {
         self.hop
     }
 
-    pub(crate) fn request(
+    pub fn request(
         session_id: String,
         hop: u32,
         create: gents_protocol::request_admission::AgentRequestCreate,

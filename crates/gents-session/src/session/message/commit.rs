@@ -113,7 +113,7 @@ impl gents_store::config_client::TransactionFailure for CommitError {
     }
 }
 
-pub(crate) async fn commit<C>(
+pub async fn commit<C>(
     node: &Arc<EmbeddedNode>,
     cause: &SessionMessageCause,
     lifecycle: &mut C,

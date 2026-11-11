@@ -222,7 +222,7 @@ impl RequestExecutionLease {
         )))
     }
 
-    pub(crate) async fn owns_execution(
+    pub async fn owns_execution(
         &self,
         node: &std::sync::Arc<EmbeddedNode>,
         request_doc_id: &str,

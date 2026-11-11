@@ -235,7 +235,7 @@ impl BindingAction {
 pub(crate) type Binding = Grant<WorkspaceKey, BindingAction>;
 
 #[derive(Clone, Debug)]
-pub(crate) struct ActionConsent {
+pub struct ActionConsent {
     home: PathBuf,
     binding: Binding,
 }
@@ -285,18 +285,18 @@ impl gents_pack::plugin::InvocationConsent for ActionConsent {
     }
 }
 
-pub(crate) fn action_consent(home: &Path, binding: Binding) -> ActionConsent {
+pub fn action_consent(home: &Path, binding: Binding) -> ActionConsent {
     ActionConsent {
         home: home.to_owned(),
         binding,
     }
 }
 
-pub(crate) fn within_workspace(path: &Path) -> bool {
+pub fn within_workspace(path: &Path) -> bool {
     context::within_workspace(path)
 }
 
-pub(crate) struct BindingDecision {
+pub struct BindingDecision {
     pub route: Route,
     pub binding: Binding,
     input: Input<WorkspaceKey, BindingAction>,
@@ -316,7 +316,7 @@ async fn authorize_binding(
     Ok(binding)
 }
 
-pub(crate) async fn consent_binding(
+pub async fn consent_binding(
     home: &Path,
     decision: BindingDecision,
     interactive: bool,
@@ -398,7 +398,7 @@ pub(crate) fn consume_decision(
         .ok_or_else(|| SelectionChanged.into())
 }
 
-pub(crate) fn allowed_scope(
+pub fn allowed_scope(
     home: &Path,
     workdir: Option<&Path>,
     user_home: Option<&Path>,
@@ -412,7 +412,7 @@ pub(crate) fn allowed_scope(
 
 /// Installed plugin admission still enforces its manifold. This decision
 /// controls only consent for the exact bound input under that ceiling.
-pub(crate) fn binding_route(
+pub fn binding_route(
     home: &Path,
     action: impl FnOnce() -> Result<BindingAction>,
     covered: bool,

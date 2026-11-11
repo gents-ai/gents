@@ -16,19 +16,19 @@ pub mod native_encoding;
 
 #[derive(Clone, Debug)]
 pub struct AcceptedToolCall {
-    pub(crate) actor: identity::Did,
-    pub(crate) agent_signer: Option<gents_store::identity::ManagedAgentSigner>,
-    pub(crate) tool_call_doc_id: String,
-    pub(crate) request_doc_id: String,
-    pub(crate) session_id: String,
-    pub(crate) accepted_header_doc_id: String,
-    pub(crate) message_sequence: u32,
-    pub(crate) id: String,
-    pub(crate) call_id: Option<String>,
-    pub(crate) tool_name: String,
-    pub(crate) execution_generation: String,
-    pub(crate) arguments: gents_protocol::output::PayloadRef,
-    pub(crate) await_mode: gents_protocol::tool_call::AwaitMode,
+    pub actor: identity::Did,
+    pub agent_signer: Option<gents_store::identity::ManagedAgentSigner>,
+    pub tool_call_doc_id: String,
+    pub request_doc_id: String,
+    pub session_id: String,
+    pub accepted_header_doc_id: String,
+    pub message_sequence: u32,
+    pub id: String,
+    pub call_id: Option<String>,
+    pub tool_name: String,
+    pub execution_generation: String,
+    pub arguments: gents_protocol::output::PayloadRef,
+    pub await_mode: gents_protocol::tool_call::AwaitMode,
 }
 
 /// Maximum UTF-8 byte length of the reasoning preview persisted while a

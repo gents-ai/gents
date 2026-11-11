@@ -173,7 +173,7 @@ impl PluginOutcome {
 pub struct PluginRunner {
     afb_bytes: Vec<u8>,
     plugin: PackPlugin,
-    manifold: Manifold,
+    pub manifold: Manifold,
 }
 
 impl std::fmt::Debug for PluginRunner {
@@ -333,7 +333,7 @@ impl PluginRunner {
         self.call_with_host(arguments, budget, manifold, None)
     }
 
-    fn call_with_host(
+    pub fn call_with_host(
         &self,
         arguments: &serde_json::Value,
         budget: &PluginBudget,

@@ -4,7 +4,7 @@ use super::{ConfigApplyTxn, ConfigClientError};
 use crate::graphql::escape_graphql_string;
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum RuntimeHopCapError {
+pub enum RuntimeHopCapError {
     #[error("the hop-cap read requires the bound runtime and a managed Agent transaction")]
     RuntimeScope,
     #[error(transparent)]
@@ -27,7 +27,7 @@ impl ConfigApplyTxn<'_> {
     /// this Agent transaction's snapshot. The Agent's own Node visibility does
     /// not decide the cap. `None` is a Node the runtime cannot read, which is
     /// unavailable rather than an unset cap.
-    pub(crate) async fn runtime_max_request_hop(
+    pub async fn runtime_max_request_hop(
         &self,
         node_did: &str,
     ) -> Result<Option<Option<u32>>, RuntimeHopCapError> {

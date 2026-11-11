@@ -157,7 +157,7 @@ pub async fn load_session_requester_scope(
     })
 }
 
-pub(crate) async fn require_session(
+pub async fn require_session(
     node: &std::sync::Arc<EmbeddedNode>,
     actor: Option<::identity::Did>,
     node_did: &str,

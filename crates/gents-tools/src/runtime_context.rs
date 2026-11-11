@@ -35,20 +35,20 @@ tokio::task_local! {
 
 #[derive(Clone)]
 pub struct CurrentToolRuntimeContext {
-    pub(crate) runtime_home: Option<PathBuf>,
-    pub(crate) deadline_at: Option<DateTime<Utc>>,
-    pub(crate) cancellation_token: CancellationToken,
-    pub(crate) workspace_cwd: Option<PathBuf>,
-    pub(crate) workspace_root: Option<PathBuf>,
-    pub(crate) workspace_authority: Option<WorkspaceAuthority>,
-    pub(crate) workspace_artifact: Option<gents_session::workspace::ArtifactGrant>,
-    pub(crate) session_id: Option<String>,
+    pub runtime_home: Option<PathBuf>,
+    pub deadline_at: Option<DateTime<Utc>>,
+    pub cancellation_token: CancellationToken,
+    pub workspace_cwd: Option<PathBuf>,
+    pub workspace_root: Option<PathBuf>,
+    pub workspace_authority: Option<WorkspaceAuthority>,
+    pub workspace_artifact: Option<gents_session::workspace::ArtifactGrant>,
+    pub session_id: Option<String>,
     pub(crate) background: bool,
-    pub(crate) correlation: Option<String>,
-    pub(crate) source_fields: std::collections::BTreeMap<String, String>,
-    pub(crate) requester_did: Option<String>,
-    pub(crate) node_did: Option<String>,
-    pub(crate) agent_did: Option<String>,
+    pub correlation: Option<String>,
+    pub source_fields: std::collections::BTreeMap<String, String>,
+    pub requester_did: Option<String>,
+    pub node_did: Option<String>,
+    pub agent_did: Option<String>,
     pub(crate) request_id: Option<String>,
 }
 
