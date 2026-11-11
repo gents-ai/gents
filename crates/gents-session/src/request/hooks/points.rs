@@ -5,7 +5,7 @@ use super::prepared::{admit, inputs_digest, prepare, Binding, Stale};
 use super::queue_scope::{QueueScopes, SessionRequests};
 use super::registry::{
     AdmitShown, ClaimApplied, ClaimCandidate, OperationContext, QueueScopeAsk, Registry,
-    RequestTerminal, SessionHalt, SessionResume,
+    RequestCreated, RequestTerminal, SessionHalt, SessionResume,
 };
 use super::stage::{gate, stage, stage_dropping, stage_naming, HookError, Plugin, Staged};
 use crate::request::admission::{
@@ -186,6 +186,22 @@ pub async fn session_resume(
         },
     );
     stage(&host, &registry.session_resume, &event)
+        .await
+        .map_err(surface)?;
+    Ok(())
+}
+
+/// `request.create.stage` after creation (may refuse). Called by core's
+/// `request.create` operation once the row exists, in the same transaction; a
+/// refusal fails the creation with the plugin's reason.
+pub async fn request_created(
+    txn: &ConfigApplyTxn<'_>,
+    context: OperationContext<'_>,
+    event: &RequestCreated,
+) -> anyhow::Result<()> {
+    let registry = Registry::for_transaction(txn)?;
+    let host = TxnHost::new(txn, &registry, context);
+    stage(&host, &registry.request_created, event)
         .await
         .map_err(surface)?;
     Ok(())

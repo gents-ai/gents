@@ -20,7 +20,8 @@ use gents_session::request::hooks::operations::{supersede_pending, Selector};
 use gents_session::request::hooks::prepared::{Decide, Verdict};
 use gents_session::request::hooks::queue_scope::{ScopeAnswer, ScopeAnswers, ScopeFailure};
 use gents_session::request::hooks::registry::{
-    AdmitShown, ClaimApplied, ClaimCandidate, QueueScopeAsk, Registry, SessionHalt, SessionResume,
+    AdmitShown, ClaimApplied, ClaimCandidate, QueueScopeAsk, Registry, RequestCreated,
+    SessionHalt, SessionResume,
 };
 use gents_store::config_client::agent_session::{decode_agent_session_read, AgentSessionRowRead};
 
@@ -179,16 +180,12 @@ impl Hook<SessionHalt> for PauseOnHalt {
 
 /// `control.session.resume`: a paused Goal resumes with its session. Busy, it
 /// resumes the work the session holds; idle, it continues from its terminal
-/// predecessor through core's `request.create` (Lean `Hooks.Resume`).
+/// predecessor through core's `request.create` (Lean `Hooks.Resume`). A Goal
+/// with no assignment root gets its continuation as root from
+/// `BindResumedRoot` once core has created it.
 struct RestageOnResume {
     manifest: Manifest,
 }
-
-/// Why the plugin cannot resume a Goal that has no assignment root. Binding
-/// the continuation as the root needs the document ID core gives the created
-/// request, which no effect of this point can name.
-const UNBOUND_RESUME: &str =
-    "goal has no assignment root to bind its resumed continuation to; resume was not applied";
 
 impl RestageOnResume {
     fn effects(event: &SessionResume, rows: &[Vec<Row>]) -> Result<Vec<Effect>> {
@@ -235,9 +232,6 @@ impl RestageOnResume {
                 if let Some(child) = children.first() {
                     request_head::verify_goal_continuation_receipt(&goal, parent_row, child)?;
                     return Ok(Vec::new());
-                }
-                if goal.assignment_root_request_doc_id.is_none() {
-                    bail!(UNBOUND_RESUME);
                 }
                 let agent = parent.agent_did.clone();
                 let resumed = operator_resume::decide_idle_resume(
@@ -286,6 +280,80 @@ impl Hook<SessionResume> for RestageOnResume {
     }
 
     fn decide(&self, event: &SessionResume, rows: &[Vec<Row>]) -> Outcome<()> {
+        match Self::effects(event, rows) {
+            Ok(effects) => Outcome::effects(effects),
+            Err(error) => Outcome::Refuse(format!("{error:#}")),
+        }
+    }
+}
+
+/// `request.create.stage` after creation: the Goal continuation core created
+/// for a Goal with no assignment root becomes that root, the binding
+/// `bind_goal_first_request_in_txn` makes for a Goal's first request (Lean
+/// `Hooks.Resume.resumeCreating`). The Goal row is shown as this transaction
+/// left it, after the resume restaged it, so its revision is current.
+struct BindResumedRoot {
+    manifest: Manifest,
+}
+
+impl BindResumedRoot {
+    /// The Goal the created request continues, from its signed trigger.
+    fn continued(event: &RequestCreated) -> Option<&str> {
+        let request = &event.request;
+        (request.caused_by_trigger_kind.as_deref() == Some(GOAL_TRIGGER_KIND))
+            .then_some(request.caused_by_trigger_id.as_deref())
+            .flatten()
+    }
+
+    fn effects(event: &RequestCreated, rows: &[Vec<Row>]) -> Result<Vec<Effect>> {
+        let Some(goal_id) = Self::continued(event) else {
+            return Ok(Vec::new());
+        };
+        let [sessions, goals] = rows else {
+            bail!("Goal root binding was not shown its declared rows");
+        };
+        let Some((goal, row)) = canonical_goal(&event.request.session_id, sessions, goals)? else {
+            return Ok(Vec::new());
+        };
+        if goal.goal_id != goal_id || goal.assignment_root_request_doc_id.is_some() {
+            return Ok(Vec::new());
+        }
+        anyhow::ensure!(
+            !event.doc_id.is_empty()
+                && event
+                    .request
+                    .input
+                    .goal_assignment
+                    .as_ref()
+                    .is_none_or(|reference| {
+                        reference.goal_id == goal.goal_id && reference.root_request_doc_id.is_none()
+                    }),
+            "Goal first request conflicts with its assignment binding"
+        );
+        Ok(vec![Effect::Write(Write::Update {
+            doc: row.doc.clone(),
+            expected: row.revision,
+            value: serde_json::json!({ "assignment_root_request_doc_id": event.doc_id }),
+            conflict: Some("Goal first request binding changed during publication".into()),
+        })])
+    }
+}
+
+impl Hook<RequestCreated> for BindResumedRoot {
+    type Value = ();
+
+    fn manifest(&self) -> &Manifest {
+        &self.manifest
+    }
+
+    fn reads(&self, event: &RequestCreated) -> Vec<Query> {
+        if Self::continued(event).is_none() {
+            return Vec::new();
+        }
+        canonical_goal_reads(&event.request.node_did, &event.request.session_id).into()
+    }
+
+    fn decide(&self, event: &RequestCreated, rows: &[Vec<Row>]) -> Outcome<()> {
         match Self::effects(event, rows) {
             Ok(effects) => Outcome::effects(effects),
             Err(error) => Outcome::Refuse(format!("{error:#}")),
@@ -832,6 +900,9 @@ pub fn register(registry: &mut Registry) {
         manifest: manifest(),
     }));
     registry.session_resume.push(Arc::new(RestageOnResume {
+        manifest: manifest(),
+    }));
+    registry.request_created.push(Arc::new(BindResumedRoot {
         manifest: manifest(),
     }));
 }

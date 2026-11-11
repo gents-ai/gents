@@ -74,6 +74,18 @@ pub struct SessionHalt {
     pub at: String,
 }
 
+/// `request.create.stage`, after creation: core created `request` (signed,
+/// with core's session, Agent and hop fields) in this transaction as the row
+/// `doc_id`, at a plugin's request (Lean `Hooks.Resume.resumeCreating`). A
+/// plugin is shown its rows as they stand after everything this transaction
+/// staged so far, and may refuse; a refusal fails the creation and the
+/// transition that requested it.
+#[derive(Debug, Clone)]
+pub struct RequestCreated {
+    pub request: gents_protocol::request_admission::AgentRequestCreate,
+    pub doc_id: String,
+}
+
 /// `control.session.resume`: core cleared the session's stop latch in this
 /// transaction after its own quiescence rule held. Resume starts work, so a
 /// plugin may refuse it and the whole resume is not applied.
@@ -128,6 +140,7 @@ pub struct Registry {
     pub request_admit_verify: Vec<Decider<AgentRequestRow, AdmitShown, ()>>,
     pub claim_gate: Vec<Plugin<ClaimCandidate, ClaimVerdict>>,
     pub claim_applied: Vec<Plugin<ClaimApplied, ()>>,
+    pub request_created: Vec<Plugin<RequestCreated, ()>>,
     pub queue_scope: Vec<Plugin<QueueScopeAsk, ScopeAnswers>>,
     pub request_terminal: Vec<Plugin<RequestTerminal, ()>>,
     pub session_halt: Vec<Plugin<SessionHalt, ()>>,
