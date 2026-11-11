@@ -162,11 +162,13 @@ async fn generated_goal_operator_resume_cases_drive_real_transactions() {
                             .transact_write("test.goal.resume_claim_fence", |txn| {
                                 let request = &request;
                                 Box::pin(async move {
-                                    fence_goal_continuation_claim_in_txn(
+                                    gents_session::request::hooks::points::claim_gate(
                                         txn,
-                                        request,
-                                        "2026-10-23T00:00:00Z",
-                                        true,
+                                        &gents_session::request::hooks::registry::ClaimCandidate {
+                                            request: request.clone(),
+                                            client: true,
+                                            at: "2026-10-23T00:00:00Z".into(),
+                                        },
                                     )
                                     .await
                                 })
@@ -174,7 +176,7 @@ async fn generated_goal_operator_resume_cases_drive_real_transactions() {
                             .await
                             .unwrap();
                         assert_eq!(
-                            allowed == gents_protocol::goal::GoalClaimFence::Allowed,
+                            allowed == gents_session::request::hooks::claim::ClaimVerdict::Allow,
                             opening_is_entry,
                             "the publication must pass the modeled assignment-opening claim fence"
                         );

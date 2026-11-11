@@ -106,30 +106,6 @@ pub async fn set_goal_auto_resume_from_access(
         .await
 }
 
-pub(crate) async fn pause_goal_for_interrupt_in_txn(
-    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
-    node_did: &str,
-    session_id: &str,
-) -> Result<()> {
-    let Some(goal) = load_canonical_goal_in_txn(txn, node_did, session_id).await? else {
-        return Ok(());
-    };
-    let state = goal.state().context("Goal has an unknown status")?;
-    if state.step(GoalAction::Pause).is_some() {
-        set_goal_in_txn(
-            txn,
-            node_did,
-            session_id,
-            None,
-            Some(GoalStatus::Paused),
-            None,
-            None,
-        )
-        .await?;
-    }
-    Ok(())
-}
-
 pub(super) async fn set_goal_in_txn(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,

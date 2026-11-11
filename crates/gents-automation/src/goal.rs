@@ -19,6 +19,7 @@ mod document;
 mod edit;
 mod first_request_binding;
 mod history;
+pub mod lifecycle_hooks;
 mod load;
 mod observation;
 mod operator_resume;
@@ -96,7 +97,6 @@ pub(crate) use backed_request::{
 pub use backed_request::{
     submit_goal_backed_request, submit_goal_backed_request_local, GoalBackedRequestDisposition,
 };
-pub(crate) use controller::fence_goal_continuation_claim_in_txn;
 pub use controller::{
     claim_continuation_from_access, claim_retry_continuation_from_access,
     update_goal_fields_if_status_from_access,
@@ -133,7 +133,6 @@ pub use transition::{
 pub(crate) use usage::session_token_usage_breakdown_in_txn;
 use usage::session_token_usage_in_txn;
 pub use usage::{refresh_goal_usage_from_access, session_token_usage};
-pub(crate) use write::pause_goal_for_interrupt_in_txn;
 use write::set_goal_in_txn;
 pub use write::{
     delete_goal_from_access, delete_goals_for_session_from_access, set_goal,

@@ -108,6 +108,7 @@ import Proofs.Conformance.ToolTimeouts
 
 import Proofs.Conformance.LogicalOutputObligation
 import Proofs.Conformance.TaskHooks
+import Proofs.Conformance.Hooks
 
 import Proofs.Conformance.OperatorBaseFreeze
 
@@ -125,3 +126,5 @@ import Proofs.Optimization
 import Proofs.PluginJob
 
 import Proofs.ToolExecution.Parallel
+
+import Proofs.Hooks

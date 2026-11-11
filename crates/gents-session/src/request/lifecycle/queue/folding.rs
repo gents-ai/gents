@@ -392,7 +392,7 @@ pub(crate) async fn consume_folded_in_txn(
         .context("folded request receipt omitted request_id")?
         .to_owned();
     crate::request::workspace_binding::release_terminal_writer_binding(txn, &updated[0]).await?;
-    crate::triggers::engine::durable::publish_request_outcome(
+    crate::request::hooks::points::request_terminal(
         txn,
         &consumption.node_did,
         &request_id,
@@ -400,7 +400,8 @@ pub(crate) async fn consume_folded_in_txn(
         FOLDED_REASON,
         published_at,
     )
-    .await
+    .await?;
+    Ok(())
 }
 
 pub(crate) async fn ensure_folded_consumed_in_txn(

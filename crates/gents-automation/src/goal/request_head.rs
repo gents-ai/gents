@@ -516,28 +516,27 @@ pub(crate) fn assignment_allows(assigned: Option<&str>, observed: Option<&str>) 
     assigned.is_none_or(|root| observed == Some(root))
 }
 
-pub(super) async fn retire_stale_assignment_continuations_in_txn(
-    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+pub(super) const STALE_ASSIGNMENT_REASON: &str = "superseded by a newer Task Goal assignment";
+
+/// A pending Goal continuation that is not a member of the Goal's current
+/// assignment, with the request that supersedes it.
+pub(super) struct StaleContinuation {
+    pub(super) doc_id: String,
+    pub(super) request_id: String,
+    pub(super) survivor_request_id: String,
+    pub(super) survivor_doc_id: String,
+}
+
+/// The pending Goal continuations of the session that the Goal's current
+/// assignment retires, decided on the session's request rows alone.
+pub(super) fn stale_assignment_continuations(
     goal: &GoalDocument,
     only_doc: Option<&str>,
-    now: &str,
-) -> Result<bool> {
+    requests: &[AgentRequestRow],
+) -> Result<Vec<StaleContinuation>> {
     let Some(root) = goal.assignment_root_request_doc_id.as_deref() else {
-        return Ok(true);
+        return Ok(Vec::new());
     };
-    let rendered = {
-        use gents_protocol::document_query::{
-            fields::agent_request as fields, Filter, Query, Selection,
-        };
-        Query::select(Selection::owned(
-            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
-        ))
-        .filter(Filter::eq(fields::NODE_DID, &goal.node_did))
-        .filter(Filter::eq(fields::SESSION_ID, &goal.session_id))
-        .render()
-    };
-    let response = txn.run_local_response(&rendered).await?;
-    let requests: Vec<AgentRequestRow> = gents_store::graphql::rows(&response, "AgentRequest")?;
     let pending = requests
         .iter()
         .filter(|row| {
@@ -547,9 +546,9 @@ pub(super) async fn retire_stale_assignment_continuations_in_txn(
         })
         .collect::<Vec<_>>();
     if pending.is_empty() {
-        return Ok(true);
+        return Ok(Vec::new());
     }
-    let by_doc = request_rows_by_doc(&goal.node_did, &goal.session_id, &requests)?;
+    let by_doc = request_rows_by_doc(&goal.node_did, &goal.session_id, requests)?;
     let openings = assignment_openings(std::slice::from_ref(goal));
     let opening = *by_doc
         .get(root)
@@ -567,7 +566,7 @@ pub(super) async fn retire_stale_assignment_continuations_in_txn(
             && super::request_assignment::request_belongs_to_goal(goal, entry),
         "Goal assignment has no authenticated physical opening"
     );
-    let mut allowed = true;
+    let mut stale = Vec::new();
     for row in pending {
         let doc = row
             .doc_id
@@ -586,14 +585,46 @@ pub(super) async fn retire_stale_assignment_continuations_in_txn(
         {
             continue;
         }
-        allowed = false;
-        let reason = "superseded by a newer Task Goal assignment";
+        stale.push(StaleContinuation {
+            doc_id: doc.to_owned(),
+            request_id: row.request_id.clone(),
+            survivor_request_id: entry.request_id.clone(),
+            survivor_doc_id: root.to_owned(),
+        });
+    }
+    Ok(stale)
+}
+
+pub(super) async fn retire_stale_assignment_continuations_in_txn(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    goal: &GoalDocument,
+    only_doc: Option<&str>,
+    now: &str,
+) -> Result<bool> {
+    if goal.assignment_root_request_doc_id.is_none() {
+        return Ok(true);
+    }
+    let rendered = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::owned(
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
+        ))
+        .filter(Filter::eq(fields::NODE_DID, &goal.node_did))
+        .filter(Filter::eq(fields::SESSION_ID, &goal.session_id))
+        .render()
+    };
+    let response = txn.run_local_response(&rendered).await?;
+    let requests: Vec<AgentRequestRow> = gents_store::graphql::rows(&response, "AgentRequest")?;
+    let stale = stale_assignment_continuations(goal, only_doc, &requests)?;
+    for continuation in &stale {
         let mutation = gents_session::request::lifecycle::queue::supersede_pending_mutation(
-            doc,
+            &continuation.doc_id,
             &goal.node_did,
-            &entry.request_id,
-            root,
-            reason,
+            &continuation.survivor_request_id,
+            &continuation.survivor_doc_id,
+            STALE_ASSIGNMENT_REASON,
         );
         let response = txn.execute_local_response(&mutation).await?;
         if response
@@ -602,18 +633,18 @@ pub(super) async fn retire_stale_assignment_continuations_in_txn(
             .and_then(|data| data.get("update_AgentRequest"))
             .is_some_and(gents_store::graphql::response_has_documents)
         {
-            crate::triggers::engine::durable::publish_request_outcome(
+            gents_session::request::hooks::points::request_terminal(
                 txn,
                 &goal.node_did,
-                &row.request_id,
+                &continuation.request_id,
                 RequestLifecycleState::Superseded,
-                reason,
+                STALE_ASSIGNMENT_REASON,
                 now,
             )
             .await?;
         }
     }
-    Ok(allowed)
+    Ok(stale.is_empty())
 }
 
 pub(crate) async fn assignment_request_id_in_txn(

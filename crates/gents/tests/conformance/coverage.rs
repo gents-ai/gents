@@ -1809,6 +1809,41 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "SessionControlCases".to_string(),
         ));
     }
+    for (present, key, domain) in [
+        (
+            !snapshot.lifecycle_hook_effect_cases.is_empty(),
+            "lifecycle_hook_effect_cases",
+            "LifecycleHookEffectCases",
+        ),
+        (
+            !snapshot.lifecycle_hook_stage_cases.is_empty(),
+            "lifecycle_hook_stage_cases",
+            "LifecycleHookStageCases",
+        ),
+        (
+            !snapshot.lifecycle_hook_must_commit_cases.is_empty(),
+            "lifecycle_hook_must_commit_cases",
+            "LifecycleHookMustCommitCases",
+        ),
+        (
+            !snapshot.lifecycle_hook_combine_cases.is_empty(),
+            "lifecycle_hook_combine_cases",
+            "LifecycleHookCombineCases",
+        ),
+        (
+            !snapshot.lifecycle_hook_gate_cases.is_empty(),
+            "lifecycle_hook_gate_cases",
+            "LifecycleHookGateCases",
+        ),
+        (
+            !snapshot.lifecycle_hook_delivery_cases.is_empty(),
+            "lifecycle_hook_delivery_cases",
+            "LifecycleHookDeliveryCases",
+        ),
+    ] {
+        assert!(present, "{key} must be emitted by the Lean hooks contract");
+        emitted.insert((key.to_string(), domain.to_string()));
+    }
     if !snapshot.mailbox_handoff_cases.is_empty() {
         emitted.insert((
             "mailbox_handoff_cases".to_string(),

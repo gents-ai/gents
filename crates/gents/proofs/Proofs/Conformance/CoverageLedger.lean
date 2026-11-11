@@ -187,6 +187,10 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , required := [Surface.agentFacing, Surface.runtimeInternal]
     , deferred := []
     }
+  , { feature := "lifecycle-hooks"
+    , required := [Surface.runtimeInternal]
+    , deferred := []
+    }
   , { feature := "mcp-health"
     , required := [Surface.runtimeInternal, Surface.operatorCli, Surface.operatorUi]
     , deferred := []
@@ -1435,6 +1439,37 @@ def caseCoverage : List CoverageEntry :=
       "SessionControlCases"
       "conformance::session_control::generated_session_control_cases_drive_native_interrupt_stop_and_resume")
       "session-control" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "lifecycle_hook_effect_cases"
+      "LifecycleHookEffectCases"
+      "conformance::hooks::generated_lifecycle_hook_effect_cases_drive_validation_and_application"
+      "Production validate decides every case; application runs through the conformance test's in-memory Host, whose all-or-none apply mirrors Hooks.applyEffects. The DefraDB transaction host (request::hooks::native) is crate-private and is not driven by these cases.")
+      "lifecycle-hooks" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "lifecycle_hook_stage_cases"
+      "LifecycleHookStageCases"
+      "conformance::hooks::generated_lifecycle_hook_stage_cases_drive_refusable_staging")
+      "lifecycle-hooks" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "lifecycle_hook_must_commit_cases"
+      "LifecycleHookMustCommitCases"
+      "conformance::hooks::generated_lifecycle_hook_must_commit_cases_drive_dropping_staging")
+      "lifecycle-hooks" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "lifecycle_hook_combine_cases"
+      "LifecycleHookCombineCases"
+      "conformance::hooks::generated_lifecycle_hook_combine_cases_drive_verdict_combination")
+      "lifecycle-hooks" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "lifecycle_hook_gate_cases"
+      "LifecycleHookGateCases"
+      "conformance::hooks::generated_lifecycle_hook_gate_cases_drive_the_claim_gate")
+      "lifecycle-hooks" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "lifecycle_hook_delivery_cases"
+      "LifecycleHookDeliveryCases"
+      "conformance::hooks::generated_lifecycle_hook_delivery_cases_drive_the_delivery_record")
+      "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "fold_queue_cases"
       "FoldQueueCases"

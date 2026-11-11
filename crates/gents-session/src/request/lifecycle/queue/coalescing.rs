@@ -142,7 +142,7 @@ pub async fn reconcile_coalesced_pending_request_for_with_access(
                             .and_then(|data| data.get("update_AgentRequest"))
                             .is_some_and(gents_store::graphql::response_has_documents)
                         {
-                            crate::triggers::engine::durable::publish_request_outcome(
+                            crate::request::hooks::points::request_terminal(
                                 txn,
                                 node_did,
                                 &duplicate.request_id,
