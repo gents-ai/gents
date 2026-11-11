@@ -1,33 +1,44 @@
 use anyhow::{Context, Result};
 #[cfg(test)]
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole, OutputOutcome};
 
 use crate::request::streaming::AcceptedToolCall;
-use crate::session::canonical_rows::{decode_transcript_message_row, AGENT_MESSAGE_FIELDS};
 #[cfg(test)]
 use crate::store::config_client::ConfigAccess;
 use crate::store::config_client::ConfigApplyTxn;
-use crate::store::graphql::escape_graphql_string;
+use gents_protocol::output::rows::{decode_transcript_message_row, AGENT_MESSAGE_FIELDS};
 
 use super::ToolCallLifecycle;
 
 impl ToolCallLifecycle {
+    /// The accepted dispatch binding of a direct call, read as the owning
+    /// Agent, which alone sees its Agent-owned call rows.
     #[cfg(test)]
-    pub(crate) async fn load_accepted_for_dispatch(
+    pub(crate) async fn load_accepted_for_dispatch_as(
         node: &std::sync::Arc<EmbeddedNode>,
+        actor: identity::Did,
         tool_doc_id: &str,
         node_did: &str,
         session_id: &str,
         requester_did: Option<&str>,
     ) -> Result<AcceptedToolCall> {
-        Self::load_direct_binding(node, tool_doc_id, node_did, session_id, requester_did, true)
-            .await
+        Self::load_direct_binding(
+            node,
+            actor,
+            tool_doc_id,
+            node_did,
+            session_id,
+            requester_did,
+            true,
+        )
+        .await
     }
 
     #[cfg(test)]
-    pub(super) async fn load_direct_binding(
+    async fn load_direct_binding(
         node: &std::sync::Arc<EmbeddedNode>,
+        actor: identity::Did,
         tool_doc_id: &str,
         node_did: &str,
         session_id: &str,
@@ -36,7 +47,7 @@ impl ToolCallLifecycle {
     ) -> Result<AcceptedToolCall> {
         ConfigAccess::transact_local_readonly(
             node,
-            None,
+            Some(actor),
             "tool_call.load_direct_admission",
             |txn| {
                 Box::pin(Self::load_direct_binding_in_txn(
@@ -60,16 +71,29 @@ impl ToolCallLifecycle {
         requester_did: Option<&str>,
         require_complete: bool,
     ) -> Result<AcceptedToolCall> {
-        let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
-        let tool_id = escape_graphql_string(tool_doc_id);
-        let response = txn
-            .execute(&format!(
-                r#"{{ AgentToolCall(filter: {{ {scope}, _docID: {{ _eq: "{tool_id}" }} }}, limit: 2) {{
-                    _docID request_doc_id tool_call_id tool_name message_sequence lifecycle_state
-                    await_mode spawned_by_tool_call_doc_id plugin_parent_tool_call_doc_id plugin_effect_ordinal
-                }} }}"#
-            ))
-            .await?;
+        use gents_protocol::document_query::{
+            fields::{agent_message, agent_request, agent_tool_call},
+            session_scope, Filter, Query, Selection,
+        };
+        let tool_query = Query::select(
+            Selection::doc_id()
+                .field(agent_tool_call::REQUEST_DOC_ID)
+                .field(agent_tool_call::TOOL_CALL_ID)
+                .field(agent_tool_call::TOOL_NAME)
+                .field(agent_tool_call::MESSAGE_SEQUENCE)
+                .field(agent_tool_call::LIFECYCLE_STATE)
+                .field(agent_tool_call::AWAIT_MODE)
+                .field(agent_tool_call::SPAWNED_BY_TOOL_CALL_DOC_ID)
+                .field(agent_tool_call::PLUGIN_PARENT_TOOL_CALL_DOC_ID)
+                .field(agent_tool_call::PLUGIN_EFFECT_ORDINAL),
+        )
+        .filter(
+            session_scope(node_did, session_id, requester_did)
+                .and(Filter::eq(agent_tool_call::DOC_ID, tool_doc_id)),
+        )
+        .limit(2)
+        .render();
+        let response = txn.run(&tool_query).await?;
         let rows = response["data"]["AgentToolCall"]
             .as_array()
             .context("direct admission lookup omitted tool rows")?;
@@ -98,18 +122,19 @@ impl ToolCallLifecycle {
             .as_u64()
             .and_then(|value| u32::try_from(value).ok())
             .context("accepted tool lacks valid message sequence")?;
-        let await_mode = crate::tools::call::lifecycle::AwaitMode::from_persisted(
+        let await_mode = gents_protocol::tool_call::AwaitMode::from_persisted(
             tool["await_mode"].as_str().unwrap_or("foreground"),
         )
         .context("accepted tool has an invalid await mode")?;
-        let request = escape_graphql_string(request_doc_id);
-        let response = txn
-            .execute(&format!(
-                r#"{{ AgentMessage(filter: {{
-{scope}, request_doc_id: {{ _eq: "{request}" }}, sequence: {{ _eq: {sequence} }}
-                }}, limit: 2) {{ {AGENT_MESSAGE_FIELDS} }} }}"#
-            ))
-            .await?;
+        let message_query = Query::select(Selection::owned(AGENT_MESSAGE_FIELDS))
+            .filter(
+                session_scope(node_did, session_id, requester_did)
+                    .and(Filter::eq(agent_message::REQUEST_DOC_ID, request_doc_id))
+                    .and(Filter::eq(agent_message::SEQUENCE, sequence)),
+            )
+            .limit(2)
+            .render();
+        let response = txn.run(&message_query).await?;
         let headers = response["data"]["AgentMessage"]
             .as_array()
             .context("direct admission lookup omitted header rows")?;
@@ -166,7 +191,23 @@ impl ToolCallLifecycle {
             "accepted header does not uniquely bind this physical tool"
         );
         let (call_id, arguments) = matches[0];
+        let owner_query = Query::select(Selection::new().field(agent_request::AGENT_DID))
+            .filter(Filter::eq(agent_request::DOC_ID, request_doc_id))
+            .limit(1)
+            .render();
+        let owner = txn.run_local_response(&owner_query).await?;
+        let agent = owner
+            .data
+            .as_ref()
+            .and_then(|data| data["AgentRequest"].as_array())
+            .and_then(|rows| rows.first())
+            .context("tool owner request is missing or ambiguous")?["agent_did"]
+            .as_str()
+            .context("accepted tool request is missing its agent DID")?;
+        let actor = identity::Did::new(agent.to_owned())?;
         Ok(AcceptedToolCall {
+            actor,
+            agent_signer: txn.managed_agent_signer(),
             tool_call_doc_id: tool_doc_id.to_owned(),
             request_doc_id: request_doc_id.to_owned(),
             session_id: session_id.to_owned(),

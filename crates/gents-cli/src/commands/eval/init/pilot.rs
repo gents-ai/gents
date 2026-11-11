@@ -4,10 +4,10 @@ use std::io::Write;
 
 use anyhow::{anyhow, Context, Result};
 use gents::documents::EvalSplit;
-use gents::eval::report::{load_report, EvalReport, SlotClass};
-use gents::eval::runner::{self, Capture, TrialLocator};
 use gents::eval::scoring::PILOT_PURPOSE;
 use gents::eval::OutcomeKind;
+use gents_eval::report::{load_report, EvalReport, SlotClass};
+use gents_eval::runner::{self, Capture, TrialLocator};
 use serde_json::{json, Value};
 
 use super::draft::parse_reply;
@@ -206,7 +206,7 @@ async fn run_split(
         cells: vec![CellArg {
             cell_id: PILOT_CELL.to_owned(),
             pack: init.subject_dir.display().to_string(),
-            agent: Some(init.dossier.agent_id.clone()),
+            agent: Some(init.dossier.agent_slot.clone()),
         }],
         profiles: vec![(PILOT_CELL.to_owned(), init.profile.clone())],
         split,
@@ -239,7 +239,7 @@ async fn run_split(
     .await?;
     anyhow::ensure!(
         !outcome.cancelled && outcome.abandoned == 0,
-        "pilot run {run_id} stopped before it finished; the pack stays as written; `gents eval resume {run_id}` continues it"
+        "pilot run {run_id} stopped before it finished; the pack stays as written; `gents utils eval resume {run_id}` continues it"
     );
     Ok(())
 }
@@ -437,8 +437,8 @@ async fn revise(
 mod tests {
     use std::path::Path;
 
-    use gents::eval::checks::CheckRegistry;
-    use gents::eval::report::load_runs;
+    use gents_eval::checks::CheckRegistry;
+    use gents_eval::report::load_runs;
     use serde_json::json;
 
     use super::super::tests::draft_block;
@@ -482,7 +482,7 @@ mod tests {
 
     fn context<'a>(fixture: &Fixture, registry: &'a CheckRegistry, out: &Path) -> InitContext<'a> {
         let mut subject = dossier();
-        subject.agent_id = "monitor".into();
+        subject.agent_slot = "monitor".into();
         InitContext {
             dossier: subject,
             registry,
@@ -550,9 +550,7 @@ mod tests {
             .access
             .transact_write("eval.pilot.existing_definition_fixture", |txn| {
                 let plan = &plan;
-                Box::pin(async move {
-                    gents::store::config_client::apply_desired_state_plan(txn, plan).await
-                })
+                Box::pin(async move { gents::documents::apply_desired_state_plan(txn, plan).await })
             })
             .await
             .unwrap();

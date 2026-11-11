@@ -5,6 +5,14 @@ use crate::output_format::OutputFormat;
 use gents::pack::HomePackInstall;
 use serde_json::json;
 
+async fn selected_agent(access: &gents::ConfigAccess, owner: &str) -> String {
+    let value = access.execute(&format!("{{ Node(filter: {{ node_did: {{ _eq: \"{}\" }} }}, limit: 1) {{ default_agent_did }} }}", gents::store::graphql::escape_graphql_string(owner))).await.unwrap();
+    value["data"]["Node"][0]["default_agent_did"]
+        .as_str()
+        .expect("initialized default agent")
+        .to_owned()
+}
+
 fn scope(home: &Path) -> ScopeArgs {
     ScopeArgs {
         home: Some(home.to_path_buf()),
@@ -17,6 +25,7 @@ async fn install(home: &Path, package: String) -> anyhow::Result<Value> {
     crate::request_helpers::capture_report(super::super::install(PackInstallArgs {
         package,
         inference_slots: Vec::new(),
+        dependency_variables: Vec::new(),
         preview: false,
         scope: scope(home),
         output: OutputFormat::Json,
@@ -29,6 +38,7 @@ async fn install(home: &Path, package: String) -> anyhow::Result<Value> {
         explicit: true,
     }))
     .await
+    .map_err(gents::pack::PackChangeError::into_anyhow)
 }
 
 async fn remove_pkg(home: &Path, package: &str) -> anyhow::Result<Value> {
@@ -38,10 +48,31 @@ async fn remove_pkg(home: &Path, package: &str) -> anyhow::Result<Value> {
         drift: PackDriftArgs::default(),
     }))
     .await
+    .map_err(gents::pack::PackChangeError::into_anyhow)
 }
 
 fn assets_fixture_spec() -> String {
     fixture_dir("assets_fixture").to_str().unwrap().to_owned()
+}
+
+#[tokio::test]
+async fn unconfigured_home_does_not_prove_a_plugin_is_unreferenced() {
+    let home = tempfile::tempdir().unwrap();
+    let guard = gents::plugin::store::try_lock_store(home.path()).unwrap();
+    super::ensure_home_plugins_unreferenced(home.path(), &BTreeSet::new(), &guard)
+        .await
+        .unwrap();
+    let error = super::ensure_home_plugins_unreferenced(
+        home.path(),
+        &BTreeSet::from(["acme/plugin".to_owned()]),
+        &guard,
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(
+        error.downcast_ref::<gents::pack::PackRemovalError>(),
+        Some(gents::pack::PackRemovalError::ReferenceInventoryUnavailable)
+    ));
 }
 
 #[tokio::test]
@@ -383,7 +414,7 @@ fn plugin_pack_dir(
 }
 
 #[tokio::test]
-async fn a_plugins_pack_releases_its_plugins_and_unreferenced_bytes() {
+async fn a_plugins_pack_keeps_records_and_bytes_without_complete_inventory() {
     let home = tempfile::tempdir().unwrap();
     let afb = crate::commands::plugin::testing::build_plugin_afb(
         "shared",
@@ -404,28 +435,19 @@ async fn a_plugins_pack_releases_its_plugins_and_unreferenced_bytes() {
         .unwrap();
     assert!(gents::plugin::store::read_bytes(home.path(), &digest_hex).is_ok());
 
-    let removed = remove_pkg(home.path(), "acme/tools").await.unwrap();
-    assert!(
-        removed["removed"]["plugin_bytes"]
-            .as_array()
+    for coordinate in ["acme/tools", "zeta/tools"] {
+        let error = remove_pkg(home.path(), coordinate).await.unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<gents::pack::PackRemovalError>(),
+            Some(gents::pack::PackRemovalError::ReferenceInventoryUnavailable)
+        ));
+        assert!(gents::pack::read_home_install(home.path(), coordinate)
             .unwrap()
-            .is_empty(),
-        "bytes zeta/tools still references are kept: {removed}"
-    );
+            .is_some());
+    }
     assert!(gents::plugin::store::read_bytes(home.path(), &digest_hex).is_ok());
-    assert!(gents::plugin::store::read_record(home.path(), "acme", "shared").is_err());
+    assert!(gents::plugin::store::read_record(home.path(), "acme", "shared").is_ok());
     assert!(gents::plugin::store::read_record(home.path(), "zeta", "shared").is_ok());
-
-    let removed = remove_pkg(home.path(), "zeta/tools").await.unwrap();
-    assert_eq!(
-        removed["removed"]["plugin_bytes"],
-        json!([format!("sha256:{digest_hex}")]),
-        "{removed}"
-    );
-    assert!(
-        gents::plugin::store::read_bytes(home.path(), &digest_hex).is_err(),
-        "nothing references the bytes any more"
-    );
 }
 
 fn documents_pack_dir() -> tempfile::TempDir {
@@ -468,7 +490,7 @@ async fn initialized_home() -> tempfile::TempDir {
         home.path().to_str().unwrap(),
     ])
     .unwrap();
-    let crate::cli::Command::Init(init_args) = cli.command else {
+    let Some(crate::cli::Command::Init(init_args)) = cli.command else {
         panic!("expected init")
     };
     crate::commands::init::init(init_args).await.unwrap();
@@ -485,7 +507,7 @@ async fn demo_tools_rows(home: &Path) -> usize {
         .unwrap();
     let count = response["data"]["Tools"].as_array().unwrap().len();
     if let Some(node) = access.local_node() {
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
     count
 }
@@ -588,7 +610,7 @@ async fn referenced_plugin_removal_refuses_before_changing_pack_or_store_records
             .unwrap();
         let mut request = crate::commands::pack::wire::WireRequest {
             plugin: "acme/shared".into(),
-            agent: gents::default_agent_id_for_node(&owner),
+            agent: selected_agent(&access, &owner).await,
             targets_from: Vec::new(),
             remove: false,
             preview: false,
@@ -596,7 +618,12 @@ async fn referenced_plugin_removal_refuses_before_changing_pack_or_store_records
         crate::commands::pack::wire::wire_in(&access, &owner, home.path(), &request)
             .await
             .unwrap();
-        access.local_node().unwrap().shutdown().await;
+        access
+            .local_node()
+            .unwrap()
+            .shutdown()
+            .await
+            .expect("node shutdown");
         drop(access);
         if !documents {
             let error = crate::request_helpers::capture_report(crate::commands::plugin::dispatch(
@@ -632,10 +659,19 @@ async fn referenced_plugin_removal_refuses_before_changing_pack_or_store_records
         crate::commands::pack::wire::wire_in(&access, &owner, home.path(), &request)
             .await
             .unwrap();
-        access.local_node().unwrap().shutdown().await;
+        access
+            .local_node()
+            .unwrap()
+            .shutdown()
+            .await
+            .expect("node shutdown");
         drop(access);
-        remove_pkg(home.path(), "acme/tools").await.unwrap();
-        assert!(gents::plugin::store::read_record(home.path(), "acme", "shared").is_err());
+        let error = remove_pkg(home.path(), "acme/tools").await.unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<gents::pack::PackRemovalError>(),
+            Some(gents::pack::PackRemovalError::ReferenceInventoryUnavailable)
+        ));
+        assert!(gents::plugin::store::read_record(home.path(), "acme", "shared").is_ok());
     }
 }
 
@@ -676,7 +712,7 @@ async fn wiring_holds_store_lock_through_pin_commit() {
         async move {
             let request = super::super::wire::WireRequest {
                 plugin: "acme/shared".into(),
-                agent: gents::default_agent_id_for_node(&owner),
+                agent: selected_agent(&access, &owner).await,
                 targets_from: Vec::new(),
                 remove: false,
                 preview: false,
@@ -696,7 +732,8 @@ async fn wiring_holds_store_lock_through_pin_commit() {
         false,
         Some(&owner),
         &std::collections::BTreeMap::new(),
-        move |identity| async move {
+        gents::pack::PackSource::Local { file_name: None },
+        move |identity, _| async move {
             gents::pack::record_plugin_store_change(
                 &notify_access,
                 &notify_owner,
@@ -729,7 +766,7 @@ async fn wiring_holds_store_lock_through_pin_commit() {
     pause.release.notify_one();
     writer.await.unwrap().unwrap();
     *super::super::wire::WIRE_TEST_PAUSE.lock().unwrap() = None;
-    let agent = gents::default_agent_id_for_node(&owner);
+    let agent = selected_agent(&access, &owner).await;
     let (_, tools) = access
         .transact_write("test.wire.pin", |txn| {
             let owner = &owner;
@@ -751,7 +788,12 @@ async fn wiring_holds_store_lock_through_pin_commit() {
         .unwrap()
         .digest;
     assert_eq!(pin.as_deref(), Some(expected_digest.as_str()));
-    access.local_node().unwrap().shutdown().await;
+    access
+        .local_node()
+        .unwrap()
+        .shutdown()
+        .await
+        .expect("node shutdown");
 }
 
 #[tokio::test]
@@ -804,7 +846,12 @@ async fn documents_pack_with_schema_patch_installs_after_schema_application() {
         .await
         .unwrap();
     assert_eq!(tools["data"]["Tools"].as_array().unwrap().len(), 1);
-    access.local_node().unwrap().shutdown().await;
+    access
+        .local_node()
+        .unwrap()
+        .shutdown()
+        .await
+        .expect("node shutdown");
 }
 
 #[tokio::test]
@@ -883,6 +930,13 @@ async fn wire_refuses_even_the_initialized_homes_served_endpoint() {
     let init = crate::home_state::read_init_config(home.path())
         .unwrap()
         .unwrap();
+    let (local, owner) = super::super::resolve_scope_owner(&scope(home.path()))
+        .await
+        .unwrap();
+    let agent_did = selected_agent(&local, &owner).await;
+    if let Some(node) = local.local_node() {
+        node.shutdown().await.expect("node shutdown");
+    }
     let url = "http://127.0.0.1:56789/api/v0/graphql";
     crate::home_state::write_runtime_state(
         home.path(),
@@ -891,7 +945,7 @@ async fn wire_refuses_even_the_initialized_homes_served_endpoint() {
             graphql: url.into(),
             node_name: init.node_name.clone(),
             node_did: init.node_did.clone(),
-            default_agent_id: gents::default_agent_id_for_node(&init.node_did),
+            default_agent_did: agent_did,
             p2p_transport: "iroh".into(),
             p2p_peer_id: None,
             p2p_listen_addresses: vec![],
@@ -932,17 +986,27 @@ async fn removal_holds_plugin_lock_after_reference_check_until_deletion() {
         async move { super::remove_home_install(&home, "acme/tools").await }
     });
     pause.reached.notified().await;
-    let (access, owner) = super::super::resolve_scope_owner(&scope(home.path()))
-        .await
-        .unwrap();
-    let request = super::super::wire::WireRequest {
-        plugin: "acme/shared".into(),
-        agent: gents::default_agent_id_for_node(&owner),
-        targets_from: vec![],
-        remove: false,
-        preview: false,
-    };
-    let result = super::super::wire::wire_in(&access, &owner, home.path(), &request).await;
+    // A wire while the removal holds the plugin store lock is refused, whether
+    // at the offline open that reads installed plugins or at the pin publish.
+    let result = async {
+        let (access, owner) = super::super::resolve_scope_owner(&scope(home.path())).await?;
+        let request = super::super::wire::WireRequest {
+            plugin: "acme/shared".into(),
+            agent: selected_agent(&access, &owner).await,
+            targets_from: vec![],
+            remove: false,
+            preview: false,
+        };
+        let wired = super::super::wire::wire_in(&access, &owner, home.path(), &request).await;
+        access
+            .local_node()
+            .unwrap()
+            .shutdown()
+            .await
+            .expect("node shutdown");
+        wired
+    }
+    .await;
     let snapshot: Value =
         tokio::task::spawn_blocking(|| gents_lean_contract::load_contract_snapshot().unwrap())
             .await
@@ -957,12 +1021,14 @@ async fn removal_holds_plugin_lock_after_reference_check_until_deletion() {
         .unwrap();
     assert_eq!(result.is_ok(), allowed, "{result:?}");
     assert!(format!("{:#}", result.unwrap_err()).contains("plugin store is busy"));
-    access.local_node().unwrap().shutdown().await;
-    drop(access);
     pause.release.notify_one();
-    remover.await.unwrap().unwrap();
+    let error = remover.await.unwrap().unwrap_err();
+    assert!(matches!(
+        error.downcast_ref::<gents::pack::PackRemovalError>(),
+        Some(gents::pack::PackRemovalError::ReferenceInventoryUnavailable)
+    ));
     *super::REMOVAL_TEST_PAUSE.lock().unwrap() = None;
-    assert!(gents::plugin::store::read_record(home.path(), "acme", "shared").is_err());
+    assert!(gents::plugin::store::read_record(home.path(), "acme", "shared").is_ok());
 }
 
 #[tokio::test]
@@ -974,8 +1040,12 @@ async fn delegated_home_removal_uses_the_existing_store_guard() {
         .await
         .unwrap();
     let guard = gents::plugin::store::try_lock_store(home.path()).unwrap();
-    super::remove_home_install_with_guard(home.path(), "acme/tools", guard)
+    let error = super::remove_home_install_with_guard(home.path(), "acme/tools", guard)
         .await
-        .unwrap();
-    assert!(gents::plugin::store::read_record(home.path(), "acme", "shared").is_err());
+        .unwrap_err();
+    assert!(matches!(
+        error.downcast_ref::<gents::pack::PackRemovalError>(),
+        Some(gents::pack::PackRemovalError::ReferenceInventoryUnavailable)
+    ));
+    assert!(gents::plugin::store::read_record(home.path(), "acme", "shared").is_ok());
 }

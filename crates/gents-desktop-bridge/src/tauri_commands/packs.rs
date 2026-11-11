@@ -1,11 +1,13 @@
 use crate::types::*;
+use futures::TryFutureExt;
+use gents::pack::PackChangeError;
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::Value;
 use tauri::State;
 use ts_rs::TS;
 
 use crate::error::{BridgeError, BridgeErrorCode};
-use crate::state::DesktopAppState;
+use crate::state::{current_core, DesktopAppState};
 use gents_server::packs::{self, EditedDocuments};
 
 fn home(state: &DesktopAppState) -> Result<std::path::PathBuf, BridgeError> {
@@ -56,7 +58,16 @@ pub async fn desktop_pack_installed(
 ) -> Result<InstalledPacksView, BridgeError> {
     {
         let home = home(&state)?;
-        run(move || packs::installed(home, registry)).await
+        if let Some(core) = current_core(&state) {
+            let node_did = packs::ux_installing_node(&home).map_err(failed)?;
+            let access = gents::ConfigAccess::Graphql(
+                core.local_home_operator_endpoint(&node_did, &home)
+                    .map_err(|error| failed(error.into()))?,
+            );
+            run(move || packs::installed_with_access(home, registry, access, node_did)).await
+        } else {
+            run(move || packs::installed(home, registry)).await
+        }
     }
 }
 
@@ -100,6 +111,11 @@ pub struct PackInstallRequest {
     #[serde(default)]
     #[ts(as = "Option<bool>", optional)]
     pub preview: bool,
+    /// The content digest the install must have: the one its preview
+    /// reported, so what installs is what was reviewed.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub expect_digest: Option<String>,
 }
 
 #[tauri::command]
@@ -118,7 +134,9 @@ pub async fn desktop_pack_install(
                 request.edited,
                 request.grant_authority,
                 request.preview,
+                request.expect_digest,
             )
+            .map_err(PackChangeError::into_anyhow)
         })
         .await
     }
@@ -133,7 +151,11 @@ pub async fn desktop_pack_update(
 ) -> Result<PackUpdateView, BridgeError> {
     {
         let home = home(&state)?;
-        run(move || packs::update(home, package, registry, edited.unwrap_or_default())).await
+        run(move || {
+            packs::update(home, package, registry, edited.unwrap_or_default())
+                .map_err(PackChangeError::into_anyhow)
+        })
+        .await
     }
 }
 
@@ -145,7 +167,11 @@ pub async fn desktop_pack_remove(
 ) -> Result<PackRemoveView, BridgeError> {
     {
         let home = home(&state)?;
-        run(move || packs::remove(home, package, edited.unwrap_or_default())).await
+        run(move || {
+            packs::remove(home, package, edited.unwrap_or_default())
+                .map_err(PackChangeError::into_anyhow)
+        })
+        .await
     }
 }
 
@@ -367,5 +393,55 @@ mod tests {
         });
         let view: PackInstallView = serde_json::from_value(report.clone()).unwrap();
         assert_eq!(serde_json::to_value(view).unwrap(), report);
+    }
+
+    #[test]
+    fn preview_reports_carry_the_review_and_unknown_collections() {
+        let report = serde_json::json!({
+            "pack":"demo", "digest":"sha256:digest", "source":"local", "would_write": false,
+            "coordinate":"acme/demo", "version":"1.0.0", "description":"Demo", "kind":"documents",
+            "documents":[{"collection":"Agent", "id":"a", "name":null}],
+            "collections": null,
+            "authority":[{"plugin":"fetch", "asks":"HTTP to any host"}],
+            "dependencies": [],
+        });
+        let view: PackInstallView = serde_json::from_value(report.clone()).unwrap();
+        assert_eq!(view.collections, Some(None));
+        assert_eq!(view.authority.as_ref().map(Vec::len), Some(1));
+        assert_eq!(serde_json::to_value(view).unwrap(), report);
+    }
+
+    #[test]
+    fn preview_reports_carry_the_slots_still_to_bind() {
+        let report = serde_json::json!({
+            "pack":"code_review", "digest":"sha256:digest", "source":"registry",
+            "would_write": false,
+            "inference_needs": {
+                "slots": [{
+                    "name":"coordinator", "description":"Plans the review", "optional": false,
+                    "packs":["gents/code_review"], "profile": null, "automatic": false,
+                }],
+                "profiles": [],
+                "unbound": ["coordinator"],
+            },
+        });
+        let view: PackInstallView = serde_json::from_value(report.clone()).unwrap();
+        let needs = view.inference_needs.as_ref().unwrap();
+        assert_eq!(needs.unbound, ["coordinator"]);
+        assert_eq!(needs.slots[0].profile, None);
+        assert_eq!(serde_json::to_value(view).unwrap(), report);
+    }
+
+    #[test]
+    fn install_requests_carry_the_reviewed_digest() {
+        let request: PackInstallRequest = serde_json::from_value(serde_json::json!({
+            "package": "/tmp/demo.pack", "expectDigest": "sha256:abc", "edited": "keep",
+        }))
+        .unwrap();
+        assert_eq!(request.expect_digest.as_deref(), Some("sha256:abc"));
+        assert_eq!(request.edited, EditedDocuments::Keep);
+        let request: PackInstallRequest =
+            serde_json::from_value(serde_json::json!({"package": "acme/demo"})).unwrap();
+        assert_eq!(request.expect_digest, None);
     }
 }

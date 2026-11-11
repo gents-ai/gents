@@ -119,15 +119,19 @@ fn job_read_error_display_names_the_next_call() {
     let cases = [
         (
             JobReadError::NotAJob,
-            "not a plugin job; find the job's address with `gents job list`",
+            "not a plugin job; find the job's address with `gents automation job list`",
         ),
         (
             JobReadError::NotAuthorized,
             "this job belongs to another session or requester; read it from the session that started it",
         ),
         (
+            JobReadError::PermissionDenied,
+            "access to the job was denied; check this client's permissions with the runtime owner",
+        ),
+        (
             JobReadError::NotYetObservable,
-            "no job row is visible at this address yet; retry shortly, or check the address with `gents job list`",
+            "no job row is visible at this address yet; retry shortly, or check the address with `gents automation job list`",
         ),
         (
             JobReadError::Unavailable { message: message() },

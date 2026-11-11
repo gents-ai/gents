@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context as _;
-use defra_node::EmbeddedNode;
-use tokio::sync::{watch, OnceCell};
+use defra_node::Node as EmbeddedNode;
+use tokio::sync::watch;
 
 use crate::inference::backends::health::{BackendHealthMap, BackendProberOptions};
 use crate::inference::resolved::{
@@ -22,7 +22,6 @@ use crate::tools::mcp::pool::McpPool;
 use crate::tools::surface::{
     AgentToolConfig, AgentToolSurfaceConfig, ResolvedToolSelection, ToolCeiling,
 };
-use crate::triggers::engine::manual_source::ManualTriggerHandle;
 
 mod builder;
 pub mod completion_retry;
@@ -58,7 +57,7 @@ pub(crate) async fn process_owned_request_with_model_for_test<M>(
     tool_surface: Arc<crate::tools::surface::ToolSurface>,
     tool_runtime: &crate::tools::surface::ToolRuntimeContext,
     model: M,
-    request: crate::request::watcher::AgentRequest,
+    request: gents_protocol::row::AgentRequest,
 ) -> anyhow::Result<()>
 where
     M: crate::inference::llm::rig_compat::ProviderModel,
@@ -71,7 +70,8 @@ where
         &allowed_targets,
     );
     let preamble = prompt_builder.preamble().to_string();
-    let loop_tools = Arc::new(tool_surface.build_tools(tool_runtime).await?);
+    let tool_runtime = tool_runtime.for_agent(&agent_config);
+    let loop_tools = Arc::new(tool_surface.build_tools(&tool_runtime).await?);
     let runtime_status = crate::runtime::status::RuntimeStatusHandle::new(
         node.clone(),
         agent_config.node_did().to_string(),
@@ -83,7 +83,7 @@ where
     );
     let mut daemon = daemon::AgentDaemon::new(daemon::AgentDaemonInit {
         node: node.clone(),
-        agent_config,
+        agent_config: agent_config.clone(),
         provider_family: None,
         model: Arc::new(model),
         preamble,
@@ -91,9 +91,10 @@ where
         prompt_builder,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::inference::rendered_request::defra_rendered_request_capture_factory(
+            crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
                 node.clone(),
-            ),
+                agent_config.agent_identity.as_ref(),
+            )?,
         ),
         background_tool_registry: crate::tools::call::hook::BackgroundToolRegistry::default(),
         background_execution_registry:
@@ -140,7 +141,7 @@ pub trait RuntimeSnapshotObserver: Send + Sync {
         &self,
         generation: u64,
         configuration_fingerprint: &str,
-        runnable_agent_ids: &[String],
+        runnable_agent_dids: &[String],
     );
 
     /// Success is not a group-recovery/drain guarantee; errors do not authorize
@@ -159,10 +160,12 @@ pub trait RuntimeSnapshotObserver: Send + Sync {
 
 #[derive(Clone, Default)]
 pub struct DocumentRuntimeOptions {
+    pub backend_admission: Option<crate::store::local::backend_protection::BackendAdmission>,
     pub tool_ceiling: ToolCeiling,
     pub mcp_pool: McpPool,
     pub local_hostname: Option<String>,
     pub local_subnet: Option<String>,
+    pub advertised_graphql_url: Option<String>,
     pub retry_policy: RetryPolicy,
     pub hook_failure_policy: FailurePolicy,
     pub health_checker_options: HealthCheckerOptions,
@@ -205,15 +208,22 @@ impl DocumentResolveContext {
 
 #[derive(Clone)]
 pub struct Gents {
+    backend_admission: crate::store::local::backend_protection::BackendAdmission,
     usage_cache: Arc<crate::inference::usage_observation::UsageCache>,
     node: Arc<EmbeddedNode>,
     runtime_node: Arc<RuntimeNode>,
     agents: Vec<Arc<ResolvedAgent>>,
     unavailable_agents: RapidHashMap<String, UnavailableAgent>,
+    active_snapshot: Arc<
+        std::sync::RwLock<
+            Option<watch::Receiver<Arc<crate::runtime::snapshot::ActiveRuntimeSnapshot>>>,
+        >,
+    >,
     document_runtime_context: Option<DocumentResolveContext>,
     mcp_pool: McpPool,
     local_hostname: String,
     local_subnet: Option<String>,
+    advertised_graphql_url: Option<String>,
     retry_policy: RetryPolicy,
     hook_failure_policy: FailurePolicy,
     background_execution_registry: BackgroundExecutionRegistry,
@@ -230,7 +240,6 @@ pub struct Gents {
     router_dispatch_probe: Option<tokio::sync::mpsc::UnboundedSender<()>>,
     rendered_request_capture_factory:
         Option<crate::inference::rendered_request::RenderedRequestCaptureFactory>,
-    pub(crate) manual_trigger_handle: Arc<OnceCell<ManualTriggerHandle>>,
     enrollment_authority: Arc<std::sync::RwLock<Option<p2p_reconcile::EnrollmentAuthorityHandle>>>,
     operator_tool_root: Option<PathBuf>,
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
@@ -258,6 +267,14 @@ impl Gents {
                 "Gents runtime requires an EmbeddedNode configured with a node signing DID"
             );
         }
+        if let Some(url) = &options.advertised_graphql_url {
+            p2p_reconcile::endpoint::validate_advertised_graphql_url(url)?;
+        }
+        let backend_admission = options
+            .backend_admission
+            .clone()
+            .context("fresh backend protection provenance is required")?;
+        backend_admission.validate(&node).await?;
         migration::ensure_all_runtime_migrations(node.clone()).await?;
         let backend_health = options.backend_health.clone().unwrap_or_default();
         let plugin_models = crate::plugin::model_calls::AccessModels(
@@ -276,37 +293,35 @@ impl Gents {
             .node
             .clone()
             .context("resolved document runtime snapshot is missing its node owner")?;
-        let default_agent_id = runtime_node.default_agent_id.clone();
+        let default_agent_did = runtime_node.default_agent_did.clone();
         let mut agents = resolved_snapshot
             .agents
             .values()
             .cloned()
             .collect::<Vec<_>>();
         agents.sort_by(|left, right| {
-            let left_is_default = left.agent_id == default_agent_id;
-            let right_is_default = right.agent_id == default_agent_id;
+            let left_is_default = left.agent_did == default_agent_did;
+            let right_is_default = right.agent_did == default_agent_did;
             right_is_default
                 .cmp(&left_is_default)
-                .then_with(|| left.agent_id.cmp(&right.agent_id))
+                .then_with(|| left.agent_did.cmp(&right.agent_did))
         });
 
-        let rendered_request_capture_factory =
-            crate::inference::rendered_request::defra_rendered_request_capture_factory(
-                node.clone(),
-            );
-
         Ok(Self {
+            backend_admission,
             usage_cache: Arc::default(),
             node,
             runtime_node,
             agents,
             unavailable_agents: resolved_snapshot.unavailable_agents,
+            active_snapshot: Default::default(),
             document_runtime_context: Some(document_runtime_context),
             mcp_pool: options.mcp_pool,
             local_hostname: options
                 .local_hostname
                 .unwrap_or_else(runtime::default_hostname),
             local_subnet: options.local_subnet,
+            advertised_graphql_url: options.advertised_graphql_url,
             retry_policy: options.retry_policy,
             hook_failure_policy: options.hook_failure_policy,
             background_execution_registry: BackgroundExecutionRegistry::default(),
@@ -321,15 +336,15 @@ impl Gents {
             #[cfg(test)]
             router_dispatch_probe: options.router_dispatch_probe,
             // Provider calls require durable rendered input to be fact records.
-            rendered_request_capture_factory: Some(rendered_request_capture_factory),
-            manual_trigger_handle: Arc::new(OnceCell::new()),
+            rendered_request_capture_factory: None,
             enrollment_authority: Arc::default(),
             operator_tool_root: options.tool_ceiling.root().map(PathBuf::from),
             plugins,
         })
     }
 
-    pub(crate) fn observation_node(&self) -> &Arc<EmbeddedNode> {
+    /// The local database serving authenticated runtime observations.
+    pub fn observation_node(&self) -> &Arc<EmbeddedNode> {
         &self.node
     }
 
@@ -382,7 +397,35 @@ impl Gents {
             .service_admission()
             .admit()
             .map_err(anyhow::Error::new)?;
-        crate::session::mailbox::publish_runtime_notice(&self.node, self.node_did(), notice).await
+        let identities = {
+            let snapshot = self
+                .active_snapshot
+                .read()
+                .map_err(|_| anyhow::anyhow!("runtime snapshot binding unavailable"))?;
+            if let Some(snapshot) = snapshot.as_ref() {
+                snapshot.borrow().watcher_identities()?
+            } else {
+                let mut identities: Vec<Arc<dyn NodeIdentity>> = self
+                    .agents
+                    .iter()
+                    .map(|agent| agent.agent_identity.clone())
+                    .collect();
+                identities.extend(self.unavailable_agents.values().filter_map(|agent| {
+                    agent
+                        .watcher_identity
+                        .as_ref()
+                        .map(|identity| identity.0.clone())
+                }));
+                identities
+            }
+        };
+        crate::session::mailbox::publish_runtime_notice(
+            &self.node,
+            self.node_did(),
+            &identities,
+            notice,
+        )
+        .await
     }
 
     pub fn usage_cache(&self) -> &Arc<crate::inference::usage_observation::UsageCache> {
@@ -406,8 +449,8 @@ impl Gents {
         .await
     }
 
-    pub fn default_agent_id(&self) -> &str {
-        &self.runtime_node.default_agent_id
+    pub fn default_agent_did(&self) -> &str {
+        &self.runtime_node.default_agent_did
     }
 
     pub fn unavailable_agents(&self) -> &RapidHashMap<String, UnavailableAgent> {
@@ -466,63 +509,19 @@ impl Gents {
         self.operator_tool_root.as_deref()
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn manual_trigger_handle(&self) -> Option<&ManualTriggerHandle> {
-        self.manual_trigger_handle.get()
-    }
-
-    /// The caller authenticates the member with DefraDB before requesting metadata.
-    pub async fn client_observation_authorized(&self, member_did: &str) -> anyhow::Result<bool> {
-        let authority = self
-            .enrollment_authority
-            .read()
-            .map_err(|_| anyhow::anyhow!("enrollment authority is unavailable"))?
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("enrollment authority is not running"))?;
-        authority
-            .client_observation_authorized(member_did, self.node_did())
-            .await
-    }
-
-    /// The HTTP boundary must authenticate `actor` with DefraDB before calling.
-    pub async fn operator_file_inventory(
+    /// The HTTP boundary authenticates `actor` before selecting the native reader.
+    pub async fn read_file_inventory(
         &self,
         actor: &str,
-        demand: &gents_protocol::file_inventory::FileInventoryPageDemand,
-    ) -> anyhow::Result<gents_protocol::file_inventory::FileInventoryReply> {
-        crate::file_inventory::read_operator_inventory(
-            &self.node,
-            self.runtime_node.identity.as_ref(),
-            actor,
-            demand,
-        )
-        .await
-    }
-
-    /// The HTTP boundary authenticates `actor` with DefraDB.
-    pub async fn operator_job_control(
-        &self,
-        actor: Option<&str>,
-        request: &gents_protocol::job::OperatorJobControlRequest,
-    ) -> Result<gents_protocol::job::JobControlOutcome, gents_protocol::job::JobReadError> {
-        crate::tools::background::job::control::operator_control(
-            &crate::store::config_client::ConfigAccess::local(self.node.clone()),
-            actor,
-            request,
-        )
-        .await
-    }
-
-    /// The transport must authenticate this actor with DefraDB before dispatch.
-    pub async fn operator_process_control(
-        &self,
-        actor: Option<&str>,
-        request: &gents_protocol::process_control::OperatorProcessControlRequest,
-    ) -> anyhow::Result<gents_protocol::process_control::ProcessControlOutcome> {
-        crate::tools::call::control::operator_process_control(
-            self.node.clone(),
-            &self.background_execution_registry,
-            actor,
+        request: &gents_protocol::file_inventory::DirectFileInventoryRequest,
+    ) -> anyhow::Result<Option<gents_protocol::file_inventory::FileInventoryObservation>> {
+        anyhow::ensure!(
+            request.node_did == self.node_did(),
+            "file inventory belongs to another runtime"
+        );
+        let actor = identity::Did::new(actor)?;
+        crate::file_inventory::read_direct_inventory(
+            &crate::store::config_client::ConfigAccess::local_as(self.node.clone(), actor),
             request,
         )
         .await
@@ -537,12 +536,20 @@ pub(crate) async fn resolve_document_runtime_snapshot(
     node: &std::sync::Arc<EmbeddedNode>,
     context: &DocumentResolveContext,
 ) -> anyhow::Result<ResolvedRuntimeSnapshot> {
-    let view = document_view::load_document_runtime_view(node, context.identity.did()).await?;
+    let view = document_view::load_document_runtime_view_as(
+        node,
+        context.identity.did(),
+        context.identity.did(),
+    )
+    .await?;
     document_view::resolve_document_runtime_snapshot_from_view(node, context, &view).await
 }
 
 pub(crate) struct AgentDocumentInputs<'a> {
     pub(crate) agent_config: &'a crate::documents::Agent,
+    pub(crate) node: Arc<defra_node::Node>,
+    pub(crate) configuration_documents:
+        Vec<crate::inference::resolved::SelectedConfigurationDocument>,
     pub(crate) context: Option<&'a crate::documents::AgentContext>,
     pub(crate) compaction: Option<crate::documents::CompactionConfig>,
     pub(crate) compaction_inference: Option<crate::inference::resolved::ResolvedInference>,
@@ -560,6 +567,8 @@ pub(crate) fn agent_config_from_documents(
 ) -> anyhow::Result<ResolvedAgent> {
     let AgentDocumentInputs {
         agent_config,
+        node,
+        configuration_documents,
         context,
         compaction,
         compaction_inference,
@@ -608,9 +617,26 @@ pub(crate) fn agent_config_from_documents(
     }
     let backend = inference.backend.backend_fields();
     let resolved_max_turns = inference.max_turns()?;
+    anyhow::ensure!(
+        agent_config.node_did == principal.node_did,
+        "Agent {} belongs to a different runtime node",
+        agent_config.agent_did
+    );
+    let agent_identity = crate::store::identity::resolve_agent_identity(
+        principal.identity.as_ref(),
+        &agent_config.identity_binding(),
+    )?;
     Ok(ResolvedAgent {
+        configuration: crate::inference::resolved::ResolvedConfiguration::Documents(
+            crate::inference::resolved::SelectedConfiguration::new(
+                node,
+                identity::Did::new(agent_identity.did())?,
+                configuration_documents,
+            ),
+        ),
         profile_id: Some(inference.profile.profile_id.clone()),
-        agent_id: agent_config.agent_id.clone(),
+        agent_did: agent_config.agent_did.clone(),
+        agent_identity,
         node: principal,
         backend_id: backend.backend_id,
         backend_provider_kind: backend.backend_provider_kind,
@@ -630,7 +656,7 @@ pub(crate) fn agent_config_from_documents(
             .and_then(|context| context.system_prompt.clone())
             .unwrap_or_default(),
         tools: AgentToolSurfaceConfig::from_selection_with_agent_tools(
-            &agent_config.agent_id,
+            &agent_config.agent_did,
             tool_selection,
             tool_ceiling,
             agent_tools,
@@ -673,3 +699,5 @@ pub(crate) fn tool_selection_from_document(
 ) -> anyhow::Result<ResolvedToolSelection> {
     ResolvedToolSelection::from_document(selection)
 }
+
+pub use loop_stream::REPEATED_TOOL_FAILURE_PREFIX;

@@ -43,14 +43,14 @@ This node stores configuration and runtime records as documents. DefraDB control
 - Approve or deny only what you were asked to, after checking identity, such as an enrollment request's `peer_did`.
 - Act only on your own node. Always pass `--home` to the gents CLI; a bare `gents` acts on the default home.
 - Use your tools and their help before reading source or probing ports. If you are stuck after a few attempts, ask your operator rather than dig.
-- Pairing runs `enrollment_offer` on the approver, `enrollment_request` on the joiner, `enrollment_pending` and `enrollment_approve` on the approver, then `pairings_apply`. Each enrollment runs one direction, and a new grant applies from the next request.
+- Enrollment runs `enrollment_offer` on the approver, `enrollment_request` on the joiner, then `enrollment_pending` and `enrollment_approve` on the approver. Each enrollment runs one direction.
 - Set `interrupt` on `agent_message` to a busy session only for urgent work; otherwise let the message queue.
 - Keep turns bounded. Stop when the task is answered, and report what you did and what you did not verify.
 - Verify writes. A config receipt summarizes a long prompt by its `sha256`; check that it matches what you meant to install.
 
-For maintenance of your own running node, use `gents service update` (inspect
+For maintenance of your own running node, use `gents runtime service update` (inspect
 `--help` first). It returns acceptance, not completion: report the operation ID
 and finish your turn so the independent updater can retire the idle runtime.
-After reconnect, read `gents service update-status` for the durable result before
+After reconnect, read `gents runtime service update-status` for the durable result before
 claiming success. Never stop, restart, uninstall, or reinstall your own service
 from a tool turn; use external administration for unsupported maintenance.

@@ -3,12 +3,12 @@ use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use gents::eval::report::{load_report, report_refused};
-use gents::eval::runner::{
+use gents::eval::{load_run, load_trials};
+use gents_eval::report::{load_report, report_refused};
+use gents_eval::runner::{
     read_progress, read_run_view, run_dir, run_finished, run_view, slots_owed, RunView,
     STALE_WINDOW,
 };
-use gents::eval::{load_run, load_trials};
 
 use super::frame::{self, Heading, Screen};
 use super::{render, EvalContext};
@@ -16,7 +16,7 @@ use crate::cli::EvalWatchArgs;
 
 pub(crate) enum Documents<'a> {
     Open(&'a EvalContext),
-    Reopened(EvalContext),
+    Reopened(Box<EvalContext>),
     Locked(String),
 }
 
@@ -41,7 +41,7 @@ where
     Fut: Future<Output = Result<EvalContext>>,
 {
     match resolve().await {
-        Ok(ctx) => Ok(Documents::Reopened(ctx)),
+        Ok(ctx) => Ok(Documents::Reopened(Box::new(ctx))),
         Err(error) if store_locked(&error) => Ok(Documents::Locked(format!("{error:#}"))),
         Err(error) => Err(error),
     }
@@ -50,7 +50,7 @@ where
 fn runner_alive(dir: &Path) -> bool {
     #[cfg(unix)]
     {
-        use gents::eval::runner::host_alive;
+        use gents_eval::runner::host_alive;
         read_progress(dir).is_some_and(|progress| {
             progress
                 .holder
@@ -60,7 +60,7 @@ fn runner_alive(dir: &Path) -> bool {
         })
     }
     #[cfg(not(unix))]
-    gents::eval::runner::running_elsewhere(dir)
+    gents_eval::runner::running_elsewhere(dir)
 }
 
 pub(crate) async fn watch<'a, F, Fut>(
@@ -197,7 +197,7 @@ where
             }
             let ctx = match &documents {
                 Documents::Open(ctx) => *ctx,
-                Documents::Reopened(ctx) => ctx,
+                Documents::Reopened(ctx) => &**ctx,
                 Documents::Locked(reason) => {
                     anyhow::bail!("stopped: report unavailable: {reason}")
                 }
@@ -214,7 +214,7 @@ pub(crate) fn frame_screen() -> Screen {
 }
 
 fn frozen_definition(dir: &Path) -> Option<(String, i64)> {
-    let bytes = std::fs::read(dir.join(gents::eval::runner::DEFINITION_FILE)).ok()?;
+    let bytes = std::fs::read(dir.join(gents_eval::runner::DEFINITION_FILE)).ok()?;
     let definition: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
     Some((
         definition.get("definition_id")?.as_str()?.to_owned(),
@@ -252,7 +252,7 @@ async fn ending(
     let trials = load_trials(&ctx.access, &ctx.owner, run_id).await?;
     anyhow::ensure!(
         run_finished(&record, &trials, dir),
-        "stopped: {} slots owed (gents eval resume {run_id})",
+        "stopped: {} slots owed (gents utils eval resume {run_id})",
         slots_owed(&record, &trials)
     );
     if !json {

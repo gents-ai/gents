@@ -43,16 +43,7 @@ pub(super) async fn profile_set_account(args: InferenceProfileSetAccountArgs) ->
         &args.profile,
     )?;
     let output = match args.account.as_deref() {
-        None => {
-            list_candidates(
-                &access,
-                &node_did,
-                &args.profile,
-                &slots,
-                args.home.as_deref(),
-            )
-            .await?
-        }
+        None => list_candidates(&access, &node_did, &args.profile, &slots).await?,
         Some(account) => {
             set_account(
                 &access,
@@ -90,12 +81,11 @@ async fn list_candidates(
     node_did: &str,
     profile_id: &str,
     plugin_slots: &[String],
-    home: Option<&std::path::Path>,
 ) -> Result<Value> {
     let observations = if let ConfigAccess::Graphql(graphql) = access {
-        let identity = crate::commands::p2p::enrollment_admin::resolve_home_identity(home)?;
+        let identity = crate::load_client_identity().await?;
         crate::commands::accounts::request_usage_reads(
-            identity.as_ref(),
+            &identity,
             graphql,
             gents::inference::usage_observation::UsageTrigger::Cached,
             None,
@@ -108,7 +98,7 @@ async fn list_candidates(
     } else {
         Vec::new()
     };
-    let plan = gents::store::config_client::switch_candidates(
+    let plan = gents::inference::profile_switch::switch_candidates(
         access,
         node_did,
         profile_id,
@@ -175,7 +165,7 @@ async fn set_account(
     plugin_slots: &[String],
 ) -> Result<Value> {
     let backend_id = backend_for_account(access, node_did, account, provider).await?;
-    let receipt = gents::store::config_client::switch_profile_account(
+    let receipt = gents::inference::profile_switch::switch_profile_account(
         access,
         node_did,
         profile_id,
@@ -266,8 +256,7 @@ async fn write_checked(
             gents::inference::auth::credential::enabled_accounts_note(provider, &snapshot.accounts)
         );
     }
-    let doc_id =
-        gents::store::config_client::write_inference_profile_document(access, profile).await?;
+    let doc_id = gents::documents::write_inference_profile_document(access, profile).await?;
     let mut output = json!({"doc_id":doc_id,"node_did":profile.node_did,"profile_id":profile.profile_id,"backend_id":profile.backend_id,"model_name":profile.model_name});
     if let Some(account) = account {
         output["account"] = serde_json::to_value(account)?;
@@ -428,8 +417,8 @@ mod tests {
     use super::*;
     #[tokio::test]
     async fn profile_show_warns_when_an_xai_effort_will_not_be_sent() {
-        let owner = "did:key:owner";
-        let access = crate::shared::test_support::seed_unsent_xai_effort(owner).await;
+        let (access, owner) = crate::shared::test_support::seed_unsent_xai_effort().await;
+        let owner = owner.as_str();
         let mut row =
             super::super::crud::load_one(&access, super::super::crud::PROFILE_SPEC, owner, "grok")
                 .await
@@ -440,8 +429,19 @@ mod tests {
             .expect("warning");
         assert!(warning.contains("profile grok"), "{warning}");
     }
-    const DID: &str = "did:key:z6MkTestProfileAccounts";
+    const DID: &str = crate::caused_sessions::fixtures::FIXTURE_DID;
     const CLAUDE: &str = "claude-subscription";
+
+    fn agent(name: &str) -> gents_protocol::agent_identity::AgentIdentityBinding {
+        crate::shared::test_support::fixture_agent_named(name)
+    }
+
+    /// The named fixture Agents' DIDs in DID order.
+    fn agent_dids<const N: usize>(names: [&str; N]) -> Vec<String> {
+        let mut dids: Vec<String> = names.iter().map(|name| agent(name).agent_did).collect();
+        dids.sort();
+        dids
+    }
 
     fn claude_sign_in(who: &str) -> gents::inference::auth::credential::OAuthCredential {
         gents::inference::auth::claude::credential_from_login_tokens(
@@ -476,7 +476,7 @@ mod tests {
             "model_name": "model-x",
         }))
         .unwrap();
-        gents::store::config_client::write_inference_profile_document(access, &profile)
+        gents::documents::write_inference_profile_document(access, &profile)
             .await
             .unwrap();
     }
@@ -484,13 +484,17 @@ mod tests {
     async fn seeded() -> (ConfigAccess, String, String) {
         use gents::inference::auth::credential::{set_account_enabled, store_sign_in};
         let node = std::sync::Arc::new(
-            crate::shared::test_support::node_builder()
+            crate::shared::test_support::fixture_node_builder()
                 .build()
                 .await
                 .unwrap(),
         );
         gents::ensure_runtime_schemas(&node).await.unwrap();
-        let access = ConfigAccess::local(node);
+        crate::shared::test_support::publish_test_node(&node).await;
+        let access = ConfigAccess::local_as(
+            node,
+            ::identity::Did::new(crate::caused_sessions::fixtures::FIXTURE_DID).unwrap(),
+        );
         for value in [
             backend(
                 "claude",
@@ -511,7 +515,7 @@ mod tests {
                 json!({"kind": "api_key", "key": "key-SECRET"}),
             ),
         ] {
-            gents::store::config_client::write_inference_backend_document(
+            gents::documents::write_inference_backend_document(
                 &access,
                 &serde_json::from_value(value).unwrap(),
             )
@@ -741,7 +745,7 @@ mod tests {
             .await
             .unwrap_err()
             .to_string();
-        assert!(error.contains("claude-login"), "{error}");
+        assert!(error.contains("accounts login claude"), "{error}");
         assert_eq!(stored_profiles(&access).await, b, "nothing written");
     }
 
@@ -778,7 +782,7 @@ mod tests {
     #[tokio::test]
     async fn an_account_with_several_backends_is_ambiguous() {
         let (access, _, _) = seeded().await;
-        gents::store::config_client::write_inference_backend_document(
+        gents::documents::write_inference_backend_document(
             &access,
             &serde_json::from_value(backend(
                 "claude-2",
@@ -869,11 +873,11 @@ mod tests {
             ),
             (
                 gents::Collection::Agent,
-                json!({"node_did": DID, "agent_id": "x", "context_id": "context-x", "inference_profile_id": "p-original"}),
+                json!({"node_did": DID, "agent_did": agent("x").agent_did, "creation_nonce": agent("x").creation_nonce, "context_id": "context-x", "inference_profile_id": "p-original"}),
             ),
             (
                 gents::Collection::Agent,
-                json!({"node_did": DID, "agent_id": "y", "inference_profile_id": "p-original"}),
+                json!({"node_did": DID, "agent_did": agent("y").agent_did, "creation_nonce": agent("y").creation_nonce, "inference_profile_id": "p-original"}),
             ),
         ]
         .into_iter()
@@ -888,7 +892,7 @@ mod tests {
             .transact_write("test.profile.agents", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
-                    gents::store::config_client::apply_desired_state_plan(txn, plan)
+                    gents::documents::apply_desired_state_plan(txn, plan)
                         .await
                         .map(|_| ())
                 })
@@ -901,7 +905,7 @@ mod tests {
     async fn set_account_without_an_account_lists_the_candidates() {
         let (access, b_backend, _) = seeded().await;
         with_agents(&access).await;
-        let output = list_candidates(&access, DID, "p-original", &[], None)
+        let output = list_candidates(&access, DID, "p-original", &[])
             .await
             .unwrap();
         assert_eq!(output["profile"], json!("p-original"));
@@ -909,11 +913,11 @@ mod tests {
             output["account"],
             json!({"label": "Claude", "state": "enabled"})
         );
-        assert_eq!(output["agents"], json!(["x", "y"]));
+        assert_eq!(output["agents"], json!(agent_dids(["x", "y"])));
         assert_eq!(output["companions"], json!(["summ"]));
         assert_eq!(
             output["cost"],
-            json!(gents::store::config_client::SWITCH_COST)
+            json!(gents::inference::profile_switch::SWITCH_COST)
         );
         let candidates: Vec<_> = output["candidates"]
             .as_array()
@@ -952,10 +956,10 @@ mod tests {
             output["headline"],
             json!("Move profile p-original to label-b (used by 2 agents)")
         );
-        assert_eq!(output["agents"], json!(["x", "y"]));
+        assert_eq!(output["agents"], json!(agent_dids(["x", "y"])));
         assert_eq!(
             output["cost"],
-            json!(gents::store::config_client::SWITCH_COST)
+            json!(gents::inference::profile_switch::SWITCH_COST)
         );
         assert_eq!(output["companions_offered"], json!(["summ"]));
         assert_eq!(output["companions_moved"], json!([]));
@@ -983,7 +987,7 @@ mod tests {
         gents::inference::auth::credential::upsert_oauth_credential_on(&access, &grok)
             .await
             .unwrap();
-        gents::store::config_client::write_inference_backend_document(
+        gents::documents::write_inference_backend_document(
             &access,
             &serde_json::from_value(backend(
                 "xai-oauth-acct-g",
@@ -1007,7 +1011,7 @@ mod tests {
     #[tokio::test]
     async fn set_account_moves_an_api_key_profile_and_counts_its_plugin_slots() {
         let (access, _, _) = seeded().await;
-        gents::store::config_client::write_inference_backend_document(
+        gents::documents::write_inference_backend_document(
             &access,
             &serde_json::from_value(backend(
                 "openai-2",

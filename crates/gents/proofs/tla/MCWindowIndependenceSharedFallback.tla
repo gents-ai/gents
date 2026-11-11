@@ -1,0 +1,4 @@
+---- MODULE MCWindowIndependenceSharedFallback ----
+EXTENDS WindowIndependence
+
+====

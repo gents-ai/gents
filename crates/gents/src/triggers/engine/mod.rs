@@ -11,10 +11,11 @@ pub(crate) mod durable;
 pub(crate) mod event_delivery;
 pub(crate) mod event_source;
 pub(crate) mod goal_source;
-pub(crate) mod manual_source;
 pub(crate) mod production_materializer;
 pub(crate) mod schedule_source;
 pub mod subscription_source;
+
+mod dispatch;
 
 #[cfg(test)]
 mod tests;
@@ -23,20 +24,27 @@ type TriggerLockKey = (String, String, Option<String>);
 type TriggerLock = Arc<Mutex<()>>;
 type TriggerLockMap = RapidHashMap<TriggerLockKey, TriggerLock>;
 
-pub(crate) fn durable_fire_key(namespace: &str, components: &[&str]) -> String {
-    let mut key = format!("{}:{namespace}", namespace.chars().count());
-    for component in components {
-        key.push_str(&format!(":{}:{component}", component.chars().count()));
-    }
-    key
+/// Dispatches every fire from `sources` through the production materializer
+/// until `cancel` fires: the trigger task the runtime starts once its startup
+/// barrier releases.
+pub async fn run_trigger_engine(
+    node: Arc<defra_node::Node>,
+    snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
+    sources: Vec<Box<dyn TriggerSource>>,
+    cancel: CancellationToken,
+) {
+    let materializer: Arc<dyn MaterializerHandle> = Arc::new(
+        production_materializer::ProductionMaterializer::new(node, snapshot_rx.clone()),
+    );
+    TriggerEngine::new(snapshot_rx, materializer)
+        .run(sources, cancel)
+        .await;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TriggerKind {
     Schedule,
-    #[allow(dead_code)]
     Event,
-    #[allow(dead_code)]
     Manual,
 }
 
@@ -81,8 +89,8 @@ fn trigger_prompt_header(intent: &FireIntent) -> String {
 pub struct FireIntent {
     pub trigger_id: Option<String>,
     pub trigger_kind: TriggerKind,
-    pub task: crate::runtime::snapshot::ResolvedTask,
-    pub concurrency: crate::runtime::snapshot::ConcurrencyMode,
+    pub task: crate::documents::automation::ResolvedTask,
+    pub concurrency: crate::documents::ConcurrencyMode,
     pub event_vars: serde_json::Value,
     pub doc_vars: Option<serde_json::Value>,
     pub correlation: Option<String>,
@@ -91,6 +99,7 @@ pub struct FireIntent {
     pub args_vars: Option<serde_json::Value>,
     pub durable_fire_key: String,
     pub pre_materialized_request_id: Option<String>,
+    pub event_source_generation: Option<serde_json::Value>,
     pub on_result: Box<dyn FnOnce(FireResult) + Send>,
 }
 
@@ -153,27 +162,15 @@ pub(crate) fn fire_result_from_materialize(result: anyhow::Result<String>) -> Fi
 
 pub(crate) const SERIAL_BUSY: &str = "serial: prior fire still in-flight";
 
-pub(crate) const UNACKNOWLEDGED_STATUS: &str = "unacknowledged";
+pub const UNACKNOWLEDGED_STATUS: &str = "unacknowledged";
 
 #[derive(Debug, Clone)]
 pub enum FireResult {
-    Duplicate {
-        request_id: String,
-    },
-    #[allow(dead_code)]
-    Fired {
-        request_id: String,
-    },
-    #[allow(dead_code)]
-    Skipped {
-        reason: String,
-    },
-    Errored {
-        error: String,
-    },
-    Rejected {
-        error: String,
-    },
+    Duplicate { request_id: String },
+    Fired { request_id: String },
+    Skipped { reason: String },
+    Errored { error: String },
+    Rejected { error: String },
 }
 
 pub trait TriggerSource: Send + Sync {
@@ -189,7 +186,7 @@ pub(crate) trait MaterializerHandle: Send + Sync {
     )]
     fn materialize(
         &self,
-        task: &crate::runtime::snapshot::ResolvedTask,
+        task: &crate::documents::automation::ResolvedTask,
         trigger_id: Option<&str>,
         trigger_kind: TriggerKind,
         trigger_doc_id: Option<&str>,
@@ -203,9 +200,13 @@ pub(crate) trait MaterializerHandle: Send + Sync {
         prepared_ids: Option<(&str, &str)>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send + '_>>;
 
+    /// Recovers an admitted fire as the Agent of the fire's Task. The fire's
+    /// receipt and request are that Agent's rows, so recovery does not depend
+    /// on the trigger still being configured in the current snapshot.
     fn recover_admitted_fire(
         &self,
         _identity: &gents_protocol::trigger_delivery::FireIdentity,
+        _task: &crate::documents::automation::ResolvedTask,
     ) -> std::pin::Pin<
         Box<dyn std::future::Future<Output = anyhow::Result<Option<String>>> + Send + '_>,
     > {
@@ -228,7 +229,7 @@ pub(crate) trait MaterializerHandle: Send + Sync {
 
     fn recover_goal_task_fire(
         &self,
-        task: &crate::runtime::snapshot::ResolvedTask,
+        task: &crate::documents::automation::ResolvedTask,
         durable_fire_key: &str,
     ) -> std::pin::Pin<
         Box<dyn std::future::Future<Output = anyhow::Result<Option<String>>> + Send + '_>,
@@ -243,11 +244,8 @@ pub(crate) trait MaterializerHandle: Send + Sync {
 }
 
 pub(crate) struct TriggerEngine {
-    #[allow(dead_code)]
     snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
-    #[allow(dead_code)]
     materializer: Arc<dyn MaterializerHandle>,
-    #[allow(dead_code)]
     per_trigger_locks: Mutex<TriggerLockMap>,
 }
 
@@ -293,616 +291,6 @@ impl TriggerEngine {
                 }
             }
         }
-    }
-
-    #[allow(dead_code)]
-    async fn dispatch(&self, intent: FireIntent) -> FireResult {
-        if let Some(error) = intent.well_formed_error() {
-            let result = FireResult::Rejected {
-                error: error.to_string(),
-            };
-            (intent.on_result)(result.clone());
-            return result;
-        }
-
-        if let Some(request_id) = intent.pre_materialized_request_id.clone() {
-            let result = FireResult::Fired { request_id };
-            (intent.on_result)(result.clone());
-            return result;
-        }
-
-        let delivery_identity = if intent.trigger_kind == TriggerKind::Schedule {
-            let snapshot = self.snapshot_rx.borrow().clone();
-            intent.trigger_id.as_ref().map(|trigger| {
-                gents_protocol::trigger_delivery::FireIdentity {
-                    owner_did: snapshot.local_did.clone(),
-                    trigger_id: trigger.clone(),
-                    source_collection: "Schedule".into(),
-                    source_doc_id: intent.durable_fire_key.clone(),
-                }
-            })
-        } else if intent.trigger_kind == TriggerKind::Event {
-            let snapshot = self.snapshot_rx.borrow().clone();
-            let collection = intent
-                .event_vars
-                .get("source_collection")
-                .and_then(serde_json::Value::as_str)
-                .or_else(|| {
-                    snapshot
-                        .active_event_triggers()
-                        .get(intent.trigger_id.as_deref().unwrap_or_default())
-                        .map(|trigger| trigger.source_collection.as_str())
-                });
-            let (collection, document) = match &intent.group_vars {
-                Some(group) => (
-                    Some("EventGroupState"),
-                    group
-                        .get("state_doc_id")
-                        .and_then(serde_json::Value::as_str),
-                ),
-                None => (
-                    collection,
-                    intent
-                        .event_vars
-                        .get("source_doc_id")
-                        .and_then(serde_json::Value::as_str),
-                ),
-            };
-            match (intent.trigger_id.as_ref(), collection, document) {
-                (Some(trigger), Some(collection), Some(document)) => {
-                    Some(gents_protocol::trigger_delivery::FireIdentity {
-                        owner_did: snapshot.local_did.clone(),
-                        trigger_id: trigger.clone(),
-                        source_collection: collection.to_owned(),
-                        source_doc_id: document.to_owned(),
-                    })
-                }
-                _ => None,
-            }
-        } else {
-            None
-        };
-        if let Some(identity) = &delivery_identity {
-            match self.materializer.recover_admitted_fire(identity).await {
-                Ok(Some(request_id)) => {
-                    let result = FireResult::Duplicate { request_id };
-                    (intent.on_result)(result.clone());
-                    return result;
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    let result = FireResult::Errored {
-                        error: format!("recover admitted fire: {error}"),
-                    };
-                    (intent.on_result)(result.clone());
-                    return result;
-                }
-            }
-        }
-
-        match self
-            .materializer
-            .recover_goal_task_fire(&intent.task, &intent.durable_fire_key)
-            .await
-        {
-            Ok(Some(request_id)) => {
-                let result = FireResult::Fired { request_id };
-                (intent.on_result)(result.clone());
-                return result;
-            }
-            Ok(None) => {}
-            Err(error) => {
-                let result = FireResult::Errored {
-                    error: format!("recover durable goal Task fire: {error}"),
-                };
-                (intent.on_result)(result.clone());
-                return result;
-            }
-        }
-
-        let snapshot = self.snapshot_rx.borrow().clone();
-
-        let trigger_doc_id = match intent.trigger_kind {
-            TriggerKind::Schedule => {
-                let Some(trigger_id) = intent.trigger_id.as_deref() else {
-                    let result = FireResult::Rejected {
-                        error: "Schedule trigger missing trigger_id".to_string(),
-                    };
-                    (intent.on_result)(result.clone());
-                    return result;
-                };
-                let Some(trigger) = snapshot.active_schedules().get(trigger_id) else {
-                    let result = FireResult::Skipped {
-                        reason: "trigger disabled".to_string(),
-                    };
-                    (intent.on_result)(result.clone());
-                    return result;
-                };
-                Some(trigger.trigger_doc_id.clone())
-            }
-            TriggerKind::Event => {
-                let Some(trigger_id) = intent.trigger_id.as_deref() else {
-                    let result = FireResult::Rejected {
-                        error: "Event trigger missing trigger_id".to_string(),
-                    };
-                    (intent.on_result)(result.clone());
-                    return result;
-                };
-                let Some(trigger) = snapshot.active_event_triggers().get(trigger_id) else {
-                    let result = FireResult::Skipped {
-                        reason: "trigger disabled".to_string(),
-                    };
-                    (intent.on_result)(result.clone());
-                    return result;
-                };
-                Some(trigger.trigger_doc_id.clone())
-            }
-            TriggerKind::Manual => None,
-        };
-
-        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-        let (node_scope, ctx_scope) = crate::documents::template::task_node_ctx(
-            &snapshot.local_did,
-            &intent.task.agent_id,
-            &now,
-        );
-        let schedule = (intent.trigger_kind == TriggerKind::Schedule)
-            .then(|| {
-                intent
-                    .trigger_id
-                    .as_deref()
-                    .and_then(|id| snapshot.active_schedules().get(id))
-            })
-            .flatten();
-        let targeted_schedule = schedule.is_some_and(|s| s.session_id_template.is_some());
-        if intent.trigger_kind != TriggerKind::Event {
-            let validation = if let Some(schedule) = schedule {
-                if schedule.task_id != intent.task.task_id {
-                    Err(anyhow::anyhow!("schedule Task changed before admission"))
-                } else {
-                    validate_task_delivery_options(
-                        TriggerKind::Schedule,
-                        intent.task.emit_outcome,
-                        intent.concurrency,
-                        targeted_schedule,
-                    )
-                }
-            } else {
-                validate_task_delivery_options(
-                    intent.trigger_kind,
-                    intent.task.emit_outcome,
-                    intent.concurrency,
-                    false,
-                )
-            };
-            if let Err(error) = validation {
-                let result = FireResult::Rejected {
-                    error: error.to_string(),
-                };
-                (intent.on_result)(result.clone());
-                return result;
-            }
-        }
-        let prepared_ids = if matches!(
-            intent.trigger_kind,
-            TriggerKind::Manual | TriggerKind::Schedule
-        ) && !targeted_schedule
-        {
-            Some(if intent.task.goal_objective_template.is_some() {
-                let Some(agent) = snapshot.agent(&intent.task.agent_id) else {
-                    let result = FireResult::Errored {
-                        error: "Task agent unavailable".into(),
-                    };
-                    (intent.on_result)(result.clone());
-                    return result;
-                };
-                let identity = crate::goal::task_goal_fire_identity(
-                    agent.node_did(),
-                    &intent.task.task_id,
-                    &intent.durable_fire_key,
-                );
-                (identity.request_id, identity.session_id)
-            } else {
-                (
-                    uuid::Uuid::new_v4().to_string(),
-                    uuid::Uuid::new_v4().to_string(),
-                )
-            })
-        } else {
-            None
-        };
-        let mut scope = crate::documents::template::TemplateScope {
-            session: prepared_ids
-                .as_ref()
-                .map(|(_, session)| serde_json::json!({"session_id": session})),
-            request: prepared_ids
-                .as_ref()
-                .map(|(request, _)| serde_json::json!({"request_id": request})),
-            event: intent.event_vars.clone(),
-            doc: intent.doc_vars.clone(),
-            args: intent.args_vars.clone(),
-            group: intent.group_vars.clone(),
-            node: node_scope,
-            ctx: ctx_scope,
-        };
-        if intent.trigger_kind == TriggerKind::Event
-            && snapshot.agent(&intent.task.agent_id).is_none()
-        {
-            let result = FireResult::Errored {
-                error: "prepare fire: trigger agent unavailable".into(),
-            };
-            (intent.on_result)(result.clone());
-            return result;
-        }
-        let mut delivery = if intent.trigger_kind == TriggerKind::Event || targeted_schedule {
-            let prepared = (|| -> anyhow::Result<gents_protocol::trigger_delivery::TriggerFire> {
-                let event_trigger = if intent.trigger_kind == TriggerKind::Event {
-                    Some(
-                        snapshot
-                            .active_event_triggers()
-                            .get(intent.trigger_id.as_deref().unwrap_or_default())
-                            .ok_or_else(|| anyhow::anyhow!("event trigger disappeared"))?,
-                    )
-                } else {
-                    None
-                };
-                let session_template = event_trigger
-                    .and_then(|t| t.session_id_template.as_deref())
-                    .or_else(|| schedule.and_then(|s| s.session_id_template.as_deref()));
-                let owner = snapshot
-                    .agent(&intent.task.agent_id)
-                    .ok_or_else(|| anyhow::anyhow!("trigger agent unavailable"))?
-                    .node_did()
-                    .to_string();
-                let (source_collection, source_doc_id) = if targeted_schedule {
-                    ("Schedule", Some(intent.durable_fire_key.as_str()))
-                } else if let Some(group) = &intent.group_vars {
-                    (
-                        "EventGroupState",
-                        group
-                            .get("state_doc_id")
-                            .and_then(serde_json::Value::as_str),
-                    )
-                } else {
-                    (
-                        event_trigger
-                            .expect("event delivery")
-                            .source_collection
-                            .as_str(),
-                        intent
-                            .event_vars
-                            .get("source_doc_id")
-                            .and_then(serde_json::Value::as_str),
-                    )
-                };
-                let source_doc_id = source_doc_id
-                    .filter(|s| !s.is_empty())
-                    .ok_or_else(|| anyhow::anyhow!("fire lacks source document ID"))?;
-                let identity = gents_protocol::trigger_delivery::FireIdentity {
-                    owner_did: owner,
-                    trigger_id: intent.trigger_id.clone().expect("configured trigger"),
-                    source_collection: source_collection.into(),
-                    source_doc_id: source_doc_id.into(),
-                };
-                let key = durable::fire_key(&identity);
-                let session_id = match session_template {
-                    Some(template) => {
-                        let value = crate::documents::template::render_template(template, &scope)?;
-                        anyhow::ensure!(
-                            !value.trim().is_empty(),
-                            "session template rendered an empty ID"
-                        );
-                        value
-                    }
-                    None => identity.session_id(),
-                };
-                let source_string = |field: &str| {
-                    intent
-                        .doc_vars
-                        .as_ref()
-                        .and_then(|d| d.get(field))
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_owned)
-                };
-                let fire = gents_protocol::trigger_delivery::TriggerFire {
-                    request_id: identity.request_id(),
-                    fire_key: key,
-                    identity,
-                    goal_id: intent.task.goal_objective_template.as_ref().map(|_| {
-                        crate::goal::deterministic_goal_id(
-                            snapshot.agent(&intent.task.agent_id).unwrap().node_did(),
-                            &session_id,
-                        )
-                    }),
-                    session_id,
-                    task_id: intent.task.task_id.clone(),
-                    emit_outcome: intent.task.emit_outcome,
-                    goal_objective: None,
-                    goal_token_budget: intent.task.goal_token_budget,
-                    goal_assignment_applied: false,
-                    queued_serial: intent.concurrency
-                        == crate::runtime::snapshot::ConcurrencyMode::QueuedSerial,
-                    source_handoff_id: source_string("handoff_id"),
-                    reply_session_id: source_string("reply_session_id"),
-                    shard_id: source_string("shard_id"),
-                    attempt: intent
-                        .doc_vars
-                        .as_ref()
-                        .and_then(|d| d.get("attempt"))
-                        .and_then(serde_json::Value::as_i64),
-                    created_at: now.clone(),
-                };
-                anyhow::ensure!(
-                    !fire.emit_outcome
-                        || fire
-                            .source_handoff_id
-                            .as_ref()
-                            .is_some_and(|s| !s.is_empty()),
-                    "emit_outcome requires a source handoff_id"
-                );
-                Ok(fire)
-            })();
-            match prepared {
-                Ok(fire) => {
-                    scope.session = Some(serde_json::json!({"session_id": fire.session_id}));
-                    scope.request = Some(serde_json::json!({"request_id": fire.request_id}));
-                    Some(durable::PreparedFire {
-                        replace_prior: intent.concurrency
-                            == crate::runtime::snapshot::ConcurrencyMode::LatestOnly,
-                        target_existing: targeted_schedule
-                            || snapshot
-                                .active_event_triggers()
-                                .get(intent.trigger_id.as_deref().unwrap())
-                                .is_some_and(|t| t.session_id_template.is_some()),
-                        receipt: fire,
-                    })
-                }
-                Err(error) => {
-                    let result = FireResult::Rejected {
-                        error: format!("prepare fire: {error}"),
-                    };
-                    (intent.on_result)(result.clone());
-                    return result;
-                }
-            }
-        } else {
-            None
-        };
-        let (rendered, rendered_goal_objective) = match crate::documents::template::render_task(
-            &intent.task.prompt_template,
-            intent.task.goal_objective_template.as_deref(),
-            intent.task.goal_token_budget,
-            &scope,
-        ) {
-            Ok(rendered) => rendered,
-            Err(error) => {
-                let result = FireResult::Rejected { error };
-                (intent.on_result)(result.clone());
-                return result;
-            }
-        };
-        // An event prompt may interpolate any document its source matched,
-        // replicated ones included. Manual prompts keep their existing bytes.
-        let rendered = match intent.trigger_kind {
-            TriggerKind::Manual => rendered,
-            _ => format!("{}\n\n{rendered}", trigger_prompt_header(&intent)),
-        };
-        if let Some(delivery) = &mut delivery {
-            delivery.receipt.goal_objective = rendered_goal_objective.clone();
-        }
-        let concurrency_node_did = || {
-            snapshot
-                .agent(&intent.task.agent_id)
-                .map(|agent| agent.node_did().to_string())
-                .ok_or_else(|| {
-                    snapshot
-                        .unavailable_public_message(&intent.task.agent_id)
-                        .map(ToOwned::to_owned)
-                        .unwrap_or_else(|| format!("agent {} is not loaded", intent.task.agent_id))
-                })
-        };
-        let durable_goal_request_id = if let Some(delivery) = &delivery {
-            Some(delivery.receipt.request_id.clone())
-        } else {
-            match rendered_goal_objective.as_ref() {
-                Some(_) => match concurrency_node_did() {
-                    Ok(node_did) => Some(
-                        crate::goal::task_goal_fire_identity(
-                            &node_did,
-                            &intent.task.task_id,
-                            &intent.durable_fire_key,
-                        )
-                        .request_id,
-                    ),
-                    Err(reason) => {
-                        let result = FireResult::Errored {
-                            error: format!("goal identity: {reason}"),
-                        };
-                        (intent.on_result)(result.clone());
-                        return result;
-                    }
-                },
-                None => None,
-            }
-        };
-        let Some(trigger_id) = intent.trigger_id.clone() else {
-            return self
-                .materialize_after_lock(
-                    intent,
-                    trigger_doc_id,
-                    rendered,
-                    rendered_goal_objective,
-                    delivery,
-                    prepared_ids,
-                )
-                .await;
-        };
-        if intent.concurrency == crate::runtime::snapshot::ConcurrencyMode::Parallel
-            && intent.group_vars.is_none()
-        {
-            return self
-                .materialize_after_lock(
-                    intent,
-                    trigger_doc_id,
-                    rendered,
-                    rendered_goal_objective,
-                    delivery,
-                    prepared_ids,
-                )
-                .await;
-        }
-        let node_did = match concurrency_node_did() {
-            Ok(did) => did,
-            Err(reason) => {
-                let result = FireResult::Errored {
-                    error: format!("concurrency gate: {reason}"),
-                };
-                (intent.on_result)(result.clone());
-                return result;
-            }
-        };
-        let lock_key = (
-            node_did.clone(),
-            trigger_id.clone(),
-            intent
-                .group_vars
-                .as_ref()
-                .map(|_| intent.durable_fire_key.clone()),
-        );
-        let lock = {
-            let mut map = self.per_trigger_locks.lock().await;
-            map.entry(lock_key.clone())
-                .or_insert_with(|| Arc::new(Mutex::new(())))
-                .clone()
-        };
-        let guard = lock.lock().await;
-
-        if let Some(identity) = &delivery_identity {
-            let recovered = self.materializer.recover_admitted_fire(identity).await;
-            let result = match recovered {
-                Ok(Some(request_id)) => Some(FireResult::Duplicate { request_id }),
-                Ok(None) => None,
-                Err(error) => Some(FireResult::Errored {
-                    error: format!("recover locked admitted fire: {error}"),
-                }),
-            };
-            if let Some(result) = result {
-                drop(guard);
-                self.prune_trigger_lock(&lock_key, &lock).await;
-                (intent.on_result)(result.clone());
-                return result;
-            }
-        }
-
-        if intent.group_vars.is_some() {
-            let Some(_correlation) = intent
-                .correlation
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            else {
-                let result = FireResult::Errored {
-                    error: "per_group intent requires a non-empty correlation".to_string(),
-                };
-                drop(guard);
-                self.prune_trigger_lock(&lock_key, &lock).await;
-                (intent.on_result)(result.clone());
-                return result;
-            };
-            match self
-                .materializer
-                .has_materialized_group_request(&node_did, &trigger_id, &intent.durable_fire_key)
-                .await
-            {
-                Ok(true) => {
-                    let result = FireResult::Skipped {
-                        reason: "per_group: request already materialized".to_string(),
-                    };
-                    drop(guard);
-                    self.prune_trigger_lock(&lock_key, &lock).await;
-                    (intent.on_result)(result.clone());
-                    return result;
-                }
-                Ok(false) => {}
-                Err(error) => {
-                    let result = FireResult::Errored {
-                        error: format!("group marker query: {error}"),
-                    };
-                    drop(guard);
-                    self.prune_trigger_lock(&lock_key, &lock).await;
-                    (intent.on_result)(result.clone());
-                    return result;
-                }
-            }
-        }
-
-        use crate::runtime::snapshot::ConcurrencyMode;
-        match (intent.group_vars.is_some(), intent.concurrency) {
-            (true, _) | (false, ConcurrencyMode::Parallel | ConcurrencyMode::QueuedSerial) => {}
-            (false, ConcurrencyMode::Serial) => match self
-                .materializer
-                .has_active_runtime_request_for_trigger(
-                    &node_did,
-                    &trigger_id,
-                    durable_goal_request_id.as_deref(),
-                )
-                .await
-            {
-                Ok(true) => {
-                    let result = FireResult::Skipped {
-                        reason: SERIAL_BUSY.to_string(),
-                    };
-                    drop(guard);
-                    self.prune_trigger_lock(&lock_key, &lock).await;
-                    (intent.on_result)(result.clone());
-                    return result;
-                }
-                Ok(false) => {}
-                Err(error) => {
-                    let result = FireResult::Errored {
-                        error: format!("in-flight query: {error}"),
-                    };
-                    drop(guard);
-                    self.prune_trigger_lock(&lock_key, &lock).await;
-                    (intent.on_result)(result.clone());
-                    return result;
-                }
-            },
-            (false, ConcurrencyMode::LatestOnly) if delivery.is_some() => {}
-            (false, ConcurrencyMode::LatestOnly) => {
-                if let Err(error) = self
-                    .materializer
-                    .supersede_active_runtime_requests_for_trigger(
-                        &node_did,
-                        &trigger_id,
-                        durable_goal_request_id.as_deref(),
-                    )
-                    .await
-                {
-                    let result = FireResult::Errored {
-                        error: format!("supersede: {error}"),
-                    };
-                    drop(guard);
-                    self.prune_trigger_lock(&lock_key, &lock).await;
-                    (intent.on_result)(result.clone());
-                    return result;
-                }
-            }
-        }
-
-        let result = self
-            .materialize_after_lock(
-                intent,
-                trigger_doc_id,
-                rendered,
-                rendered_goal_objective,
-                delivery,
-                prepared_ids,
-            )
-            .await;
-        drop(guard);
-        self.prune_trigger_lock(&lock_key, &lock).await;
-        result
     }
 
     async fn prune_trigger_lock(&self, lock_key: &TriggerLockKey, lock: &TriggerLock) {
@@ -973,7 +361,7 @@ impl TriggerEngine {
 pub(crate) fn validate_task_delivery_options(
     kind: TriggerKind,
     emit_outcome: bool,
-    concurrency: crate::runtime::snapshot::ConcurrencyMode,
+    concurrency: crate::documents::ConcurrencyMode,
     target_existing: bool,
 ) -> anyhow::Result<()> {
     if kind == TriggerKind::Event {
@@ -985,13 +373,12 @@ pub(crate) fn validate_task_delivery_options(
     );
     if kind == TriggerKind::Schedule {
         anyhow::ensure!(
-            target_existing
-                || concurrency != crate::runtime::snapshot::ConcurrencyMode::QueuedSerial,
+            target_existing || concurrency != crate::documents::ConcurrencyMode::QueuedSerial,
             "queued_serial requires an explicit session_id_template for scheduled delivery"
         );
     } else {
         anyhow::ensure!(
-            concurrency != crate::runtime::snapshot::ConcurrencyMode::QueuedSerial,
+            concurrency != crate::documents::ConcurrencyMode::QueuedSerial,
             "queued_serial requires a document event source"
         );
         anyhow::ensure!(

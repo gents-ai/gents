@@ -188,7 +188,7 @@ impl Tool for AgentMessageTool {
         let mut properties = message_body_schema("message");
         properties["session_id"] = serde_json::json!({
             "type": "string",
-            "description": "An agent session you can reach (see agent_session_list), never this conversation's own session."
+            "description": "A session_id that agent_new returned or agent_session_list shows; never an agent name (start an agent with agent_new) or this conversation's own session."
         });
         properties["interrupt"] = serde_json::json!({
             "type": "boolean",
@@ -357,7 +357,7 @@ impl Tool for AgentSessionListTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_owned(),
-            description: "Find existing sessions you may message, including trigger-started work. Returns activity, relationship and message/interrupt permissions. Continue with next_cursor and the same filter; a stale cursor restarts the listing.".to_owned(),
+            description: "Find existing sessions you may message, including trigger-started work, and the session that started you (listed without message or interrupt permission). Returns activity, relationship and message/interrupt permissions. Continue with next_cursor and the same filter; a stale cursor restarts the listing.".to_owned(),
             parameters: serde_json::json!({
                 "type": "object", "additionalProperties": false,
                 "properties": {
@@ -374,7 +374,7 @@ impl Tool for AgentSessionListTool {
                         }
                     },
                     "cursor": {"type": "string"},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20}
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20, "description": "Sessions per page. The session that started you heads the first page and does not count toward limit."}
                 }
             }),
         }

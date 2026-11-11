@@ -1,11 +1,9 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
-use gents::goal::{
-    delete_goals_for_session, load_canonical_goal, set_goal_from_access, GoalDocument, GoalStatus,
-    GOAL_FIELDS,
-};
+use gents::goal::{set_goal_from_access, GoalDocument, GoalStatus};
 use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::escape_graphql_string;
+use gents_protocol::goal::GOAL_FIELDS;
 
 use crate::cli::args::{
     GoalCommand, GoalResumeArgs, GoalResumeOnArgs, GoalScopeArgs, GoalSetArgs, GoalShowArgs,
@@ -26,7 +24,7 @@ pub(crate) async fn dispatch(command: GoalCommand) -> Result<()> {
 
 async fn goal_show(args: GoalShowArgs) -> Result<()> {
     args.output
-        .ensure_supported("goal show", &[OutputFormat::Json])?;
+        .ensure_supported("automation goal show", &[OutputFormat::Json])?;
     let (access, node_did) = access_and_did(&args.scope).await?;
     print_json(&goal_show_value(&access, &node_did, &args.scope.session, Utc::now()).await?)
 }
@@ -54,7 +52,7 @@ async fn goal_show_value(
 
 async fn goal_set(args: GoalSetArgs) -> Result<()> {
     args.output
-        .ensure_supported("goal set", &[OutputFormat::Json])?;
+        .ensure_supported("automation goal set", &[OutputFormat::Json])?;
     let (access, node_did) = access_and_did(&args.scope).await?;
     print_json(&goal_set_value(&access, &node_did, &args).await?)
 }
@@ -88,11 +86,12 @@ async fn goal_set_value(
 
 async fn goal_resume(args: GoalResumeArgs) -> Result<()> {
     args.output
-        .ensure_supported("goal resume-request", &[OutputFormat::Json])?;
+        .ensure_supported("automation goal resume-request", &[OutputFormat::Json])?;
     let (access, node_did) = access_and_did(&args.scope).await?;
-    crate::request_helpers::ensure_local_request_signer(args.scope.home.as_deref(), &node_did)?;
-    let identity =
-        gents::store::identity::RegisteredIdentity::from_registered_did(&node_did, None)?;
+    let actor = access
+        .actor_did()
+        .context("Goal resume requires an authenticated client identity")?;
+    let identity = gents::store::identity::RegisteredIdentity::from_registered_did(actor, None)?;
     let receipt = gents::goal::resume_goal_request(
         &access,
         &identity,
@@ -106,11 +105,12 @@ async fn goal_resume(args: GoalResumeArgs) -> Result<()> {
 
 async fn goal_resume_on(args: GoalResumeOnArgs) -> Result<()> {
     args.output
-        .ensure_supported("goal resume-on", &[OutputFormat::Json])?;
+        .ensure_supported("automation goal resume-on", &[OutputFormat::Json])?;
     let (access, node_did) = access_and_did(&args.scope).await?;
-    crate::request_helpers::ensure_local_request_signer(args.scope.home.as_deref(), &node_did)?;
-    let identity =
-        gents::store::identity::RegisteredIdentity::from_registered_did(&node_did, None)?;
+    let actor = access
+        .actor_did()
+        .context("Goal resume requires an authenticated client identity")?;
+    let identity = gents::store::identity::RegisteredIdentity::from_registered_did(actor, None)?;
     let backend_id = crate::commands::config::profile::backend_for_account(
         &access,
         &node_did,
@@ -135,51 +135,15 @@ async fn goal_resume_on(args: GoalResumeOnArgs) -> Result<()> {
 
 async fn goal_clear(args: GoalShowArgs) -> Result<()> {
     args.output
-        .ensure_supported("goal clear", &[OutputFormat::Json])?;
+        .ensure_supported("automation goal clear", &[OutputFormat::Json])?;
     let (access, node_did) = access_and_did(&args.scope).await?;
     let goal = load_goal(&access, &node_did, &args.scope.session)
         .await?
         .with_context(|| format!("no durable goal for session {}", args.scope.session))?;
-    let deleted = if let Some(node) = access.local_node() {
-        delete_goals_for_session(node, &node_did, &args.scope.session).await? > 0
-    } else {
-        let node_did = escape_graphql_string(&node_did);
-        let session_id = escape_graphql_string(&args.scope.session);
-        let node_did_ref = &node_did;
-        let session_id_ref = &session_id;
-        access
-            .transact_write("cli.goal.clear", move |txn| {
-                Box::pin(async move {
-                    let response = txn
-                        .execute(&format!(
-                            r#"mutation {{
-                        delete_Goal(filter: {{
-                            node_did: {{ _eq: "{node_did_ref}" }},
-                            session_id: {{ _eq: "{session_id_ref}" }}
-                        }}) {{ _docID }}
-                    }}"#
-                        ))
-                        .await?;
-                    txn.execute(&format!(
-                        r#"mutation {{
-                        delete_GoalCreationClaim(filter: {{
-                            node_did: {{ _eq: "{node_did_ref}" }},
-                            session_id: {{ _eq: "{session_id_ref}" }}
-                        }}) {{ _docID }}
-                    }}"#
-                    ))
-                    .await?;
-                    Ok::<_, anyhow::Error>(response.pointer("/data/delete_Goal").is_some_and(
-                        |value| {
-                            value
-                                .as_array()
-                                .map_or_else(|| value.is_object(), |rows| !rows.is_empty())
-                        },
-                    ))
-                })
-            })
+    let deleted =
+        gents::goal::delete_goals_for_session_from_access(&access, &node_did, &args.scope.session)
             .await?
-    };
+            > 0;
     print_json(&serde_json::json!({
         "goal_id": goal.goal_id,
         "session_id": goal.session_id,
@@ -203,9 +167,6 @@ async fn load_goal(
     node_did: &str,
     session_id: &str,
 ) -> Result<Option<GoalDocument>> {
-    if let Some(node) = access.local_node() {
-        return load_canonical_goal(node, node_did, session_id).await;
-    }
     let node_did = escape_graphql_string(node_did);
     let session_id = escape_graphql_string(session_id);
     let response = access

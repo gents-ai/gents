@@ -128,6 +128,8 @@ pub fn desktop_bin() -> Result<PathBuf> {
 pub fn run_desktop_init_json(node_home: &Path, desktop_home: &Path, label: &str) -> Result<Value> {
     let output = Command::new(desktop_bin()?)
         .env("RUST_LOG", "error")
+        .env("GENTS_HOME", node_home)
+        .env("GENTS_DESKTOP_HOME", desktop_home)
         .arg("init")
         .arg("--node-home")
         .arg(node_home)
@@ -159,15 +161,7 @@ pub fn spawn_server(home_dir: &Path, port: u16) -> Result<ServeProcess> {
     spawn_server_with_env(home_dir, port, &[], &[])
 }
 
-fn codex_shim_opt_out(extra_args: &[&str]) -> &'static [&'static str] {
-    if extra_args.iter().any(|arg| arg.starts_with("--codex-shim")) {
-        &[]
-    } else {
-        &["--no-codex-shim"]
-    }
-}
-
-/// Spawn a `gents server` and wait for its readiness JSON. Never replaces a
+/// Spawn a `gents runtime server` and wait for its readiness JSON. Never replaces a
 /// raced-away port: a caller holding this signature cannot observe a port
 /// change, so moving the server would strand it on a dead port.
 pub fn spawn_server_with_ready_json(
@@ -224,19 +218,20 @@ fn spawn_server_with_ready_json_inner(
             .arg("server")
             .arg("--http-port")
             .arg(port.to_string())
-            .args(codex_shim_opt_out(extra_args))
             .args(extra_args)
             .stdout(Stdio::from(stdout))
             .stderr(Stdio::from(stderr));
         configure_foreground_server_env(&mut command, envs);
-        let child = command.spawn().context("spawning gents server")?;
+        let child = command.spawn().context("spawning gents runtime server")?;
         let mut serve = ServeProcess::with_logs(child, stdout_log, stderr_log);
 
         loop {
             let stdout_so_far = read_captured_log(serve.stdout_log.as_ref())?;
             if let Some(value) = server_readiness_json(&stdout_so_far) {
                 super::graphql::register_served_home(
+                    home_dir,
                     &served_home_dir(home_dir, extra_args, envs),
+                    envs,
                     port,
                 )?;
                 return Ok((serve, port, value));
@@ -309,13 +304,17 @@ pub fn spawn_server_with_env(
         .arg("server")
         .arg("--http-port")
         .arg(port.to_string())
-        .args(codex_shim_opt_out(extra_args))
         .args(extra_args)
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
     configure_foreground_server_env(&mut command, envs);
-    let child = command.spawn().context("spawning gents server")?;
-    super::graphql::register_served_home(&served_home_dir(home_dir, extra_args, envs), port)?;
+    let child = command.spawn().context("spawning gents runtime server")?;
+    super::graphql::register_served_home(
+        home_dir,
+        &served_home_dir(home_dir, extra_args, envs),
+        envs,
+        port,
+    )?;
     Ok(ServeProcess::with_logs(child, stdout_log, stderr_log))
 }
 

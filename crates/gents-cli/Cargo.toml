@@ -22,6 +22,7 @@ path = "src/main.rs"
 live-e2e = []
 # Debug native desktop acceptance must never address the user's daily service.
 native-e2e = []
+heap-profiling = ["dep:tikv-jemallocator"]
 typescript = ["dep:ts-rs"]
 
 # All other test binaries are auto-discovered; this explicit target overrides
@@ -33,6 +34,7 @@ path = "tests/cli_live_suite.rs"
 required-features = ["live-e2e"]
 
 [dependencies]
+gents-eval.workspace = true
 base64.workspace = true
 rapidhash = { workspace = true }
 ts-rs = { version = "10.1", optional = true, default-features = false, features = ["serde-compat"] }
@@ -46,17 +48,17 @@ ciborium = "0.2"
 clap.workspace = true
 gents-chatgpt-login.workspace = true
 gents-claude-login.workspace = true
-gents-codex-protocol.workspace = true
 gents-desktop-core.workspace = true
 gents = { path = "../gents" }
 gents-fs-runner = { path = "../gents-fs-runner" }
 gents-protocol.workspace = true
-defra-node.workspace = true
+gents-shell.workspace = true
+defra-node = { workspace = true, features = ["http"] }
 defra-http.workspace = true
 defra-p2p-adapter.workspace = true
-events.workspace = true
 futures-util = "0.3"
 flate2 = "1"
+iana-time-zone = "0.1"
 include_dir = "0.7"
 identity.workspace = true
 iroh.workspace = true
@@ -85,11 +87,13 @@ serde_yaml.workspace = true
 subtle.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
+tokio-tungstenite = { version = "0.26.2", features = ["rustls-tls-native-roots"] }
 tracing.workspace = true
 tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
 url = "2"
+webbrowser = "1"
 semver = "1"
 tempfile = "3"
 # `gents __docs-bundle --archive` packs the reference bundle itself so its
@@ -97,10 +101,10 @@ tempfile = "3"
 tar = "0.4"
 notify = { version = "8.2", default-features = false, features = ["macos_kqueue"] }
 wait-timeout = "0.2"
-# `gents eval init` holds a draft's check params to each check's schema.
+# `gents utils eval init` holds a draft's check params to each check's schema.
 jsonschema = { version = "0.46.5", default-features = false }
 
-# `gents pack build` (src/commands/pack/build.rs) compiles a tool's source
+# `gents config pack build` (src/commands/pack/build.rs) compiles a tool's source
 # through Afterburner's own compiler rather than growing a second one:
 # `dispatch_compile` already covers every language Afterburner supports
 # (JS/TS via Javy, Ruby via wasi-vfs, Python to an emscripten-pyodide
@@ -108,7 +112,7 @@ jsonschema = { version = "0.46.5", default-features = false }
 # behind the `bin` feature. Pinned to the same rev as the afterburner-*
 # crates in crates/gents/Cargo.toml so all of them agree on the
 # `.afb`/`Manifold` wire shapes.
-afterburner = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "bf86885d2408f29e5a9bcbb3c5392fbdf5fff9f2", default-features = false, features = [
+afterburner = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1", default-features = false, features = [
     "bin",
 ] }
 # The package loader `dispatch_compile` expects (`pkg::LocalPackage`):
@@ -118,7 +122,7 @@ afterburner = { git = "https://github.com/afterburner-sh/afterburner.git", rev =
 # Pinned to the same rev as `afterburner` above: `dispatch_compile` takes a
 # `pkg::LocalPackage` from this crate, and two instances of it at different
 # revs are different types to the compiler.
-afterburner-cloud = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "bf86885d2408f29e5a9bcbb3c5392fbdf5fff9f2" }
+afterburner-cloud = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = { version = "3.7.0", features = ["OSX_10_15"] }
@@ -131,6 +135,9 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 mimalloc.workspace = true
 
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+tikv-jemallocator = { version = "0.7", optional = true, features = ["profiling"] }
+
 # `pack build` points stdout at stderr while the plugin compiler runs, so
 # stdout carries only the JSON report.
 [target.'cfg(unix)'.dependencies]
@@ -140,11 +147,16 @@ libc = "0.2"
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Console"] }
 
 [dev-dependencies]
+gents = { path = "../gents", features = ["test-home-guard"] }
 acp.workspace = true
 crypto.workspace = true
+db.workspace = true
+defra-core.workspace = true
 futures = "0.3"
 gents-lean-contract.workspace = true
-tokio-tungstenite = "0.26.2"
+portable-pty = "0.9"
+ratatui = { version = "0.30", default-features = false }
+tui-test-rs = "0.1.1"
 
 [target.'cfg(unix)'.dev-dependencies]
 libc = "0.2"

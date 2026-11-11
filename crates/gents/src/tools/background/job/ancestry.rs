@@ -8,7 +8,6 @@ use gents_protocol::job::JobPin;
 use serde_json::Value;
 
 use crate::store::config_client::ConfigAccess;
-use crate::store::graphql::graphql_string_list_literal;
 
 #[cfg(test)]
 tokio::task_local! {
@@ -36,10 +35,21 @@ pub async fn started_by_job(
         if calls.is_empty() {
             break;
         }
-        let list = graphql_string_list_literal(calls.iter().map(String::as_str));
-        let document = format!(
-            "{{ AgentToolCall(filter: {{ _docID: {{ _in: {list} }} }}) {{ session_id job_pin }} }}"
-        );
+        let document = {
+            use gents_protocol::document_query::{
+                fields::agent_tool_call as fields, Filter, Query, Selection,
+            };
+            Query::select(
+                Selection::new()
+                    .field(fields::SESSION_ID)
+                    .field(fields::JOB_PIN),
+            )
+            .filter(Filter::any_of(
+                fields::DOC_ID,
+                calls.iter().map(String::as_str),
+            ))
+            .render()
+        };
         let mut parents = Vec::new();
         let mut started = false;
         for row in read(access, &document, "AgentToolCall").await? {
@@ -64,12 +74,16 @@ pub async fn started_by_job(
     Ok(false)
 }
 
-async fn read(access: &ConfigAccess, document: &str, collection: &str) -> Result<Vec<Value>> {
+async fn read(
+    access: &ConfigAccess,
+    document: &gents_protocol::document_query::Rendered,
+    collection: &str,
+) -> Result<Vec<Value>> {
     #[cfg(test)]
     let _ = ANCESTRY_QUERIES.try_with(|queries| {
         queries.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     });
-    let response = access.execute(document).await?;
+    let response = access.read(document).await?;
     response
         .pointer(&format!("/data/{collection}"))
         .and_then(Value::as_array)
@@ -78,10 +92,19 @@ async fn read(access: &ConfigAccess, document: &str, collection: &str) -> Result
 }
 
 async fn cross_session_calls(access: &ConfigAccess, sessions: &[String]) -> Result<Vec<String>> {
-    let list = graphql_string_list_literal(sessions.iter().map(String::as_str));
-    let document = format!(
-        "{{ AgentRequest(filter: {{ session_id: {{ _in: {list} }}, caused_by_parent_request_doc_id: {{ _ne: null }}, caused_by_parent_tool_call_doc_id: {{ _ne: null }} }}) {{ caused_by_parent_tool_call_doc_id }} }}"
-    );
+    let document = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::new().field(fields::CAUSED_BY_PARENT_TOOL_CALL_DOC_ID))
+            .filter(Filter::any_of(
+                fields::SESSION_ID,
+                sessions.iter().map(String::as_str),
+            ))
+            .filter(Filter::not_null(fields::CAUSED_BY_PARENT_REQUEST_DOC_ID))
+            .filter(Filter::not_null(fields::CAUSED_BY_PARENT_TOOL_CALL_DOC_ID))
+            .render()
+    };
     let mut calls = Vec::new();
     for row in read(access, &document, "AgentRequest").await? {
         if let Some(call) = row
@@ -101,7 +124,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
-    use defra_node::EmbeddedNode;
+    use defra_node::Node as EmbeddedNode;
     use serde_json::{json, Value};
 
     use super::{started_by_job, ANCESTRY_QUERIES};
@@ -144,7 +167,7 @@ mod tests {
             "node_did": "owner",
             "requester_did": null,
             "session_id": session_id,
-            "agent_id": "configured",
+            "agent_did": "configured",
             "lifecycle_state": "processing",
         });
         if let Some(parent) = parent_request {
@@ -247,7 +270,7 @@ mod tests {
         let chain = chain().await;
         let access = ConfigAccess::local(chain.node.clone());
         assert!(started_by_job(&access, &chain.child, 1).await.unwrap());
-        chain.node.shutdown().await;
+        chain.node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -255,7 +278,7 @@ mod tests {
         let chain = chain().await;
         let access = ConfigAccess::local(chain.node.clone());
         assert!(started_by_job(&access, &chain.grand, 2).await.unwrap());
-        chain.node.shutdown().await;
+        chain.node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -266,7 +289,7 @@ mod tests {
             .await
             .unwrap());
         assert!(!started_by_job(&access, &chain.plain_root, 1).await.unwrap());
-        chain.node.shutdown().await;
+        chain.node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -282,6 +305,6 @@ mod tests {
         let (miss, miss_queries) = counted(&access, &chain.plain_child, 3).await;
         assert!(!miss.unwrap());
         assert!(miss_queries <= 2 * (3 + 1), "{miss_queries}");
-        chain.node.shutdown().await;
+        chain.node.shutdown().await.expect("shut down test node");
     }
 }

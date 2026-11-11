@@ -1,8 +1,6 @@
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde::{Deserialize, Serialize};
-
-use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 use super::references::ConfigReferences;
 use super::serde_helpers::{
@@ -10,11 +8,16 @@ use super::serde_helpers::{
     is_enabled, rows_with_doc_id,
 };
 
+mod persistence;
+
+pub use persistence::write_agent_document;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct Agent {
-    pub agent_id: String,
+    pub agent_did: String,
+    pub creation_nonce: String,
     pub node_did: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
@@ -48,6 +51,13 @@ pub struct Agent {
 }
 
 impl Agent {
+    pub fn identity_binding(&self) -> gents_protocol::agent_identity::AgentIdentityBinding {
+        gents_protocol::agent_identity::AgentIdentityBinding {
+            agent_did: self.agent_did.clone(),
+            creation_nonce: self.creation_nonce.clone(),
+        }
+    }
+
     pub fn reference_violations(&self, refs: &ConfigReferences) -> Vec<String> {
         self.validate_references(refs)
             .err()
@@ -61,38 +71,35 @@ impl Agent {
     }
 }
 
-pub async fn load_agent(node: &EmbeddedNode, agent_id: &str) -> Result<Option<Agent>> {
-    Ok(load_agent_record(node, agent_id)
+pub async fn load_agent(node: &EmbeddedNode, agent_did: &str) -> Result<Option<Agent>> {
+    Ok(load_agent_record(node, agent_did)
         .await?
         .map(|(_, behavior)| behavior))
 }
 
 pub(crate) async fn load_agent_record(
     node: &EmbeddedNode,
-    agent_id: &str,
+    agent_did: &str,
 ) -> Result<Option<(String, Agent)>> {
-    let escaped_agent_id = escape_graphql_string(agent_id);
-    let query = format!(
-        r#"{{
-            Agent(
-                filter: {{ agent_id: {{ _eq: "{escaped_agent_id}" }} }},
-                limit: 1
-            ) {{
-                _docID
-                agent_id
-                node_did
-                display_name
-                description
-                context_id
-                inference_profile_id
-                enabled
-                tags
-                created_at
-            }}
-        }}"#
-    );
+    use gents_protocol::document_query::{fields::agent as fields, Filter, Query, Selection};
+    let rendered = Query::select(
+        Selection::doc_id()
+            .field(fields::AGENT_DID)
+            .field(fields::CREATION_NONCE)
+            .field(fields::NODE_DID)
+            .field(fields::DISPLAY_NAME)
+            .field(fields::DESCRIPTION)
+            .field(fields::CONTEXT_ID)
+            .field(fields::INFERENCE_PROFILE_ID)
+            .field(fields::ENABLED)
+            .field(fields::TAGS)
+            .field(fields::CREATED_AT),
+    )
+    .filter(Filter::eq(fields::AGENT_DID, agent_did))
+    .limit(1)
+    .render();
 
-    let resp = graphql_with_transaction_retry(node, &query, "query Agent").await?;
+    let resp = crate::store::graphql::read_rendered(node, &rendered, "query Agent").await?;
 
     Ok(first_row_with_doc_id(resp.data.as_ref(), "Agent"))
 }
@@ -109,51 +116,27 @@ pub(crate) async fn list_agent_records(
     node: &EmbeddedNode,
     node_did: &str,
 ) -> Result<Vec<(String, Agent)>> {
-    let escaped_node_did = escape_graphql_string(node_did);
-    let query = format!(
-        r#"{{
-            Agent(
-                filter: {{ node_did: {{ _eq: "{escaped_node_did}" }} }},
-                order: {{ created_at: ASC }}
-            ) {{
-                _docID
-                agent_id
-                node_did
-                display_name
-                description
-                context_id
-                inference_profile_id
-                enabled
-                tags
-                created_at
-            }}
-        }}"#
-    );
+    use gents_protocol::document_query::{
+        fields::agent as fields, Direction, Filter, Query, Selection,
+    };
+    let rendered = Query::select(
+        Selection::doc_id()
+            .field(fields::AGENT_DID)
+            .field(fields::CREATION_NONCE)
+            .field(fields::NODE_DID)
+            .field(fields::DISPLAY_NAME)
+            .field(fields::DESCRIPTION)
+            .field(fields::CONTEXT_ID)
+            .field(fields::INFERENCE_PROFILE_ID)
+            .field(fields::ENABLED)
+            .field(fields::TAGS)
+            .field(fields::CREATED_AT),
+    )
+    .filter(Filter::eq(fields::NODE_DID, node_did))
+    .order_by(fields::CREATED_AT, Direction::Asc)
+    .render();
 
-    let resp = graphql_with_transaction_retry(node, &query, "list Agent").await?;
+    let resp = crate::store::graphql::read_rendered(node, &rendered, "list Agent").await?;
 
     Ok(rows_with_doc_id(resp.data.as_ref(), "Agent"))
-}
-
-pub async fn upsert_agent(node: &std::sync::Arc<EmbeddedNode>, behavior: &Agent) -> Result<()> {
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        None,
-        "document_config.agent.upsert",
-        |txn| {
-            Box::pin(async move {
-                let value = serde_json::to_value(behavior)?;
-                let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
-                    crate::store::config_client::DesiredStateApplyDocument {
-                        collection: crate::Collection::Agent,
-                        add: value.clone(),
-                        update: value,
-                    },
-                ])?;
-                crate::store::config_client::apply_desired_state_plan(txn, &plan).await?;
-                Ok(())
-            })
-        },
-    )
-    .await
 }

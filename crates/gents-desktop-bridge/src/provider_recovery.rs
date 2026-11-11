@@ -143,7 +143,7 @@ pub async fn plan(
     let mut companions = Vec::new();
     let mut unavailable = None;
     if let Some(profile) = blocked.profile.as_deref() {
-        match gents::store::config_client::switch_candidates(
+        match gents::inference::profile_switch::switch_candidates(
             access,
             &request.node_did,
             profile,
@@ -187,7 +187,7 @@ pub async fn plan(
         resets_at: blocked.resets_at.map(|time| time.to_rfc3339()),
         candidates,
         companion_profiles: companions,
-        switch_cost: gents::store::config_client::SWITCH_COST.into(),
+        switch_cost: gents::inference::profile_switch::SWITCH_COST.into(),
         unavailable_reason: unavailable,
         goal,
     }))
@@ -224,7 +224,7 @@ pub async fn apply(
                     reason: "That account is no longer eligible for this model.".into(),
                 });
             }
-            gents::store::config_client::switch_profile_account(
+            gents::inference::profile_switch::switch_profile_account(
                 access,
                 &scope.node_did,
                 profile_id,

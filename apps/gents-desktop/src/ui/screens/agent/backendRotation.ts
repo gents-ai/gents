@@ -27,6 +27,7 @@ export function poolAccounts(
    choices was made, but only for the endpoint they were set up for, since
    kept they would be sent to whatever host the endpoint names */
 const KEPT_AUTH = new Set([
+  "credential",
   "aws_credentials",
   "google_credentials",
   "node_oauth",
@@ -57,7 +58,7 @@ export function movedCredential(
     return undefined;
   if (next.endpoint.trim() === saved.endpoint.trim()) return undefined;
   return backend.authKind === "node_oauth"
-    ? "This backend's sign-in is for its saved endpoint. Sign in to the new gateway with gents claude-gateway-login, or put the endpoint back."
+    ? "This backend's sign-in is for its saved endpoint. Sign in to the new gateway with gents accounts login claude-gateway, or put the endpoint back."
     : "This backend's credentials are for its saved endpoint. Set them up for the new one, or put the endpoint back.";
 }
 

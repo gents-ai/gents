@@ -75,6 +75,7 @@ mod tests {
         let observation = SessionGoalObservation {
             version: 1,
             node_did: "owner".into(),
+            agent_did: "agent".into(),
             session_id: "chat".into(),
             session_doc_id: "session-document".into(),
             requester_did: Some("person".into()),
@@ -97,7 +98,7 @@ mod tests {
                 node_did: Some("owner".into()),
                 session_id: Some("chat".into()),
                 requester_did: Some("person".into()),
-                agent_id: Some("worker".into()),
+                agent_did: Some("worker".into()),
                 lifecycle_state: Some(RequestLifecycleState::Completed),
                 ..Default::default()
             })
@@ -109,15 +110,15 @@ mod tests {
         };
         let unrelated: MailboxItemRow = serde_json::from_value(json!({
             "_docID":"question", "item_key":"question", "requester_did":"person", "node_did":"owner",
-            "target_node_did":"owner", "target_agent_id":"worker", "session_id":"other-chat", "request_id":"other-request",
+            "target_node_did":"owner", "target_agent_did":"worker", "session_id":"other-chat", "request_id":"other-request",
             "status":"open", "kind":"ask", "action":"start_request", "title":"Other work",
             "payload":"unrelated payload", "source_kind":"agent", "source_id":"source", "created_at":now.to_rfc3339()
         })).unwrap();
         for items in [Vec::new(), vec![unrelated]] {
             let (ids, verifications) =
-                crate::request::admission::count_request_receipt_verifications(|| {
-                    awaiting_goal_question_ids(&observation, &latest, &requests, &items, now)
-                });
+                crate::store::identity::request_receipt::count_request_receipt_verifications(
+                    || awaiting_goal_question_ids(&observation, &latest, &requests, &items, now),
+                );
             assert!(ids.is_empty());
             assert_eq!(verifications, 0);
         }

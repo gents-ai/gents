@@ -4,15 +4,14 @@ use ts_rs::TS;
 
 use crate::error::BridgeError;
 use crate::types::{
-    ChatSendRequest, ChatSubmissionQuery, DesktopInterruptRequest, EnrollmentInviteRequest,
-    EnrollmentStatusRequest, PendingMessageSteerRequest, PendingQueueEditRequest,
-    SessionRenameRequest,
+    ChatSendRequest, DesktopInterruptRequest, EnrollmentInviteRequest, EnrollmentStatusRequest,
+    PendingMessageSteerRequest, PendingQueueEditRequest, SessionRenameRequest,
 };
 
 /// Change the version for incompatible framing or operation semantics.
 /// Additional commands are negotiated through the initialization inventory.
 /// Typed captures require a host that preserves their submitted snapshots.
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 7;
 pub const INSTALLATION_CONTROL_VERSION: u32 = 1;
 /// The private store-key channel completes before ordinary host framing begins.
 /// Its failures use the canonical bridge error contract and never raw causes.
@@ -55,10 +54,6 @@ pub enum ClientCommand {
     BackendAuthenticationSave {
         request: crate::accounts::BackendAuthenticationSaveRequest,
     },
-    #[serde(rename = "client_backend_rotation_save")]
-    BackendRotationSave {
-        request: crate::accounts::BackendRotationSaveRequest,
-    },
     #[serde(rename = "client_runtime_is_local")]
     RuntimeIsLocal {
         #[serde(rename = "nodeDid")]
@@ -90,73 +85,6 @@ pub enum ClientCommand {
     #[serde(rename = "desktop_provider_usage_read")]
     ProviderUsageRead {
         request: crate::accounts::usage::ProviderUsageReadRequest,
-    },
-    #[serde(rename = "client_provider_accounts_list")]
-    AccountsList {
-        request: crate::accounts::ProviderAccountsRequest,
-    },
-    #[serde(rename = "client_provider_account_sign_in")]
-    AccountSignIn {
-        request: crate::accounts::ProviderSignInRequest,
-    },
-    #[serde(rename = "client_provider_account_disconnect")]
-    AccountDisconnect {
-        request: crate::accounts::ProviderAccountDisconnectRequest,
-    },
-    #[serde(rename = "client_provider_account_rename")]
-    AccountRename {
-        request: crate::accounts::ProviderAccountRenameRequest,
-    },
-    #[serde(rename = "client_provider_account_remove")]
-    AccountRemove {
-        request: crate::accounts::ProviderAccountRemoveRequest,
-    },
-    #[serde(rename = "client_provider_account_retry_save")]
-    AccountRetrySave {
-        request: crate::accounts::ProviderAccountRetrySaveRequest,
-    },
-    #[serde(rename = "client_config_catalog")]
-    ConfigCatalog {
-        #[serde(rename = "nodeDid")]
-        node_did: String,
-    },
-    #[serde(rename = "client_config_read")]
-    ConfigRead {
-        #[serde(rename = "nodeDid")]
-        node_did: String,
-        collection: String,
-        id: String,
-    },
-    #[serde(rename = "client_config_save")]
-    ConfigSave {
-        #[serde(rename = "nodeDid")]
-        node_did: String,
-        collection: String,
-        id: String,
-        revision: gents_desktop_core::client::ConfigEditorRevision,
-        content: String,
-    },
-    #[serde(rename = "client_action_catalog")]
-    ActionCatalog {
-        #[serde(rename = "nodeDid")]
-        node_did: String,
-    },
-    #[serde(rename = "client_start_task")]
-    StartTask {
-        #[serde(rename = "nodeDid")]
-        node_did: String,
-        #[serde(rename = "taskId")]
-        task_id: String,
-        #[serde(rename = "argumentsJson")]
-        /// Parsed natively to avoid a JavaScript number round trip.
-        arguments_json: String,
-    },
-    #[serde(rename = "client_run_schedule")]
-    RunSchedule {
-        #[serde(rename = "nodeDid")]
-        node_did: String,
-        #[serde(rename = "scheduleId")]
-        schedule_id: String,
     },
     #[serde(rename = "desktop_session_file_inventory")]
     SessionFileInventory {
@@ -217,64 +145,15 @@ pub enum ClientCommand {
         #[ts(optional)]
         index: Option<u32>,
     },
-    #[serde(rename = "client_speech_services")]
-    SpeechServices {
-        #[serde(rename = "nodeDid")]
-        node_did: String,
-    },
-    #[serde(rename = "client_speech_tools")]
-    SpeechTools {
-        #[serde(rename = "nodeDid")]
-        node_did: String,
-        #[serde(rename = "serviceId")]
-        service_id: String,
-    },
-    #[serde(rename = "client_speech_recognize")]
-    SpeechRecognize {
-        request: super::speech::SpeechRecognizeRequest,
-    },
-    #[serde(rename = "client_speech_synthesize")]
-    SpeechSynthesize {
-        request: super::speech::SpeechSynthesizeRequest,
-    },
     #[serde(rename = "client_connect_local")]
     ConnectLocal {
         #[serde(rename = "nodeHome")]
         node_home: Option<String>,
     },
-    #[serde(rename = "client_workspace_permissions")]
-    WorkspacePermissions {
-        request: super::permissions::WorkspacePermissionsRequest,
-    },
-    #[serde(rename = "client_workspace_permissions_forget_commands")]
-    WorkspacePermissionsForgetCommands {
-        request: super::permissions::WorkspacePermissionsForgetCommandsRequest,
-    },
-    #[serde(rename = "client_workspace_permissions_save")]
-    WorkspacePermissionsSave {
-        request: super::permissions::WorkspacePermissionsSaveRequest,
-    },
-    #[serde(rename = "client_plugin_approval_subscribe")]
-    ApprovalSubscribe {
-        #[serde(rename = "nodeDid")]
-        node_did: String,
-        token: String,
-    },
-    #[serde(rename = "client_plugin_approval_unsubscribe")]
-    ApprovalUnsubscribe { token: String },
-    #[serde(rename = "client_plugin_approval_pending")]
-    ApprovalPending {
-        #[serde(rename = "nodeDid")]
-        node_did: String,
-        token: String,
-    },
-    #[serde(rename = "client_plugin_approval_decide")]
-    ApprovalDecide {
-        #[serde(rename = "nodeDid")]
-        node_did: String,
-        token: String,
-        id: String,
-        decision: String,
+    #[serde(rename = "client_enroll_local")]
+    EnrollLocal {
+        #[serde(rename = "nodeHome")]
+        node_home: Option<String>,
     },
     #[serde(rename = "desktop_client_snapshot")]
     Snapshot {},
@@ -317,12 +196,6 @@ pub enum ClientCommand {
     },
     #[serde(rename = "desktop_chat_send")]
     Send { request: ChatSendRequest },
-    #[serde(rename = "desktop_chat_submission_recover")]
-    RecoverSubmission { query: ChatSubmissionQuery },
-    #[serde(rename = "desktop_chat_submission_acknowledge")]
-    AcknowledgeSubmission {
-        receipt: crate::types::ChatSubmissionReceipt,
-    },
     #[serde(rename = "desktop_request_retry")]
     Retry {
         #[serde(rename = "requestId")]
@@ -360,7 +233,6 @@ impl ClientCommand {
     pub const NAMES: &'static [&'static str] = &[
         "client_backend_authentication",
         "client_backend_authentication_save",
-        "client_backend_rotation_save",
         "client_runtime_is_local",
         "client_inference_setup_catalog",
         "client_inference_setup_state",
@@ -368,36 +240,14 @@ impl ClientCommand {
         "client_inference_models_discover",
         "client_inference_model_recommendation",
         "client_config_apply",
-        "client_provider_accounts_list",
         "desktop_provider_usage_read",
-        "client_provider_account_sign_in",
-        "client_provider_account_disconnect",
-        "client_provider_account_rename",
-        "client_provider_account_remove",
-        "client_provider_account_retry_save",
-        "client_config_catalog",
-        "client_config_read",
-        "client_config_save",
-        "client_action_catalog",
-        "client_start_task",
-        "client_run_schedule",
         "desktop_request_output",
         "desktop_request_attachments",
         "desktop_tool_file_changes",
         "desktop_inventory_file_change",
         "desktop_session_file_inventory",
-        "client_speech_services",
-        "client_speech_tools",
-        "client_speech_recognize",
-        "client_speech_synthesize",
         "client_connect_local",
-        "client_workspace_permissions",
-        "client_workspace_permissions_save",
-        "client_workspace_permissions_forget_commands",
-        "client_plugin_approval_subscribe",
-        "client_plugin_approval_unsubscribe",
-        "client_plugin_approval_pending",
-        "client_plugin_approval_decide",
+        "client_enroll_local",
         "desktop_client_snapshot",
         "desktop_peer_enroll_status",
         "desktop_peer_enroll_invite",
@@ -412,8 +262,6 @@ impl ClientCommand {
         "desktop_goal_submission_resume",
         "desktop_goal_submission_acknowledge",
         "desktop_chat_send",
-        "desktop_chat_submission_recover",
-        "desktop_chat_submission_acknowledge",
         "desktop_request_retry",
         "desktop_pending_queue_edit",
         "desktop_pending_message_steer",
@@ -435,22 +283,12 @@ impl ClientCommand {
                 | Self::RuntimeIsLocal { .. }
                 | Self::InferenceModelsDiscover { .. }
                 | Self::InferenceModelRecommendation { .. }
-                | Self::AccountsList { .. }
                 | Self::ProviderUsageRead { .. }
-                | Self::ConfigCatalog { .. }
-                | Self::ConfigRead { .. }
-                | Self::ActionCatalog { .. }
                 | Self::RequestOutput { .. }
                 | Self::RequestAttachments { .. }
                 | Self::ToolFileChanges { .. }
                 | Self::SessionFileInventory { .. }
                 | Self::InventoryFileChange { .. }
-                | Self::SpeechServices { .. }
-                | Self::SpeechTools { .. }
-                | Self::SpeechRecognize { .. }
-                | Self::SpeechSynthesize { .. }
-                | Self::WorkspacePermissions { .. }
-                | Self::ApprovalPending { .. }
                 | Self::SessionSnapshot(_)
                 | Self::SessionContextDetails { .. }
                 | Self::SessionLiveDelta(_)
@@ -471,8 +309,6 @@ pub struct SessionSnapshotArgs {
     pub request_id: Option<String>,
     #[ts(optional = nullable)]
     pub timeline_limit: Option<usize>,
-    #[ts(optional = nullable)]
-    pub timeline_before_item_key: Option<String>,
 }
 
 #[derive(Debug, Deserialize, TS)]

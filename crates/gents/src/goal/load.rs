@@ -34,27 +34,6 @@ pub async fn load_canonical_goal(
         .next())
 }
 
-pub async fn load_goal_by_id(
-    node: &EmbeddedNode,
-    node_did: &str,
-    goal_id: &str,
-) -> Result<Option<GoalDocument>> {
-    let node_did = escape_graphql_string(node_did);
-    let goal_id = escape_graphql_string(goal_id);
-    let query = format!(
-        r#"{{
-            Goal(
-                filter: {{ node_did: {{ _eq: "{node_did}" }}, goal_id: {{ _eq: "{goal_id}" }} }},
-                showDeleted: true,
-                order: [{{ created_at: ASC }}, {{ goal_id: ASC }}]
-            ) {{ {GOAL_FIELDS} }}
-        }}"#
-    );
-    let mut goals = decode_goal_rows(node, &query).await?;
-    sort_goals_canonical(&mut goals);
-    Ok(goals.into_iter().next())
-}
-
 pub(crate) fn sort_goals_canonical(goals: &mut [GoalDocument]) {
     goals.sort_by(|left, right| {
         left.created_at
@@ -74,15 +53,23 @@ pub async fn load_canonical_goal_in_txn(
     node_did: &str,
     session_id: &str,
 ) -> Result<Option<GoalDocument>> {
-    let node_did = escape_graphql_string(node_did);
-    let session_id = escape_graphql_string(session_id);
-    let response = txn
-        .execute(&format!(
-            r#"{{ Goal(filter: {{
-        node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{session_id}" }}
-    }}) {{ {GOAL_FIELDS} }} }}"#
-        ))
-        .await?;
+    let Some(session) =
+        crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+            txn, node_did, session_id,
+        )
+        .await?
+    else {
+        return Ok(None);
+    };
+    use gents_protocol::document_query::{fields::goal as fields, Filter, Query, Selection};
+    let rendered = Query::select(Selection::owned(GOAL_FIELDS))
+        .filter(
+            Filter::eq(fields::NODE_DID, node_did)
+                .and(Filter::eq(fields::SESSION_ID, session_id))
+                .and(Filter::eq(fields::SESSION_DOC_ID, &session.doc_id)),
+        )
+        .render();
+    let response = txn.run(&rendered).await?;
     let mut goals: Vec<GoalDocument> = serde_json::from_value(
         response
             .pointer("/data/Goal")

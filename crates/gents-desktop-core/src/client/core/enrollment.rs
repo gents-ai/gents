@@ -9,7 +9,7 @@ use gents::runtime::agent::p2p_reconcile::enrollment::{
 };
 use gents::runtime::agent::p2p_reconcile::enrollment_candidate::{
     confirm_network_admin_pin, local_enrollment_ticket, push_enrollment_request,
-    sign_enrollment_request, verify_enrollment_offer, write_enrollment_request,
+    sign_enrollment_request_with_name, verify_enrollment_offer, write_enrollment_request,
 };
 use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 use gents::NodeIdentity;
@@ -20,25 +20,19 @@ use gents_protocol::network_token::EndpointRecord;
 use serde_json::Value;
 use tokio::time::timeout;
 
-use super::sync_state::RuntimeSchemaObservation;
 use super::{ClientCore, P2P_OPERATION_TIMEOUT};
-use projection::{
+use gents::runtime::agent::p2p_reconcile::enrollment_projection::{
     assemble_durable_enrollment_documents, listing_assembly_requests, listing_revision_rows,
 };
-use reconcile::EnrollmentAuthorizationGeneration;
-use rows::{
+use gents::runtime::agent::p2p_reconcile::enrollment_rows::{
     to_pure_decision, EnrollmentDecisionRow, EnrollmentPinRow, EnrollmentRequestRow,
     STATUS_ENROLLMENT_QUERY,
 };
+use reconcile::EnrollmentAuthorizationGeneration;
 
-mod authority;
-mod projection;
 pub(super) mod reconcile;
-mod rows;
 #[cfg(test)]
 mod tests;
-
-pub(super) use authority::load_status_enrollment_approvals_in_txn;
 
 pub(super) async fn current_local_endpoint(
     p2p: &Arc<dyn P2POps>,
@@ -57,6 +51,7 @@ pub(super) async fn current_local_endpoint(
         did: identity.did().to_string(),
         node_id: peer_id,
         address,
+        graphql_url: None,
         updated_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
         sig: Vec::new(),
     })
@@ -75,26 +70,6 @@ pub struct EnrollmentRequestResult {
 }
 
 impl ClientCore {
-    pub fn begin_runtime_schema_observation(
-        &self,
-        runtime_did: &str,
-        endpoint: &str,
-    ) -> Option<RuntimeSchemaObservation> {
-        self.sync_state
-            .begin_runtime_schema_observation(runtime_did, Some(endpoint))
-    }
-
-    pub async fn finish_runtime_schema_observation(
-        &self,
-        observation: &RuntimeSchemaObservation,
-        status: &Value,
-    ) -> Result<()> {
-        self.sync_state
-            .finish_runtime_schema_observation(&self.node, observation, status)
-            .await
-            .context("runtime cannot sync with this app")
-    }
-
     pub async fn request_status_enrollment(
         &self,
         status: &Value,
@@ -111,27 +86,51 @@ impl ClientCore {
         status: &Value,
         advertised_label: Option<&str>,
     ) -> Result<EnrollmentRequestResult> {
+        self.request_status_enrollment_with_names(status, advertised_label, None)
+            .await
+    }
+
+    pub async fn request_status_enrollment_with_names(
+        &self,
+        status: &Value,
+        advertised_label: Option<&str>,
+        candidate_name: Option<&str>,
+    ) -> Result<EnrollmentRequestResult> {
+        let candidate_name = candidate_name
+            .map(str::trim)
+            .filter(|name| !name.is_empty());
         let offer_token = status
             .pointer("/enrollment/token")
             .and_then(Value::as_str)
             .filter(|token| !token.trim().is_empty())
             .context("server does not advertise authenticated status enrollment")?;
         let offer = decode_offer(offer_token).context("decoding server enrollment offer")?;
-        self.sync_state
-            .compare_runtime_schema(&self.node, &offer.owner_agent, status)
-            .await
-            .context("refusing to enroll with an incompatible runtime")?;
-        self.request_offer_enrollment(offer_token, offer, Some(status), advertised_label)
-            .await
+        self.request_offer_enrollment(
+            offer_token,
+            offer,
+            Some(status),
+            advertised_label,
+            candidate_name,
+        )
+        .await
     }
 
     pub async fn request_invite_enrollment(
         &self,
         offer_token: &str,
+        candidate_name: Option<&str>,
     ) -> Result<EnrollmentRequestResult> {
         let offer = decode_offer(offer_token).context("decoding enrollment invite")?;
-        self.request_offer_enrollment(offer_token, offer, None, None)
-            .await
+        self.request_offer_enrollment(
+            offer_token,
+            offer,
+            None,
+            None,
+            candidate_name
+                .map(str::trim)
+                .filter(|name| !name.is_empty()),
+        )
+        .await
     }
 
     async fn request_offer_enrollment(
@@ -140,6 +139,7 @@ impl ClientCore {
         offer: gents_protocol::enrollment::EnrollmentOfferRecord,
         status: Option<&Value>,
         advertised_label: Option<&str>,
+        candidate_name: Option<&str>,
     ) -> Result<EnrollmentRequestResult> {
         let _lifecycle = self.route_manager.lock().await;
         verify_enrollment_offer(&self.p2p, &self.node_identity, &offer).await?;
@@ -156,14 +156,21 @@ impl ClientCore {
             .existing_request_for_offer(&offer, offer_token, &candidate_peer)
             .await?
         {
-            Some(existing) => existing,
+            Some(existing) => {
+                anyhow::ensure!(
+                    existing.0.candidate_name.as_deref() == candidate_name,
+                    "an enrollment request for this invitation already uses a different name"
+                );
+                existing
+            }
             None => {
-                let request = sign_enrollment_request(
+                let request = sign_enrollment_request_with_name(
                     &self.node_identity,
                     &offer,
                     offer_token,
                     candidate_peer,
                     candidate_ticket,
+                    candidate_name.map(str::to_owned),
                 )
                 .await?;
                 let document_id = match write_enrollment_request(&self.node, &request).await {
@@ -191,7 +198,7 @@ impl ClientCore {
             self.sync_state
                 .remember_enrollment_endpoint(
                     &request.server_peer,
-                    &request.owner_agent,
+                    &request.owner_node_did,
                     &request.request_digest,
                     &request.expires_at,
                     endpoint,
@@ -209,7 +216,7 @@ impl ClientCore {
             network_id: request.network_id,
             admin_did: request.admin_did,
             server_peer: request.server_peer,
-            owner_node: request.owner_agent,
+            owner_node: request.owner_node_did,
             state: "pending_approval".to_string(),
             expires_at: request.expires_at,
             activation_error: None,
@@ -217,12 +224,18 @@ impl ClientCore {
     }
 
     pub async fn active_status_enrollment_requests(&self) -> Result<Vec<EnrollmentRequestResult>> {
-        let response = graphql_with_transaction_retry(
-            &self.node,
-            STATUS_ENROLLMENT_QUERY,
-            "load desktop enrollment requests",
-        )
-        .await?;
+        anyhow::ensure!(
+            self.node.node_identity_did() == Some(self.node_identity.did()),
+            "desktop enrollment requires its configured local identity"
+        );
+        let response: defra_node::QueryResponse = serde_json::from_value(
+            gents::store::config_client::ConfigAccess::local_as(
+                self.node.clone(),
+                identity::Did::new(self.node_identity.did())?,
+            )
+            .execute(STATUS_ENROLLMENT_QUERY)
+            .await?,
+        )?;
         let pins = rows::<EnrollmentPinRow>(&response, "NetworkAdminPin")?
             .into_iter()
             .fold(BTreeMap::<String, Vec<String>>::new(), |mut pins, row| {
@@ -335,7 +348,7 @@ impl ClientCore {
                     let matching_peer = peers.iter().find(|peer| {
                         peer.is_enrollment()
                             && peer.peer_id == request.server_peer
-                            && peer.node_did == request.owner_agent
+                            && peer.node_did == request.owner_node_did
                             && peer.pairing_network_id.as_deref() == Some(&request.network_id)
                             && peer.pairing_template.as_deref() == Some(&request.profile)
                             && peer.enrollment_request_id.as_deref() == Some(&request.request_id)
@@ -347,7 +360,8 @@ impl ClientCore {
                             && peer.enrollment_authorization_expires_at.as_deref()
                                 == Some(&decision.authorization_expires_at)
                     });
-                    route_applied = matching_peer.is_some_and(|peer| peer.is_chat_ready_at(now));
+                    route_applied =
+                        matching_peer.is_some_and(|peer| peer.is_enrollment_ready_at(now));
                     let route_failure = matching_peer.is_some_and(|peer| {
                         sync.peers
                             .iter()
@@ -395,7 +409,7 @@ impl ClientCore {
                     network_id: request.network_id,
                     admin_did: request.admin_did,
                     server_peer: request.server_peer,
-                    owner_node: request.owner_agent,
+                    owner_node: request.owner_node_did,
                     state: state.to_string(),
                     expires_at: request.expires_at,
                     activation_error,
@@ -420,8 +434,8 @@ impl ClientCore {
         let query = format!(
             r#"{{ NetworkEnrollmentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}) {{
                 _docID protocol_version request_id request_digest offer_id offer_token challenge
-                network_id admin_did server_peer candidate_did candidate_peer candidate_ticket
-                owner_agent profile client_nonce issued_at expires_at candidate_sig
+                network_id admin_did server_peer candidate_did candidate_peer candidate_name candidate_ticket
+                owner_node_did profile client_nonce issued_at expires_at candidate_sig
             }} }}"#
         );
         let response = graphql_with_transaction_retry(
@@ -461,8 +475,8 @@ impl ClientCore {
         let query = format!(
             r#"{{ NetworkEnrollmentRequest(filter: {{ offer_id: {{ _eq: "{offer_id}" }} }}) {{
                 _docID protocol_version request_id request_digest offer_id offer_token challenge
-                network_id admin_did server_peer candidate_did candidate_peer candidate_ticket
-                owner_agent profile client_nonce issued_at expires_at candidate_sig
+                network_id admin_did server_peer candidate_did candidate_peer candidate_name candidate_ticket
+                owner_node_did profile client_nonce issued_at expires_at candidate_sig
             }} }}"#
         );
         let response = graphql_with_transaction_retry(

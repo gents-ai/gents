@@ -1,0 +1,577 @@
+use super::*;
+#[cfg(test)]
+use crate::store::config_client::ConfigAccess;
+use crate::store::config_client::ConfigApplyTxn;
+use crate::store::graphql::required_rows;
+use gents_protocol::session::SessionScope;
+
+#[cfg(test)]
+pub(super) async fn load_session_selection(
+    node: &Arc<EmbeddedNode>,
+    request: &FileInventoryRequest,
+) -> Result<SessionSelection> {
+    ConfigAccess::transact_local_readonly(node, None, "file_inventory.selection", |txn| {
+        Box::pin(load_session_selection_in_txn(txn, request))
+    })
+    .await
+}
+
+/// All origin, segment and effect dependencies use the caller's same read
+/// snapshot. Inventory enumeration must additionally establish bounded complete
+/// membership and current projection owners before certifying coverage.
+#[cfg(test)]
+pub(super) async fn load_session_selection_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    request: &FileInventoryRequest,
+) -> Result<SessionSelection> {
+    let scope = SessionScope {
+        node_did: request.node_did.clone(),
+        session_id: request.session_id.clone(),
+        requester_did: Some(request.requester_did.clone()),
+    };
+    load_canonical_selection_in_txn(txn, &scope).await
+}
+
+/// Canonical authorship selects immutable conversation data; it is independent
+/// of the authenticated reader whose access the delivery owner must observe.
+pub(super) async fn load_canonical_selection_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    scope: &SessionScope,
+) -> Result<SessionSelection> {
+    let requester = scope
+        .requester_did
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .context("canonical hydration selection omitted its requester")?;
+    let response = pages::load_session_rows(txn, scope).await?;
+
+    let mut root_headers = required_rows::<serde_json::Value>(&response, "AgentMessage")?
+        .iter()
+        .map(|row| decode_transcript_message_row(row).map_err(anyhow::Error::from))
+        .collect::<Result<Vec<_>>>()?;
+    let mut root_header_ids = root_headers
+        .iter()
+        .map(|row| row.doc_id.clone())
+        .collect::<Vec<_>>();
+    let mut terminal_request_ids = BTreeSet::new();
+    for request_row in
+        required_rows::<gents_protocol::row::AgentRequestRow>(&response, "AgentRequest")?
+    {
+        if request_row.is_terminal() {
+            terminal_request_ids.insert(
+                request_row
+                    .doc_id
+                    .clone()
+                    .context("terminal hydration request omitted physical id")?,
+            );
+            match request_row
+                .observed_terminal_output()
+                .cloned()
+                .context("terminal hydration request omitted terminal_output")?
+            {
+                gents_protocol::output::TerminalOutput::Message { message_doc_id } => {
+                    let selected = root_headers
+                        .iter()
+                        .find(|row| row.doc_id == message_doc_id)
+                        .context("terminal hydration selection is missing its exact header")?;
+                    anyhow::ensure!(
+                        selected.message.session_id == scope.session_id
+                            && selected.message.request_doc_id == request_row.doc_id,
+                        "terminal hydration selection does not belong to the exact request"
+                    );
+                    anyhow::ensure!(
+                        selected.message.role == gents_protocol::output::MessageRole::Assistant
+                            && matches!(
+                                selected.message.publication,
+                                gents_protocol::output::MessagePublication::RequestExecution { .. }
+                                    | gents_protocol::output::MessagePublication::RequestRecovery { .. }
+                            ),
+                        "terminal hydration selection is not an eligible assistant header"
+                    );
+                    root_header_ids.push(message_doc_id);
+                }
+                gents_protocol::output::TerminalOutput::NoMessage => {}
+            }
+        }
+    }
+    root_header_ids.sort();
+    root_header_ids.dedup();
+    let mut output_segments = required_rows::<serde_json::Value>(&response, "AgentOutputSegment")?
+        .iter()
+        .map(|row| decode_output_segment_row(row).map_err(anyhow::Error::from))
+        .collect::<Result<Vec<_>>>()?;
+    let copied = copied_fork_headers(&root_headers, &output_segments);
+    load_origin_headers(txn, &mut root_headers, &copied, &scope.node_did, requester).await?;
+    load_referenced_segments(
+        txn,
+        &root_headers,
+        &mut output_segments,
+        &scope.node_did,
+        requester,
+    )
+    .await?;
+    let mut bases = Vec::new();
+    let mut effects = Vec::new();
+    for row in required_rows::<gents_protocol::row::AgentToolCallRow>(&response, "AgentToolCall")? {
+        observe_tool_call(row, &mut bases, &mut effects);
+    }
+    for collection in [
+        crate::file_inventory::SessionCollection::AgentRequest,
+        crate::file_inventory::SessionCollection::CompactionEntry,
+    ] {
+        let name = session_collection_name(collection);
+        bases.extend(
+            required_rows::<TranscriptRow>(&response, name)?
+                .into_iter()
+                .filter_map(|row| {
+                    Some(ScopedDocument {
+                        collection,
+                        doc_id: row.doc_id.filter(|value| !value.is_empty())?,
+                        requester_did: row.requester_did.unwrap_or_default(),
+                        node_did: row.node_did.unwrap_or_default(),
+                        session_id: row.session_id.unwrap_or_default(),
+                    })
+                }),
+        );
+    }
+    load_referenced_bases(
+        txn,
+        ReferencedBasesInput {
+            headers: &root_headers,
+            copied: &copied,
+            segments: &output_segments,
+            node_did: &scope.node_did,
+            requester_did: requester,
+        },
+        &mut bases,
+        &mut effects,
+    )
+    .await?;
+    load_effect_children(txn, scope, &bases, &mut effects).await?;
+    let parents = bases
+        .iter()
+        .filter(|row| row.collection == crate::file_inventory::SessionCollection::AgentToolCall)
+        .map(|row| row.doc_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let effect_requests = effects
+        .iter()
+        .filter(|row| {
+            crate::tools::call::lifecycle::PluginEffectBinding::decode(
+                row.plugin_parent_tool_call_doc_id.as_deref(),
+                row.plugin_effect_ordinal,
+                row.spawned,
+                &row.tool_call_id,
+            )
+            .ok()
+            .flatten()
+            .is_some_and(|binding| parents.contains(binding.parent_tool_call_doc_id.as_str()))
+        })
+        .map(|row| row.request_doc_id.clone())
+        .filter(|id| {
+            !output_segments
+                .iter()
+                .any(|segment| &segment.segment.request_doc_id == id)
+        })
+        .collect();
+    load_request_segments(
+        txn,
+        effect_requests,
+        &mut output_segments,
+        &scope.node_did,
+        requester,
+    )
+    .await?;
+    let session_bases = bases
+        .iter()
+        .filter(|row| row.session_id == scope.session_id)
+        .cloned()
+        .collect::<Vec<_>>();
+    let canonical = build_canonical_selection(CanonicalClosureInput {
+        root_header_ids: &root_header_ids,
+        headers: &root_headers,
+        segments: &output_segments,
+        base_documents: &bases,
+        retained_bases: &session_bases,
+        tool_effects: &effects,
+        denied_headers: &[],
+        denied_segments: &[],
+        dependency_denials: &[],
+        node_did: &scope.node_did,
+        requester_did: Some(requester),
+        session_id: &scope.session_id,
+    })
+    .context("build authorized canonical hydration closure")?;
+    let mut documents = canonical.documents;
+    for request_id in terminal_request_ids {
+        let row = bases
+            .iter()
+            .find(|row| {
+                row.collection == crate::file_inventory::SessionCollection::AgentRequest
+                    && row.doc_id == request_id
+            })
+            .context("terminal hydration request missing from authorized base rows")?;
+        documents.insert(SessionDocument {
+            collection: row.collection,
+            doc_id: row.doc_id.clone(),
+            requester_did: row.requester_did.clone(),
+            node_did: row.node_did.clone(),
+            session_id: row.session_id.clone(),
+        });
+    }
+    Ok(SessionSelection {
+        documents,
+        publications: canonical.publications,
+        headers: root_headers,
+        output_segments,
+    })
+}
+
+/// Fork headers that resolve from copies in their own session, and those
+/// copies; neither needs anything from the source session.
+#[derive(Default)]
+struct CopiedForks {
+    headers: BTreeSet<String>,
+    segments: BTreeSet<String>,
+}
+
+fn copied_fork_headers(
+    headers: &[gents_protocol::output::rows::TranscriptMessageRow],
+    segments: &[gents_protocol::output::rows::OutputSegmentRow],
+) -> CopiedForks {
+    let observed = segments
+        .iter()
+        .map(
+            |row| gents_protocol::output::reconstruction::ObservedSegment {
+                doc_id: &row.doc_id,
+                segment: &row.segment,
+            },
+        )
+        .collect::<Vec<_>>();
+    let mut copied = CopiedForks::default();
+    for header in headers {
+        if gents_protocol::output::reconstruction::fork_copy_observations(
+            &header.message,
+            &observed,
+        )
+        .is_none()
+        {
+            continue;
+        }
+        copied.headers.insert(header.doc_id.clone());
+        for reference in header.message.payload_references() {
+            copied.segments.extend(
+                segments
+                    .iter()
+                    .filter(|row| {
+                        gents_protocol::output::reconstruction::is_fork_copy_for(
+                            &header.message,
+                            &row.segment,
+                            &reference.close_doc_id,
+                        )
+                    })
+                    .map(|row| row.doc_id.clone()),
+            );
+        }
+    }
+    copied
+}
+
+async fn load_origin_headers(
+    txn: &ConfigApplyTxn<'_>,
+    headers: &mut Vec<gents_protocol::output::rows::TranscriptMessageRow>,
+    copied: &CopiedForks,
+    node_did: &str,
+    requester_did: &str,
+) -> Result<()> {
+    let mut loaded = headers
+        .iter()
+        .map(|row| row.doc_id.clone())
+        .collect::<BTreeSet<_>>();
+    loop {
+        let next = headers
+            .iter()
+            .find_map(|row| match &row.message.publication {
+                gents_protocol::output::MessagePublication::Fork {
+                    origin_message_doc_id,
+                } if !loaded.contains(origin_message_doc_id)
+                    && !copied.headers.contains(&row.doc_id) =>
+                {
+                    Some(origin_message_doc_id.clone())
+                }
+                _ => None,
+            });
+        let Some(doc_id) = next else {
+            return Ok(());
+        };
+        let rendered = {
+            use gents_protocol::document_query::{
+                fields::agent_message as message, Filter, Query, Selection,
+            };
+            Query::select(Selection::owned(AGENT_MESSAGE_FIELDS))
+                .filter(Filter::eq(message::DOC_ID, &doc_id))
+                .filter(Filter::eq(message::NODE_DID, node_did))
+                .filter(Filter::eq(message::REQUESTER_DID, requester_did))
+                .limit(2)
+                .render()
+        };
+        let response = txn.run_local_response(&rendered).await?;
+        let decoded = required_rows::<serde_json::Value>(&response, "AgentMessage")?
+            .iter()
+            .map(|row| decode_transcript_message_row(row).map_err(anyhow::Error::from))
+            .collect::<Result<Vec<_>>>()?;
+        anyhow::ensure!(
+            decoded.len() == 1,
+            "hydration origin is missing, denied, or conflicting"
+        );
+        loaded.insert(doc_id);
+        headers.extend(decoded);
+    }
+}
+
+async fn load_referenced_segments(
+    txn: &ConfigApplyTxn<'_>,
+    headers: &[gents_protocol::output::rows::TranscriptMessageRow],
+    segments: &mut Vec<gents_protocol::output::rows::OutputSegmentRow>,
+    node_did: &str,
+    requester_did: &str,
+) -> Result<()> {
+    let request_ids = headers
+        .iter()
+        .filter_map(|row| row.message.request_doc_id.clone())
+        .chain(headers.iter().flat_map(|row| {
+            row.message
+                .payload_references()
+                .into_iter()
+                .filter_map(|reference| {
+                    segments
+                        .iter()
+                        .find(|segment| segment.doc_id == reference.close_doc_id)
+                        .map(|segment| segment.segment.request_doc_id.clone())
+                })
+        }))
+        .collect::<BTreeSet<_>>();
+    load_request_segments(txn, request_ids, segments, node_did, requester_did).await
+}
+
+async fn load_request_segments(
+    txn: &ConfigApplyTxn<'_>,
+    request_ids: BTreeSet<String>,
+    segments: &mut Vec<gents_protocol::output::rows::OutputSegmentRow>,
+    node_did: &str,
+    requester_did: &str,
+) -> Result<()> {
+    for request_id in request_ids {
+        let filter = gents_protocol::output::rows::request_output_segments_filter(&request_id);
+        let values = pages::load_rows(
+            txn,
+            crate::file_inventory::SessionCollection::AgentOutputSegment,
+            &filter,
+        )
+        .await?;
+        for row in gents_protocol::output::rows::decode_scoped_request_output_segments(
+            &values,
+            node_did,
+            None,
+            Some(requester_did),
+        )? {
+            if !segments.iter().any(|known| known.doc_id == row.doc_id) {
+                segments.push(row);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The selected headers and segments whose referenced bases and effects the
+/// caller loads at one read snapshot.
+struct ReferencedBasesInput<'a> {
+    headers: &'a [gents_protocol::output::rows::TranscriptMessageRow],
+    copied: &'a CopiedForks,
+    segments: &'a [gents_protocol::output::rows::OutputSegmentRow],
+    node_did: &'a str,
+    requester_did: &'a str,
+}
+
+async fn load_referenced_bases(
+    txn: &ConfigApplyTxn<'_>,
+    input: ReferencedBasesInput<'_>,
+    bases: &mut Vec<ScopedDocument>,
+    effects: &mut Vec<ToolEffectRow>,
+) -> Result<()> {
+    let ReferencedBasesInput {
+        headers,
+        copied,
+        segments,
+        node_did,
+        requester_did,
+    } = input;
+    use crate::file_inventory::SessionCollection;
+    use gents_protocol::output::{MessageBlock, MessagePublication, OutputSource};
+    let mut wanted = BTreeSet::new();
+    for row in headers
+        .iter()
+        .filter(|row| !copied.headers.contains(&row.doc_id))
+    {
+        if let Some(id) = &row.message.request_doc_id {
+            wanted.insert((SessionCollection::AgentRequest, id.clone()));
+        }
+        if let MessagePublication::ToolDelivery { tool_call_doc_id } = &row.message.publication {
+            wanted.insert((SessionCollection::AgentToolCall, tool_call_doc_id.clone()));
+        }
+        for block in &row.message.blocks {
+            if let MessageBlock::ToolCall {
+                tool_call_doc_id, ..
+            }
+            | MessageBlock::ToolResult {
+                tool_call_doc_id, ..
+            } = block
+            {
+                wanted.insert((SessionCollection::AgentToolCall, tool_call_doc_id.clone()));
+            }
+        }
+    }
+    for row in segments
+        .iter()
+        .filter(|row| !copied.segments.contains(&row.doc_id))
+    {
+        if let OutputSource::ToolCall { tool_call_doc_id } = &row.segment.source {
+            wanted.insert((SessionCollection::AgentToolCall, tool_call_doc_id.clone()));
+        }
+    }
+    let agent = escape_graphql_string(node_did);
+    let requester = escape_graphql_string(requester_did);
+    for (collection, doc_id) in wanted {
+        if bases
+            .iter()
+            .any(|row| row.collection == collection && row.doc_id == doc_id)
+            || (collection == SessionCollection::AgentToolCall
+                && effects.iter().any(|row| row.document.doc_id == doc_id))
+        {
+            continue;
+        }
+        let name = session_collection_name(collection);
+        let id = escape_graphql_string(&doc_id);
+        let fields = if collection == SessionCollection::AgentToolCall {
+            SESSION_TOOL_CALL_FIELDS
+        } else {
+            "_docID requester_did node_did session_id"
+        };
+        let response = txn.execute_local_response(&format!(
+            r#"{{ {name}(filter: {{ _docID: {{ _eq: "{id}" }}, node_did: {{ _eq: "{agent}" }}, requester_did: {{ _eq: "{requester}" }} }}, limit: 2) {{ {fields} }} }}"#
+        )).await?;
+        if collection == SessionCollection::AgentToolCall {
+            let found = required_rows::<gents_protocol::row::AgentToolCallRow>(&response, name)?;
+            anyhow::ensure!(
+                found.len() == 1,
+                "hydration provenance is missing, denied, or conflicting"
+            );
+            for row in found {
+                observe_tool_call(row, bases, effects);
+            }
+            continue;
+        }
+        let found = required_rows::<TranscriptRow>(&response, name)?;
+        anyhow::ensure!(
+            found.len() == 1,
+            "hydration provenance is missing, denied, or conflicting"
+        );
+        let row = found.into_iter().next().expect("length checked");
+        bases.push(ScopedDocument {
+            collection,
+            doc_id: row
+                .doc_id
+                .context("hydration provenance omitted physical id")?,
+            requester_did: row.requester_did.unwrap_or_default(),
+            node_did: row.node_did.unwrap_or_default(),
+            session_id: row.session_id.unwrap_or_default(),
+        });
+    }
+    Ok(())
+}
+
+pub(super) const SESSION_TOOL_CALL_FIELDS: &str = "_docID tool_call_key requester_did node_did session_id request_doc_id tool_call_id spawned_by_tool_call_doc_id plugin_parent_tool_call_doc_id plugin_effect_ordinal terminal_output";
+
+fn observe_tool_call(
+    row: gents_protocol::row::AgentToolCallRow,
+    bases: &mut Vec<ScopedDocument>,
+    effects: &mut Vec<ToolEffectRow>,
+) {
+    let Some(doc_id) = row.doc_id.filter(|value| !value.is_empty()) else {
+        return;
+    };
+    let document = ScopedDocument {
+        collection: crate::file_inventory::SessionCollection::AgentToolCall,
+        doc_id,
+        requester_did: row.requester_did.unwrap_or_default(),
+        node_did: row.node_did.unwrap_or_default(),
+        session_id: row.session_id.unwrap_or_default(),
+    };
+    if row.plugin_parent_tool_call_doc_id.is_none() && row.plugin_effect_ordinal.is_none() {
+        bases.push(document);
+        return;
+    }
+    effects.push(ToolEffectRow {
+        document,
+        plugin_parent_tool_call_doc_id: row.plugin_parent_tool_call_doc_id,
+        plugin_effect_ordinal: row.plugin_effect_ordinal,
+        spawned: row.spawned_by_tool_call_doc_id.is_some(),
+        tool_call_id: row.tool_call_id.unwrap_or_default(),
+        request_doc_id: row.request_doc_id.unwrap_or_default(),
+        terminal_output: row.terminal_output.map(|terminal| terminal.output),
+    });
+}
+
+pub(super) async fn load_effect_children(
+    txn: &ConfigApplyTxn<'_>,
+    scope: &SessionScope,
+    bases: &[ScopedDocument],
+    effects: &mut Vec<ToolEffectRow>,
+) -> Result<()> {
+    let parents = bases
+        .iter()
+        .filter(|row| {
+            row.collection == crate::file_inventory::SessionCollection::AgentToolCall
+                && row.session_id != scope.session_id
+        })
+        .map(|row| row.doc_id.as_str())
+        .collect::<BTreeSet<_>>();
+    if parents.is_empty() {
+        return Ok(());
+    }
+    let parents: Vec<_> = parents.into_iter().collect();
+    let agent = escape_graphql_string(&scope.node_did);
+    let requester = escape_graphql_string(
+        scope
+            .requester_did
+            .as_deref()
+            .context("canonical effect scope omitted requester")?,
+    );
+    let mut ignored = Vec::new();
+    for parents in parents.chunks(pages::PAGE_SIZE) {
+        let parents = crate::store::graphql::graphql_string_list_literal(parents.iter().copied());
+        let filter = format!(
+            r#"plugin_parent_tool_call_doc_id: {{ _in: {parents} }}, node_did: {{ _eq: "{agent}" }}, requester_did: {{ _eq: "{requester}" }}"#
+        );
+        let values = pages::load_rows(
+            txn,
+            crate::file_inventory::SessionCollection::AgentToolCall,
+            &filter,
+        )
+        .await?;
+        for value in values {
+            let row: gents_protocol::row::AgentToolCallRow = serde_json::from_value(value)?;
+            if !effects
+                .iter()
+                .any(|known| row.doc_id.as_deref() == Some(&known.document.doc_id))
+            {
+                observe_tool_call(row, &mut ignored, effects);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests;
+
+mod pages;

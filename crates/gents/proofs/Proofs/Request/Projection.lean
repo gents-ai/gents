@@ -2,29 +2,6 @@ import Proofs.Request.Transition
 
 namespace Request.Projection
 
-def agentCompatible (requested : String) (persisted : List String) : Bool :=
-  persisted.all (· == requested)
-
-theorem duplicate_equal_bindings_are_compatible (requested : String) :
-    agentCompatible requested [requested, requested] = true := by
-  simp [agentCompatible]
-
-theorem conflicting_binding_is_rejected (requested existing : String)
-    (h : existing ≠ requested) :
-    agentCompatible requested [requested, existing] = false := by
-  simp [agentCompatible, h]
-
-def projectAll {α : Type} (value : α) (rows : List α) : List α :=
-  if rows.isEmpty then [value] else rows.map fun _ => value
-
-theorem projection_is_present_after_write {α : Type} (value : α) (rows : List α) :
-    projectAll value rows ≠ [] := by
-  cases rows <;> simp [projectAll]
-
-theorem duplicate_projection_values_converge {α : Type} (oldA oldB value : α) :
-    projectAll value [oldA, oldB] = [value, value] := by
-  simp [projectAll]
-
 inductive ProjectionAttempt where
   | committed
   | deterministicFailure

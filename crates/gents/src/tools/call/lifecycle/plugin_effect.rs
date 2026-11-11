@@ -7,13 +7,13 @@ use gents_protocol::output::{
 };
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
-use crate::session::canonical_rows::{
-    decode_scoped_request_output_segments, output_segment_create_variables,
-    request_output_segments_filter, AGENT_OUTPUT_SEGMENT_FIELDS,
-    CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-};
-use crate::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
+use crate::store::config_client::session_children::output_segment_bound_variables;
+use crate::store::config_client::{ConfigApplyTxn, IdempotentTransactionRetry};
 use crate::store::graphql::{created_doc_id, escape_graphql_string};
+use gents_protocol::output::rows::{
+    decode_scoped_request_output_segments, request_output_segments_filter,
+    AGENT_OUTPUT_SEGMENT_FIELDS, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+};
 
 use super::{ToolCallLifecycle, ToolCallState};
 use crate::plugin::tool_calls::{MAX_EFFECTS, MAX_PAYLOAD_BYTES};
@@ -80,21 +80,34 @@ impl ToolCallLifecycle {
             .map_or(self.deadline_at, |deadline| deadline.min(self.deadline_at));
         let key = super::PluginEffectBinding::internal_id(&binding.tool_call_doc_id, ordinal);
         let internal_id = key.clone();
-        let child = ConfigAccess::transact_local_idempotent(
-            &self.node, None, IdempotentTransactionRetry::Standard, "tool_call.admit_plugin_effect",
+        let child = self.access()?.transact_idempotent(
+            IdempotentTransactionRetry::Standard, "tool_call.admit_plugin_effect",
             |txn| {
                 let binding = binding.clone(); let header = header.clone(); let generation = generation.clone();
                 let name = name.clone(); let arguments = arguments.clone();
                 let key = key.clone(); let internal_id = internal_id.clone();
                 Box::pin(async move {
                     let request_id = validate_parent(txn, &binding, &header, &generation, sequence, deadline, true).await?;
-                    let scope = crate::session::session_scope_filter(&binding.node_did, &binding.session_id,
-                        binding.requester_did.as_deref());
                     let parent = escape_graphql_string(&binding.tool_call_doc_id);
-                    let result = txn.execute(&format!(r#"{{ AgentToolCall(filter: {{ {scope},
-                        plugin_parent_tool_call_doc_id: {{ _eq: "{parent}" }}, plugin_effect_ordinal: {{ _eq: {ordinal} }}
-                    }}, limit: 2) {{ _docID tool_call_key tool_call_id tool_name request_id request_doc_id message_sequence
-                        deadline_at spawned_by_tool_call_doc_id }} }}"#)).await?;
+                    let result = {
+                        use gents_protocol::document_query::{fields::agent_tool_call as fields, session_scope, Filter, Query, Selection};
+                        txn.run(&Query::select(
+                            Selection::doc_id()
+                                .field(fields::TOOL_CALL_KEY)
+                                .field(fields::TOOL_CALL_ID)
+                                .field(fields::TOOL_NAME)
+                                .field(fields::REQUEST_ID)
+                                .field(fields::REQUEST_DOC_ID)
+                                .field(fields::MESSAGE_SEQUENCE)
+                                .field(fields::DEADLINE_AT)
+                                .field(fields::SPAWNED_BY_TOOL_CALL_DOC_ID),
+                        )
+                        .filter(session_scope(&binding.node_did, &binding.session_id, binding.requester_did.as_deref()))
+                        .filter(Filter::eq(fields::PLUGIN_PARENT_TOOL_CALL_DOC_ID, &binding.tool_call_doc_id))
+                        .filter(Filter::eq(fields::PLUGIN_EFFECT_ORDINAL, ordinal))
+                        .limit(2)
+                        .render()).await?
+                    };
                     let rows = result["data"]["AgentToolCall"].as_array().context("plugin effect lookup omitted rows")?;
                     anyhow::ensure!(rows.len() <= 1, "plugin effect has conflicting physical identities");
                     if let Some(row) = rows.first() {
@@ -113,7 +126,12 @@ impl ToolCallLifecycle {
                         anyhow::ensure!(stored == arguments, "plugin effect replay changed arguments");
                         return Ok(child.to_owned());
                     }
+                    let (session_doc_id, selected_agent) = crate::store::config_client::session_children::agent_session_child_binding_in_txn(
+                        txn, &binding.node_did, &binding.session_id, binding.requester_did.as_deref()).await?;
+                    let session_doc_id = escape_graphql_string(&session_doc_id);
+                    let selected_agent = escape_graphql_string(&selected_agent);
                     let created = txn.execute(&format!(r#"mutation {{ create_AgentToolCall(input: {{
+                        session_doc_id: "{session_doc_id}", agent_did: "{selected_agent}", creator_did: "{selected_agent}", parent_linked: false,
                         tool_call_key: "{}", tool_call_id: "{}", tool_name: "{}", request_id: "{}",
                         request_doc_id: "{}", session_id: "{}", node_did: "{}", {}
                         message_sequence: {sequence}, deadline_at: "{}", status: "pending", lifecycle_state: "pending",
@@ -139,19 +157,29 @@ impl ToolCallLifecycle {
                         created_at: Utc::now().to_rfc3339_opts(SecondsFormat::Nanos, true),
                     };
                     txn.execute_with_variables(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-                        &output_segment_create_variables(&segment)?).await?;
+                        &output_segment_bound_variables(txn, &segment).await?).await?;
                     Ok(child)
                 })
             }).await?;
-        Self::load_by_doc_id(
+        crate::store::config_client::session_children::publish_agent_session_child_relationships_with_access(
+            &self.access()?,
+            &self.node_did,
+            &self.actor,
+            &self.session_id,
+        )
+        .await?;
+        let mut effect = Self::load_by_doc_id_as(
             self.node.clone(),
+            self.actor.clone(),
             &child,
             &self.node_did,
             &self.session_id,
             self.requester_did.as_deref(),
         )
         .await?
-        .context("admitted plugin effect disappeared")
+        .context("admitted plugin effect disappeared")?;
+        effect.inherit_signer(self)?;
+        Ok(effect)
     }
 
     fn plugin_effect_parent_binding(&self) -> Result<super::delivery::ToolOutputBinding> {
@@ -160,6 +188,8 @@ impl ToolCallLifecycle {
             .as_ref()
             .context("plugin effect lacks provenance")?;
         Ok(super::delivery::ToolOutputBinding {
+            actor: self.actor.clone(),
+            agent_signer: self.agent_signer.clone(),
             node: self.node.clone(),
             tool_call_doc_id: effect.parent_tool_call_doc_id.clone(),
             request_doc_id: self
@@ -199,7 +229,7 @@ impl ToolCallLifecycle {
         let internal_id = self.tool_call_id.clone();
         let name = self.tool_name.clone();
         let selected_tool_fields = self.selected_tool_fields_fragment();
-        let started = ConfigAccess::transact_local_idempotent(&self.node, None,
+        let started = self.access()?.transact_idempotent(
             IdempotentTransactionRetry::Standard, "tool_call.start_plugin_effect", |txn| {
             let parent = parent.clone(); let child = child.clone(); let header = header.clone();
             let generation = generation.clone(); let internal_id = internal_id.clone(); let name = name.clone();
@@ -208,7 +238,7 @@ impl ToolCallLifecycle {
                 validate_parent(txn, &parent, &header, &generation, sequence, deadline, true).await?;
                 arguments_in_txn(txn, &parent, &child, &generation, &internal_id, &name).await?;
                 let now = Utc::now();
-                let scope = crate::session::session_scope_filter(&parent.node_did, &parent.session_id,
+                let scope = gents_protocol::session::session_scope_filter(&parent.node_did, &parent.session_id,
                     parent.requester_did.as_deref());
                 let result = txn.execute(&format!(r#"mutation {{ update_AgentToolCall(docID: "{}", filter: {{
                     {scope}, request_doc_id: {{ _eq: "{}" }}, plugin_parent_tool_call_doc_id: {{ _eq: "{}" }},
@@ -248,15 +278,34 @@ pub(super) async fn validate_parent(
         binding.requester_did.as_deref(),
     )
     .await?;
-    let scope = crate::session::session_scope_filter(
-        &binding.node_did,
-        &binding.session_id,
-        binding.requester_did.as_deref(),
-    );
-    let rows = txn.execute(&format!(r#"{{ AgentToolCall(filter: {{ {scope}, _docID: {{ _eq: "{}" }},
-        request_doc_id: {{ _eq: "{}" }} }}, limit: 2) {{ tool_call_id tool_name message_sequence lifecycle_state
-        spawned_by_tool_call_doc_id plugin_parent_tool_call_doc_id plugin_effect_ordinal deadline_at }} }}"#,
-        escape_graphql_string(&binding.tool_call_doc_id), escape_graphql_string(&binding.request_doc_id))).await?;
+    let rows = {
+        use gents_protocol::document_query::{
+            fields::agent_tool_call as fields, session_scope, Filter, Query, Selection,
+        };
+        txn.run(
+            &Query::select(
+                Selection::new()
+                    .field(fields::TOOL_CALL_ID)
+                    .field(fields::TOOL_NAME)
+                    .field(fields::MESSAGE_SEQUENCE)
+                    .field(fields::LIFECYCLE_STATE)
+                    .field(fields::SPAWNED_BY_TOOL_CALL_DOC_ID)
+                    .field(fields::PLUGIN_PARENT_TOOL_CALL_DOC_ID)
+                    .field(fields::PLUGIN_EFFECT_ORDINAL)
+                    .field(fields::DEADLINE_AT),
+            )
+            .filter(session_scope(
+                &binding.node_did,
+                &binding.session_id,
+                binding.requester_did.as_deref(),
+            ))
+            .filter(Filter::eq(fields::DOC_ID, &binding.tool_call_doc_id))
+            .filter(Filter::eq(fields::REQUEST_DOC_ID, &binding.request_doc_id))
+            .limit(2)
+            .render(),
+        )
+        .await?
+    };
     let rows = rows["data"]["AgentToolCall"]
         .as_array()
         .context("plugin parent lookup omitted rows")?;
@@ -286,14 +335,30 @@ pub(super) async fn validate_parent(
             if tool_call_doc_id == &binding.tool_call_doc_id && Some(id.as_str()) == parent["tool_call_id"].as_str()
                 && Some(name.as_str()) == parent["tool_name"].as_str())),
         "plugin effect has no exact accepted direct parent");
-    let rows = txn
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ {scope}, _docID: {{ _eq: "{}" }} }}, limit: 2) {{
-        request_id lifecycle_state execution_generation execution_lease_expires_at interrupt_requested_at
-    }} }}"#,
-            escape_graphql_string(&binding.request_doc_id)
-        ))
-        .await?;
+    let rows = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, session_scope, Filter, Query, Selection,
+        };
+        txn.run(
+            &Query::select(
+                Selection::new()
+                    .field(fields::REQUEST_ID)
+                    .field(fields::LIFECYCLE_STATE)
+                    .field(fields::EXECUTION_GENERATION)
+                    .field(fields::EXECUTION_LEASE_EXPIRES_AT)
+                    .field(fields::INTERRUPT_REQUESTED_AT),
+            )
+            .filter(session_scope(
+                &binding.node_did,
+                &binding.session_id,
+                binding.requester_did.as_deref(),
+            ))
+            .filter(Filter::eq(fields::DOC_ID, &binding.request_doc_id))
+            .limit(2)
+            .render(),
+        )
+        .await?
+    };
     let rows = rows["data"]["AgentRequest"]
         .as_array()
         .context("plugin request lookup omitted rows")?;
@@ -517,7 +582,7 @@ mod tests {
                 }
             }
             drop(owner);
-            node.shutdown().await;
+            node.shutdown().await.expect("shut down test node");
             let _ = std::fs::remove_dir_all(path);
         }
     }

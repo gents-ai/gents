@@ -1,3 +1,4 @@
+export type { AgentIdentityBinding } from "./generated/AgentIdentityBinding.js";
 export type {
   BootstrapSummary,
   EnrollmentRequestView,
@@ -15,9 +16,11 @@ export type {
   AgentUnavailableReasonView,
   AgentView,
   SessionSummary,
+  TaskOriginView,
   SessionProvenance,
   SessionFork,
   DeploymentView,
+  EndedAccessView,
   DesktopClientSnapshot,
   TriggerView,
   InferenceBackendView,
@@ -25,11 +28,6 @@ export type {
   MailboxQuestion,
   MailboxQuestionAnswer,
   MailboxQuestionOption,
-  ToolSurfaceExplanationView,
-  NetworkStatusView,
-  NetworkReplicatorView,
-  NetworkSavedPeerView,
-  PairingCollectionStatusView,
   RuntimeSnapshot,
   SyncHealthView,
   RuntimeView,
@@ -111,12 +109,8 @@ export type {
 } from "./types/requests.js";
 export type {
   ChatSendResult,
-  ChatSubmissionReceipt,
-  ChatSubmissionRecovery,
-  ChatSubmissionQuery,
   CommandDenialView,
   DesktopSessionSnapshot,
-  SessionHydrationView,
   SessionContextDetails,
   SessionContextDetailsRequest,
   SessionLiveDeltaView,
@@ -125,7 +119,6 @@ export type {
   SessionRowsWindow,
   SessionProjectionRevisionView,
   FoldedInputView,
-  GoalView,
   MessageView,
   PendingTurnView,
   PendingQueueEditRequest,
@@ -140,7 +133,6 @@ export type {
   ToolDiffLineKind,
   ToolDiffLineView,
   ToolPresentationView,
-  RequestResendResult,
   RequestTimelineView,
   RunTimelineEventView,
 } from "./types/session.js";
@@ -174,6 +166,11 @@ export type {
   PackInfo,
   PackEditedChoice,
   PackInstallRequest,
+  PackInstallReport,
+  PackReviewDocument,
+  PackAuthorityAsk,
+  PackInferenceNeeds,
+  PackInferenceSlotNeed,
   PackPluginSlot,
   PackSlotProfile,
   PackWireRequest,
@@ -251,9 +248,13 @@ export type { ToolServiceRegistry } from "./generated/ToolServiceRegistry.js";
 export type { AgentTargetDocument } from "./generated/AgentTargetDocument.js";
 export type { Node } from "./generated/Node.js";
 export type { SessionGoalView } from "./generated/SessionGoalView.js";
+export type { SessionGoalState } from "./generated/SessionGoalState.js";
+export type { SessionGoalNextAction } from "./generated/SessionGoalNextAction.js";
+export type { SessionGoalUnknownCause } from "./generated/SessionGoalUnknownCause.js";
 export type { GoalControlView } from "./generated/GoalControlView.js";
 export type { GoalControlAction } from "./generated/GoalControlAction.js";
 export type { GoalControlRequest } from "./generated/GoalControlRequest.js";
+export type { GoalRevision } from "./generated/GoalRevision.js";
 export type { GoalControlResult } from "./generated/GoalControlResult.js";
 export type { GoalSubmissionQuery } from "./generated/GoalSubmissionQuery.js";
 export type { GoalSubmissionReference } from "./generated/GoalSubmissionReference.js";

@@ -22,10 +22,6 @@ instance (s : ComposedState) (callId : ToolExecution.ToolCallId) :
     Decidable (s.hasToolByCallId callId) := by
   unfold hasToolByCallId; infer_instance
 
-def findToolByCallId (s : ComposedState) (callId : ToolExecution.ToolCallId) :
-    Option ToolExecution.ToolCallContext :=
-  s.tools.find? (fun t => t.callId = callId)
-
 def Coherent (pre : ComposedState) (toolPre : ToolExecution.ToolCallContext) : Prop :=
   toolPre.requestId = pre.requestId ∧
   toolPre.deadline = pre.request.deadline ∧

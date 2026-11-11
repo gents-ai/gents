@@ -46,7 +46,7 @@ pub(crate) struct RequestPendingMutationArgs {
     #[command(flatten)]
     pub(crate) scope: RequestPendingArgs,
     #[arg(long = "expected-request-doc-id", required = true, action = clap::ArgAction::Append,
-        help = "Every physical ID from request pending, in its observed order; repeat for each entry")]
+        help = "Every physical ID from `utils debug request pending`, in its observed order; repeat for each entry")]
     pub(crate) expected_request_doc_ids: Vec<String>,
 }
 
@@ -98,7 +98,7 @@ pub(crate) struct RequestSubmitArgs {
     #[arg(long)]
     pub(crate) session_id: Option<String>,
     #[arg(long)]
-    pub(crate) agent_id: Option<String>,
+    pub(crate) agent_did: Option<String>,
     /// Canonical request input JSON (skills, cwd, title, and queue settings).
     #[arg(long)]
     pub(crate) input: Option<String>,
@@ -218,7 +218,7 @@ pub(crate) struct SessionForkArgs {
     pub(crate) at_user_turn: u32,
     #[arg(
         long,
-        help = "Target agent_id for the child; omit to inherit the parent's agent"
+        help = "Target agent_did for the child; omit to inherit the parent's agent"
     )]
     pub(crate) agent: Option<String>,
 }

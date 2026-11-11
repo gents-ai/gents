@@ -58,6 +58,14 @@ theorem folded_admitted {head entry : QueueEntry} {admitted : List RequestId}
     {entries : List QueueEntry} (h_mem : entry ∈ foldRun head admitted entries) :
     entry.requestId ∈ admitted := (mem_foldRun h_mem).2.1
 
+theorem ordinary_queued_input_never_folds {head entry : QueueEntry}
+    {admitted : List RequestId} {entries : List QueueEntry}
+    (queued : entry.delivery = .queue) : entry ∉ foldRun head admitted entries := by
+  intro selected
+  have compatible := (folded_share_head_authority selected).2.2
+  rcases compatible with ⟨_, _, _, _, steer⟩
+  simp [queued] at steer
+
 theorem non_user_head_folds_nothing {head : QueueEntry} (admitted : List RequestId)
     (entries : List QueueEntry)
     (h_head : ¬ (head.source = .user ∧ head.origin = .interactive)) :

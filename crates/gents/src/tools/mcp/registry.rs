@@ -16,20 +16,6 @@ where
     Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
 }
 
-pub(crate) async fn configured_mcp_services(
-    node: &defra_node::EmbeddedNode,
-    node_did: &str,
-) -> anyhow::Result<Vec<crate::documents::ToolServiceRegistry>> {
-    let query = services_query(node_did)?;
-    let response = crate::store::graphql::graphql_with_transaction_retry(
-        node,
-        &query,
-        "configured_mcp_services",
-    )
-    .await?;
-    parse_services(response.data.as_ref(), node_did)
-}
-
 pub async fn configured_mcp_services_on(
     access: &crate::ConfigAccess,
     node_did: &str,
@@ -38,7 +24,27 @@ pub async fn configured_mcp_services_on(
     parse_services(response.get("data"), node_did)
 }
 
-fn services_query(node_did: &str) -> anyhow::Result<String> {
+pub(crate) async fn configured_mcp_service_on(
+    access: &crate::ConfigAccess,
+    node_did: &str,
+    service_id: &str,
+) -> anyhow::Result<Option<crate::documents::ToolServiceRegistry>> {
+    anyhow::ensure!(
+        !service_id.trim().is_empty(),
+        "MCP service identity is required"
+    );
+    let query = services_query_for(node_did, Some(service_id))?;
+    let response = access.execute(&query).await?;
+    Ok(parse_services(response.get("data"), node_did)?
+        .into_iter()
+        .next())
+}
+
+pub(crate) fn services_query(node_did: &str) -> anyhow::Result<String> {
+    services_query_for(node_did, None)
+}
+
+fn services_query_for(node_did: &str, service_id: Option<&str>) -> anyhow::Result<String> {
     anyhow::ensure!(
         !node_did.trim().is_empty(),
         "MCP registry owner is required"
@@ -48,14 +54,22 @@ fn services_query(node_did: &str) -> anyhow::Result<String> {
         None,
     )?;
     let owner = crate::store::graphql::escape_graphql_string(node_did);
+    let service_filter = service_id
+        .map(|id| {
+            format!(
+                ", service_id: {{ _eq: \"{}\" }}",
+                crate::store::graphql::escape_graphql_string(id)
+            )
+        })
+        .unwrap_or_default();
     let query = format!(
-        "{{ ToolServiceRegistry(filter: {{ node_did: {{ _eq: \"{owner}\" }} }}) {{ {} }} }}",
+        "{{ ToolServiceRegistry(filter: {{ node_did: {{ _eq: \"{owner}\" }}{service_filter} }}) {{ {} }} }}",
         fields.join(" ")
     );
     Ok(query)
 }
 
-fn parse_services(
+pub(crate) fn parse_services(
     data: Option<&serde_json::Value>,
     node_did: &str,
 ) -> anyhow::Result<Vec<crate::documents::ToolServiceRegistry>> {
@@ -81,6 +95,7 @@ fn parse_services(
     Ok(services)
 }
 
+#[derive(PartialEq, Eq)]
 pub struct ResolvedMcpService {
     pub endpoint: String,
     pub send_node_did: bool,
@@ -91,29 +106,89 @@ pub fn resolve_mcp_service(
     hostname: &str,
     subnet: Option<&str>,
 ) -> anyhow::Result<ResolvedMcpService> {
-    let port = entry
-        .mcp_port
-        .and_then(|port| u16::try_from(port).ok())
-        .filter(|port| *port > 0)
-        .ok_or_else(|| anyhow!("service '{}' has no valid MCP port", entry.service_id))?;
-    let host = entry.hostname.as_deref().unwrap_or_default();
-    let tailscale = entry.tailscale_ip.as_deref().unwrap_or_default();
-    let lan = entry.lan_ip.as_deref().unwrap_or_default();
-    anyhow::ensure!(
-        !host.is_empty() || !tailscale.is_empty() || !lan.is_empty(),
-        "service '{}' has no MCP address",
-        entry.service_id
-    );
+    let service = crate::tools::mcp::health::McpHealthCheckService::from(entry.clone());
+    let endpoint = service
+        .endpoint(hostname, subnet)
+        .map_err(|error| anyhow!("service '{}': {error}", entry.service_id))?;
     Ok(ResolvedMcpService {
-        endpoint: crate::tools::mcp::pool::resolve_mcp_url(
-            host,
-            tailscale,
-            lan,
-            port,
-            entry.mcp_path.as_deref().unwrap_or_default(),
-            hostname,
-            subnet,
-        ),
+        endpoint,
         send_node_did: entry.send_node_did,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::documents::ToolServiceRegistry;
+    use crate::tools::mcp::health::McpHealthCheckService;
+
+    fn service(endpoint_url: &str) -> McpHealthCheckService {
+        McpHealthCheckService {
+            service_id: "svc".into(),
+            hostname: "remote-host".into(),
+            tailscale_ip: String::new(),
+            lan_ip: String::new(),
+            mcp_port: Some(9201),
+            mcp_path: "/mcp".into(),
+            endpoint_url: endpoint_url.into(),
+            send_node_did: false,
+            updated_at: None,
+        }
+    }
+
+    #[test]
+    fn endpoint_url_overrides_address_fields_and_keeps_its_scheme() {
+        assert_eq!(
+            service("").endpoint("local", None).unwrap(),
+            "http://remote-host:9201/mcp"
+        );
+        assert_eq!(
+            service("https://mcp.linear.app/mcp")
+                .endpoint("remote-host", None)
+                .unwrap(),
+            "https://mcp.linear.app/mcp"
+        );
+        let mut without_address = service("https://mcp.linear.app/mcp");
+        without_address.hostname.clear();
+        without_address.mcp_port = None;
+        assert!(without_address.endpoint("local", None).is_ok());
+        assert_eq!(
+            service("https://host/mcp?key=1").endpoint("local", None),
+            Err(crate::tools::mcp::health::McpEndpointDefect::InvalidEndpointUrl)
+        );
+    }
+
+    #[test]
+    fn endpoint_url_accepts_http_and_https_and_canonicalises() {
+        assert_eq!(
+            ToolServiceRegistry::parse_endpoint_url(" https://mcp.linear.app/mcp ")
+                .unwrap()
+                .as_str(),
+            "https://mcp.linear.app/mcp"
+        );
+        assert_eq!(
+            ToolServiceRegistry::parse_endpoint_url("HTTP://127.0.0.1:12799")
+                .unwrap()
+                .as_str(),
+            "http://127.0.0.1:12799/"
+        );
+    }
+
+    #[test]
+    fn endpoint_url_refuses_other_schemes_credentials_and_queries() {
+        for bad in [
+            "",
+            "mcp.linear.app/mcp",
+            "ws://host/mcp",
+            "file:///tmp/mcp",
+            "https://user:secret@host/mcp",
+            "https://token@host/mcp",
+            "https://host/mcp?api_key=secret",
+            "https://host/mcp#frag",
+        ] {
+            assert!(
+                ToolServiceRegistry::parse_endpoint_url(bad).is_err(),
+                "{bad} must be refused"
+            );
+        }
+    }
 }

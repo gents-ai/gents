@@ -1,70 +1,6 @@
 [
   {
     "read": {
-      "path": "crates/gents-cli/src/commands/grok_shim/projection/messages.rs",
-      "collection": "AgentMessage",
-      "arguments": "filter:{$GENTS_scope$,request_doc_id:{_eq:\"$GENTS_0$\"}},order:{sequence:ASC},limit:256"
-    },
-    "bindings": [
-      {
-        "scope": "@session",
-        "0": "probe"
-      },
-      {
-        "scope": "@session-absent",
-        "0": "probe"
-      }
-    ]
-  },
-  {
-    "read": {
-      "path": "crates/gents-cli/src/commands/grok_shim/sessions.rs",
-      "collection": "AgentRequest",
-      "arguments": "filter: { $GENTS_scope$ }, order: [{request_id: ASC}, {_docID: ASC}], limit: $GENTS_PAGE_SIZE$"
-    },
-    "bindings": [
-      {
-        "scope": "@public-keyset",
-        "PAGE_SIZE": "1"
-      },
-      {
-        "scope": "@public-node-keyset",
-        "PAGE_SIZE": "1"
-      }
-    ]
-  },
-  {
-    "read": {
-      "path": "crates/gents-cli/src/commands/grok_shim/turn/observe.rs",
-      "collection": "AgentRequest",
-      "arguments": "filter: { $GENTS_scope$ }, order: [{ request_id: ASC }, { _docID: ASC }], limit: $GENTS_PAGE_SIZE$"
-    },
-    "bindings": [
-      {
-        "scope": "@public-created-keyset",
-        "PAGE_SIZE": "1"
-      }
-    ]
-  },
-  {
-    "read": {
-      "path": "crates/gents-cli/src/commands/grok_shim/turn/stream.rs",
-      "collection": "AgentRequest",
-      "arguments": "filter: {$GENTS_scope$}, order: {request_id: ASC}, limit: 128, offset: $GENTS_offset$"
-    },
-    "bindings": [
-      {
-        "scope": "@public-session",
-        "offset": "1"
-      },
-      {
-        "scope": "@public-session-absent",
-        "offset": "1"
-      }
-    ]
-  },
-  {
-    "read": {
       "path": "crates/gents-cli/src/commands/trace.rs",
       "collection": "AgentToolCall",
       "arguments": "$GENTS_filter$ order:{started_at:DESC}, limit:$GENTS_0$"
@@ -148,10 +84,11 @@
     "read": {
       "path": "crates/gents-desktop-bridge/src/tauri_commands/operations.rs",
       "collection": "InferenceCall",
-      "arguments": "filter: { backend_id: { _eq: \"$GENTS_escaped_id$\" } }, order: { queued_at: DESC }, limit: $GENTS_limit$"
+      "arguments": "filter: { node_did: { _eq: \"$GENTS_escaped_node$\" }, backend_id: { _eq: \"$GENTS_escaped_id$\" } }, order: { queued_at: DESC }, limit: $GENTS_limit$"
     },
     "bindings": [
       {
+        "escaped_node": "probe",
         "escaped_id": "probe",
         "limit": "1"
       }
@@ -192,27 +129,6 @@
         "node": "probe",
         "session": "probe",
         "requester": "\"probe\""
-      }
-    ]
-  },
-  {
-    "read": {
-      "path": "crates/gents-desktop-core/src/client/query.rs",
-      "collection": "$GENTS_AGENT_REQUEST_NAME$",
-      "arguments": "filter: { node_did: { _eq: \"$GENTS_node$\" }, session_id: { _eq: \"$GENTS_session$\" }, purpose: { _eq: \"normal\" }$GENTS_request$ }, order: [{ created_at: DESC }, { request_id: DESC }, { _docID: DESC }], limit: 1"
-    },
-    "bindings": [
-      {
-        "AGENT_REQUEST_NAME": "AgentRequest",
-        "node": "probe",
-        "session": "probe",
-        "request": ""
-      },
-      {
-        "AGENT_REQUEST_NAME": "AgentRequest",
-        "node": "probe",
-        "session": "probe",
-        "request": ", request_id: { _eq: \"probe\" }"
       }
     ]
   },
@@ -433,11 +349,12 @@
     "read": {
       "path": "crates/gents/src/triggers/callback/documents.rs",
       "collection": "CallbackInvocation",
-      "arguments": "filter: { owner_node_did: { _eq: \"$GENTS_owner$\" }, lifecycle_state: { _eq: \"failed\" }, created_at: { _ge: \"$GENTS_cutoff$\" } }, order: { created_at: DESC }, limit: $GENTS_limit$"
+      "arguments": "filter: { owner_node_did: { _eq: \"$GENTS_owner$\" }, agent_did: { _eq: \"$GENTS_agent$\" }, lifecycle_state: { _eq: \"failed\" }, created_at: { _ge: \"$GENTS_cutoff$\" } }, order: { created_at: DESC }, limit: $GENTS_limit$"
     },
     "bindings": [
       {
         "owner": "probe",
+        "agent": "probe",
         "cutoff": "2026-10-16T00:00:00Z",
         "limit": "1"
       }
@@ -447,11 +364,12 @@
     "read": {
       "path": "crates/gents/src/triggers/callback/documents.rs",
       "collection": "CallbackInvocation",
-      "arguments": "filter: { owner_node_did: { _eq: \"$GENTS_owner$\" }, lifecycle_state: { _eq: \"succeeded\" }, created_at: { _ge: \"$GENTS_cutoff$\" } }, order: { created_at: DESC }, limit: $GENTS_limit$"
+      "arguments": "filter: { owner_node_did: { _eq: \"$GENTS_owner$\" }, agent_did: { _eq: \"$GENTS_agent$\" }, lifecycle_state: { _eq: \"succeeded\" }, created_at: { _ge: \"$GENTS_cutoff$\" } }, order: { created_at: DESC }, limit: $GENTS_limit$"
     },
     "bindings": [
       {
         "owner": "probe",
+        "agent": "probe",
         "cutoff": "2026-10-16T00:00:00Z",
         "limit": "1"
       }
@@ -461,7 +379,7 @@
     "read": {
       "path": "crates/gents/src/turn/completion_factory.rs",
       "collection": "InferenceCall",
-      "arguments": "filter: { _and: [ { node_did: { _eq: \"$GENTS_0$\" } }, { agent_id: { _eq: \"$GENTS_1$\" } }, { session_id: { _eq: \"$GENTS_2$\" } }, { model_name: { _eq: \"$GENTS_3$\" } }, { call_kind: { _eq: \"inference\" } } ] }, order: [{ queued_at: DESC }, { call_seq: DESC }], limit: $GENTS_CALIBRATION_CALL_SCAN$"
+      "arguments": "filter: { _and: [ { node_did: { _eq: \"$GENTS_0$\" } }, { agent_did: { _eq: \"$GENTS_1$\" } }, { session_id: { _eq: \"$GENTS_2$\" } }, { model_name: { _eq: \"$GENTS_3$\" } }, { call_kind: { _eq: \"inference\" } } ] }, order: [{ queued_at: DESC }, { call_seq: DESC }], limit: $GENTS_CALIBRATION_CALL_SCAN$"
     },
     "bindings": [
       {
@@ -475,7 +393,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/eval/runner/embedded/inspect.rs",
+      "path": "crates/gents-eval/src/runner/embedded/inspect.rs",
       "collection": "AgentRequest",
       "arguments": "filter: { node_did: { _eq: \"$GENTS_0$\" } }, order: { created_at: ASC }, limit: $GENTS_1$"
     },
@@ -488,7 +406,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/eval/runner/embedded/live.rs",
+      "path": "crates/gents-eval/src/runner/embedded/live.rs",
       "collection": "AgentToolCall",
       "arguments": "order: { started_at: DESC }, limit: 1"
     },
@@ -526,21 +444,6 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/request/lifecycle/recovery.rs",
-      "collection": "AgentRequest",
-      "arguments": "filter: { node_did: { _eq: \"$GENTS_escaped_node_did$\" }, _and: [ { requester_did: { _neq: null } }, { requester_did: { _neq: \"$GENTS_escaped_node_did$\" } } ], lifecycle_state: { _in: $GENTS_terminal_states$ }, terminal_redrive_attempts: { _lt: $GENTS_cap$ } }, order: [{ terminalized_at: ASC }, { request_id: ASC }], limit: $GENTS_limit$"
-    },
-    "bindings": [
-      {
-        "escaped_node_did": "probe",
-        "terminal_states": "[\"failed\", \"interrupted\", \"superseded\"]",
-        "cap": "1",
-        "limit": "1"
-      }
-    ]
-  },
-  {
-    "read": {
       "path": "crates/gents/src/turn/provider_context_reduction.rs",
       "collection": "AgentMessage",
       "arguments": "filter: { $GENTS_session_scope$ }, order: { sequence: DESC }, limit: 1"
@@ -565,32 +468,6 @@
         "0": "probe",
         "1": "1",
         "2": "1"
-      }
-    ]
-  },
-  {
-    "read": {
-      "path": "crates/gents/src/observe/run_timeline_fetch.rs",
-      "collection": "AgentToolCall",
-      "arguments": "filter: { request_id: { _in: [$GENTS_request_list$] } }, order: { started_at: ASC }, limit: $GENTS_limit$"
-    },
-    "bindings": [
-      {
-        "request_list": "\"probe\"",
-        "limit": "1"
-      }
-    ]
-  },
-  {
-    "read": {
-      "path": "crates/gents/src/observe/run_timeline_fetch.rs",
-      "collection": "InferenceCall",
-      "arguments": "filter: { request_id: { _in: [$GENTS_request_list$] }, call_kind: { _eq: \"inference\" } }, order: { started_at: ASC }, limit: $GENTS_limit$"
-    },
-    "bindings": [
-      {
-        "request_list": "\"probe\"",
-        "limit": "1"
       }
     ]
   },
@@ -709,13 +586,13 @@
     "read": {
       "path": "crates/gents/src/tools/native/context_budget.rs",
       "collection": "InferenceCall",
-      "arguments": "filter: { _and: [ { node_did: { _eq: \"$GENTS_node_did$\" } }, { agent_id: { _eq: \"$GENTS_agent_id$\" } }, { call_kind: { _eq: \"inference\" } }, { request_id: { _in: [$GENTS_list$] } } ] }, order: { queued_at: DESC }, limit: $GENTS_RECENT_REQUEST_SCAN$"
+      "arguments": "filter: { _and: [ { node_did: { _eq: \"$GENTS_node_did$\" } }, { agent_did: { _eq: \"$GENTS_agent_did$\" } }, { call_kind: { _eq: \"inference\" } }, { request_id: { _in: [$GENTS_list$] } } ] }, order: { queued_at: DESC }, limit: $GENTS_RECENT_REQUEST_SCAN$"
     },
     "bindings": [
       {
         "node_did": "probe",
         "RECENT_REQUEST_SCAN": "1",
-        "agent_id": "probe",
+        "agent_did": "probe",
         "list": "\"probe\""
       }
     ]
@@ -751,19 +628,6 @@
       {
         "0": "probe",
         "limit": "1"
-      }
-    ]
-  },
-  {
-    "read": {
-      "path": "crates/gents/src/tools/native/session_history/observation.rs",
-      "collection": "InferenceCall",
-      "arguments": "filter: { node_did: {_eq: \"$GENTS_0$\"}, request_doc_id: {_eq: \"$GENTS_1$\"}, call_kind: {_eq: \"inference\"} }, order: [{queued_at: DESC}, {call_seq: DESC}, {call_id: DESC}], limit: 1"
-    },
-    "bindings": [
-      {
-        "0": "probe",
-        "1": "probe"
       }
     ]
   },
@@ -894,6 +758,125 @@
         "collection": "AgentMessage",
         "filter": "{node_did: {_eq: \"probe\"}}",
         "SOURCE_SCAN_PAGE_SIZE": "1"
+      }
+    ]
+  },
+  {
+    "read": {
+      "path": "crates/gents/src/triggers/callback/documents.rs",
+      "collection": "$GENTS_collection$",
+      "arguments": "filter: {owner_node_did: {_eq: \"$GENTS_0$\"}, agent_did: {_eq: \"$GENTS_1$\"}, parent_linked: {_eq: false}, _docID: {_gt: \"$GENTS_2$\"}}, order: {_docID: ASC}, limit: 256"
+    },
+    "bindings": [
+      {
+        "collection": "CallbackInvocation",
+        "0": "probe",
+        "1": "probe",
+        "2": ""
+      },
+      {
+        "collection": "CallbackResult",
+        "0": "probe",
+        "1": "probe",
+        "2": ""
+      }
+    ]
+  },
+  {
+    "read": {
+      "path": "crates/gents/src/runtime/agent/p2p_reconcile/enrollment_exchange.rs",
+      "collection": "EnrollmentRenewalIntent",
+      "arguments": "filter: { admin_did: { _eq: \"$GENTS_admin$\" }, expires_at: { _gt: \"$GENTS_now$\" } $GENTS_after$ }, order: { intent_id: ASC }, limit: 4"
+    },
+    "bindings": [
+      {
+        "admin": "probe",
+        "now": "2026-01-01T00:00:00Z",
+        "after": ""
+      },
+      {
+        "admin": "probe",
+        "now": "2026-01-01T00:00:00Z",
+        "after": ", intent_id: {_gt: \"probe\"}"
+      }
+    ]
+  },
+  {
+    "read": {
+      "path": "crates/gents/src/runtime/agent/p2p_reconcile/enrollment_exchange.rs",
+      "collection": "EnrollmentRenewalOffer",
+      "arguments": "filter: { admin_did: { _eq: \"$GENTS_admin$\" }, expires_at: { _lt: \"$GENTS_cutoff$\" } $GENTS_after$ }, order: { intent_id: ASC }, limit: 32"
+    },
+    "bindings": [
+      {
+        "admin": "probe",
+        "cutoff": "2026-01-01T00:00:00Z",
+        "after": ""
+      },
+      {
+        "admin": "probe",
+        "cutoff": "2026-01-01T00:00:00Z",
+        "after": ", intent_id: {_gt: \"probe\"}"
+      }
+    ]
+  },
+  {
+    "read": {
+      "path": "crates/gents/src/runtime/agent/p2p_reconcile/enrollment_member_renewal/persisted.rs",
+      "collection": "EnrollmentRenewalIntent",
+      "arguments": "filter: { member_did: { _eq: \"$GENTS_member$\" }, expires_at: { _lt: \"$GENTS_cutoff$\" } $GENTS_after$ }, order: { intent_id: ASC }, limit: 32"
+    },
+    "bindings": [
+      {
+        "member": "probe",
+        "cutoff": "2026-01-01T00:00:00Z",
+        "after": ""
+      },
+      {
+        "member": "probe",
+        "cutoff": "2026-01-01T00:00:00Z",
+        "after": ", intent_id: {_gt: \"probe\"}"
+      }
+    ]
+  },
+  {
+    "read": {
+      "path": "crates/gents/src/runtime/agent/p2p_reconcile/enrollment_member_renewal/persisted.rs",
+      "collection": "EnrollmentRenewalIntent",
+      "arguments": "filter: { network_id: { _eq: \"$GENTS_0$\" }, admin_did: { _eq: \"$GENTS_1$\" }, server_peer: { _eq: \"$GENTS_2$\" }, member_did: { _eq: \"$GENTS_3$\" }, member_peer: { _eq: \"$GENTS_4$\" }, predecessor_sequence: { _eq: $GENTS_5$ }, expires_at: { _gt: \"$GENTS_6$\" } $GENTS_after$ }, order: { intent_id: ASC }, limit: 32"
+    },
+    "bindings": [
+      {
+        "0": "probe",
+        "1": "probe",
+        "2": "probe",
+        "3": "probe",
+        "4": "probe",
+        "5": "1",
+        "6": "2026-01-01T00:00:00Z",
+        "after": ""
+      },
+      {
+        "0": "probe",
+        "1": "probe",
+        "2": "probe",
+        "3": "probe",
+        "4": "probe",
+        "5": "1",
+        "6": "2026-01-01T00:00:00Z",
+        "after": ", intent_id: {_gt: \"probe\"}"
+      }
+    ]
+  },
+  {
+    "read": {
+      "path": "crates/gents-cli/src/commands/start/yolo.rs",
+      "collection": "NodeReadiness",
+      "arguments": "filter: {node_did: {_eq: \"$GENTS_0$\"}}, order: {updated_at: DESC}, limit: 1"
+    },
+    "bindings": [
+      {
+        "0": "probe"
       }
     ]
   }

@@ -1,9 +1,9 @@
 use super::*;
-use crate::store::config_client::ConfigAccess;
 use crate::tools::call::lifecycle::runtime::{
     current_tool_runtime_context, scope_request_tool_execution_with_workspace_overlay,
     ToolWorkspaceScope,
 };
+use anyhow::Context;
 use futures::FutureExt;
 use gents_loop::session_hook::{ForegroundCall, ForegroundResult};
 use std::panic::AssertUnwindSafe;
@@ -12,6 +12,33 @@ use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 impl DefraSessionHook {
+    pub(in crate::tools::call::hook) async fn foreground_background_request(
+        &self,
+        doc: &str,
+    ) -> anyhow::Result<Option<String>> {
+        let query = {
+            use gents_protocol::document_query::{
+                fields::agent_tool_call as fields, Filter, Query, Selection,
+            };
+            Query::select(Selection::new().field(fields::BACKGROUND_REQUESTED_AT))
+                .filter(Filter::eq(fields::DOC_ID, doc))
+                .limit(2)
+                .render()
+        };
+        let response = self.actor_access()?.read(&query).await?;
+        let rows = response["data"]["AgentToolCall"]
+            .as_array()
+            .context("foreground background request query omitted rows")?;
+        let [row] = rows.as_slice() else {
+            anyhow::bail!("foreground background request is unavailable or ambiguous");
+        };
+        match row.get("background_requested_at") {
+            Some(serde_json::Value::Null) => Ok(None),
+            Some(serde_json::Value::String(value)) => Ok(Some(value.clone())),
+            _ => anyhow::bail!("foreground background request timestamp is unavailable"),
+        }
+    }
+
     pub(in crate::tools::call::hook) async fn handoff_unverified_process(
         &self,
         lifecycle: &mut ToolCallLifecycle,
@@ -167,26 +194,13 @@ impl DefraSessionHook {
             loop {
                 if inspect && !backgrounded {
                     inspect = false;
-                    let query = format!(
-                        r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ background_requested_at }} }}"#,
-                        crate::store::graphql::escape_graphql_string(&doc)
-                    );
-                    match ConfigAccess::local(hook.node.clone()).execute(&query).await {
-                        Ok(value)
-                            if value
-                                .pointer("/data/AgentToolCall/0/background_requested_at")
-                                .is_some_and(|value| value.as_str().is_some()) =>
-                        {
+                    match hook.foreground_background_request(&doc).await {
+                        Ok(Some(requested_at)) => {
                             let receipt = json!({
                                 "tool_call_id": lifecycle.tool_call_id(),
                                 "status": "running", "await_mode": "background",
                                 "message": "The same process continues in the background. Its result will arrive in this conversation."
                             }).to_string();
-                            let requested_at = value
-                                .pointer("/data/AgentToolCall/0/background_requested_at")
-                                .and_then(serde_json::Value::as_str)
-                                .unwrap()
-                                .to_owned();
                             // Cancellation drains this same request-local map. Hold it through
                             // the receipt commit so it cannot terminalize a stale foreground copy.
                             let mut in_flight = hook.in_flight_lifecycles.lock().await;
@@ -222,7 +236,7 @@ impl DefraSessionHook {
                                 }
                             }
                         }
-                        Ok(_) => {}
+                        Ok(None) => {}
                         Err(error) => tracing::warn!(%error, tool_call_doc_id = %doc,
                             "foreground background request read failed"),
                     }

@@ -1,12 +1,12 @@
 use std::collections::BTreeMap;
 use std::io::{self, Write};
 
-use gents::eval::report::SlotClass;
-use gents::eval::runner::{
+use gents::eval::OutcomeKind;
+use gents_eval::report::SlotClass;
+use gents_eval::runner::{
     is_fresh, EvidenceRecord, GoalEntry, InFlight, LiveSnapshot, Progress, RunView, SCHEMAS_GOAL,
     STALE_WINDOW,
 };
-use gents::eval::OutcomeKind;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Screen {
@@ -27,7 +27,7 @@ impl Screen {
 }
 
 #[cfg(unix)]
-fn terminal_size() -> Option<(usize, usize)> {
+pub(crate) fn terminal_size() -> Option<(usize, usize)> {
     // SAFETY: TIOCGWINSZ writes one `winsize` into the struct it is handed
     // and reads nothing else; a failed call leaves it zeroed.
     let mut size: libc::winsize = unsafe { std::mem::zeroed() };
@@ -37,7 +37,7 @@ fn terminal_size() -> Option<(usize, usize)> {
 }
 
 #[cfg(not(unix))]
-fn terminal_size() -> Option<(usize, usize)> {
+pub(crate) fn terminal_size() -> Option<(usize, usize)> {
     None
 }
 

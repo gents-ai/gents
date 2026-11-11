@@ -7,7 +7,6 @@ use super::super::input::{chain_of, derive_children_in_txn, CallArgs};
 use super::super::records::{read_pin, read_progress, read_step_state};
 use crate::plugin::job_calls::job_state;
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::store::graphql::escape_graphql_string;
 use crate::tools::call::lifecycle::query::load_tool_call_arguments_in_txn;
 use crate::tools::call::lifecycle::{ToolCallLifecycle, ToolCallState};
 
@@ -15,12 +14,15 @@ pub(super) async fn read_lifecycle_state(
     txn: &ConfigApplyTxn<'_>,
     row_doc_id: &str,
 ) -> Result<String> {
-    let response = txn
-        .execute(&format!(
-            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state }} }}"#,
-            escape_graphql_string(row_doc_id)
-        ))
-        .await?;
+    let query = {
+        use gents_protocol::document_query::{
+            fields::agent_tool_call as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::new().field(fields::LIFECYCLE_STATE))
+            .filter(Filter::eq(fields::DOC_ID, row_doc_id))
+            .render()
+    };
+    let response = txn.run(&query).await?;
     response
         .pointer("/data/AgentToolCall/0/lifecycle_state")
         .and_then(Value::as_str)
@@ -33,31 +35,59 @@ pub(in crate::tools::background::job) async fn load_lifecycle(
     access: &ConfigAccess,
     row_doc_id: &str,
 ) -> Result<ToolCallLifecycle> {
-    let response = access
-        .execute(&format!(
-            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ session_id node_did requester_did request_doc_id }} }}"#,
-            escape_graphql_string(row_doc_id)
-        ))
-        .await?;
-    let stored: StoredRow = serde_json::from_value(
-        response
-            .pointer("/data/AgentToolCall/0")
-            .cloned()
-            .with_context(|| format!("job row {row_doc_id} does not exist"))?,
-    )
-    .with_context(|| format!("decoding job row {row_doc_id}"))?;
+    let actor = access
+        .actor_did()
+        .context("job step requires its selected agent DID")?;
     let ConfigAccess::Local(node) = access else {
         anyhow::bail!("a job step needs a local node");
     };
-    ToolCallLifecycle::load_by_doc_id(
-        node.node().clone(),
-        row_doc_id,
-        &stored.node_did,
-        &stored.session_id,
-        stored.requester_did.as_deref(),
-    )
-    .await?
-    .with_context(|| format!("job row {row_doc_id} does not exist"))
+    let node = node.node().clone();
+    access
+        .transact_readonly("plugin_job.load_lifecycle", |txn| {
+            let node = node.clone();
+            let actor = &actor;
+            Box::pin(async move {
+                let query = {
+                    use gents_protocol::document_query::{
+                        fields::agent_tool_call as fields, Filter, Query, Selection,
+                    };
+                    Query::select(
+                        Selection::new()
+                            .field(fields::SESSION_ID)
+                            .field(fields::NODE_DID)
+                            .field(fields::REQUESTER_DID)
+                            .field(fields::REQUEST_DOC_ID),
+                    )
+                    .filter(Filter::eq(fields::DOC_ID, row_doc_id))
+                    .render()
+                };
+                let response = txn.run(&query).await?;
+                let stored: StoredRow = serde_json::from_value(
+                    response
+                        .pointer("/data/AgentToolCall/0")
+                        .cloned()
+                        .with_context(|| format!("job row {row_doc_id} does not exist"))?,
+                )
+                .with_context(|| format!("decoding job row {row_doc_id}"))?;
+                let mut lifecycle = ToolCallLifecycle::load_by_doc_id_in_txn(
+                    txn,
+                    node,
+                    row_doc_id,
+                    &stored.node_did,
+                    &stored.session_id,
+                    stored.requester_did.as_deref(),
+                )
+                .await?
+                .with_context(|| format!("job row {row_doc_id} does not exist"))?;
+                anyhow::ensure!(
+                    lifecycle.actor().as_str() == actor,
+                    "job row belongs to another agent"
+                );
+                lifecycle.bind_agent_signer(txn.managed_agent_signer())?;
+                Ok::<_, anyhow::Error>(lifecycle)
+            })
+        })
+        .await
 }
 
 #[derive(Deserialize)]
@@ -96,12 +126,22 @@ pub(crate) async fn read_step_row(access: &ConfigAccess, row_doc_id: &str) -> Re
 
 /// One row's own facts; `root_call` is the caller's to fill from the chain root.
 async fn read_row(txn: &ConfigApplyTxn<'_>, row_doc_id: &str) -> Result<StepRow> {
-    let stored = txn
-        .execute(&format!(
-            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ session_id node_did requester_did request_doc_id lifecycle_state }} }}"#,
-            escape_graphql_string(row_doc_id)
-        ))
-        .await?;
+    let query = {
+        use gents_protocol::document_query::{
+            fields::agent_tool_call as fields, Filter, Query, Selection,
+        };
+        Query::select(
+            Selection::new()
+                .field(fields::SESSION_ID)
+                .field(fields::NODE_DID)
+                .field(fields::REQUESTER_DID)
+                .field(fields::REQUEST_DOC_ID)
+                .field(fields::LIFECYCLE_STATE),
+        )
+        .filter(Filter::eq(fields::DOC_ID, row_doc_id))
+        .render()
+    };
+    let stored = txn.run(&query).await?;
     let stored: StoredRow = serde_json::from_value(
         stored
             .pointer("/data/AgentToolCall/0")
@@ -109,12 +149,15 @@ async fn read_row(txn: &ConfigApplyTxn<'_>, row_doc_id: &str) -> Result<StepRow>
             .with_context(|| format!("job row {row_doc_id} does not exist"))?,
     )
     .with_context(|| format!("decoding job row {row_doc_id}"))?;
-    let hop = txn
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ request_hop }} }}"#,
-            escape_graphql_string(&stored.request_doc_id)
-        ))
-        .await?;
+    let query = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::new().field(fields::REQUEST_HOP))
+            .filter(Filter::eq(fields::DOC_ID, &stored.request_doc_id))
+            .render()
+    };
+    let hop = txn.run(&query).await?;
     let caller_hop = hop
         .pointer("/data/AgentRequest/0")
         .with_context(|| format!("the caller request of job row {row_doc_id} does not exist"))?
@@ -192,44 +235,48 @@ pub(in crate::tools::background::job) async fn store_running_progress(
     admission: &crate::tools::call::lifecycle::admission_fixture::PublishedAdmission,
 ) {
     use super::super::records::{write_progress_in_txn, HostProgressFacts};
-    use crate::store::config_client::ConfigAccess;
     use gents_protocol::job::{JobBudget, JobProgress, JobState};
     let doc_id = admission.tool.doc_id().unwrap().to_owned();
-    ConfigAccess::transact_local_write(&admission.node, None, "test.driver.progress", |txn| {
-        let doc_id = doc_id.clone();
-        Box::pin(async move {
-            let guest = JobProgress {
-                title: "audit".to_owned(),
-                state: JobState::Running,
-                pause_reason: None,
-                phases: Vec::new(),
-                active: Vec::new(),
-                spawned: 0,
-                budget: JobBudget {
-                    total: 0,
-                    spent: 0,
-                    remaining: 0,
-                },
-                last_event: "scanning".to_owned(),
-                last_event_at: None,
-                question: None,
-                observed_terminal_children: 0,
-                revision: 0,
-            };
-            let host = HostProgressFacts {
-                spawned: 2,
-                budget: JobBudget {
-                    total: 4,
-                    spent: 2,
-                    remaining: 2,
-                },
-                observed_terminal_children: 1,
-                state: JobState::Running,
-                pause_reason: None,
-            };
-            write_progress_in_txn(txn, &doc_id, 0, guest, host).await
+    let access = admission
+        .tool
+        .access()
+        .expect("admission tool carries its agent-scoped access");
+    access
+        .transact_write("test.driver.progress", |txn| {
+            let doc_id = doc_id.clone();
+            Box::pin(async move {
+                let guest = JobProgress {
+                    title: "audit".to_owned(),
+                    state: JobState::Running,
+                    pause_reason: None,
+                    phases: Vec::new(),
+                    active: Vec::new(),
+                    spawned: 0,
+                    budget: JobBudget {
+                        total: 0,
+                        spent: 0,
+                        remaining: 0,
+                    },
+                    last_event: "scanning".to_owned(),
+                    last_event_at: None,
+                    question: None,
+                    observed_terminal_children: 0,
+                    revision: 0,
+                };
+                let host = HostProgressFacts {
+                    spawned: 2,
+                    budget: JobBudget {
+                        total: 4,
+                        spent: 2,
+                        remaining: 2,
+                    },
+                    observed_terminal_children: 1,
+                    state: JobState::Running,
+                    pause_reason: None,
+                };
+                write_progress_in_txn(txn, &doc_id, 0, guest, host).await
+            })
         })
-    })
-    .await
-    .unwrap();
+        .await
+        .unwrap();
 }

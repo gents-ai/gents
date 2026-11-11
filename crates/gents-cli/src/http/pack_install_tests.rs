@@ -10,10 +10,16 @@ fn archive(name: &str) -> Arc<PackArchive> {
 
 fn body(root: &PackArchive, dependencies: &[Arc<PackArchive>], node_did: &str) -> Vec<u8> {
     encode_request(root, dependencies, |root, dependencies| InstallRequest {
+        root_source: gents::pack::PackSource::Local { file_name: None },
+        dependency_sources: vec![
+            gents::pack::PackSource::Local { file_name: None };
+            dependencies.len()
+        ],
         node_did: node_did.into(),
         root,
         dependencies,
         inference_slots: Vec::new(),
+        dependency_variables: Vec::new(),
         overwrite: false,
         keep: false,
         preview: false,
@@ -51,6 +57,55 @@ fn received_archives_carry_every_declared_path_at_the_resolved_digest() {
 }
 
 #[test]
+fn remote_sources_keep_file_names_but_reject_paths() {
+    let root = archive("documents_fixture");
+    let mut request: serde_json::Value = serde_json::from_slice(&body(&root, &[], NODE)).unwrap();
+    request["root_source"] = serde_json::json!({"kind": "local", "file_name": "demo.pack"});
+    let received = decode_request(&serde_json::to_vec(&request).unwrap(), NODE).unwrap();
+    assert_eq!(
+        received.root.provenance(),
+        gents::pack::PackSource::Local {
+            file_name: Some("demo.pack".into())
+        }
+    );
+    request["root_source"]["file_name"] = "/private/demo.pack".into();
+    assert!(refusal(&serde_json::to_vec(&request).unwrap()).contains("invalid local pack filename"));
+    request["root_source"] = serde_json::json!({
+        "kind": "registry", "namespace": "other", "name": "other", "version": "1.0.0", "artifact_digest": "a".repeat(64)
+    });
+    assert!(
+        refusal(&serde_json::to_vec(&request).unwrap()).contains("registry source does not match")
+    );
+}
+
+#[test]
+fn remote_install_requires_source_fields() {
+    let root = archive("documents_fixture");
+    let request: serde_json::Value = serde_json::from_slice(&body(&root, &[], NODE)).unwrap();
+    for field in ["root_source", "dependency_sources"] {
+        let mut missing = request.clone();
+        missing.as_object_mut().unwrap().remove(field);
+        assert!(refusal(&serde_json::to_vec(&missing).unwrap()).contains(field));
+    }
+}
+
+#[test]
+fn remote_dependency_sources_follow_their_archives() {
+    let root = archive("dependent_fixture");
+    let dependency = archive("dependee_fixture");
+    let mut request: serde_json::Value =
+        serde_json::from_slice(&body(&root, std::slice::from_ref(&dependency), NODE)).unwrap();
+    request["dependency_sources"] = serde_json::json!([{"kind": "store"}]);
+    let received = decode_request(&serde_json::to_vec(&request).unwrap(), NODE).unwrap();
+    assert_eq!(
+        received.dependencies[0].provenance(),
+        gents::pack::PackSource::Store
+    );
+    request["dependency_sources"] = serde_json::json!([{"kind": "store"}, {"kind": "store"}]);
+    assert!(refusal(&serde_json::to_vec(&request).unwrap()).contains("dependency source count"));
+}
+
+#[test]
 fn received_dependencies_are_exactly_the_root_dependency_list() {
     let root = archive("dependent_fixture");
     let dependee = archive("dependee_fixture");
@@ -77,10 +132,38 @@ fn received_dependencies_are_exactly_the_root_dependency_list() {
 }
 
 #[test]
-fn received_requests_bind_the_runtime_node_and_a_documents_root() {
+fn received_request_preserves_dependency_variable_overrides() {
+    let root = archive("dependent_fixture");
+    let dependee = archive("dependee_fixture");
+    let mut request: serde_json::Value =
+        serde_json::from_slice(&body(&root, &[dependee], NODE)).unwrap();
+    assert_eq!(request["dependency_variables"], serde_json::json!([]));
+    let mut missing = request.clone();
+    missing
+        .as_object_mut()
+        .unwrap()
+        .remove("dependency_variables");
+    assert!(refusal(&serde_json::to_vec(&missing).unwrap()).contains("dependency_variables"));
+    request["dependency_variables"] = serde_json::json!(["fixture/dependee_fixture:LABEL=value"]);
+    let received = decode_request(&serde_json::to_vec(&request).unwrap(), NODE).unwrap();
+    assert_eq!(
+        received.request.dependency_variables,
+        ["fixture/dependee_fixture:LABEL=value"]
+    );
+}
+
+#[test]
+fn received_requests_bind_the_runtime_node_and_reviewed_root() {
     let root = archive("documents_fixture");
     assert!(refusal(&body(&root, &[], "did:key:zOtherNode")).contains("different node"));
-    assert!(refusal(&body(&archive("assets_fixture"), &[], NODE)).contains("documents pack root"));
+    let assets = archive("assets_fixture");
+    assert_eq!(
+        decode_request(&body(&assets, &[], NODE), NODE)
+            .unwrap()
+            .root
+            .digest(),
+        assets.digest()
+    );
 
     let mut conflicting: serde_json::Value =
         serde_json::from_slice(&body(&root, &[], NODE)).unwrap();

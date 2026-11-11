@@ -10,6 +10,30 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
+/// Why a folder cannot be a tool root whoever asks: a root is a boundary only if it
+/// leaves something out, and these leave out nothing of the person's.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum TooBroadRoot {
+    #[error("The filesystem root is too broad. Choose your home directory or a folder inside it.")]
+    FilesystemRoot,
+    #[error("{} is broader than your home directory. Choose your home directory or a more specific folder.", .0.display())]
+    AboveUserHome(PathBuf),
+}
+
+/// Both paths must already be canonical.
+pub fn refuse_too_broad_root(
+    root: &Path,
+    user_home: Option<&Path>,
+) -> std::result::Result<(), TooBroadRoot> {
+    if root.parent().is_none() {
+        return Err(TooBroadRoot::FilesystemRoot);
+    }
+    if user_home.is_some_and(|home| home.starts_with(root) && home != root) {
+        return Err(TooBroadRoot::AboveUserHome(root.to_path_buf()));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct WorkspaceRootDocument {
     pub root_path: Option<String>,
@@ -27,19 +51,40 @@ pub struct WorkspaceRootPolicy {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct RootExecutionGuard {
-    pub(crate) agent_id: String,
+    pub(crate) agent_did: String,
     pub(crate) selected_root: Option<PathBuf>,
     pub(crate) ceiling_root: Option<PathBuf>,
 }
 
 impl RootExecutionGuard {
-    pub(crate) async fn validate(&self, node: &defra_node::EmbeddedNode) -> Result<()> {
-        let policy = load_workspace_root_policy(node, self.ceiling_root.as_deref()).await?;
+    pub(crate) async fn validate(
+        &self,
+        node: &std::sync::Arc<defra_node::Node>,
+        agent: &dyn crate::store::identity::NodeIdentity,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            agent.did() == self.agent_did,
+            "workspace root requires the selected Agent identity"
+        );
+        let access = crate::ConfigAccess::local_managed_agent(
+            node.clone(),
+            identity::Did::new(&self.agent_did)?,
+            agent,
+        )?;
+        let node_did = node.node_identity_did().unwrap_or_default();
+        let policy = access
+            .transact_readonly("workspace_root.execution", |txn| {
+                Box::pin(async move {
+                    load_workspace_root_policy_in_txn(txn, self.ceiling_root.as_deref(), node_did)
+                        .await
+                })
+            })
+            .await?;
         let Some(selected_root) = self.selected_root.as_deref() else {
             anyhow::ensure!(
                 !policy.configured,
                 "agent {} has active host tools but no explicit root under current WorkspaceRoot policy",
-                self.agent_id
+                self.agent_did
             );
             return Ok(());
         };
@@ -47,13 +92,13 @@ impl RootExecutionGuard {
             RootAdmission::Admitted(root) if root == selected_root => Ok(()),
             RootAdmission::Admitted(root) => anyhow::bail!(
                 "agent {} persisted root {} re-resolved to {} at the execution boundary",
-                self.agent_id,
+                self.agent_did,
                 selected_root.display(),
                 root.display()
             ),
             denied @ RootAdmission::Denied { .. } => anyhow::bail!(
                 "agent {} persisted root {} is not admitted by current WorkspaceRoot policy at the execution boundary: {}",
-                self.agent_id,
+                self.agent_did,
                 selected_root.display(),
                 denied.denial_reason().expect("denied outcome has a reason")
             ),
@@ -78,13 +123,24 @@ impl WorkspaceRootPolicy {
     }
 }
 
+/// The caller supplies all configured roots; actor-filtered database results
+/// must instead use the completeness-aware loader below.
 pub fn project_workspace_root_policy(
     documents: Vec<WorkspaceRootDocument>,
     ceiling_root: Option<&Path>,
 ) -> WorkspaceRootPolicy {
+    project_workspace_root_policy_with_completeness(documents, ceiling_root, true)
+}
+
+fn project_workspace_root_policy_with_completeness(
+    documents: Vec<WorkspaceRootDocument>,
+    ceiling_root: Option<&Path>,
+    complete: bool,
+) -> WorkspaceRootPolicy {
     let resolved_ceiling = ceiling_root.and_then(|ceiling| resolve_tool_root(ceiling).ok());
-    let configured =
-        !documents.is_empty() || (ceiling_root.is_some() && resolved_ceiling.is_none());
+    let configured = !complete
+        || !documents.is_empty()
+        || (ceiling_root.is_some() && resolved_ceiling.is_none());
 
     let candidates = if configured {
         documents
@@ -135,35 +191,224 @@ fn decode_workspace_root_rows(value: &serde_json::Value) -> Result<Vec<Workspace
     serde_json::from_value(rows).context("decoding WorkspaceRoot policy rows")
 }
 
+fn workspace_root_query(complete: bool, node_did: &str) -> String {
+    if complete {
+        "{ WorkspaceRoot { root_path enabled } }".to_owned()
+    } else {
+        format!(
+            "{{ WorkspaceRoot(filter: {{node_did: {{_eq: \"{}\"}}}}) {{ root_path enabled }} }}",
+            crate::store::graphql::escape_graphql_string(node_did)
+        )
+    }
+}
+
 pub(crate) async fn load_workspace_root_policy_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     ceiling_root: Option<&Path>,
+    node_did: &str,
 ) -> Result<WorkspaceRootPolicy> {
+    let complete = txn.collection_has_no_document_policy("WorkspaceRoot");
+    let query = workspace_root_query(complete, node_did);
     let response = txn
-        .execute("{ WorkspaceRoot { root_path enabled } }")
+        .execute(&query)
         .await
         .context("querying WorkspaceRoot policy in configuration transaction")?;
-    Ok(project_workspace_root_policy(
+    Ok(project_workspace_root_policy_with_completeness(
         decode_workspace_root_rows(&response)?,
         ceiling_root,
+        complete,
     ))
 }
 
+/// The stored path of the enabled WorkspaceRoot, visible to the transaction's
+/// actor, whose resolution contains `root`. Reader grants name a root by this
+/// exact stored path, which can differ from its canonical resolution.
+pub(crate) async fn published_root_covering_in_txn(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    node_did: &str,
+    root: &Path,
+) -> Result<Option<String>> {
+    let complete = txn.collection_has_no_document_policy("WorkspaceRoot");
+    let response = txn
+        .execute(&workspace_root_query(complete, node_did))
+        .await
+        .context("querying WorkspaceRoot paths in configuration transaction")?;
+    for document in decode_workspace_root_rows(&response)? {
+        let Some(path) = document
+            .root_path
+            .filter(|_| document.enabled.unwrap_or(false))
+        else {
+            continue;
+        };
+        let Ok(published) = resolve_configured_tool_root(Path::new(path.trim())) else {
+            continue;
+        };
+        if matches!(
+            resolve_admitted_tool_root(root, [published.as_path()]),
+            Ok(RootAdmission::Admitted(_))
+        ) {
+            return Ok(Some(path));
+        }
+    }
+    Ok(None)
+}
+
+/// The WorkspaceRoot a User grants an Agent reader on so it can run the host
+/// tools its Tools select. Agent creation names the same root in its receipt
+/// ([`reader_grant_step`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToolRootReader {
+    /// The Tools select no filesystem root, or this node publishes no roots.
+    NotNeeded,
+    /// The stored path of the enabled published root covering the tool root.
+    Published(String),
+    /// No published root visible to the reader covers this tool root.
+    Unpublished(String),
+}
+
+pub(crate) async fn tools_root_reader_in_txn(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    node_did: &str,
+    policy: &WorkspaceRootPolicy,
+    tools: &crate::documents::Tools,
+) -> Result<ToolRootReader> {
+    let root = tools.host.as_ref().and_then(|host| host.root.clone());
+    match (
+        policy.configured
+            && crate::tools::surface::ResolvedToolSelection::from_document(tools)?
+                .requires_filesystem_root(),
+        root,
+    ) {
+        (true, Some(root)) => Ok(
+            match published_root_covering_in_txn(txn, node_did, Path::new(&root)).await? {
+                Some(published) => ToolRootReader::Published(published),
+                None => ToolRootReader::Unpublished(root),
+            },
+        ),
+        _ => Ok(ToolRootReader::NotNeeded),
+    }
+}
+
+/// [`ToolRootReader`] for the Tools `agent_did` selects, read as `access`'s actor.
+pub async fn agent_tool_root_reader(
+    access: &crate::store::config_client::ConfigAccess,
+    node_did: &str,
+    agent_did: &str,
+) -> Result<ToolRootReader> {
+    access
+        .transact_readonly("workspace_root.agent_tool_root", |txn| {
+            Box::pin(async move {
+                let Some(tools) =
+                    crate::documents::load_agent_tools_in_txn(txn, node_did, agent_did).await?
+                else {
+                    return Ok(ToolRootReader::NotNeeded);
+                };
+                let policy = load_workspace_root_policy_in_txn(txn, None, node_did).await?;
+                tools_root_reader_in_txn(txn, node_did, &policy, &tools).await
+            })
+        })
+        .await
+}
+
+/// The step a Node administrator takes so `agent_did` may run host tools under
+/// a published root. WorkspaceRoot `reader` is managed only by the Node's owner
+/// and administrators (`workspace_roots.reader_manager`), so an Agent creating
+/// another Agent never grants it, even with relationship delegation.
+/// `known_missing` is true for a newly created Agent, which holds no
+/// relationship yet; otherwise the caller cannot see the Agent's relationships.
+pub(crate) fn reader_grant_step(
+    agent_did: &str,
+    published_root: Option<&str>,
+    known_missing: bool,
+) -> serde_json::Value {
+    let path = published_root.unwrap_or("PUBLISHED_ROOT");
+    let answer = if known_missing {
+        format!("Saved, but {agent_did} cannot use its host tools yet: a User must grant it reader on the published WorkspaceRoot {path}. Until then the runtime cannot load its tools and reports the agent unavailable.")
+    } else {
+        format!("{agent_did} uses host tools only if a User granted it reader on the published WorkspaceRoot {path}; without that grant the runtime cannot load its tools and the agent is unavailable (agent_new to it is not offered).")
+    };
+    serde_json::json!({
+        "state": if known_missing { "waiting_for_user" } else { "requires_user_grant" },
+        "published_root": published_root,
+        "answer": answer,
+        "user_command": format!(
+            "gents config workspace-root grant-reader --graphql GRAPHQL_URL --path {path} --agent-did {agent_did}"
+        ),
+        "how_to_proceed": "Keep these Tools and give the User user_command to run from their own client; no config or policy call, and no change to your own Tools, can grant it.",
+    })
+}
+
 pub async fn load_workspace_root_policy(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     ceiling_root: Option<&Path>,
 ) -> Result<WorkspaceRootPolicy> {
+    let complete = node
+        .get_collection("WorkspaceRoot")
+        .ok()
+        .flatten()
+        .is_some_and(|collection| collection.policy.is_none());
+    let node_did = if complete {
+        ""
+    } else {
+        node.node_identity_did()
+            .context("WorkspaceRoot policy requires the selected Node identity")?
+    };
+    let query = workspace_root_query(complete, node_did);
     let response = crate::store::graphql::graphql_with_transaction_retry(
         node,
-        "{ WorkspaceRoot { root_path enabled } }",
+        &query,
         "querying WorkspaceRoot policy",
     )
     .await?;
     let value = serde_json::json!({"data": response.data.unwrap_or(serde_json::Value::Null)});
-    Ok(project_workspace_root_policy(
+    Ok(project_workspace_root_policy_with_completeness(
         decode_workspace_root_rows(&value)?,
         ceiling_root,
+        complete,
     ))
+}
+
+/// Read-only startup check that the configured host tool root (the process
+/// ceiling) is covered by a WorkspaceRoot published for this Node. A mismatch
+/// is reported with the operator's fix; nothing is written here.
+pub async fn ensure_configured_root_published(
+    node: &defra_node::Node,
+    configured_root: &Path,
+) -> Result<()> {
+    let policy = load_workspace_root_policy(node, Some(configured_root)).await?;
+    configured_root_coverage(&policy, configured_root)
+}
+
+/// [`ensure_configured_root_published`] through a running Node's
+/// configuration access, as `node_did`'s principal, for a caller that must
+/// refuse a root before it replaces that runtime.
+pub async fn ensure_root_published_for_node(
+    access: &crate::ConfigAccess,
+    node_did: &str,
+    configured_root: &Path,
+) -> Result<()> {
+    let policy = access
+        .transact_readonly("workspace_root.configured", |txn| {
+            Box::pin(async move {
+                load_workspace_root_policy_in_txn(txn, Some(configured_root), node_did).await
+            })
+        })
+        .await?;
+    configured_root_coverage(&policy, configured_root)
+}
+
+pub(crate) fn configured_root_coverage(
+    policy: &WorkspaceRootPolicy,
+    configured_root: &Path,
+) -> Result<()> {
+    match policy.admit(configured_root)? {
+        RootAdmission::Admitted(_) => Ok(()),
+        denied @ RootAdmission::Denied { .. } => anyhow::bail!(
+            "configured host tool root {} is not published as a WorkspaceRoot for this Node ({}). Choose this folder in the desktop app while the Node is running, or publish it with `gents config workspace-root set --graphql <url> --node-did <node-did> --path <folder> --reader-agent <engineer-agent-did>`, then start the server again.",
+            configured_root.display(),
+            denied.denial_reason().expect("denied outcome has a reason")
+        ),
+    }
 }
 
 pub fn admit_authored_root(
@@ -432,6 +677,87 @@ fn resolve_path_with_canonical_prefix(path: &Path) -> Result<ResolvedToolRoot> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workspace_root_fallback_requires_complete_visibility() {
+        for case in
+            &crate::lean_vocab_test::lean_contract_snapshot().workspace_root_completeness_cases
+        {
+            let complete = case["complete"].as_bool().unwrap();
+            let visible_configured = case["visible_configured"].as_bool().unwrap();
+            let documents = if visible_configured {
+                vec![WorkspaceRootDocument {
+                    root_path: None,
+                    enabled: Some(false),
+                }]
+            } else {
+                Vec::new()
+            };
+            let policy = project_workspace_root_policy_with_completeness(documents, None, complete);
+            assert_eq!(
+                !policy.configured && policy.published.is_empty(),
+                case["fallback_allowed"].as_bool().unwrap(),
+                "{case}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn filtered_native_workspace_roots_do_not_enable_fallback() -> anyhow::Result<()> {
+        use crate::store::identity::NodeIdentity;
+        let directory = tempfile::tempdir()?;
+        let owner = crate::KeyIdentity::load_or_create(directory.path().join("owner.key"), None)?;
+        let binding = crate::store::identity::provision_agent_identity(&owner)?;
+        let agent = crate::store::identity::resolve_agent_identity(&owner, &binding)?;
+        let node = std::sync::Arc::new(
+            defra_node::Node::builder()
+                .enable_signing()
+                .with_node_identity_did(owner.did())
+                .with_node_acp_enabled()
+                .build()
+                .await?,
+        );
+        let context =
+            defra_core::RequestContext::default().with_identity(Some(owner.did().to_owned()));
+        let policy_id = node.add_dac_policy_as(&context, "name: WorkspaceRootCompleteness\nresources:\n  - name: roots\n    permissions:\n      - name: read\n      - name: update\n      - name: delete\n").await?;
+        node.add_collection_as(&context, &format!(
+            "type WorkspaceRoot @policy(id: \"{policy_id}\", resource: \"roots\") {{ node_did: String root_path: String enabled: Boolean }}"
+        )).await?;
+        let owner_access = crate::ConfigAccess::local_as(node.clone(), owner.did().parse()?);
+        for permission in [
+            crate::store::config_client::NodePermission::DocumentRead,
+            crate::store::config_client::NodePermission::CollectionGet,
+        ] {
+            owner_access
+                .grant_node_permission(&agent.did().parse()?, permission)
+                .await?;
+        }
+        owner_access.write("test.root.hidden", &format!(
+            "mutation {{ create_WorkspaceRoot(input: {{root_path: \"{}\", enabled: true}}) {{_docID}} }}",
+            crate::store::graphql::escape_graphql_string(&directory.path().to_string_lossy())
+        )).await?;
+        let access = crate::ConfigAccess::local_managed_agent(
+            node.clone(),
+            agent.did().parse()?,
+            agent.as_ref(),
+        )?;
+        let rows = access.execute("{ WorkspaceRoot { _docID } }").await?;
+        assert_eq!(rows["data"]["WorkspaceRoot"].as_array().unwrap().len(), 0);
+        let owner_did = owner.did().to_owned();
+        let projected = access
+            .transact_readonly("test.root.filtered", |txn| {
+                Box::pin(async { load_workspace_root_policy_in_txn(txn, None, &owner_did).await })
+            })
+            .await?;
+        assert!(projected.configured);
+        assert!(projected.published.is_empty());
+        assert!(matches!(
+            projected.admit(directory.path())?,
+            RootAdmission::Denied { .. }
+        ));
+        node.shutdown().await?;
+        Ok(())
+    }
 
     #[test]
     fn nonexistent_descendant_is_retained_and_admitted() {
@@ -808,5 +1134,44 @@ mod tests {
         let d_volume = PathBuf::from(r"D:\workspace\root");
         assert!(!d_volume.starts_with(&c_volume));
         assert!(!c_volume.starts_with(&d_volume));
+    }
+
+    #[test]
+    fn configured_tool_root_must_be_covered_by_a_published_root() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let published = directory.path().join("published");
+        let other = directory.path().join("other");
+        std::fs::create_dir_all(published.join("nested"))?;
+        std::fs::create_dir_all(&other)?;
+        let policy_for = |root: &Path, ceiling: &Path| {
+            project_workspace_root_policy(
+                vec![WorkspaceRootDocument {
+                    root_path: Some(root.to_string_lossy().into_owned()),
+                    enabled: Some(true),
+                }],
+                Some(ceiling),
+            )
+        };
+        let nested = published.join("nested");
+
+        configured_root_coverage(&policy_for(&published, &published), &published)?;
+        configured_root_coverage(&policy_for(&nested, &nested), &nested)?;
+        // A broader grant does not admit a narrower ceiling at execution, so
+        // the startup check refuses the same configuration.
+        assert!(configured_root_coverage(&policy_for(&published, &nested), &nested).is_err());
+
+        let mismatch = configured_root_coverage(&policy_for(&published, &other), &other)
+            .expect_err("a configured root outside every published root must be refused");
+        let message = mismatch.to_string();
+        assert!(message.contains(&other.display().to_string()), "{message}");
+        assert!(message.contains("workspace-root set"), "{message}");
+        assert!(message.contains("start the server again"), "{message}");
+
+        let unpublished = WorkspaceRootPolicy {
+            configured: true,
+            published: Vec::new(),
+        };
+        assert!(configured_root_coverage(&unpublished, &published).is_err());
+        Ok(())
     }
 }

@@ -9,18 +9,18 @@ import { isWorkingNode, nodeDidOf } from "@/lib/nodes";
 import { NodeAvatar, nodeAvatarOf } from "./AgentAvatar";
 import { AgentHoverCard, NodeHoverCard } from "./HoverCards";
 import { AgentInitials } from "./parts";
-import { agentName } from "./behavior";
+import { agentName, isShared, nameShared, sharedNames } from "./behavior";
 
 export function NodeAgentStack({
   nodeDid,
-  agentId,
+  agentDid,
   description,
   size = "md",
   workers = [],
   keyboard = false,
 }: {
   nodeDid: string | null | undefined;
-  agentId: string | null | undefined;
+  agentDid: string | null | undefined;
   description?: string;
   size?: "sm" | "md";
   workers?: readonly SessionSummary[];
@@ -37,11 +37,11 @@ export function NodeAgentStack({
   const workerAgents = [
     ...new Map(
       workers.flatMap((w, i) =>
-        w.agentId && (w.agentId !== agentId || w.nodeDid !== nodeDid)
+        w.agentDid && (w.agentDid !== agentDid || w.nodeDid !== nodeDid)
           ? [
               [
-                JSON.stringify([w.nodeDid, w.agentId]),
-                [w.agentId, workersOn[i] ?? null] as const,
+                JSON.stringify([w.nodeDid, w.agentDid]),
+                [w.agentDid, workersOn[i] ?? null] as const,
               ] as const,
             ]
           : [],
@@ -61,6 +61,21 @@ export function NodeAgentStack({
   const agentsLeft = workerAgents.length - shownAgents.length;
   const nodesLeft = workerNodes.length - shownNodes.length;
   const leftOut = agentsLeft + nodesLeft;
+  const named = (did: string | null, on: NodeView | null) => ({
+    agentDid: did,
+    displayName: agentName(did, on),
+    onNode: nameShared(did, on),
+  });
+  const lead = named(agentDid ?? null, found);
+  const shownNamed = shownAgents.map(([, [b, on]]) => named(b, on));
+  /* agents sharing a name, in the stack or on their node, are told apart
+     by their DIDs */
+  const shared = sharedNames([lead, ...shownNamed]);
+  const mark = (a: typeof lead) => ({
+    name: a.displayName,
+    agentDid: a.agentDid,
+    shared: a.onNode || isShared(shared, a.displayName),
+  });
   const motion = "transition-[margin,box-shadow] duration-200 ease-out";
   const shifted = cn(
     "cursor-default ring-2 ring-background",
@@ -88,28 +103,25 @@ export function NodeAgentStack({
       )}
       <AgentHoverCard
         deployment={found}
-        agentId={agentId ?? null}
+        agentDid={agentDid ?? null}
         description={description}
         side={spread ? "bottom" : "right"}
       >
         {keyboard ? (
           <button
             type="button"
-            aria-label={`About ${agentName(agentId ?? null, found)} agent`}
+            aria-label={`About ${lead.displayName} agent`}
             className="grid cursor-default place-items-center rounded-full p-0 leading-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none"
           >
-            <AgentInitials
-              name={agentName(agentId ?? null, found)}
-              className={shifted}
-            />
+            <AgentInitials {...mark(lead)} className={shifted} />
           </button>
         ) : (
-          <AgentInitials name={agentName(agentId ?? null, found)} className={shifted} />
+          <AgentInitials {...mark(lead)} className={shifted} />
         )}
       </AgentHoverCard>
-      {shownAgents.map(([identity, [b, on]]) => (
-        <AgentHoverCard key={identity} deployment={on} agentId={b} side="bottom">
-          <AgentInitials name={agentName(b, on)} className={shifted} />
+      {shownAgents.map(([identity, [b, on]], i) => (
+        <AgentHoverCard key={identity} deployment={on} agentDid={b} side="bottom">
+          <AgentInitials {...mark(shownNamed[i]!)} className={shifted} />
         </AgentHoverCard>
       ))}
       {shownNodes.map((n) => (

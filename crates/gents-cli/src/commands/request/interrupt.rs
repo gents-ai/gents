@@ -61,7 +61,7 @@ pub(super) async fn request_interrupt(args: RequestInterruptArgs) -> Result<()> 
         already_terminal,
     );
     match args.output.ensure_supported(
-        "request interrupt",
+        "utils debug request interrupt",
         &[OutputFormat::Text, OutputFormat::Json],
     )? {
         OutputFormat::Json => print_json(&summary)?,
@@ -83,7 +83,7 @@ async fn fetch_interrupt_request_row(
             ) {{
                 _docID request_id
                 node_did requester_did
-                agent_id
+                agent_did
                 session_id
                 lifecycle_state
                 failure_reason
@@ -158,7 +158,7 @@ fn request_interrupt_summary(
     json!({
         "request_id": row.request_id,
         "node_did": nonempty_owned(row.node_did.as_deref()),
-        "agent_id": nonempty_owned(row.agent_id.as_deref()),
+        "agent_did": nonempty_owned(row.agent_did.as_deref()),
         "session_id": nonempty_owned(row.session_id.as_deref()),
         "lifecycle_state": lifecycle_state,
         "failure_reason": nonempty_owned(row.failure_reason.as_deref()),

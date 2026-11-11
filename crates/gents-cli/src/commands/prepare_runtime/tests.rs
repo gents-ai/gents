@@ -245,7 +245,7 @@ async fn preparation_busy_refusal_leaves_identity_store_and_saved_route_unchange
         home.to_str().unwrap(),
     ])
     .unwrap();
-    let crate::cli::Command::PrepareRuntime(args) = cli.command else {
+    let Some(crate::cli::Command::PrepareRuntime(args)) = cli.command else {
         panic!("prepare-runtime command");
     };
     let result = prepare_inner(args, crate::commands::eval::testing::test_runtime_handle()).await;
@@ -295,7 +295,7 @@ async fn changing_root_does_not_modify_a_busy_runtime() {
         root.path().to_str().unwrap(),
     ])
     .unwrap();
-    let crate::cli::Command::PrepareRuntime(args) = cli.command else {
+    let Some(crate::cli::Command::PrepareRuntime(args)) = cli.command else {
         panic!("prepare-runtime command");
     };
     let error = prepare_inner(args, crate::commands::eval::testing::test_runtime_handle())
@@ -374,7 +374,7 @@ async fn changed_root_does_not_retire_a_runtime_with_stricter_live_access() {
         root.path().to_str().unwrap(),
     ])
     .unwrap();
-    let crate::cli::Command::PrepareRuntime(args) = cli.command else {
+    let Some(crate::cli::Command::PrepareRuntime(args)) = cli.command else {
         panic!("prepare-runtime command");
     };
     let error = prepare_inner(args, crate::commands::eval::testing::test_runtime_handle())
@@ -433,7 +433,7 @@ async fn changing_root_without_the_store_key_preserves_the_initialized_home() {
         root.path().to_str().unwrap(),
     ])
     .unwrap();
-    let crate::cli::Command::PrepareRuntime(args) = cli.command else {
+    let Some(crate::cli::Command::PrepareRuntime(args)) = cli.command else {
         panic!("prepare-runtime command");
     };
     let error = prepare_inner(args, crate::commands::eval::testing::test_runtime_handle())
@@ -489,7 +489,7 @@ fn record_home(node: &ControlNode, home: &Path) -> StoredInitConfig {
             graphql: node.endpoint.to_string(),
             node_name: config.node_name.clone(),
             node_did: config.node_did.clone(),
-            default_agent_id: "fixture".into(),
+            default_agent_did: "fixture".into(),
             p2p_transport: "none".into(),
             p2p_peer_id: None,
             p2p_listen_addresses: Vec::new(),
@@ -520,7 +520,7 @@ async fn preparation_missing_store_key_refuses_before_requesting_retirement() {
         home.to_str().unwrap(),
     ])
     .unwrap();
-    let crate::cli::Command::PrepareRuntime(args) = cli.command else {
+    let Some(crate::cli::Command::PrepareRuntime(args)) = cli.command else {
         panic!("prepare-runtime command");
     };
     let error = prepare_inner(args, crate::commands::eval::testing::test_runtime_handle())

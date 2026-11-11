@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use tokio::sync::watch;
 
@@ -12,7 +12,7 @@ use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retr
 
 mod scoped;
 pub use scoped::fetch_interrupt_requested_at_scoped;
-pub(crate) use scoped::observe_interrupt_requested_at_scoped;
+pub(crate) use scoped::observe_interrupt_requested_at_with_access;
 
 /// Requests a soft interrupt by latching `interrupt_requested_at` on the
 /// AgentRequest document. Idempotent: the first latch drains automated wakes
@@ -23,40 +23,51 @@ pub(crate) use scoped::observe_interrupt_requested_at_scoped;
 /// owner. In P2P-replicated deployments independent writers may each stamp and
 /// CRDT merge picks one timestamp: audit meaning is preserved, microsecond
 /// ordering is not.
-pub async fn interrupt_request(node: &Arc<EmbeddedNode>, request_id: &str) -> Result<()> {
+///
+/// The latch runs as the request's working Agent, signed by that Agent's
+/// managed key, and selects only a request naming that Agent; a caller without
+/// the Agent's key cannot latch it as another actor.
+pub async fn interrupt_request(
+    node: &Arc<EmbeddedNode>,
+    agent: &dyn crate::store::identity::NodeIdentity,
+    request_id: &str,
+) -> Result<()> {
+    let access = crate::store::config_client::ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(agent.did())?,
+        agent,
+    )?;
     let logical = escape_graphql_string(request_id);
-    interrupt_request_matching(node, format!("request_id:{{_eq:\"{logical}\"}}"))
+    let owner = escape_graphql_string(agent.did());
+    let filter = format!("request_id:{{_eq:\"{logical}\"}},agent_did:{{_eq:\"{owner}\"}}");
+    access
+        .transact_write("interrupt.latch_request", |txn| {
+            let filter = &filter;
+            Box::pin(async move { interrupt_request_matching_in_txn(txn, filter).await })
+        })
         .await
         .map(|_| ())
 }
 
+/// Latch the exact scoped request as its working Agent. An Agent-owned request
+/// row accepts only that Agent's signed update, so the caller supplies the
+/// Agent's managed signer; without one the interrupt is refused rather than
+/// attempted as another actor.
 pub async fn interrupt_request_by_doc_id(
     node: &Arc<EmbeddedNode>,
+    signer: Option<&crate::store::identity::ManagedAgentSigner>,
     request_doc_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
 ) -> Result<()> {
-    interrupt_request_by_doc_id_returning_drained_wake_ids(
-        node,
-        request_doc_id,
-        node_did,
-        requester_did,
-    )
-    .await
-    .map(|_| ())
-}
-
-pub(crate) async fn interrupt_request_by_doc_id_returning_drained_wake_ids(
-    node: &Arc<EmbeddedNode>,
-    request_doc_id: &str,
-    node_did: &str,
-    requester_did: Option<&str>,
-) -> Result<Vec<String>> {
-    interrupt_request_matching(
-        node,
-        exact_request_filter(request_doc_id, node_did, requester_did)?,
-    )
-    .await
+    let signer =
+        signer.ok_or(crate::store::config_client::ConfigClientError::ManagedAgentSignerRequired)?;
+    let access = crate::store::config_client::ConfigAccess::local_with_agent_signer(
+        node.clone(),
+        identity::Did::new(signer.did())?,
+        signer.clone(),
+    )?;
+    interrupt_request_by_doc_id_with_access(&access, request_doc_id, node_did, requester_did).await
 }
 
 fn exact_request_filter(
@@ -127,22 +138,6 @@ pub(crate) async fn interrupt_request_by_doc_id_in_txn(
         .map(|_| ())
 }
 
-async fn interrupt_request_matching(
-    node: &std::sync::Arc<EmbeddedNode>,
-    filter: String,
-) -> Result<Vec<String>> {
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        None,
-        "interrupt.latch_request",
-        |txn| {
-            let filter = &filter;
-            Box::pin(async move { interrupt_request_matching_in_txn(txn, filter).await })
-        },
-    )
-    .await
-}
-
 async fn interrupt_request_matching_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     filter: &str,
@@ -179,8 +174,14 @@ async fn interrupt_request_matching_in_txn(
         return Ok(Vec::new());
     }
     let physical = escape_graphql_string(physical);
-    let now = escape_graphql_string(&Utc::now().to_rfc3339());
-    let result = txn.execute(&format!(r#"mutation {{update_AgentRequest(docID: "{physical}", filter: {{_docID: {{_eq: "{physical}"}}}}, input: {{interrupt_requested_at: "{now}"}}) {{_docID}}}}"#)).await?;
+    let now = Utc::now().to_rfc3339();
+    let result = txn
+        .execute_client_signed_update(
+            &format!(r#"mutation($input: AgentRequestMutationInputArg!) {{ update_AgentRequest(filter: {{_docID: {{_eq: "{physical}"}}}}, input: $input) {{_docID}} }}"#),
+            &serde_json::json!({"input": {"interrupt_requested_at": now}}),
+            gents_protocol::schemas::AGENT_REQUEST,
+        )
+        .await?;
     let updated = result["data"]["update_AgentRequest"]
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("interrupt mutation omitted affected rows"))?;
@@ -204,18 +205,25 @@ pub(crate) async fn interrupt_active_session_in_txn(
     node_did: &str,
     requester_did: Option<&str>,
 ) -> Result<Option<String>> {
-    let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
-    let response = txn
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ {scope}, purpose: {{ _eq: "normal" }},
-                lifecycle_state: {{ _in: {claimed_or_processing} }} }}, limit: 2)
-                {{ _docID request_id }} }}"#,
-            claimed_or_processing = RequestLifecycleState::graphql_list([
-                RequestLifecycleState::Claimed,
-                RequestLifecycleState::Processing
-            ])
-        ))
-        .await?;
+    let rendered = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, session_scope, Filter, Query, Selection,
+        };
+        Query::select(Selection::doc_id().field(fields::REQUEST_ID))
+            .filter(session_scope(node_did, session_id, requester_did))
+            .filter(Filter::eq(fields::PURPOSE, "normal"))
+            .filter(Filter::any_of(
+                fields::LIFECYCLE_STATE,
+                [
+                    RequestLifecycleState::Claimed,
+                    RequestLifecycleState::Processing,
+                ]
+                .map(RequestLifecycleState::as_str),
+            ))
+            .limit(2)
+            .render()
+    };
+    let response = txn.run(&rendered).await?;
     let rows = response
         .pointer("/data/AgentRequest")
         .and_then(serde_json::Value::as_array)
@@ -239,29 +247,40 @@ pub(crate) async fn interrupt_active_session_in_txn(
     Ok(Some(request_id))
 }
 
-pub(crate) async fn active_session_request(
-    node: &EmbeddedNode,
+pub(crate) async fn active_session_request_with_access(
+    access: &crate::ConfigAccess,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
 ) -> Result<Option<gents_protocol::row::AgentRequestRow>> {
-    let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
-    let response = graphql_with_transaction_retry(
-        node,
-        &format!(r#"{{AgentRequest(filter:{{{scope},purpose:{{_eq:"normal"}},lifecycle_state:{{_in:{claimed_or_processing}}}}},limit:2){{_docID request_id node_did requester_did session_id lifecycle_state}}}}"#, claimed_or_processing = RequestLifecycleState::graphql_list([RequestLifecycleState::Claimed, RequestLifecycleState::Processing])),
-        "active request lookup",
+    let query = active_session_request_query(session_id, node_did, requester_did);
+    let response = access.execute(&query).await?;
+    active_session_request_rows(&response["data"])
+}
+
+fn active_session_request_query(
+    session_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+) -> String {
+    let scope = gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
+    format!(
+        r#"{{AgentRequest(filter:{{{scope},purpose:{{_eq:"normal"}},lifecycle_state:{{_in:{claimed_or_processing}}}}},limit:2){{_docID request_id node_did requester_did session_id lifecycle_state}}}}"#,
+        claimed_or_processing = RequestLifecycleState::graphql_list([
+            RequestLifecycleState::Claimed,
+            RequestLifecycleState::Processing
+        ])
     )
-    .await?;
-    anyhow::ensure!(
-        response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("AgentRequest"))
-            .is_some(),
-        "active request query omitted rows"
-    );
-    let mut rows: Vec<gents_protocol::row::AgentRequestRow> =
-        crate::store::graphql::rows(&response, "AgentRequest")?;
+}
+
+fn active_session_request_rows(
+    data: &serde_json::Value,
+) -> Result<Option<gents_protocol::row::AgentRequestRow>> {
+    let mut rows: Vec<gents_protocol::row::AgentRequestRow> = serde_json::from_value(
+        data.get("AgentRequest")
+            .context("active request query omitted rows")?
+            .clone(),
+    )?;
     anyhow::ensure!(
         rows.len() <= 1,
         "multiple active physical requests in exact session scope"
@@ -273,39 +292,49 @@ pub async fn fetch_interrupt_requested_at_by_doc_id(
     node: &EmbeddedNode,
     request_doc_id: &str,
 ) -> Result<Option<String>> {
+    let query = physical_interrupt_query(request_doc_id)?;
+    let response =
+        graphql_with_transaction_retry(node, &query, "fetch_interrupt_requested_at_by_doc_id")
+            .await
+            .with_context(|| format!("fetch_interrupt_requested_at_by_doc_id({request_doc_id})"))?;
+    decode_physical_interrupt(response.data.as_ref())
+}
+
+pub(crate) async fn fetch_interrupt_requested_at_by_doc_id_with_access(
+    access: &crate::ConfigAccess,
+    request_doc_id: &str,
+) -> Result<Option<String>> {
+    let query = physical_interrupt_query(request_doc_id)?;
+    let response = access
+        .execute(&query)
+        .await
+        .with_context(|| format!("fetch_interrupt_requested_at_by_doc_id({request_doc_id})"))?;
+    decode_physical_interrupt(response.get("data"))
+}
+
+fn physical_interrupt_query(request_doc_id: &str) -> Result<String> {
     anyhow::ensure!(
         !request_doc_id.trim().is_empty(),
         "interrupt fetch requires a physical request document id"
     );
     let escaped = escape_graphql_string(request_doc_id);
-    let query = format!(
-        r#"query {{
-            AgentRequest(
-                filter: {{ _docID: {{ _eq: "{escaped}" }} }},
-                limit: 2
-            ) {{
-                interrupt_requested_at
-            }}
-        }}"#
-    );
-    let resp =
-        graphql_with_transaction_retry(node, &query, "fetch_interrupt_requested_at_by_doc_id")
-            .await
-            .with_context(|| format!("fetch_interrupt_requested_at_by_doc_id({request_doc_id})"))?;
-    let rows = resp
-        .data
-        .as_ref()
-        .and_then(|d| d.get("AgentRequest"))
-        .and_then(|v| v.as_array())
+    Ok(format!(
+        r#"query {{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 2) {{ interrupt_requested_at }} }}"#
+    ))
+}
+
+fn decode_physical_interrupt(data: Option<&serde_json::Value>) -> Result<Option<String>> {
+    let rows = data
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(serde_json::Value::as_array)
         .ok_or_else(|| anyhow::anyhow!("interrupt request fetch omitted rows"))?;
     anyhow::ensure!(rows.len() <= 1, "interrupt request fetch is ambiguous");
-    let value = rows
+    Ok(rows
         .first()
         .and_then(|row| row.get("interrupt_requested_at"))
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(String::from);
-    Ok(value)
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned))
 }
 
 pub async fn fetch_interrupt_requested_at(
@@ -331,6 +360,7 @@ const OBSERVER_POLL_INTERVAL: Duration = Duration::from_secs(2);
 /// aborted.
 pub fn spawn_request_interrupt_observer(
     node: Arc<EmbeddedNode>,
+    access: crate::ConfigAccess,
     request_doc_id: String,
     interrupt_tx: watch::Sender<Option<InterruptIntent>>,
     mut shutdown: watch::Receiver<bool>,
@@ -344,7 +374,7 @@ pub fn spawn_request_interrupt_observer(
         observe_request_interrupt(
             &request_doc_id,
             changes,
-            || read_interrupt_requested_at(&node, &request_doc_id),
+            || read_interrupt_requested_at(&access, &request_doc_id),
             &interrupt_tx,
             &mut shutdown,
         )
@@ -366,39 +396,17 @@ impl InterruptChangeFeed for events::DocumentChangeSubscription {
     }
 }
 
-async fn read_interrupt_requested_at(node: &EmbeddedNode, request_doc_id: &str) -> Option<String> {
-    let query = format!(
-        r#"query {{
-            AgentRequest(
-                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
-                limit: 1
-            ) {{
-                interrupt_requested_at
-            }}
-        }}"#,
-        doc_id = escape_graphql_string(request_doc_id),
-    );
-    let resp = match graphql_with_transaction_retry(node, &query, "interrupt observer query").await
-    {
-        Ok(resp) => resp,
+async fn read_interrupt_requested_at(
+    access: &crate::ConfigAccess,
+    request_doc_id: &str,
+) -> Option<String> {
+    match fetch_interrupt_requested_at_by_doc_id_with_access(access, request_doc_id).await {
+        Ok(value) => value,
         Err(error) => {
-            tracing::warn!(
-                doc_id = %request_doc_id,
-                error = %error,
-                "interrupt observer query failed; will retry"
-            );
-            return None;
+            tracing::warn!(doc_id = %request_doc_id, error = %error, "interrupt observer query failed; will retry");
+            None
         }
-    };
-    resp.data
-        .as_ref()
-        .and_then(|d| d.get("AgentRequest"))
-        .and_then(|v| v.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|row| row.get("interrupt_requested_at"))
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
+    }
 }
 
 /// The fallback tick is polled before the change feed so a feed that is

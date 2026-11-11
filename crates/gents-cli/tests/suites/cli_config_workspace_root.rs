@@ -35,6 +35,10 @@ async fn workspace_root_set_list_show_rm_round_trip() -> Result<()> {
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
+    // `gents init` publishes the home's own tool root; the assertions below
+    // concern only the roots this test sets.
+    let init_roots = enabled_root_paths(&graphql).await?;
+
     let relative_rejection = run_cli_failure_stderr(
         &home_dir,
         &[
@@ -43,6 +47,8 @@ async fn workspace_root_set_list_show_rm_round_trip() -> Result<()> {
             "set",
             "--graphql",
             &graphql,
+            "--node-did",
+            &node_did,
             "--path",
             "relative/workspace",
         ],
@@ -66,6 +72,8 @@ async fn workspace_root_set_list_show_rm_round_trip() -> Result<()> {
             "set",
             "--graphql",
             &graphql,
+            "--node-did",
+            &node_did,
             "--path",
             enabled_root_str,
             "--display-name",
@@ -89,6 +97,8 @@ async fn workspace_root_set_list_show_rm_round_trip() -> Result<()> {
             "set",
             "--graphql",
             &graphql,
+            "--node-did",
+            &node_did,
             "--path",
             disabled_root_str,
             "--display-name",
@@ -151,22 +161,14 @@ async fn workspace_root_set_list_show_rm_round_trip() -> Result<()> {
     );
     assert_eq!(show.get("enabled").and_then(Value::as_bool), Some(false));
 
-    let enabled_only = graphql_query(
-        &graphql,
-        r#"{ WorkspaceRoot(filter: { enabled: { _eq: true } }) { root_path } }"#,
-    )
-    .await?;
-    let enabled_paths = enabled_only
-        .get("data")
-        .and_then(|data| data.get("WorkspaceRoot"))
-        .and_then(Value::as_array)
-        .context("WorkspaceRoot query must return an array")?
-        .iter()
-        .filter_map(|row| row.get("root_path").and_then(Value::as_str))
+    let enabled_paths = enabled_root_paths(&graphql)
+        .await?
+        .into_iter()
+        .filter(|path| !init_roots.contains(path))
         .collect::<Vec<_>>();
     assert_eq!(
         enabled_paths,
-        vec![enabled_root_str],
+        vec![enabled_root_str.to_owned()],
         "allowed_roots' enabled-filter source must publish only the enabled root"
     );
 
@@ -178,6 +180,8 @@ async fn workspace_root_set_list_show_rm_round_trip() -> Result<()> {
             "set",
             "--graphql",
             &graphql,
+            "--node-did",
+            &node_did,
             "--path",
             disabled_root_str,
             "--display-name",
@@ -204,21 +208,13 @@ async fn workspace_root_set_list_show_rm_round_trip() -> Result<()> {
         Some("Re-enabled Root"),
         "update branch must overwrite mutable fields on the existing row"
     );
-    let both_enabled = graphql_query(
-        &graphql,
-        r#"{ WorkspaceRoot(filter: { enabled: { _eq: true } }) { root_path } }"#,
-    )
-    .await?;
-    let mut both_paths = both_enabled
-        .get("data")
-        .and_then(|data| data.get("WorkspaceRoot"))
-        .and_then(Value::as_array)
-        .context("WorkspaceRoot query must return an array")?
-        .iter()
-        .filter_map(|row| row.get("root_path").and_then(Value::as_str))
+    let mut both_paths = enabled_root_paths(&graphql)
+        .await?
+        .into_iter()
+        .filter(|path| !init_roots.contains(path))
         .collect::<Vec<_>>();
     both_paths.sort_unstable();
-    let mut expected_paths = vec![enabled_root_str, disabled_root_str];
+    let mut expected_paths = vec![enabled_root_str.to_owned(), disabled_root_str.to_owned()];
     expected_paths.sort_unstable();
     assert_eq!(
         both_paths, expected_paths,
@@ -263,9 +259,26 @@ async fn workspace_root_set_list_show_rm_round_trip() -> Result<()> {
         ],
     )?;
     assert!(
-        second_rm.contains("no WorkspaceRoot document"),
+        second_rm.contains("workspace root is unavailable"),
         "{second_rm}"
     );
 
     Ok(())
+}
+
+async fn enabled_root_paths(graphql: &str) -> Result<Vec<String>> {
+    let response = graphql_query(
+        graphql,
+        r#"{ WorkspaceRoot(filter: { enabled: { _eq: true } }) { root_path } }"#,
+    )
+    .await?;
+    Ok(response
+        .get("data")
+        .and_then(|data| data.get("WorkspaceRoot"))
+        .and_then(Value::as_array)
+        .context("WorkspaceRoot query must return an array")?
+        .iter()
+        .filter_map(|row| row.get("root_path").and_then(Value::as_str))
+        .map(str::to_owned)
+        .collect())
 }

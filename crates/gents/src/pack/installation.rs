@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::documents::PackConfig;
+use crate::plugin::authority::GrantError;
 use crate::store::config_client::{
     ConfigAccess, ConfigApplyTxn, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
@@ -14,24 +15,156 @@ use crate::store::graphql::escape_graphql_string;
 use crate::Collection;
 
 mod catalog;
+mod declared_access;
 mod dependencies;
 mod documents;
-pub(crate) use documents::sdl_paths;
+mod hosted;
+pub(crate) use documents::{prepare_document_pack_archive_with_provisioner, sdl_paths};
 mod removal;
-mod scope_preview;
 pub use catalog::{installed_catalog, InstalledCatalogEntry};
+pub use declared_access::declared_readers;
 pub use documents::{
-    apply_prepared_dependency_schemas, document_pack_schema_paths, install_documents_with_plugins,
-    install_prepared_document_graph, install_prepared_document_pack, plugin_data_unique_keys,
-    prepare_document_pack_install, PreparedDependency, PreparedDocumentPackInstall,
+    apply_hosted_document_graph, apply_prepared_dependency_schemas, assemble_document_graph_report,
+    document_pack_schema_paths, hosted_document_graph, install_prepared_document_graph,
+    install_prepared_document_pack, plugin_data_unique_keys, prepare_document_pack_archive,
+    prepare_document_pack_archive_with_runtime, prepare_document_pack_install,
+    prepare_hosted_document_pack_archive, DependencyVariableOverrides, HostedDocumentGraph,
+    HostedPackPreparation, PreparedDependency, PreparedDocumentPackInstall,
 };
+pub use hosted::{stage_hosted_pack, HostedHomePublication, HostedPackStage, HostedPackStageError};
 pub use removal::ensure_plugins_unreferenced;
-pub use scope_preview::{preview_installed_pack_scope, InstalledPackScopePreview};
 const RECORD: &str = "PackInstallation";
 const HISTORY_LIMIT: usize = 32;
 
+/// Portable description of how an operator obtained a pack archive.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PackSource {
+    Local {
+        file_name: Option<String>,
+    },
+    Installed,
+    Store,
+    Registry {
+        namespace: String,
+        name: String,
+        version: String,
+        artifact_digest: String,
+    },
+}
+
+impl PackSource {
+    /// Retain only the final path component, which is portable between nodes.
+    pub fn local(path: &Path) -> Self {
+        Self::Local {
+            file_name: path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned()),
+        }
+    }
+
+    /// A pack named by store digest came from the store; one named by path
+    /// is local.
+    pub fn of_local_name(name: &crate::pack::local::LocalName<'_>) -> Self {
+        match name {
+            crate::pack::local::LocalName::Digest(_) => Self::Store,
+            crate::pack::local::LocalName::Path(path) => Self::local(path),
+        }
+    }
+
+    /// Where the resolver found a named pack.
+    pub fn of_resolution(resolved: &crate::pack::resolve::ResolvedNamedPack) -> Self {
+        match &resolved.from {
+            crate::pack::resolve::ResolvedFrom::Installed => Self::Installed,
+            crate::pack::resolve::ResolvedFrom::Store => Self::Store,
+            crate::pack::resolve::ResolvedFrom::Registry {
+                artifact_digest,
+                version,
+            } => {
+                let manifest = resolved.archive.manifest();
+                Self::Registry {
+                    namespace: manifest.metadata.namespace.clone(),
+                    name: manifest.name.clone(),
+                    version: version.clone(),
+                    artifact_digest: artifact_digest.clone(),
+                }
+            }
+        }
+    }
+
+    /// The serialized `kind` tag, which the model-facing installer reports
+    /// as a pack's source.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Local { .. } => "local",
+            Self::Installed => "installed",
+            Self::Store => "store",
+            Self::Registry { .. } => "registry",
+        }
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if let Self::Local {
+            file_name: Some(name),
+        } = self
+        {
+            anyhow::ensure!(
+                !name.is_empty()
+                    && name.len() <= 255
+                    && !name.contains(['/', '\\'])
+                    && !name.chars().any(char::is_control)
+                    && name != "."
+                    && name != "..",
+                "invalid local pack filename"
+            );
+        }
+        if let Self::Registry {
+            namespace,
+            name,
+            version,
+            artifact_digest,
+        } = self
+        {
+            anyhow::ensure!(
+                super::is_valid_pack_name(namespace) && super::is_valid_pack_name(name),
+                "invalid registry pack coordinate"
+            );
+            anyhow::ensure!(
+                super::store::is_valid_index_version(version),
+                "invalid registry pack version"
+            );
+            anyhow::ensure!(
+                artifact_digest.len() == 64
+                    && artifact_digest.bytes().all(|b| b.is_ascii_hexdigit()),
+                "invalid registry artifact digest"
+            );
+        }
+        Ok(())
+    }
+
+    pub(crate) fn validate_for(&self, coordinate: &str, installed_version: &str) -> Result<()> {
+        self.validate()?;
+        if let Self::Registry {
+            namespace,
+            name,
+            version,
+            ..
+        } = self
+        {
+            anyhow::ensure!(
+                coordinate == format!("{namespace}/{name}") && installed_version == version,
+                "registry source does not match the installed pack"
+            );
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PackIdentity {
+    /// An authored binding plan is conditional on this installation still existing.
+    pub installation_doc_id: Option<String>,
+    pub agent_bindings: super::PackAgentBindings,
     pub coordinate: String,
     pub version: String,
     pub digest: String,
@@ -49,6 +182,8 @@ impl PackIdentity {
         plugins: Vec<InstalledPackPlugin>,
     ) -> Self {
         Self {
+            installation_doc_id: None,
+            agent_bindings: BTreeMap::new(),
             coordinate: format!("{}/{}", manifest.metadata.namespace, manifest.name),
             version: manifest.version.clone(),
             digest: digest.into(),
@@ -73,6 +208,28 @@ pub enum DriftPolicy {
     Keep,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum PackRemovalError {
+    #[error("pack-owned {collection} {id:?} is unavailable to the removing actor")]
+    OwnedDocumentUnavailable { collection: String, id: String },
+    #[error("plugin retirement requires a complete native configuration reference inventory")]
+    ReferenceInventoryUnavailable,
+}
+
+fn require_owned_document_visible(
+    collection: &str,
+    id: &str,
+    visible: bool,
+) -> std::result::Result<(), PackRemovalError> {
+    if visible {
+        return Ok(());
+    }
+    Err(PackRemovalError::OwnedDocumentUnavailable {
+        collection: collection.to_owned(),
+        id: id.to_owned(),
+    })
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct RecordedDocument {
     collection: String,
@@ -81,22 +238,99 @@ struct RecordedDocument {
     created: bool,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct Record {
+    agent_bindings: super::PackAgentBindings,
     doc_id: Option<String>,
     version: Option<String>,
     digest: Option<String>,
     documents: BTreeMap<String, RecordedDocument>,
+    /// A record written before install values were recorded reads as empty, so
+    /// every variable it renders is an unknown prior binding that a dependent
+    /// install refuses instead of guessing (Lean `resolvePackInstallVariable`).
+    variables: BTreeMap<String, Option<String>>,
     plugins: Vec<InstalledPackPlugin>,
     history: Vec<String>,
+    source: Option<PackSource>,
+    source_history: Vec<PackSourceHistory>,
     required_by: BTreeSet<String>,
     /// Missing legacy records default to explicit ownership.
     explicit: bool,
     plugin_store: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PackSourceHistory {
+    pub version: String,
+    pub digest: String,
+    pub source: Option<PackSource>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct InstalledDependencySnapshot {
+    record: Record,
+    documents: BTreeMap<(Collection, String), (String, Value)>,
+}
+
+async fn dependency_snapshot_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    owner: &str,
+    coordinate: &str,
+    digest: Option<&str>,
+) -> Result<Option<InstalledDependencySnapshot>> {
+    let record = read_record(txn, owner, coordinate).await?;
+    if record.doc_id.is_none()
+        || digest.is_some_and(|digest| record.digest.as_deref() != Some(digest))
+    {
+        return Ok(None);
+    }
+    let mut grouped: BTreeMap<Collection, Vec<&str>> = BTreeMap::new();
+    for document in record.documents.values() {
+        grouped
+            .entry(collection_named(&document.collection)?)
+            .or_default()
+            .push(&document.id);
+    }
+    let mut documents = BTreeMap::new();
+    for (collection, ids) in grouped {
+        let live = crate::store::config_client::read_desired_state_records_in_txn(
+            txn, collection, owner, &ids,
+        )
+        .await?;
+        anyhow::ensure!(
+            live.len() == ids.len(),
+            "installed dependency {coordinate} has missing configuration; reinstall it explicitly"
+        );
+        for (id, value) in live {
+            documents.insert((collection, id), value);
+        }
+    }
+    Ok(Some(InstalledDependencySnapshot { record, documents }))
+}
+
+impl InstalledDependencySnapshot {
+    fn config(&self, owner: &str) -> Result<PackConfig> {
+        let mut bundle = serde_json::Map::new();
+        bundle.insert("node".into(), json!({"node_did": owner}));
+        for ((collection, _), (_, value)) in &self.documents {
+            let field = collection
+                .dir_name()
+                .context("installed dependency cannot own a node document")?;
+            bundle
+                .entry(field.to_owned())
+                .or_insert_with(|| json!([]))
+                .as_array_mut()
+                .context("dependency configuration collection is not an array")?
+                .push(value.clone());
+        }
+        serde_json::from_value(Value::Object(bundle))
+            .context("decode installed dependency configuration")
+    }
+}
+
 #[derive(Debug, Default, Serialize)]
 pub struct InstallReport {
+    pub agents: BTreeMap<String, String>,
     #[serde(flatten)]
     pub applied: crate::store::config_client::DesiredStateApplyCounts,
     pub created: Vec<String>,
@@ -142,17 +376,33 @@ fn collection_named(name: &str) -> Result<Collection> {
 }
 
 fn is_reserved(document: &RecordedDocument) -> bool {
-    crate::runtime::agent::document_view::is_retired_reserved_id(&document.id)
+    gents_protocol::canonical::is_retired_reserved_id(&document.id)
 }
 
 async fn read_record(txn: &ConfigApplyTxn<'_>, owner: &str, coordinate: &str) -> Result<Record> {
-    let response = txn
-        .execute(&format!(
-            r#"{{ {RECORD}(filter: {{ node_did: {{ _eq: "{}" }}, coordinate: {{ _eq: "{}" }} }}, limit: 2) {{ _docID version digest documents plugins history required_by explicit plugin_store }} }}"#,
-            escape_graphql_string(owner),
-            escape_graphql_string(coordinate)
-        ))
-        .await?;
+    use gents_protocol::document_query::{
+        fields::pack_installation as fields, Filter, Query, Selection,
+    };
+    let query = Query::select(
+        Selection::doc_id()
+            .field(fields::VERSION)
+            .field(fields::DIGEST)
+            .field(fields::AGENT_BINDINGS)
+            .field(fields::DOCUMENTS)
+            .field(fields::VARIABLES)
+            .field(fields::PLUGINS)
+            .field(fields::HISTORY)
+            .field(fields::SOURCE)
+            .field(fields::SOURCE_HISTORY)
+            .field(fields::REQUIRED_BY)
+            .field(fields::EXPLICIT)
+            .field(fields::PLUGIN_STORE),
+    )
+    .filter(Filter::eq(fields::NODE_DID, owner))
+    .filter(Filter::eq(fields::COORDINATE, coordinate))
+    .limit(2)
+    .render();
+    let response = txn.run(&query).await?;
     let rows = response["data"][RECORD]
         .as_array()
         .context("reading the pack installation record")?;
@@ -167,6 +417,7 @@ async fn read_record(txn: &ConfigApplyTxn<'_>, owner: &str, coordinate: &str) ->
         decode_record_field(row, "documents", owner, coordinate)?;
     let required_by: Vec<String> = decode_record_field(row, "required_by", owner, coordinate)?;
     Ok(Record {
+        agent_bindings: decode_record_field(row, "agent_bindings", owner, coordinate)?,
         doc_id: row["_docID"].as_str().map(str::to_owned),
         version: row["version"].as_str().map(str::to_owned),
         digest: row["digest"].as_str().map(str::to_owned),
@@ -174,12 +425,30 @@ async fn read_record(txn: &ConfigApplyTxn<'_>, owner: &str, coordinate: &str) ->
             .into_iter()
             .map(|document| (key(&document.collection, &document.id), document))
             .collect(),
+        variables: decode_record_field(row, "variables", owner, coordinate)?,
         plugins: decode_record_field(row, "plugins", owner, coordinate)?,
         history: decode_record_field(row, "history", owner, coordinate)?,
+        source: decode_record_field(row, "source", owner, coordinate)?,
+        source_history: decode_record_field(row, "source_history", owner, coordinate)?,
         required_by: required_by.into_iter().collect(),
         explicit: row.get("explicit").and_then(Value::as_bool).unwrap_or(true),
         plugin_store: row["plugin_store"].as_bool().unwrap_or(false),
     })
+}
+
+pub(super) async fn read_agent_bindings(
+    access: &ConfigAccess,
+    owner: &str,
+    coordinate: &str,
+) -> Result<(Option<String>, super::PackAgentBindings)> {
+    access
+        .transact_readonly("pack.agent_bindings", |txn| {
+            Box::pin(async move {
+                let record = read_record(txn, owner, coordinate).await?;
+                Ok((record.doc_id, record.agent_bindings))
+            })
+        })
+        .await
 }
 
 fn decode_record_field<T>(row: &Value, field: &str, owner: &str, coordinate: &str) -> Result<T>
@@ -222,15 +491,57 @@ async fn live_digests<'a>(
     Ok(out)
 }
 
-fn edited_error(coordinate: &str, edited: &[String]) -> anyhow::Error {
-    anyhow::anyhow!(
-        "{} of {coordinate}'s documents were edited since it was installed: {}; \
-         use the operator CLI `gents pack install`, `gents pack update`, or `gents pack remove` with --overwrite or --keep to decide how to handle them; the agent pack command does not accept these flags",
-        edited.len(),
-        edited.join(", ")
-    )
+async fn ensure_removal_origin(
+    txn: &ConfigApplyTxn<'_>,
+    owner: &str,
+    coordinate: &str,
+    removals: &[(Collection, String, String)],
+) -> Result<()> {
+    let mut grouped: BTreeMap<Collection, BTreeSet<&str>> = BTreeMap::new();
+    for (collection, _, id) in removals {
+        grouped.entry(*collection).or_default().insert(id);
+    }
+    for (collection, ids) in grouped {
+        let ids: Vec<&str> = ids.into_iter().collect();
+        let records = crate::store::config_client::read_desired_state_records_in_txn(
+            txn, collection, owner, &ids,
+        )
+        .await?;
+        for (id, (_, live)) in records {
+            let tags = live
+                .get("tags")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .map(|tag| {
+                    tag.as_str()
+                        .map(str::to_owned)
+                        .context("live document tag must be a string")
+                })
+                .collect::<Result<Vec<_>>>()?;
+            super::provenance::ensure_origin_owned(&tags, coordinate)
+                .with_context(|| format!("cannot remove {} {id}", collection.graphql_type()))?;
+        }
+    }
+    Ok(())
 }
 
+fn select_install_source(
+    same_digest: bool,
+    prior: Option<&PackSource>,
+    proposed: Option<&PackSource>,
+) -> Option<PackSource> {
+    if same_digest && matches!(proposed, None | Some(PackSource::Installed)) {
+        prior.cloned()
+    } else {
+        proposed.cloned()
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the record, prior state, publication options, Node binding and source have distinct owners"
+)]
 async fn write_record_in_txn(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
@@ -239,7 +550,20 @@ async fn write_record_in_txn(
     documents: Vec<RecordedDocument>,
     explicit: bool,
     plugin_store: bool,
+    node_binding: Option<&crate::store::config_client::ConfigurationNodeBinding>,
+    source: Option<&PackSource>,
 ) -> Result<()> {
+    if let Some(source) = source {
+        source.validate_for(&pack.coordinate, &pack.version)?;
+    }
+    if let (Some(source), Some(version)) = (&prior.source, &prior.version) {
+        source.validate_for(&pack.coordinate, version)?;
+    }
+    for entry in &prior.source_history {
+        if let Some(source) = &entry.source {
+            source.validate_for(&pack.coordinate, &entry.version)?;
+        }
+    }
     let mut history = prior.history.clone();
     if let Some(previous) = prior
         .digest
@@ -250,22 +574,45 @@ async fn write_record_in_txn(
         history.truncate(HISTORY_LIMIT);
     }
     let required_by: Vec<&String> = prior.required_by.iter().collect();
+    let source = select_install_source(
+        prior.digest.as_deref() == Some(pack.digest.as_str()),
+        prior.source.as_ref(),
+        source,
+    );
+    let mut source_history = prior.source_history.clone();
+    if let (Some(version), Some(digest)) = (&prior.version, &prior.digest) {
+        if *version != pack.version || *digest != pack.digest || prior.source != source {
+            source_history.insert(
+                0,
+                PackSourceHistory {
+                    version: version.clone(),
+                    digest: digest.clone(),
+                    source: prior.source.clone(),
+                },
+            );
+            source_history.truncate(HISTORY_LIMIT);
+        }
+    }
     let input = json!({
         "node_did": owner,
         "coordinate": pack.coordinate,
         "version": pack.version,
         "digest": pack.digest,
+        "agent_bindings": if pack.agent_bindings.is_empty() { Value::Null } else { json!(pack.agent_bindings) },
         "documents": if documents.is_empty() { Value::Null } else { json!(documents) },
+        "variables": prior.variables,
         "plugins": if pack.plugins.is_empty() {
             Value::Null
         } else {
             json!(pack.plugins)
         },
-        "history": history,
+        "history": if history.is_empty() { Value::Null } else { json!(history) },
+        "source": source,
+        "source_history": if source_history.is_empty() { Value::Null } else { json!(source_history) },
         // A remove immediately followed by a reinstall must not regenerate
         // the just-tombstoned record's content-addressed docID (see
         // `mint_recreate_identity_timestamp`).
-        "installed_at": crate::store::config_client::mint_recreate_identity_timestamp(),
+        "installed_at": txn.pack_timestamp("pack_installation").await?,
         "required_by": if required_by.is_empty() { Value::Null } else { json!(required_by) },
         "explicit": prior.explicit || explicit,
         "plugin_store": plugin_store,
@@ -277,21 +624,23 @@ async fn write_record_in_txn(
                 object.remove("node_did");
                 object.remove("coordinate");
             }
-            txn.execute_with_variables(
+            txn.execute_client_signed_update(
                 &format!(
                     r#"mutation($input: {RECORD}MutationInputArg!) {{ update_{RECORD}(docID: "{}", input: $input) {{ _docID }} }}"#,
                     escape_graphql_string(doc_id)
                 ),
                 &json!({ "input": update }),
+                gents_protocol::schemas::PACK_INSTALLATION,
             )
             .await?
         }
         None => {
-            txn.execute_with_variables(
+            txn.execute_client_signed_create(
                 &format!(
                     "mutation($input: {RECORD}MutationInputArg!) {{ create_{RECORD}(input: $input) {{ _docID }} }}"
                 ),
                 &json!({ "input": input }),
+                gents_protocol::schemas::PACK_INSTALLATION,
             )
             .await?
         }
@@ -301,18 +650,84 @@ async fn write_record_in_txn(
         "writing the installation record failed: {}",
         mutation["errors"]
     );
+    if prior.doc_id.is_none() {
+        let doc_id = crate::store::graphql::created_doc_id(&mutation, RECORD)?;
+        let node_doc =
+            crate::store::config_client::configuration_node_doc(txn, owner, node_binding).await?;
+        txn.add_resource_relationship(RECORD, &doc_id, "parent", "nodes", &node_doc)
+            .await?;
+        crate::store::config_client::publish_node_managers_in_txn(
+            txn,
+            RECORD,
+            &doc_id,
+            "selection_manager",
+            &node_doc,
+        )
+        .await?;
+    }
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the installation record inputs a graph stage carries"
+)]
 pub(crate) async fn install_in_txn(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
     pack: &PackIdentity,
     documents: Vec<DesiredStateApplyDocument>,
     policy: DriftPolicy,
-) -> Result<InstallReport> {
-    let prior = read_record(txn, owner, &pack.coordinate).await?;
-    let mut report = InstallReport::default();
+    node_binding: Option<&crate::store::config_client::ConfigurationNodeBinding>,
+    source: Option<&PackSource>,
+    variables: Option<&BTreeMap<String, Option<String>>>,
+) -> Result<InstallReport, PackChangeError> {
+    let mut prior = read_record(txn, owner, &pack.coordinate).await?;
+    if let Some(variables) = variables {
+        prior.variables.clone_from(variables);
+    }
+    super::agent_bindings::validate_bindings(&pack.agent_bindings)?;
+    if !pack.agent_bindings.is_empty() && prior.doc_id != pack.installation_doc_id {
+        return Err(anyhow::anyhow!(
+            "pack installation changed after preparation; prepare the installation again"
+        )
+        .into());
+    }
+    for (slot, binding) in &prior.agent_bindings {
+        if pack.agent_bindings.get(slot) != Some(binding) {
+            return Err(anyhow::anyhow!(
+                "pack agent bindings changed after preparation; prepare the installation again"
+            )
+            .into());
+        }
+    }
+    for binding in pack.agent_bindings.values() {
+        if let Some(agent) = documents.iter().find(|document| {
+            document.collection == Collection::Agent
+                && document.add["agent_did"].as_str() == Some(binding.agent_did.as_str())
+        }) {
+            if agent.add["creation_nonce"].as_str() != Some(binding.creation_nonce.as_str()) {
+                return Err(anyhow::anyhow!(
+                    "pack agent creation nonce does not match its installation binding"
+                )
+                .into());
+            }
+        }
+    }
+    let mut report = InstallReport {
+        agents: pack
+            .agent_bindings
+            .iter()
+            .filter(|(_, binding)| {
+                documents.iter().any(|document| {
+                    document.collection == Collection::Agent
+                        && document.add["agent_did"].as_str() == Some(binding.agent_did.as_str())
+                })
+            })
+            .map(|(slot, binding)| (slot.clone(), binding.agent_did.clone()))
+            .collect(),
+        ..InstallReport::default()
+    };
     let mut recorded = BTreeMap::new();
     let mut edited = Vec::new();
     let mut keep = Vec::new();
@@ -416,8 +831,13 @@ pub(crate) async fn install_in_txn(
         }
     }
     if !edited.is_empty() {
-        return Err(edited_error(&pack.coordinate, &edited));
+        return Err(PackChangeError::Edited {
+            coordinate: pack.coordinate.clone(),
+            edited,
+        });
     }
+
+    ensure_removal_origin(txn, owner, &pack.coordinate, &removals).await?;
 
     let applied: Vec<_> = documents
         .into_iter()
@@ -428,11 +848,15 @@ pub(crate) async fn install_in_txn(
             !keep.contains(&key(document.collection.graphql_type(), id))
         })
         .collect();
+    let installer = txn.actor_did();
+    declared_access::ensure_admissible(&applied, &pack.agent_bindings, installer)?;
     let plan = super::provenance::prepare_pack_plan_in_txn(txn, &applied)
         .await?
         .with_removals(removals)?;
-    crate::store::config_client::validate_desired_state_plan(txn, &plan).await?;
-    report.applied = crate::store::config_client::apply_desired_state_plan(txn, &plan).await?;
+    crate::documents::validate_desired_state_plan(txn, &plan).await?;
+    report.applied =
+        crate::documents::apply_desired_state_plan_with_node_binding(txn, &plan, node_binding)
+            .await?;
     report.plugins = pack.plugins.clone();
     let written: Vec<(Collection, &str)> = recorded
         .iter()
@@ -464,6 +888,8 @@ pub(crate) async fn install_in_txn(
         recorded.into_values().collect(),
         pack.explicit,
         false,
+        node_binding,
+        source,
     )
     .await?;
     dependencies::claim_in_txn(txn, owner, &pack.coordinate, &pack.dependencies, policy).await?;
@@ -531,6 +957,67 @@ impl crate::store::config_client::TransactionFailure for PluginStoreChangeError 
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum PackChangeError {
+    #[error(
+        "{} of {coordinate}'s documents were edited since it was installed: {}; \
+         use the operator CLI `gents config pack install`, `gents config pack update`, or `gents config pack remove` with --overwrite or --keep to decide how to handle them; the agent pack command does not accept these flags",
+        .edited.len(),
+        .edited.join(", ")
+    )]
+    Edited {
+        coordinate: String,
+        edited: Vec<String>,
+    },
+    #[error(transparent)]
+    Grant(#[from] GrantError),
+    #[error(transparent)]
+    Slots(#[from] super::SlotBindingError),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
+impl PackChangeError {
+    /// Erasing through `anyhow::Error::from` would hide an access error at the
+    /// top of `Other`: a transparent variant's `source()` skips its own inner
+    /// error, so a transaction owner or classifier searching the chain could
+    /// not find it.
+    pub fn into_anyhow(self) -> anyhow::Error {
+        match self {
+            Self::Other(error) | Self::Grant(GrantError::Other(error)) => error,
+            Self::Slots(error) => error.into_anyhow(),
+            refusal => refusal.into(),
+        }
+    }
+}
+
+impl From<PackRemovalError> for PackChangeError {
+    fn from(error: PackRemovalError) -> Self {
+        Self::Other(error.into())
+    }
+}
+
+impl From<crate::store::config_client::ConfigClientError> for PackChangeError {
+    fn from(error: crate::store::config_client::ConfigClientError) -> Self {
+        Self::Other(error.into())
+    }
+}
+
+impl crate::store::config_client::TransactionFailure for PackChangeError {
+    fn config_client_error(&self) -> Option<&crate::store::config_client::ConfigClientError> {
+        match self {
+            Self::Edited { .. }
+            | Self::Grant(GrantError::Ungranted { .. })
+            | Self::Slots(super::SlotBindingError::Unbound { .. }) => None,
+            Self::Other(error)
+            | Self::Grant(GrantError::Other(error))
+            | Self::Slots(super::SlotBindingError::Other(error)) => {
+                crate::store::config_client::TransactionFailure::config_client_error(error)
+            }
+        }
+    }
+}
+
 pub async fn record_plugin_store_change(
     access: &ConfigAccess,
     owner: &str,
@@ -550,30 +1037,123 @@ pub async fn record_plugin_store_change_as(
     coordinate: &str,
     installed: Option<&PackIdentity>,
 ) -> std::result::Result<(), PluginStoreChangeError> {
-    let result = match access {
-        ConfigAccess::Local(local) => {
-            ConfigAccess::transact_local_write_with_finality(
-                local.node(),
-                identity,
-                "pack.record_plugin_store",
-                |txn| {
-                    Box::pin(async move {
-                        write_plugin_record(txn, owner, home, coordinate, installed).await
-                    })
-                },
-            )
-            .await
+    record_plugin_store_change_as_with_node_binding(
+        access, owner, identity, home, coordinate, installed, None,
+    )
+    .await
+}
+
+pub(crate) async fn record_plugin_store_change_as_with_node_binding(
+    access: &ConfigAccess,
+    owner: &str,
+    identity: Option<Did>,
+    home: &Path,
+    coordinate: &str,
+    installed: Option<&PackIdentity>,
+    node_binding: Option<&crate::store::config_client::ConfigurationNodeBinding>,
+) -> std::result::Result<(), PluginStoreChangeError> {
+    record_plugin_store_change_with_stage(
+        access,
+        owner,
+        identity,
+        home,
+        coordinate,
+        installed,
+        PluginStageContext {
+            node_binding,
+            changes: None,
+        },
+    )
+    .await
+}
+
+/// Publishes a trusted host stage inside the configuration transaction. The
+/// staging owner retains the plugin store fence until transaction finality.
+pub async fn record_staged_plugin_store_change(
+    access: &ConfigAccess,
+    owner: &str,
+    home: &Path,
+    coordinate: &str,
+    installed: Option<&PackIdentity>,
+    changes: &crate::pack::plugin_lifecycle::PluginStageChanges,
+) -> std::result::Result<(), PluginStoreChangeError> {
+    record_plugin_store_change_with_stage(
+        access,
+        owner,
+        None,
+        home,
+        coordinate,
+        installed,
+        PluginStageContext {
+            node_binding: None,
+            changes: Some(changes),
+        },
+    )
+    .await
+}
+
+pub(crate) async fn record_staged_plugin_store_change_as_with_node_binding(
+    access: &ConfigAccess,
+    owner: &str,
+    identity: Option<Did>,
+    home: &Path,
+    coordinate: &str,
+    installed: Option<&PackIdentity>,
+    stage: PluginStageContext<'_>,
+) -> std::result::Result<(), PluginStoreChangeError> {
+    record_plugin_store_change_with_stage(
+        access, owner, identity, home, coordinate, installed, stage,
+    )
+    .await
+}
+
+pub(crate) struct PluginStageContext<'a> {
+    pub(crate) node_binding: Option<&'a crate::store::config_client::ConfigurationNodeBinding>,
+    pub(crate) changes: Option<&'a crate::pack::plugin_lifecycle::PluginStageChanges>,
+}
+
+async fn record_plugin_store_change_with_stage(
+    access: &ConfigAccess,
+    owner: &str,
+    identity: Option<Did>,
+    home: &Path,
+    coordinate: &str,
+    installed: Option<&PackIdentity>,
+    stage: PluginStageContext<'_>,
+) -> std::result::Result<(), PluginStoreChangeError> {
+    let PluginStageContext {
+        node_binding,
+        changes,
+    } = stage;
+    if let Some(identity) = identity {
+        if access.actor_did().as_deref() != Some(identity.as_str()) {
+            return Err(PluginStoreChangeError::Rejected(
+                crate::store::config_client::ConfigClientError::TransactionActorMismatch.into(),
+            ));
         }
-        ConfigAccess::Graphql(_) => {
-            access
-                .transact_write_with_finality("pack.record_plugin_store", |txn| {
-                    Box::pin(async move {
-                        write_plugin_record(txn, owner, home, coordinate, installed).await
-                    })
-                })
-                .await
-        }
-    };
+    }
+    let result = access
+        .transact_write_with_finality("pack.record_plugin_store", |txn| {
+            Box::pin(async move {
+                if let Some(changes) = changes {
+                    txn.stage_plugin_delete_roots(
+                        &changes
+                            .previous
+                            .iter()
+                            .map(|plugin| plugin.projected())
+                            .collect::<Vec<_>>(),
+                        &changes
+                            .installed
+                            .iter()
+                            .map(|plugin| plugin.projected())
+                            .collect::<Vec<_>>(),
+                    )
+                    .await?;
+                }
+                write_plugin_record(txn, owner, home, coordinate, installed, node_binding).await
+            })
+        })
+        .await;
     result.map_err(|failure| classify_plugin_store_failure(failure.error, failure.unconfirmed))
 }
 
@@ -591,12 +1171,72 @@ fn classify_plugin_store_failure(
     }
 }
 
+/// Apply the reviewed plugin identity without replacing any existing pack documents.
+async fn write_installed_plugin_identity(
+    txn: &ConfigApplyTxn<'_>,
+    owner: &str,
+    pack: &PackIdentity,
+    node_binding: Option<&crate::store::config_client::ConfigurationNodeBinding>,
+    source: Option<&PackSource>,
+) -> Result<()> {
+    let prior = read_record(txn, owner, &pack.coordinate).await?;
+    anyhow::ensure!(
+        prior.doc_id == pack.installation_doc_id,
+        "pack installation changed after preparation"
+    );
+    let documents = prior.documents.values().cloned().collect();
+    if prior.doc_id.is_none() || prior.plugin_store {
+        write_record_in_txn(
+            txn,
+            owner,
+            pack,
+            &prior,
+            documents,
+            false,
+            true,
+            node_binding,
+            source,
+        )
+        .await?;
+    } else {
+        let mut plugins = prior.plugins.clone();
+        for plugin in &pack.plugins {
+            plugins.retain(|kept| kept.name != plugin.name);
+            plugins.push(plugin.clone());
+        }
+        let identity = PackIdentity {
+            installation_doc_id: prior.doc_id.clone(),
+            agent_bindings: prior.agent_bindings.clone(),
+            coordinate: pack.coordinate.clone(),
+            version: prior.version.clone().unwrap_or_default(),
+            digest: prior.digest.clone().unwrap_or_default(),
+            plugins,
+            dependencies: Vec::new(),
+            explicit: prior.explicit,
+        };
+        write_record_in_txn(
+            txn,
+            owner,
+            &identity,
+            &prior,
+            documents,
+            false,
+            prior.plugin_store,
+            node_binding,
+            None,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 async fn write_plugin_record(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
     home: &Path,
     coordinate: &str,
     installed: Option<&PackIdentity>,
+    node_binding: Option<&crate::store::config_client::ConfigurationNodeBinding>,
 ) -> std::result::Result<(), PluginStoreChangeError> {
     if let Some(pack) = installed {
         if let Some(conflict) =
@@ -606,7 +1246,12 @@ async fn write_plugin_record(
         }
     }
     let current_home = super::read_home_install(home, coordinate)?;
+    let current_source = current_home
+        .as_ref()
+        .and_then(|record| record.source.clone());
     let current_identity = current_home.map(|record| PackIdentity {
+        installation_doc_id: None,
+        agent_bindings: BTreeMap::new(),
         coordinate: record.coordinate,
         version: record.version,
         digest: record.digest,
@@ -624,16 +1269,26 @@ async fn write_plugin_record(
     let own = prior.doc_id.is_none() || prior.plugin_store;
     match installed {
         Some(pack) if own => {
-            return write_record_in_txn(txn, owner, pack, &prior, documents, false, true)
-                .await
-                .map_err(Into::into)
+            return write_record_in_txn(
+                txn,
+                owner,
+                pack,
+                &prior,
+                documents,
+                false,
+                true,
+                node_binding,
+                current_source.as_ref(),
+            )
+            .await
+            .map_err(Into::into)
         }
         None if prior.doc_id.is_none() => return Ok(()),
-        None if own && !retained => {
+        None if own && !retained && prior.plugins.is_empty() => {
             return remove_record_in_txn(txn, owner, coordinate, &prior, DriftPolicy::Refuse)
                 .await
                 .map(|_| ())
-                .map_err(Into::into);
+                .map_err(|error| error.into_anyhow().into());
         }
         _ => {}
     }
@@ -643,6 +1298,8 @@ async fn write_plugin_record(
         plugins.push(plugin.clone());
     }
     let unchanged = PackIdentity {
+        installation_doc_id: prior.doc_id.clone(),
+        agent_bindings: prior.agent_bindings.clone(),
         coordinate: coordinate.to_owned(),
         version: prior.version.clone().unwrap_or_default(),
         digest: prior.digest.clone().unwrap_or_default(),
@@ -659,6 +1316,8 @@ async fn write_plugin_record(
         documents,
         false,
         plugin_store,
+        node_binding,
+        None,
     )
     .await
     .map_err(Into::into)
@@ -674,7 +1333,7 @@ async fn remove_record_in_txn(
     coordinate: &str,
     record: &Record,
     policy: DriftPolicy,
-) -> Result<RemoveReport> {
+) -> Result<RemoveReport, PackChangeError> {
     let doc_id = record
         .doc_id
         .clone()
@@ -721,8 +1380,10 @@ async fn remove_record_in_txn(
             });
             continue;
         };
-        match live.get(&(collection, document.id.clone())).cloned() {
-            None => continue,
+        let observed = live.get(&(collection, document.id.clone())).cloned();
+        require_owned_document_visible(&document.collection, &document.id, observed.is_some())?;
+        match observed {
+            None => unreachable!("document visibility was checked"),
             Some(_) if is_reserved(document) => {}
             Some(live) if live != document.digest => match policy {
                 DriftPolicy::Refuse => {
@@ -741,19 +1402,18 @@ async fn remove_record_in_txn(
         removals.push((collection, owner.to_owned(), document.id.clone()));
     }
     if !edited.is_empty() {
-        return Err(edited_error(coordinate, &edited));
+        return Err(PackChangeError::Edited {
+            coordinate: coordinate.to_owned(),
+            edited,
+        });
     }
+    ensure_removal_origin(txn, owner, coordinate, &removals).await?;
 
     let plan = DesiredStateApplyPlan::new(Vec::new())?.with_removals(removals)?;
-    crate::store::config_client::validate_desired_state_plan(txn, &plan).await?;
-    report.documents.applied =
-        crate::store::config_client::apply_desired_state_plan(txn, &plan).await?;
+    crate::documents::validate_desired_state_plan(txn, &plan).await?;
+    report.documents.applied = crate::documents::apply_desired_state_plan(txn, &plan).await?;
 
-    txn.execute(&format!(
-        r#"mutation {{ delete_{RECORD}(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
-        escape_graphql_string(&doc_id)
-    ))
-    .await?;
+    txn.delete_configuration_document(RECORD, &doc_id).await?;
 
     Ok(report)
 }
@@ -763,28 +1423,32 @@ pub async fn remove_pack(
     owner: &str,
     coordinate: &str,
     policy: DriftPolicy,
-) -> Result<RemoveReport> {
+) -> Result<RemoveReport, PackChangeError> {
     access
         .transact_write("pack.remove", |txn| {
             Box::pin(async move {
                 let record = read_record(txn, owner, coordinate).await?;
-                anyhow::ensure!(
-                    record.doc_id.is_some(),
-                    "{coordinate} is not installed for {owner}"
-                );
-                anyhow::ensure!(
-                    !record.plugin_store,
-                    "{coordinate} is not installed as a pack for {owner}: only its plugins \
-                     are, through gents plugin install; remove them with gents plugin remove"
-                );
+                if record.doc_id.is_none() {
+                    return Err(
+                        anyhow::anyhow!("{coordinate} is not installed for {owner}").into(),
+                    );
+                }
+                if record.plugin_store {
+                    return Err(anyhow::anyhow!(
+                        "{coordinate} is not installed as a pack for {owner}: only its plugins \
+                         are, through gents config pack plugin install; remove them with gents config pack plugin remove"
+                    )
+                    .into());
+                }
                 if !record.required_by.is_empty() {
                     let dependents: Vec<&str> =
                         record.required_by.iter().map(String::as_str).collect();
-                    anyhow::bail!(
+                    return Err(anyhow::anyhow!(
                         "{coordinate} is required by {}; remove {} first",
                         dependents.join(", "),
                         if dependents.len() == 1 { "it" } else { "them" }
-                    );
+                    )
+                    .into());
                 }
                 let mut report =
                     remove_record_in_txn(txn, owner, coordinate, &record, policy).await?;
@@ -820,12 +1484,20 @@ pub async fn list_installed_packs(
     access: &ConfigAccess,
     owner: &str,
 ) -> Result<Vec<InstalledPack>> {
-    let response = access
-        .execute(&format!(
-            r#"{{ {RECORD}(filter: {{ node_did: {{ _eq: "{}" }} }}, order: {{ coordinate: ASC }}) {{ _docID coordinate version digest plugin_store }} }}"#,
-            escape_graphql_string(owner)
-        ))
-        .await?;
+    use gents_protocol::document_query::{
+        fields::pack_installation as fields, Direction, Filter, Query, Selection,
+    };
+    let query = Query::select(
+        Selection::doc_id()
+            .field(fields::COORDINATE)
+            .field(fields::VERSION)
+            .field(fields::DIGEST)
+            .field(fields::PLUGIN_STORE),
+    )
+    .filter(Filter::eq(fields::NODE_DID, owner))
+    .order_by(fields::COORDINATE, Direction::Asc)
+    .render();
+    let response = access.read(&query).await?;
     response["data"][RECORD]
         .as_array()
         .context("reading the pack installation records")?
@@ -846,13 +1518,21 @@ pub async fn read_installed_pack(
     owner: &str,
     coordinate: &str,
 ) -> Result<Option<InstalledPack>> {
-    let response = access
-        .execute(&format!(
-            r#"{{ {RECORD}(filter: {{ node_did: {{ _eq: "{}" }}, coordinate: {{ _eq: "{}" }} }}, limit: 2) {{ _docID coordinate version digest plugin_store }} }}"#,
-            escape_graphql_string(owner),
-            escape_graphql_string(coordinate)
-        ))
-        .await?;
+    use gents_protocol::document_query::{
+        fields::pack_installation as fields, Filter, Query, Selection,
+    };
+    let query = Query::select(
+        Selection::doc_id()
+            .field(fields::COORDINATE)
+            .field(fields::VERSION)
+            .field(fields::DIGEST)
+            .field(fields::PLUGIN_STORE),
+    )
+    .filter(Filter::eq(fields::NODE_DID, owner))
+    .filter(Filter::eq(fields::COORDINATE, coordinate))
+    .limit(2)
+    .render();
+    let response = access.read(&query).await?;
     let rows = response["data"][RECORD]
         .as_array()
         .context("reading the pack installation records")?;
@@ -880,13 +1560,19 @@ pub async fn installed_pack_documents(
     owner: &str,
     coordinate: &str,
 ) -> Result<Vec<(Collection, String)>> {
-    let response = access
-        .execute(&format!(
-            r#"{{ {RECORD}(filter: {{ node_did: {{ _eq: "{}" }}, coordinate: {{ _eq: "{}" }} }}, limit: 2) {{ _docID documents plugin_store }} }}"#,
-            escape_graphql_string(owner),
-            escape_graphql_string(coordinate)
-        ))
-        .await?;
+    use gents_protocol::document_query::{
+        fields::pack_installation as fields, Filter, Query, Selection,
+    };
+    let query = Query::select(
+        Selection::doc_id()
+            .field(fields::DOCUMENTS)
+            .field(fields::PLUGIN_STORE),
+    )
+    .filter(Filter::eq(fields::NODE_DID, owner))
+    .filter(Filter::eq(fields::COORDINATE, coordinate))
+    .limit(2)
+    .render();
+    let response = access.read(&query).await?;
     let rows = response["data"][RECORD]
         .as_array()
         .context("reading the pack installation record")?;
@@ -939,9 +1625,16 @@ pub async fn referenced_pack_digests(
         digests.insert(record.digest);
     }
     if let Some(access) = node {
-        let response = access
-            .execute(&format!("{{ {RECORD} {{ digest history }} }}"))
-            .await?;
+        use gents_protocol::document_query::{
+            fields::pack_installation as fields, Query, Selection,
+        };
+        let query = Query::select(
+            Selection::new()
+                .field(fields::DIGEST)
+                .field(fields::HISTORY),
+        )
+        .render();
+        let response = access.read(&query).await?;
         for row in response["data"][RECORD]
             .as_array()
             .context("reading the pack installation records")?

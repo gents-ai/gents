@@ -27,14 +27,20 @@ impl Drop for RequestLifecycle {
         ) {
             return;
         }
-        let node = self.node.clone();
+        let access = match self.access() {
+            Ok(access) => access,
+            Err(error) => {
+                tracing::warn!(%error, "cannot relinquish request without its agent DID");
+                return;
+            }
+        };
         let doc_id = self.request.doc_id.clone();
         let generation = lease.generation.as_str().to_owned();
         // Relinquishment only expires the matching generation. Recovery remains
         // the terminal owner, including when a panic or task abort drops us.
         lease.runtime.spawn(async move {
             if let Err(error) =
-                relinquish_execution_lease(&node, &doc_id, &generation, Utc::now()).await
+                relinquish_execution_lease(&access, &doc_id, &generation, Utc::now()).await
             {
                 tracing::warn!(%error, %doc_id, "could not promptly relinquish execution lease; durable expiry remains recoverable");
             }
@@ -43,29 +49,33 @@ impl Drop for RequestLifecycle {
 }
 
 async fn relinquish_execution_lease(
-    node: &Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     request_doc_id: &str,
     generation: &str,
     now: DateTime<Utc>,
 ) -> Result<()> {
-    let doc_id = escape_graphql_string(request_doc_id);
-    let generation = escape_graphql_string(generation);
-    let expired = escape_graphql_string(&(now - chrono::Duration::milliseconds(1)).to_rfc3339());
-    let now = escape_graphql_string(&now.to_rfc3339());
-    let active = RequestLifecycleState::graphql_list([
-        RequestLifecycleState::Claimed,
-        RequestLifecycleState::Processing,
-    ]);
-    crate::store::config_client::ConfigAccess::write_local(
-        node,
-        "lifecycle.relinquish_execution_lease",
-        &format!(r#"mutation {{ update_AgentRequest(
-            docID: "{doc_id}", filter: {{ _docID: {{ _eq: "{doc_id}" }}, execution_generation: {{ _eq: "{generation}" }},
-                lifecycle_state: {{ _in: {active} }}, execution_lease_expires_at: {{ _gt: "{now}" }} }},
-            input: {{ execution_lease_expires_at: "{expired}" }}
-        ) {{ _docID }} }}"#),
+    use gents_protocol::document_query::{fields::agent_request as request, Filter, Input, Update};
+    let expired = (now - chrono::Duration::milliseconds(1)).to_rfc3339();
+    let now = now.to_rfc3339();
+    let rendered = Update::doc(
+        request_doc_id,
+        Input::new().set(request::EXECUTION_LEASE_EXPIRES_AT, expired),
     )
-    .await?;
+    .filter(Filter::eq(request::DOC_ID, request_doc_id))
+    .filter(Filter::eq(request::EXECUTION_GENERATION, generation))
+    .filter(Filter::any_of(
+        request::LIFECYCLE_STATE,
+        [
+            RequestLifecycleState::Claimed,
+            RequestLifecycleState::Processing,
+        ]
+        .map(RequestLifecycleState::as_str),
+    ))
+    .filter(Filter::gt(request::EXECUTION_LEASE_EXPIRES_AT, now))
+    .render();
+    access
+        .write_rendered("lifecycle.relinquish_execution_lease", &rendered)
+        .await?;
     Ok(())
 }
 
@@ -82,14 +92,16 @@ impl ExecutionGeneration {
 #[derive(Debug, Clone)]
 pub(crate) struct RequestExecutionLease {
     pub(crate) generation: ExecutionGeneration,
-    runtime: crate::runtime::drop_cleanup::DropCleanup,
+    actor: identity::Did,
+    runtime: crate::drop_cleanup::DropCleanup,
 }
 
 impl RequestExecutionLease {
-    pub(crate) fn new(generation: String) -> Self {
+    pub(crate) fn new(generation: String, actor: identity::Did) -> Self {
         Self {
             generation: ExecutionGeneration(generation),
-            runtime: crate::runtime::drop_cleanup::DropCleanup::current(),
+            actor,
+            runtime: crate::drop_cleanup::DropCleanup::current(),
         }
     }
 }
@@ -147,11 +159,11 @@ enum TerminalAuthority<'a> {
 impl RequestExecutionLease {
     async fn decide_lease(
         &self,
-        node: &EmbeddedNode,
+        node: &std::sync::Arc<EmbeddedNode>,
         request_doc_id: &str,
         decide: fn(super::execution_policy::LeaseObservation<'_>, &str, i64) -> bool,
     ) -> Result<Option<bool>> {
-        let Some(row) = super::query::request_view(node, request_doc_id).await? else {
+        let Some(row) = super::query::request_view(node, &self.actor, request_doc_id).await? else {
             return Ok(None);
         };
         let expiry = row
@@ -175,7 +187,7 @@ impl RequestExecutionLease {
 
     pub(crate) async fn owns_execution(
         &self,
-        node: &EmbeddedNode,
+        node: &std::sync::Arc<EmbeddedNode>,
         request_doc_id: &str,
     ) -> Result<bool> {
         Ok(self
@@ -240,8 +252,8 @@ impl RequestLifecycle {
         pending_request_doc_ids: &[String],
     ) -> Result<bool> {
         let generation = self.execution_generation()?.to_owned();
-        let result = terminalize_execution_with_time(
-            &self.node,
+        let result = terminalize_execution_with_access(
+            &self.access()?,
             TerminalizeSpec {
                 request_doc_id: &self.request.doc_id,
                 authority: TerminalAuthority::Owner(&generation),
@@ -276,15 +288,20 @@ impl RequestLifecycle {
         reason: Option<&str>,
     ) -> Result<TerminalizeResult> {
         let generation = self.execution_generation()?.to_string();
-        let result = terminalize_execution(
-            &self.node,
-            &self.request.doc_id,
-            TerminalAuthority::Owner(&generation),
-            outcome,
-            Some(selection),
-            reason
-                .or(self.failure_reason.as_deref())
-                .unwrap_or_default(),
+        let result = terminalize_execution_with_access(
+            &self.access()?,
+            TerminalizeSpec {
+                request_doc_id: &self.request.doc_id,
+                authority: TerminalAuthority::Owner(&generation),
+                outcome,
+                selection: Some(selection),
+                reason: reason
+                    .or(self.failure_reason.as_deref())
+                    .unwrap_or_default(),
+                fixture_now: None,
+                fixture_fresh_generation: None,
+                pending_fence: None,
+            },
         )
         .await?;
         if matches!(
@@ -297,66 +314,92 @@ impl RequestLifecycle {
     }
 }
 
+/// Revoke without discarding already-published output. Selection is made under
+/// the same write gate as the generation CAS and uses immutable header metadata,
+/// exactly as `terminalSelectionMetadataValid`; corrupt bytes remain untouched.
 #[cfg(test)]
 pub(crate) async fn revoke_execution_generation(
-    node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     row: &AgentRequestRow,
     outcome: RequestTerminalOutcome,
     selection: TerminalOutput,
     reason: &str,
 ) -> Result<TerminalizeResult> {
-    terminalize_execution(
-        node,
-        row.doc_id.as_deref().context("missing request document")?,
-        TerminalAuthority::Revocation {
-            generation: row
-                .execution_generation
-                .as_deref()
-                .context("missing execution generation")?,
-            expiry: row
-                .execution_lease_expires_at
-                .as_deref()
-                .context("missing execution expiry")?,
+    let actor = row
+        .agent_did
+        .as_deref()
+        .context("request is missing agent DID")?;
+    anyhow::ensure!(
+        access.actor_did().as_deref() == Some(actor),
+        "revocation signer differs from request actor"
+    );
+    terminalize_execution_with_access(
+        access,
+        TerminalizeSpec {
+            request_doc_id: row.doc_id.as_deref().context("missing request document")?,
+            authority: TerminalAuthority::Revocation {
+                generation: row
+                    .execution_generation
+                    .as_deref()
+                    .context("missing execution generation")?,
+                expiry: row
+                    .execution_lease_expires_at
+                    .as_deref()
+                    .context("missing execution expiry")?,
+            },
+            outcome,
+            selection: Some(selection),
+            reason,
+            fixture_now: None,
+            fixture_fresh_generation: None,
+            pending_fence: None,
         },
-        outcome,
-        Some(selection),
-        reason,
     )
     .await
 }
 
-/// Revoke without discarding already-published output. Selection is made under
-/// the same write gate as the generation CAS and uses immutable header metadata,
-/// exactly as `terminalSelectionMetadataValid`; corrupt bytes remain untouched.
-pub(crate) async fn revoke_execution_preserving_output(
-    node: &std::sync::Arc<EmbeddedNode>,
+pub(crate) async fn revoke_execution_preserving_output_with_access(
+    access: &crate::ConfigAccess,
     row: &AgentRequestRow,
     outcome: RequestTerminalOutcome,
     reason: &str,
 ) -> Result<TerminalizeResult> {
-    terminalize_execution(
-        node,
-        row.doc_id.as_deref().context("missing request document")?,
-        TerminalAuthority::Revocation {
-            generation: row
-                .execution_generation
-                .as_deref()
-                .context("missing execution generation")?,
-            expiry: row
-                .execution_lease_expires_at
-                .as_deref()
-                .context("missing execution expiry")?,
+    let actor = row
+        .agent_did
+        .as_deref()
+        .context("request is missing agent DID")?;
+    anyhow::ensure!(
+        access.actor_did().as_deref() == Some(actor),
+        "recovery signer differs from request actor"
+    );
+    terminalize_execution_with_access(
+        access,
+        TerminalizeSpec {
+            request_doc_id: row.doc_id.as_deref().context("missing request document")?,
+            authority: TerminalAuthority::Revocation {
+                generation: row
+                    .execution_generation
+                    .as_deref()
+                    .context("missing execution generation")?,
+                expiry: row
+                    .execution_lease_expires_at
+                    .as_deref()
+                    .context("missing execution expiry")?,
+            },
+            outcome,
+            selection: None,
+            reason,
+            fixture_now: None,
+            fixture_fresh_generation: None,
+            pending_fence: None,
         },
-        outcome,
-        None,
-        reason,
     )
     .await
 }
 
 #[cfg(test)]
-pub(crate) async fn revoke_execution_preserving_output_at(
-    node: &std::sync::Arc<EmbeddedNode>,
+pub(crate) async fn revoke_execution_preserving_output_at_with_access(
+    access: &crate::ConfigAccess,
     row: &AgentRequestRow,
     outcome: RequestTerminalOutcome,
     reason: &str,
@@ -364,8 +407,8 @@ pub(crate) async fn revoke_execution_preserving_output_at(
     fresh_generation: &str,
     now: DateTime<Utc>,
 ) -> Result<TerminalizeResult> {
-    terminalize_execution_with_time(
-        node,
+    terminalize_execution_with_access(
+        access,
         TerminalizeSpec {
             request_doc_id: row.doc_id.as_deref().context("missing request document")?,
             authority: TerminalAuthority::Revocation {
@@ -386,41 +429,17 @@ pub(crate) async fn revoke_execution_preserving_output_at(
     .await
 }
 
-async fn terminalize_execution(
-    node: &std::sync::Arc<EmbeddedNode>,
-    request_doc_id: &str,
-    authority: TerminalAuthority<'_>,
-    outcome: RequestTerminalOutcome,
-    selection: Option<TerminalOutput>,
-    reason: &str,
-) -> Result<TerminalizeResult> {
-    terminalize_execution_with_time(
-        node,
-        TerminalizeSpec {
-            request_doc_id,
-            authority,
-            outcome,
-            selection,
-            reason,
-            fixture_now: None,
-            fixture_fresh_generation: None,
-            pending_fence: None,
-        },
-    )
-    .await
-}
-
 #[cfg(test)]
-pub(crate) async fn terminalize_owned_at(
-    node: &std::sync::Arc<EmbeddedNode>,
+pub(crate) async fn terminalize_owned_at_with_access(
+    access: &crate::ConfigAccess,
     request_doc_id: &str,
     generation: &str,
     outcome: RequestTerminalOutcome,
     selection: TerminalOutput,
     now: DateTime<Utc>,
 ) -> Result<TerminalizeResult> {
-    terminalize_execution_with_time(
-        node,
+    terminalize_execution_with_access(
+        access,
         TerminalizeSpec {
             request_doc_id,
             authority: TerminalAuthority::Owner(generation),
@@ -446,8 +465,8 @@ struct TerminalizeSpec<'a> {
     pending_fence: Option<(&'a [String], Option<DateTime<Utc>>)>,
 }
 
-async fn terminalize_execution_with_time(
-    node: &std::sync::Arc<EmbeddedNode>,
+async fn terminalize_execution_with_access(
+    access: &crate::ConfigAccess,
     spec: TerminalizeSpec<'_>,
 ) -> Result<TerminalizeResult> {
     let fresh_generation = spec
@@ -457,14 +476,13 @@ async fn terminalize_execution_with_time(
         });
     let fresh_generation = &fresh_generation;
     let spec = &spec;
-    crate::store::config_client::ConfigAccess::transact_local_idempotent(
-        node,
-        None,
-        crate::store::config_client::IdempotentTransactionRetry::Standard,
-        "lifecycle.terminalize_execution",
-        move |txn| Box::pin(terminalize_execution_in_txn(txn, spec, fresh_generation)),
-    )
-    .await
+    access
+        .transact_idempotent(
+            crate::store::config_client::IdempotentTransactionRetry::Standard,
+            "lifecycle.terminalize_execution",
+            move |txn| Box::pin(terminalize_execution_in_txn(txn, spec, fresh_generation)),
+        )
+        .await
 }
 
 pub(super) async fn stage_revoke_execution_preserving_output(
@@ -511,20 +529,34 @@ async fn terminalize_execution_in_txn(
     let reason = spec.reason;
     let fixture_now = spec.fixture_now;
     let pending_fence = spec.pending_fence;
-    use super::execution_policy::{
-        authorize_execution_revocation, authorize_finalize, LeaseObservation,
-    };
-    use gents_protocol::output::{MessagePublication, MessageRole};
+    use super::execution_policy::LeaseObservation;
 
     if pending_fence.is_some() {
         crate::store::graphql::fence_arrivals(txn, "AgentRequest").await?;
     }
     let doc_id = escape_graphql_string(request_doc_id);
-    let result = txn.execute_local_response(&format!(r#"{{ AgentRequest(
-                filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
-                _docID request_id purpose node_did requester_did session_id lifecycle_state
-                execution_generation execution_lease_expires_at interrupt_requested_at terminal_output
-            }} }}"#)).await?;
+    let result = {
+        use gents_protocol::document_query::{
+            fields::agent_request as request, Filter, Query, Selection,
+        };
+        let rendered = Query::select(
+            Selection::doc_id()
+                .field(request::REQUEST_ID)
+                .field(request::PURPOSE)
+                .field(request::NODE_DID)
+                .field(request::REQUESTER_DID)
+                .field(request::SESSION_ID)
+                .field(request::LIFECYCLE_STATE)
+                .field(request::EXECUTION_GENERATION)
+                .field(request::EXECUTION_LEASE_EXPIRES_AT)
+                .field(request::INTERRUPT_REQUESTED_AT)
+                .field(request::TERMINAL_OUTPUT),
+        )
+        .filter(Filter::eq(request::DOC_ID, request_doc_id))
+        .limit(1)
+        .render();
+        txn.run_local_response(&rendered).await?
+    };
     let row = crate::store::graphql::first_row::<AgentRequestRow>(&result, "AgentRequest")?
         .context("execution request disappeared")?;
     let purpose = row.purpose.context("execution request purpose missing")?;
@@ -575,28 +607,14 @@ async fn terminalize_execution_in_txn(
         generation: owner,
         deadline_ms: deadline,
     };
-    let authorized = match authority {
-        TerminalAuthority::Owner(expected) => authorize_finalize(
-            observed,
-            expected,
-            now.timestamp_millis(),
-            effective_outcome == RequestTerminalOutcome::Completed,
-        ),
-        TerminalAuthority::Revocation {
-            generation,
-            expiry: expected,
-        } => authorize_execution_revocation(
-            observed,
-            LeaseObservation {
-                generation,
-                deadline_ms: DateTime::parse_from_rfc3339(expected)?.timestamp_millis(),
-                ..observed
-            },
-            fresh_generation.as_str(),
-            effective_outcome.request_state(),
-        ),
-    };
-    if !authorized || row.terminal_output.is_some() {
+    if !authorize_terminal_transition(
+        observed,
+        authority,
+        effective_outcome,
+        now,
+        fresh_generation,
+        row.terminal_output.is_some(),
+    )? {
         return Ok(TerminalizeResult::Lost);
     }
     let agent = row.node_did.as_deref().context("missing request agent")?;
@@ -604,16 +622,7 @@ async fn terminalize_execution_in_txn(
         .session_id
         .as_deref()
         .context("missing request session")?;
-    if let Some((expected, request_deadline)) = pending_fence {
-        anyhow::ensure!(
-            request_deadline.is_none_or(|deadline| Utc::now() < deadline),
-            "request deadline expired before natural completion"
-        );
-        let actual = super::queue::pending_ids_in_txn(txn, agent, session_id).await?;
-        if actual != expected {
-            return Err(PendingQueueChanged.into());
-        }
-    }
+    validate_pending_fence(txn, agent, session_id, pending_fence).await?;
 
     let headers = session::load_request_headers_in_txn(
         txn,
@@ -636,7 +645,113 @@ async fn terminalize_execution_in_txn(
     }
     let mut reader = session::TxnCanonicalReader::new(txn, agent, row.requester_did.as_deref());
     reader.observe_headers(&headers);
-    let eligible = |header: &&session::canonical_rows::TranscriptMessageRow| {
+    let timestamp = now.to_rfc3339();
+    let site = TerminalSite {
+        request_doc_id,
+        authority,
+        outcome: effective_outcome,
+        state,
+        owner,
+        expiry,
+        reason,
+        fresh_generation,
+        auxiliary,
+        agent,
+        session_id,
+        timestamp: &timestamp,
+    };
+    let (selection, reply_preview) =
+        select_terminal_output(&mut reader, &headers, site, selection).await?;
+    if !write_terminal_request(txn, site, &doc_id, &selection).await? {
+        return Ok(TerminalizeResult::Lost);
+    }
+    write_terminal_dependents(txn, &mut reader, &row, &headers, site, &reply_preview).await?;
+    Ok(TerminalizeResult::Won)
+}
+
+#[derive(Clone, Copy)]
+struct TerminalSite<'a> {
+    request_doc_id: &'a str,
+    authority: TerminalAuthority<'a>,
+    outcome: RequestTerminalOutcome,
+    state: RequestLifecycleState,
+    owner: &'a str,
+    expiry: &'a str,
+    reason: &'a str,
+    fresh_generation: &'a ExecutionGeneration,
+    auxiliary: bool,
+    agent: &'a str,
+    session_id: &'a str,
+    timestamp: &'a str,
+}
+
+fn authorize_terminal_transition(
+    observed: super::execution_policy::LeaseObservation<'_>,
+    authority: TerminalAuthority<'_>,
+    effective_outcome: RequestTerminalOutcome,
+    now: DateTime<Utc>,
+    fresh_generation: &ExecutionGeneration,
+    has_terminal_output: bool,
+) -> Result<bool> {
+    use super::execution_policy::{
+        authorize_execution_revocation, authorize_finalize, LeaseObservation,
+    };
+    let authorized = match authority {
+        TerminalAuthority::Owner(expected) => authorize_finalize(
+            observed,
+            expected,
+            now.timestamp_millis(),
+            effective_outcome == RequestTerminalOutcome::Completed,
+        ),
+        TerminalAuthority::Revocation {
+            generation,
+            expiry: expected,
+        } => authorize_execution_revocation(
+            observed,
+            LeaseObservation {
+                generation,
+                deadline_ms: DateTime::parse_from_rfc3339(expected)?.timestamp_millis(),
+                ..observed
+            },
+            fresh_generation.as_str(),
+            effective_outcome.request_state(),
+        ),
+    };
+    Ok(authorized && !has_terminal_output)
+}
+
+async fn validate_pending_fence(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    agent: &str,
+    session_id: &str,
+    pending_fence: Option<(&[String], Option<DateTime<Utc>>)>,
+) -> Result<()> {
+    if let Some((expected, request_deadline)) = pending_fence {
+        anyhow::ensure!(
+            request_deadline.is_none_or(|deadline| Utc::now() < deadline),
+            "request deadline expired before natural completion"
+        );
+        let actual = super::queue::pending_ids_in_txn(txn, agent, session_id).await?;
+        if actual != expected {
+            return Err(PendingQueueChanged.into());
+        }
+    }
+    Ok(())
+}
+
+async fn select_terminal_output(
+    reader: &mut session::TxnCanonicalReader<'_, '_>,
+    headers: &[gents_protocol::output::rows::TranscriptMessageRow],
+    site: TerminalSite<'_>,
+    selection: &Option<TerminalOutput>,
+) -> Result<(TerminalOutput, Option<String>)> {
+    use gents_protocol::output::{MessagePublication, MessageRole};
+    let TerminalSite {
+        authority,
+        auxiliary,
+        ..
+    } = site;
+    let eligible = |header: &&gents_protocol::output::rows::TranscriptMessageRow| {
         header.message.role == MessageRole::Assistant
             && matches!(
                 header.message.publication,
@@ -715,6 +830,26 @@ async fn terminalize_execution_in_txn(
             }
         }
     }
+    Ok((selection.clone(), reply_preview))
+}
+
+async fn write_terminal_request(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    site: TerminalSite<'_>,
+    doc_id: &str,
+    selection: &TerminalOutput,
+) -> Result<bool> {
+    let TerminalSite {
+        authority,
+        outcome: effective_outcome,
+        state,
+        owner,
+        expiry,
+        reason,
+        fresh_generation,
+        timestamp,
+        ..
+    } = site;
     let terminal_generation = match authority {
         TerminalAuthority::Owner(_) => owner,
         TerminalAuthority::Revocation { .. } => fresh_generation.as_str(),
@@ -722,9 +857,7 @@ async fn terminalize_execution_in_txn(
     let generation = escape_graphql_string(owner);
     let next_generation = escape_graphql_string(terminal_generation);
     let expiry = escape_graphql_string(expiry);
-    let timestamp = now.to_rfc3339();
-    let timestamp_gql = escape_graphql_string(&timestamp);
-    let outcome_reason = reason;
+    let timestamp_gql = escape_graphql_string(timestamp);
     let reason = escape_graphql_string(reason);
     let stopped_before_running = state.certifies_stopped_before_running(
         effective_outcome.request_state(),
@@ -755,17 +888,39 @@ async fn terminalize_execution_in_txn(
         .and_then(|value| value.get("update_AgentRequest"))
         .is_some_and(response_has_documents)
     {
-        return Ok(TerminalizeResult::Lost);
+        return Ok(false);
     }
+    Ok(true)
+}
+
+async fn write_terminal_dependents(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    reader: &mut session::TxnCanonicalReader<'_, '_>,
+    row: &AgentRequestRow,
+    headers: &[gents_protocol::output::rows::TranscriptMessageRow],
+    site: TerminalSite<'_>,
+    reply_preview: &Option<String>,
+) -> Result<()> {
+    let TerminalSite {
+        request_doc_id,
+        outcome: effective_outcome,
+        owner,
+        reason: outcome_reason,
+        auxiliary,
+        agent,
+        session_id,
+        timestamp,
+        ..
+    } = site;
     if !auxiliary {
         super::terminal_tools::account_tools_in_txn(
             txn,
-            &mut reader,
-            &row,
-            &headers,
+            reader,
+            row,
+            headers,
             owner,
             effective_outcome == RequestTerminalOutcome::Completed,
-            &timestamp,
+            timestamp,
         )
         .await?;
         session::refresh_session_request_observation_in_txn(
@@ -778,7 +933,7 @@ async fn terminalize_execution_in_txn(
                 request_id: &row.request_id,
                 reply_preview: Some(reply_preview.as_deref()),
             },
-            &timestamp,
+            timestamp,
         )
         .await?;
     }
@@ -788,15 +943,15 @@ async fn terminalize_execution_in_txn(
         &row.request_id,
         effective_outcome.request_state(),
         outcome_reason,
-        &timestamp,
+        timestamp,
     )
     .await?;
-    Ok(TerminalizeResult::Won)
+    Ok(())
 }
 
 pub(super) fn validate_auxiliary_sources_decided(
     request_doc_id: &str,
-    records: &[crate::session::canonical_rows::OutputSegmentRow],
+    records: &[gents_protocol::output::rows::OutputSegmentRow],
     purpose: gents_protocol::request_admission::RequestPurpose,
 ) -> Result<()> {
     use gents_protocol::output::reconstruction::ObservedSegment;

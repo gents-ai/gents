@@ -2,13 +2,13 @@ use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde::Deserialize;
 
 use crate::documents::OutputObligationDecision;
-use crate::store::graphql::{
-    canonical_positive_count, escape_graphql_string, graphql_with_transaction_retry,
-};
+use crate::store::graphql::canonical_positive_count;
+#[cfg(test)]
+use crate::store::graphql::escape_graphql_string;
 
 use gents_loop::output_obligation::OutputObligationCheck;
 pub(crate) use gents_loop::output_obligation::UnmetOutputObligation;
@@ -35,7 +35,7 @@ fn active_for_request(
 
 #[derive(Clone)]
 pub(crate) struct OutputObligationGate {
-    node: Arc<EmbeddedNode>,
+    access: crate::ConfigAccess,
     request_doc_ids: Vec<String>,
     obligations: Vec<ActiveOutputObligation>,
 }
@@ -60,11 +60,12 @@ impl OutputObligationGate {
     #[cfg(test)]
     pub(crate) fn new(
         node: Arc<EmbeddedNode>,
+        actor: identity::Did,
         request_doc_id: impl Into<String>,
         obligations: Vec<ActiveOutputObligation>,
     ) -> Self {
         Self {
-            node,
+            access: crate::ConfigAccess::local_as(node, actor),
             request_doc_ids: vec![request_doc_id.into()],
             obligations,
         }
@@ -72,32 +73,29 @@ impl OutputObligationGate {
 
     pub(crate) async fn for_request(
         node: Arc<EmbeddedNode>,
-        request: &crate::request::watcher::AgentRequest,
+        request: &gents_protocol::row::AgentRequest,
         configured: &[(String, crate::documents::WriteToolOutputObligation)],
     ) -> Result<Option<Self>> {
         if configured.is_empty() {
             return Ok(None);
         }
+        let access = crate::ConfigAccess::local_as(node, identity::Did::new(&request.agent_did)?);
         let mut request_doc_ids = vec![request.doc_id.clone()];
         let mut triggered = request.has_automated_trigger_lineage();
         if request.caused_by_trigger_kind.as_deref() == Some(crate::goal::GOAL_TRIGGER_KIND) {
-            let query = format!(
-                r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }},
-                    session_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
-                escape_graphql_string(&request.node_did),
-                escape_graphql_string(&request.session_id),
-                crate::request::admission::SIGNED_REQUEST_FIELDS,
-            );
-            let response = graphql_with_transaction_retry(
-                &node,
-                &query,
-                "loading output obligation request ancestry",
-            )
-            .await?;
+            use gents_protocol::document_query::{
+                fields::agent_request as fields, Filter, Query, Selection,
+            };
+            let query = Query::select(Selection::owned(
+                gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
+            ))
+            .filter(Filter::eq(fields::NODE_DID, &request.node_did))
+            .filter(Filter::eq(fields::SESSION_ID, &request.session_id))
+            .render();
+            let response = access.read(&query).await?;
             let rows: Vec<gents_protocol::row::AgentRequestRow> = serde_json::from_value(
                 response
-                    .data
-                    .as_ref()
+                    .get("data")
                     .and_then(|data| data.get("AgentRequest"))
                     .cloned()
                     .context("output obligation ancestry query omitted requests")?,
@@ -108,13 +106,13 @@ impl OutputObligationGate {
                 &request.doc_id,
                 &rows,
             )?;
-            triggered = crate::request::watcher::AgentRequest::try_from(members.entry.clone())?
+            triggered = gents_protocol::row::AgentRequest::try_from(members.entry.clone())?
                 .has_automated_trigger_lineage();
             request_doc_ids = members.member_doc_ids;
         }
         let obligations = active_for_request(configured, triggered);
         Ok((!obligations.is_empty()).then_some(Self {
-            node,
+            access,
             request_doc_ids,
             obligations,
         }))
@@ -130,32 +128,31 @@ impl OutputObligationGate {
             bail!("output obligations require a physical request document id");
         }
 
-        let query = format!(
-            r#"{{
-                AgentToolCall(
-                    filter: {{
-                        request_doc_id: {{ _in: {} }},
-                        lifecycle_state: {{ _eq: "completed" }}
-                    }}
-                ) {{
-                    _docID node_did requester_did session_id request_doc_id
-                    tool_name
-                }}
-            }}"#,
-            gents_protocol::graphql::graphql_string_list_literal(&self.request_doc_ids),
-        );
-        let response =
-            graphql_with_transaction_retry(&self.node, &query, "loading completed output writes")
-                .await?;
+        use gents_protocol::document_query::{
+            fields::agent_tool_call as fields, Filter, Query, Selection,
+        };
+        let query = Query::select(
+            Selection::doc_id()
+                .field(fields::NODE_DID)
+                .field(fields::REQUESTER_DID)
+                .field(fields::SESSION_ID)
+                .field(fields::REQUEST_DOC_ID)
+                .field(fields::TOOL_NAME),
+        )
+        .filter(Filter::any_of(
+            fields::REQUEST_DOC_ID,
+            &self.request_doc_ids,
+        ))
+        .filter(Filter::eq(fields::LIFECYCLE_STATE, "completed"))
+        .render();
+        let response = self.access.read(&query).await?;
         let rows: Vec<CompletedWriteIdentity> = serde_json::from_value(
             response
-                .data
-                .as_ref()
+                .get("data")
                 .and_then(|data| data.get("AgentToolCall"))
                 .cloned()
                 .context("completed output query omitted AgentToolCall rows")?,
         )?;
-        let access = crate::store::config_client::ConfigAccess::local(self.node.clone());
         let mut requests = RapidHashMap::new();
         let mut writes = RapidHashMap::<String, Vec<CompletedWriteRow>>::new();
         let mut scoped_rows = RapidHashMap::<(String, String, Option<String>), Vec<_>>::new();
@@ -172,8 +169,8 @@ impl OutputObligationGate {
                 "completed output write lacks exact request membership"
             );
             if !requests.contains_key(&row.request_doc_id) {
-                let request = crate::request::binding::load_agent_request_by_doc_id(
-                    &self.node,
+                let request = crate::request::binding::load_agent_request_by_doc_id_with_access(
+                    &self.access,
                     &row.request_doc_id,
                 )
                 .await?
@@ -204,7 +201,7 @@ impl OutputObligationGate {
                 .into_iter()
                 .collect::<Vec<_>>();
             let calls = crate::observe::run_timeline_fetch::load_accepted_tool_calls(
-                &access,
+                &self.access,
                 &node_did,
                 &session_id,
                 requester_did.as_deref(),
@@ -324,13 +321,13 @@ fn expected_write_count(
         })?;
         let count = canonical_positive_count(
             value,
-            crate::runtime::snapshot::MAX_EVENT_TRIGGER_GROUP_DOCS,
+            crate::documents::automation::MAX_EVENT_TRIGGER_GROUP_DOCS,
         )
         .ok_or_else(|| {
             anyhow::anyhow!(
                 "completed `{}` write expected_count_field `{field}` must be a canonical positive integer <= {}",
                 obligation.tool_name,
-                crate::runtime::snapshot::MAX_EVENT_TRIGGER_GROUP_DOCS,
+                crate::documents::automation::MAX_EVENT_TRIGGER_GROUP_DOCS,
             )
         })?;
         if expected.is_some_and(|prior| prior != count) {

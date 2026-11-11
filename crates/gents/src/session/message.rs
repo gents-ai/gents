@@ -1,8 +1,4 @@
 #[cfg(test)]
-use crate::request::lifecycle::{SessionMessageCause, SessionMessageTarget};
-#[cfg(test)]
-use crate::session::origin::SessionScope;
-#[cfg(test)]
 use crate::store::config_client::ConfigAccess;
 #[cfg(test)]
 use crate::store::graphql::escape_graphql_string;
@@ -10,10 +6,10 @@ use crate::store::graphql::escape_graphql_string;
 use crate::tools::surface::AgentToolConfig;
 use anyhow::Result;
 #[cfg(test)]
-use defra_node::EmbeddedNode;
-use serde::Deserialize;
+use gents_protocol::request_lifecycle::{SessionMessageCause, SessionMessageTarget};
 #[cfg(test)]
-use std::sync::Arc;
+use gents_protocol::session::SessionScope;
+use serde::Deserialize;
 
 #[cfg(test)]
 mod agent_tools_tests;
@@ -37,14 +33,21 @@ pub(crate) use body::{load_configured_task, render_body, render_task_body};
 pub(crate) use caused::{kill, observe_caused_request, CausedObservation, KillOutcome};
 #[cfg(test)]
 pub(crate) use commit::load_receipt;
-pub(crate) use commit::{commit, stage_planned_write_in_txn, CommitError, SessionMessageReceipt};
+pub(crate) use commit::{
+    commit, stage_planned_write_in_txn, CommitError, SessionMessageCall, SessionMessageReceipt,
+    ToolCallTerminal,
+};
 pub(crate) use discovery::{agent_session_list, AgentSessionListArgs};
 pub(crate) use inspection::{agent_session_read, AgentSessionReadArgs};
-pub use interrupt::{agent_interrupt_allowed, interrupt_refusal, interrupt_session};
-#[cfg(test)]
+pub use interrupt::{
+    agent_interrupt_allowed, interrupt_refusal, interrupt_session, interrupt_session_with_access,
+};
+#[cfg(any(test, feature = "test-fixtures"))]
 pub(crate) use plan::plan;
 pub(crate) use plan::{plan_with_delivery, Plan};
-pub(crate) use target::{agent_list, load_caller_session_tools, resolve_send_target, target_scope};
+pub(crate) use target::{
+    agent_list, load_caller_session_tools, resolve_send_target, target_agent_exists, target_scope,
+};
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]

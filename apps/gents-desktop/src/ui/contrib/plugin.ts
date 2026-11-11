@@ -12,6 +12,9 @@ import { onUxEvent, type UxEventListener } from "./events";
 import { registry } from "./registry";
 import { TRANSCRIPT_DIRECTIVE_AREA, type Contribution } from "./types";
 import type { UxDeclaredContributions } from "./plugins-store";
+import type { UxNotificationKind, UxNotifyRequest } from "@/sandbox/contract";
+
+export type { UxNotificationKind, UxNotifyRequest };
 
 /** a contribution as an author writes it: provenance and id scoping are the
     host's job, so those fields are off limits */
@@ -61,12 +64,24 @@ export interface UxDataCallResult {
 }
 
 export type UxDataWatchEvent =
-  { kind: "snapshot"; value: UxDataCallResult } | { kind: "error"; message: string };
+  | { kind: "snapshot"; value: UxDataCallResult }
+  | { kind: "reconnecting"; delay_ms: number }
+  | { kind: "error"; message: string };
 
 /** the plugin a host verb acts for: its id and the name the inventory shows */
 export interface UxCaller {
   id: string;
   name: string;
+}
+
+/** the plugin a notification is from: `key` is what the person's switches
+    are kept under (the pack's listing for a pack plugin, so another pack
+    reusing the id inherits nothing), `kinds` what its module declared, and
+    `pack` the pack it shipped in, which a notification names as its sender */
+export interface UxNotifyCaller extends UxCaller {
+  key: string;
+  kinds: readonly UxNotificationKind[];
+  pack?: string;
 }
 
 /** the host's shell: `send` takes the caller, which the plugin's context
@@ -102,6 +117,9 @@ export interface UxHost {
     ) => Promise<() => void>;
   };
   os: UxOs;
+  /** raises a plugin's notification, or rejects with why not; the request
+      is the plugin's, unchecked. Absent where the app can't notify. */
+  notify?: (caller: UxNotifyCaller, request: unknown) => Promise<void>;
   /** a change of the route, the selection or the fleet: what a frame's
       mirror of the shell follows */
   onShellChange?: (listener: () => void) => () => void;
@@ -133,6 +151,9 @@ export interface UxContext {
    *  gesture (a click or a key press): never from a timer, an effect or a
    *  directive's mount. */
   send: (content: string) => Promise<void>;
+  /** a notification of one of the kinds the plugin declared; see the
+      frame's contract */
+  notify: (request: UxNotifyRequest) => Promise<void>;
   shell: UxShell;
   storage: UxStorage;
   os: UxOs;
@@ -162,6 +183,8 @@ export interface GentsUxPlugin {
   description?: string;
   /** registers on load when the user has not chosen; false ships opt-in */
   defaultEnabled?: boolean;
+  /** the kinds of notification it may raise, checked when it loaded */
+  notifications?: readonly UxNotificationKind[];
   register: (ctx: UxContext) => void | Promise<void>;
 }
 
@@ -332,6 +355,12 @@ export interface CreateContextOptions {
   listing?: string;
   /** the display name the send confirmation shows; the id when absent */
   name?: string;
+  /** what the person's notification switches for it are kept under */
+  notifier?: string;
+  /** the kinds of notification its module declared */
+  notifications?: readonly UxNotificationKind[];
+  /** the pack it shipped in (`<ns>/<pack>`); absent outside a pack */
+  pack?: string;
 }
 
 export function createUxContext(
@@ -365,6 +394,20 @@ export function createUxContext(
   const host = () => hostOrThrow();
   const caller: UxCaller = { id: pluginId, name: options.name ?? pluginId };
   const send = (content: string) => host().shell.send(content, caller);
+  const notify = (request: UxNotifyRequest) => {
+    const h = host();
+    if (!h.notify || !options.notifier)
+      return Promise.reject(new Error(`${pluginId}: ctx.notify is unavailable here`));
+    return h.notify(
+      {
+        ...caller,
+        key: options.notifier,
+        kinds: options.notifications ?? [],
+        ...(options.pack ? { pack: options.pack } : {}),
+      },
+      request,
+    );
+  };
   return {
     source,
     pluginId,
@@ -383,6 +426,7 @@ export function createUxContext(
       return h.plugin(options.listing, name, input);
     },
     send,
+    notify,
     get shell(): UxShell {
       return { ...host().shell, send };
     },

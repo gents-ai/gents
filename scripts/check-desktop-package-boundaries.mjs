@@ -496,15 +496,13 @@ if (
   JSON.stringify(syncStateMembers) !==
     JSON.stringify([
       '"healthy"',
-      '"syncing"',
-      '"offline"',
-      '"failed"',
-      '"incompatible"',
+      '"waiting"',
+      '"blocked"',
     ]) ||
   !syncProjector.includes("export function projectSyncOperationalStatus(")
 ) {
   failures.push(
-    "gents-desktop-client must own the exact five-state sync projection",
+    "gents-desktop-client must own the exact three-state sync projection",
   );
 }
 for (const sourceRoot of [

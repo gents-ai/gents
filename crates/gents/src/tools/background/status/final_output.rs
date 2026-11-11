@@ -2,7 +2,6 @@ use rapidhash::{HashMapExt, RapidHashMap};
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
 use gents_protocol::output::{
     MessagePublication, MessageRole, ReconstructionError, TerminalOutput,
 };
@@ -11,23 +10,7 @@ use gents_protocol::row::AgentRequestRow;
 
 use crate::session::TxnCanonicalReader;
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::store::graphql::graphql_string_list_literal;
 use crate::tools::call::lifecycle::CausedRequestTerminal;
-
-pub async fn load_caused_request_terminal(
-    node: &std::sync::Arc<EmbeddedNode>,
-    caused_request_doc_id: &str,
-) -> Result<Option<CausedRequestTerminal>> {
-    ConfigAccess::transact_local_readonly(node, None, "background.caused_request_terminal", |txn| {
-        Box::pin(async move {
-            let ids = [caused_request_doc_id.to_owned()];
-            Ok(caused_request_terminals_in_txn(txn, &ids)
-                .await?
-                .remove(caused_request_doc_id))
-        })
-    })
-    .await
-}
 
 pub(crate) fn select_folded_outcome(
     folded: bool,
@@ -42,53 +25,103 @@ pub(crate) fn select_folded_outcome(
 }
 
 pub(crate) async fn load_session_message_terminal(
-    node: &std::sync::Arc<EmbeddedNode>,
+    access: &ConfigAccess,
     caused_doc_id: &str,
 ) -> Result<Option<CausedRequestTerminal>> {
-    ConfigAccess::transact_local_readonly(node, None, "background.session_message_terminal", |txn| {
-        Box::pin(async move {
-            let response = txn.execute(&format!(
-                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{
-                    _docID request_id node_did requester_did session_id agent_id lifecycle_state failure_reason superseded_by_request superseded_by_request_doc_id
-                }} }}"#,
-                crate::store::graphql::escape_graphql_string(caused_doc_id),
-            )).await?;
-            let rows: Vec<AgentRequestRow> = query_rows(&response, "AgentRequest")?;
-            let Some(caused) = rows.first() else { return Ok(None); };
-            anyhow::ensure!(rows.len() == 1, "caused request physical identity is ambiguous");
-            anyhow::ensure!(
-                caused.node_did.as_deref().is_some_and(|value| !value.is_empty())
-                    && caused.session_id.as_deref().is_some_and(|value| !value.is_empty())
-                    && caused.agent_id.as_deref().is_some_and(|value| !value.is_empty()),
-                "caused request lacks its session scope"
-            );
-            let folded = caused.lifecycle_state == Some(RequestLifecycleState::Superseded)
-                && caused.failure_reason.as_deref() == Some(crate::request::lifecycle::FOLDED_REASON);
-            let mut ids = vec![caused_doc_id.to_owned()];
-            if folded {
-                let head = caused.superseded_by_request_doc_id.as_deref()
-                    .context("folded request lacks its physical head")?;
-                anyhow::ensure!(head != caused_doc_id, "folded request references itself");
-                let response = txn.execute(&format!(
-                    r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID request_id node_did requester_did session_id agent_id }} }}"#,
-                    crate::store::graphql::escape_graphql_string(head),
-                )).await?;
-                let heads: Vec<AgentRequestRow> = query_rows(&response, "AgentRequest")?;
-                if heads.is_empty() { return Ok(None); }
-                anyhow::ensure!(heads.len() == 1 && heads[0].node_did == caused.node_did
-                    && heads[0].session_id == caused.session_id
-                    && heads[0].requester_did == caused.requester_did
-                    && heads[0].agent_id == caused.agent_id
-                    && caused.superseded_by_request.as_deref() == Some(heads[0].request_id.as_str()),
-                    "folded request head is outside its session scope");
-                ids.push(head.to_owned());
-            }
-            let mut outcomes = caused_request_terminals_in_txn(txn, &ids).await?;
-            let caused_outcome = outcomes.remove(caused_doc_id);
-            let head_outcome = ids.get(1).and_then(|id| outcomes.remove(id));
-            Ok(select_folded_outcome(folded, caused_outcome, head_outcome))
+    access
+        .transact_readonly("background.session_message_terminal", |txn| {
+            Box::pin(async move {
+                use gents_protocol::document_query::{
+                    fields::agent_request as fields, Filter, Query, Selection,
+                };
+                let response = txn
+                    .run(
+                        &Query::select(
+                            Selection::doc_id()
+                                .field(fields::REQUEST_ID)
+                                .field(fields::NODE_DID)
+                                .field(fields::REQUESTER_DID)
+                                .field(fields::SESSION_ID)
+                                .field(fields::AGENT_DID)
+                                .field(fields::LIFECYCLE_STATE)
+                                .field(fields::FAILURE_REASON)
+                                .field(fields::SUPERSEDED_BY_REQUEST)
+                                .field(fields::SUPERSEDED_BY_REQUEST_DOC_ID),
+                        )
+                        .filter(Filter::eq(fields::DOC_ID, caused_doc_id))
+                        .render(),
+                    )
+                    .await?;
+                let rows: Vec<AgentRequestRow> = query_rows(&response, "AgentRequest")?;
+                let Some(caused) = rows.first() else {
+                    return Ok(None);
+                };
+                anyhow::ensure!(
+                    rows.len() == 1,
+                    "caused request physical identity is ambiguous"
+                );
+                anyhow::ensure!(
+                    caused
+                        .node_did
+                        .as_deref()
+                        .is_some_and(|value| !value.is_empty())
+                        && caused
+                            .session_id
+                            .as_deref()
+                            .is_some_and(|value| !value.is_empty())
+                        && caused
+                            .agent_did
+                            .as_deref()
+                            .is_some_and(|value| !value.is_empty()),
+                    "caused request lacks its session scope"
+                );
+                let folded = caused.lifecycle_state == Some(RequestLifecycleState::Superseded)
+                    && caused.failure_reason.as_deref()
+                        == Some(crate::request::lifecycle::FOLDED_REASON);
+                let mut ids = vec![caused_doc_id.to_owned()];
+                if folded {
+                    let head = caused
+                        .superseded_by_request_doc_id
+                        .as_deref()
+                        .context("folded request lacks its physical head")?;
+                    anyhow::ensure!(head != caused_doc_id, "folded request references itself");
+                    let response = txn
+                        .run(
+                            &Query::select(
+                                Selection::doc_id()
+                                    .field(fields::REQUEST_ID)
+                                    .field(fields::NODE_DID)
+                                    .field(fields::REQUESTER_DID)
+                                    .field(fields::SESSION_ID)
+                                    .field(fields::AGENT_DID),
+                            )
+                            .filter(Filter::eq(fields::DOC_ID, head))
+                            .render(),
+                        )
+                        .await?;
+                    let heads: Vec<AgentRequestRow> = query_rows(&response, "AgentRequest")?;
+                    if heads.is_empty() {
+                        return Ok(None);
+                    }
+                    anyhow::ensure!(
+                        heads.len() == 1
+                            && heads[0].node_did == caused.node_did
+                            && heads[0].session_id == caused.session_id
+                            && heads[0].requester_did == caused.requester_did
+                            && heads[0].agent_did == caused.agent_did
+                            && caused.superseded_by_request.as_deref()
+                                == Some(heads[0].request_id.as_str()),
+                        "folded request head is outside its session scope"
+                    );
+                    ids.push(head.to_owned());
+                }
+                let mut outcomes = caused_request_terminals_in_txn(txn, &ids).await?;
+                let caused_outcome = outcomes.remove(caused_doc_id);
+                let head_outcome = ids.get(1).and_then(|id| outcomes.remove(id));
+                Ok(select_folded_outcome(folded, caused_outcome, head_outcome))
+            })
         })
-    }).await
+        .await
 }
 
 /// The durable terminals of many caused requests: one request query and one
@@ -123,16 +156,28 @@ pub(crate) async fn caused_request_terminals_in_txn(
     txn: &ConfigApplyTxn<'_>,
     caused_request_doc_ids: &[String],
 ) -> Result<RapidHashMap<String, CausedRequestTerminal>> {
-    let list = graphql_string_list_literal(caused_request_doc_ids.iter().map(String::as_str));
+    use gents_protocol::document_query::{
+        fields::{agent_message as messages, agent_request as fields},
+        Filter, Query, Selection,
+    };
     let response = txn
-        .execute(&format!(
-            r#"{{
-        AgentRequest(filter: {{ _docID: {{ _in: {list} }} }}) {{
-            _docID request_id node_did requester_did session_id lifecycle_state
-            failure_reason terminal_output
-        }}
-    }}"#
-        ))
+        .run(
+            &Query::select(
+                Selection::doc_id()
+                    .field(fields::REQUEST_ID)
+                    .field(fields::NODE_DID)
+                    .field(fields::REQUESTER_DID)
+                    .field(fields::SESSION_ID)
+                    .field(fields::LIFECYCLE_STATE)
+                    .field(fields::FAILURE_REASON)
+                    .field(fields::TERMINAL_OUTPUT),
+            )
+            .filter(Filter::any_of(
+                fields::DOC_ID,
+                caused_request_doc_ids.iter().map(String::as_str),
+            ))
+            .render(),
+        )
         .await?;
     let rows: Vec<AgentRequestRow> = query_rows(&response, "AgentRequest")?;
     let mut terminals = RapidHashMap::new();
@@ -176,11 +221,15 @@ pub(crate) async fn caused_request_terminals_in_txn(
     if pending.is_empty() {
         return Ok(terminals);
     }
-    let header_list = graphql_string_list_literal(pending.iter().map(|(_, _, header)| *header));
     let available = txn
-        .execute(&format!(
-            r#"{{ AgentMessage(filter: {{ _docID: {{ _in: {header_list} }} }}) {{ _docID }} }}"#
-        ))
+        .run(
+            &Query::select(Selection::doc_id())
+                .filter(Filter::any_of(
+                    messages::DOC_ID,
+                    pending.iter().map(|(_, _, header)| *header),
+                ))
+                .render(),
+        )
         .await?;
     let mut headers: RapidHashMap<String, usize> = RapidHashMap::new();
     for fact in query_rows::<serde_json::Value>(&available, "AgentMessage")? {

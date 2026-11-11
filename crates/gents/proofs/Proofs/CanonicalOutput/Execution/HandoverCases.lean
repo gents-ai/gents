@@ -42,7 +42,7 @@ def claimedNext : Option World := do
 
 def followingEntry (requestId : RequestId) (createdAt : Time) : SessionQueue.QueueEntry :=
   { requestId, createdAt, source := .user, policy := .append
-  , queueKey := none, queuedAfter := some 10 }
+  , queueKey := none, queuedAfter := some 10, delivery := .steer }
 
 structure FoldClaimCase where
   name : String

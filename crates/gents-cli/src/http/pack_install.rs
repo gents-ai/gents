@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use axum::{
     body::Bytes,
     extract::{rejection::BytesRejection, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -18,6 +18,8 @@ use super::router::RuntimeHttpState;
 use crate::cli::output_format::OutputFormat;
 use crate::cli::{PackDriftArgs, PackInstallArgs, ScopeArgs};
 use crate::commands::pack::PackSource;
+
+pub(crate) mod session;
 
 const PATH: &str = "/packs/install";
 /// The root and its dependencies share one pack's compressed bound, so a
@@ -67,7 +69,10 @@ struct InstallRequest {
     node_did: String,
     root: Archive,
     dependencies: Vec<Archive>,
+    root_source: gents::pack::PackSource,
+    dependency_sources: Vec<gents::pack::PackSource>,
     inference_slots: Vec<String>,
+    dependency_variables: Vec<String>,
     overwrite: bool,
     keep: bool,
     preview: bool,
@@ -136,38 +141,7 @@ pub(crate) async fn install_remote(
         .strip_suffix("/api/v0/graphql")
         .context("remote pack install requires a Gents runtime GraphQL endpoint")?;
     url.set_path(&format!("{prefix}{PATH}"));
-    let root = pack.shared_archive();
-    let dependencies = dependencies
-        .iter()
-        .map(PackSource::shared_archive)
-        .collect::<Vec<_>>();
-    let node_did = owner.to_owned();
-    let inference_slots = args.inference_slots.clone();
-    let wire = args.wire.clone();
-    let (overwrite, keep, preview, force_rebind, grant_authority) = (
-        args.drift.overwrite,
-        args.drift.keep,
-        args.preview,
-        args.force_rebind_concrete_did,
-        args.grant_authority,
-    );
-    let body = tokio::task::spawn_blocking(move || {
-        encode_request(&root, &dependencies, |root, dependencies| InstallRequest {
-            node_did,
-            root,
-            dependencies,
-            inference_slots,
-            overwrite,
-            keep,
-            preview,
-            force_rebind,
-            grant_authority,
-            explicit,
-            wire,
-        })
-    })
-    .await
-    .context("packing remote document archives")??;
+    let body = encode_install_request(pack, dependencies, args, owner, explicit).await?;
     let client = tokio::task::spawn_blocking(|| {
         reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
@@ -176,8 +150,7 @@ pub(crate) async fn install_remote(
     .await??;
     let response = endpoint
         .authorize(client.post(url))?
-        .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .body(body)
+        .json(&body)
         .send()
         .await
         .context(
@@ -196,6 +169,57 @@ pub(crate) async fn install_remote(
         .context("remote pack install response was unreadable; inspect the runtime before retrying")
 }
 
+pub(crate) async fn encode_install_request(
+    pack: &PackSource,
+    dependencies: &[PackSource],
+    args: &PackInstallArgs,
+    owner: &str,
+    explicit: bool,
+) -> Result<serde_json::Value> {
+    let root = pack.shared_archive();
+    let root_source = pack.provenance();
+    let dependency_sources = dependencies
+        .iter()
+        .map(|source| source.provenance())
+        .collect();
+    let dependencies = dependencies
+        .iter()
+        .map(PackSource::shared_archive)
+        .collect::<Vec<_>>();
+    let node_did = owner.to_owned();
+    let inference_slots = args.inference_slots.clone();
+    let dependency_variables = args.dependency_variables.clone();
+    let wire = args.wire.clone();
+    let (overwrite, keep, preview, force_rebind, grant_authority) = (
+        args.drift.overwrite,
+        args.drift.keep,
+        args.preview,
+        args.force_rebind_concrete_did,
+        args.grant_authority,
+    );
+    tokio::task::spawn_blocking(move || {
+        let body = encode_request(&root, &dependencies, |root, dependencies| InstallRequest {
+            node_did,
+            root,
+            dependencies,
+            root_source,
+            dependency_sources,
+            inference_slots,
+            dependency_variables,
+            overwrite,
+            keep,
+            preview,
+            force_rebind,
+            grant_authority,
+            explicit,
+            wire,
+        })?;
+        Ok::<_, anyhow::Error>(serde_json::from_slice(&body)?)
+    })
+    .await
+    .context("packing remote document archives")?
+}
+
 fn refused(status: StatusCode, error: impl std::fmt::Display) -> Response {
     (
         status,
@@ -206,17 +230,26 @@ fn refused(status: StatusCode, error: impl std::fmt::Display) -> Response {
 
 pub(crate) async fn install_handler(
     State(state): State<RuntimeHttpState>,
+    identity: defra_http::ExtractIdentity,
+    headers: HeaderMap,
     body: Result<Bytes, BytesRejection>,
 ) -> Response {
+    let Some(actor) = identity.did().cloned() else {
+        return refused(
+            StatusCode::UNAUTHORIZED,
+            "Client authentication is required.",
+        );
+    };
     let Some(home) = state.home.clone() else {
         return refused(
             StatusCode::SERVICE_UNAVAILABLE,
             "runtime plugin store unavailable",
         );
     };
-    if state.activation_runtime.get().is_none() {
-        return refused(StatusCode::SERVICE_UNAVAILABLE, "runtime is not active");
-    }
+    let access = match delegated_install_access(&state, &headers, actor) {
+        Ok(access) => access,
+        Err(error) => return refused(StatusCode::UNAUTHORIZED, error),
+    };
     let body = match body {
         Ok(body) => body,
         Err(rejection) if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE => {
@@ -237,10 +270,18 @@ pub(crate) async fn install_handler(
         Ok(Err(error)) => return refused(StatusCode::BAD_REQUEST, error),
         Err(error) => return refused(StatusCode::INTERNAL_SERVER_ERROR, error),
     };
+    if received.root.manifest().metadata.kind != PackKind::Documents {
+        return refused(
+            StatusCode::BAD_REQUEST,
+            "plugin packs require the reviewed install session",
+        );
+    }
     // Detached so a dropped client cannot cancel an install mid-commit.
     let result =
-        tokio::spawn(async move { install_owned(state, PathBuf::from(home), received).await })
-            .await;
+        tokio::spawn(
+            async move { install_owned(state, PathBuf::from(home), received, access).await },
+        )
+        .await;
     match result {
         Ok(Ok(value)) => Json(value).into_response(),
         Ok(Err(error)) => (
@@ -259,6 +300,16 @@ pub(crate) async fn install_handler(
     }
 }
 
+fn delegated_install_access(
+    state: &RuntimeHttpState,
+    headers: &HeaderMap,
+    actor: identity::Did,
+) -> Result<gents::store::config_client::ConfigAccess> {
+    Ok(gents::store::config_client::ConfigAccess::Graphql(
+        crate::http::private_reader::caller_endpoint(state, headers, actor)?,
+    ))
+}
+
 struct Received {
     root: PackSource,
     dependencies: Vec<PackSource>,
@@ -266,8 +317,12 @@ struct Received {
 }
 
 fn decode_request(body: &[u8], node_did: &str) -> Result<Received> {
-    let mut request: InstallRequest =
+    let request: InstallRequest =
         serde_json::from_slice(body).context("decoding pack install request")?;
+    decode_install_request(request, node_did)
+}
+
+fn decode_install_request(mut request: InstallRequest, node_did: &str) -> Result<Received> {
     anyhow::ensure!(
         request.node_did == node_did,
         "endpoint serves a different node"
@@ -284,17 +339,28 @@ fn decode_request(body: &[u8], node_did: &str) -> Result<Received> {
                 .map(|archive| archive.0.len())
                 .sum::<usize>(),
     )?;
-    let open = |archive: Archive| -> Result<PackSource> {
-        Ok(PackSource::received(PackArchive::from_bytes(&archive.0)?))
+    anyhow::ensure!(
+        request.dependency_sources.len() == request.dependencies.len(),
+        "dependency source count does not match archives"
+    );
+    let open = |archive: Archive, source| -> Result<PackSource> {
+        PackSource::received(PackArchive::from_bytes(&archive.0)?, source)
     };
-    let root = open(std::mem::replace(&mut request.root, Archive(Vec::new())))?;
+    let root = open(
+        std::mem::replace(&mut request.root, Archive(Vec::new())),
+        request.root_source.clone(),
+    )?;
     let dependencies = std::mem::take(&mut request.dependencies)
         .into_iter()
-        .map(open)
+        .zip(std::mem::take(&mut request.dependency_sources))
+        .map(|(archive, source)| open(archive, source))
         .collect::<Result<Vec<_>>>()?;
     anyhow::ensure!(
-        root.manifest().metadata.kind == PackKind::Documents,
-        "remote pack install accepts a documents pack root"
+        matches!(
+            root.manifest().metadata.kind,
+            PackKind::Documents | PackKind::Plugins | PackKind::Assets
+        ),
+        "unsupported remote pack root"
     );
     ensure_exact_closure(&root, &dependencies)?;
     Ok(Received {
@@ -339,6 +405,7 @@ async fn install_owned(
     state: RuntimeHttpState,
     home: PathBuf,
     received: Received,
+    access: gents::store::config_client::ConfigAccess,
 ) -> Result<serde_json::Value> {
     let Received {
         root,
@@ -348,6 +415,7 @@ async fn install_owned(
     let args = PackInstallArgs {
         package: root.manifest().name.clone(),
         inference_slots: request.inference_slots,
+        dependency_variables: request.dependency_variables,
         preview: request.preview,
         scope: ScopeArgs {
             home: Some(home.clone()),
@@ -366,7 +434,6 @@ async fn install_owned(
         expect_digest: None,
         explicit: request.explicit,
     };
-    let access = gents::store::config_client::ConfigAccess::Graphql(state.p2p_graphql.clone());
     let mut result = crate::commands::pack::install_documents_pack_resolved(
         &access,
         &state.node_did,
@@ -375,7 +442,8 @@ async fn install_owned(
         args.explicit,
         dependencies,
     )
-    .await?;
+    .await
+    .map_err(gents::pack::PackChangeError::into_anyhow)?;
     if !args.wire.is_empty() && !args.preview {
         result["wired"] = crate::commands::pack::wire_pack_plugins(
             &access,

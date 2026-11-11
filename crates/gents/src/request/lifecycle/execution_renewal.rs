@@ -3,11 +3,11 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::row::AgentRequestRow;
 
 use super::execution_policy::{authorize_renewal, is_live, renewable_lifecycle, LeaseObservation};
-use crate::store::graphql::{escape_graphql_string, response_has_documents};
+use crate::store::graphql::response_has_documents;
 
 pub(super) struct RenewalTask {
     task: tokio::task::JoinHandle<()>,
@@ -23,6 +23,8 @@ impl Drop for RenewalTask {
 impl RenewalTask {
     pub(super) fn start(
         node: Arc<EmbeddedNode>,
+        actor: identity::Did,
+        signer: Option<crate::store::identity::ManagedAgentSigner>,
         request_doc_id: String,
         generation: String,
         duration_ms: u64,
@@ -46,7 +48,14 @@ impl RenewalTask {
                     );
                 }
                 let started = std::time::Instant::now();
-                let outcome = renew_once(&node, &request_doc_id, &generation).await;
+                let outcome = renew_once(
+                    &node,
+                    actor.clone(),
+                    signer.clone(),
+                    &request_doc_id,
+                    &generation,
+                )
+                .await;
                 let elapsed = started.elapsed();
                 if elapsed >= poll_interval {
                     tracing::warn!(
@@ -89,25 +98,42 @@ pub(crate) enum RenewalAttemptOutcome {
 
 async fn renew_once(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor: identity::Did,
+    signer: Option<crate::store::identity::ManagedAgentSigner>,
     request_doc_id: &str,
     generation: &str,
 ) -> Result<bool> {
     Ok(!matches!(
-        renew_once_with_time(node, request_doc_id, generation, None, None).await?,
+        renew_once_with_time(
+            node,
+            Some(actor),
+            signer,
+            request_doc_id,
+            generation,
+            None,
+            None
+        )
+        .await?,
         RenewalAttemptOutcome::Lost
     ))
 }
 
 #[cfg(test)]
-pub(crate) async fn renew_once_at(
-    node: &std::sync::Arc<EmbeddedNode>,
+pub(crate) async fn renew_once_at_with_access(
+    access: &crate::ConfigAccess,
     request_doc_id: &str,
     generation: &str,
     expected_deadline: DateTime<Utc>,
     now: DateTime<Utc>,
 ) -> Result<RenewalAttemptOutcome> {
+    let node = access
+        .local_node()
+        .context("fixture requires local access")?;
+    let actor = identity::Did::new(access.actor_did().context("missing fixture actor")?)?;
     renew_once_with_time(
         node,
+        Some(actor),
+        access.managed_agent_signer(),
         request_doc_id,
         generation,
         Some(expected_deadline),
@@ -123,7 +149,7 @@ tokio::task_local! {
 
 #[cfg(test)]
 pub(crate) async fn renew_with_recheck_at(
-    node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     request_doc_id: &str,
     generation: &str,
     expected_deadline: DateTime<Utc>,
@@ -133,8 +159,8 @@ pub(crate) async fn renew_with_recheck_at(
     RENEWAL_RECHECK_TIME
         .scope(
             recheck,
-            renew_once_at(
-                node,
+            renew_once_at_with_access(
+                access,
                 request_doc_id,
                 generation,
                 expected_deadline,
@@ -152,26 +178,54 @@ fn renewal_recheck_time(fixture_now: Option<DateTime<Utc>>) -> DateTime<Utc> {
     fixture_now.unwrap_or_else(Utc::now)
 }
 
+/// One due poll. Every admission and background dispatch start writes the
+/// request document, and DefraDB aborts a renewal when any write of that
+/// document commits first, so a burst of sibling admissions can exhaust a
+/// poll's attempts. After the poll that renewed it a lease period has one
+/// due poll with margin (the next lands at the deadline), so an exhausted
+/// poll is re-driven at once rather than at the next poll. Each re-drive
+/// rereads the request and ends as `Lost` once the lease is no longer live,
+/// so it never outlasts the lease (`tla/BackgroundAdmissionContention`,
+/// `RedriveLostPoll`).
 async fn renew_once_with_time(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor: Option<identity::Did>,
+    signer: Option<crate::store::identity::ManagedAgentSigner>,
     request_doc_id: &str,
     generation: &str,
     expected_deadline: Option<DateTime<Utc>>,
     fixture_now: Option<DateTime<Utc>>,
 ) -> Result<RenewalAttemptOutcome> {
-    match crate::store::config_client::ConfigAccess::renew_execution_lease(node, move |txn| {
-        Box::pin(renew_in_transaction(
-            txn,
-            request_doc_id,
-            generation,
-            expected_deadline,
-            fixture_now,
-        ))
-    })
-    .await
-    {
-        Err(error) if error.is::<RenewalAdmissionExpired>() => Ok(RenewalAttemptOutcome::Lost),
-        result => result,
+    loop {
+        match crate::store::config_client::ConfigAccess::renew_execution_lease_with_signer(
+            node,
+            actor.clone(),
+            signer.clone(),
+            move |txn| {
+                Box::pin(renew_in_transaction(
+                    txn,
+                    request_doc_id,
+                    generation,
+                    expected_deadline,
+                    fixture_now,
+                ))
+            },
+        )
+        .await
+        {
+            Err(error) if error.is::<RenewalAdmissionExpired>() => {
+                return Ok(RenewalAttemptOutcome::Lost)
+            }
+            Err(error)
+                if crate::store::config_client::is_classified_transaction_conflict(&error) =>
+            {
+                tracing::warn!(
+                    %error, %request_doc_id, %generation,
+                    "execution lease renewal poll lost every attempt to concurrent request writes; re-driving"
+                );
+            }
+            result => return result,
+        }
     }
 }
 
@@ -186,11 +240,22 @@ pub(crate) async fn renew_in_transaction(
     expected_deadline: Option<DateTime<Utc>>,
     fixture_now: Option<DateTime<Utc>>,
 ) -> Result<RenewalAttemptOutcome> {
+    use gents_protocol::document_query::{
+        fields::agent_request as fields, Filter, Input, Query, Selection, Update,
+    };
     let started = std::time::Instant::now();
-    let doc_id = escape_graphql_string(request_doc_id);
-    let result = txn.execute_local_response(&format!(r#"{{ AgentRequest(
-                filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1
-            ) {{ request_id lifecycle_state execution_generation execution_lease_expires_at execution_lease_secs }} }}"#)).await?;
+    let rendered = Query::select(
+        Selection::new()
+            .field(fields::REQUEST_ID)
+            .field(fields::LIFECYCLE_STATE)
+            .field(fields::EXECUTION_GENERATION)
+            .field(fields::EXECUTION_LEASE_EXPIRES_AT)
+            .field(fields::EXECUTION_LEASE_SECS),
+    )
+    .filter(Filter::eq(fields::DOC_ID, request_doc_id))
+    .limit(1)
+    .render();
+    let result = txn.run_local_response(&rendered).await?;
     let snapshot_read_ms = started.elapsed().as_millis() as u64;
     let Some(row) = crate::store::graphql::first_row::<AgentRequestRow>(&result, "AgentRequest")?
     else {
@@ -240,15 +305,19 @@ pub(crate) async fn renew_in_transaction(
         return Ok(RenewalAttemptOutcome::Skipped);
     };
     let next = DateTime::<Utc>::from_timestamp_millis(next).context("renewal date overflow")?;
-    let owner = escape_graphql_string(owner);
-    let state = escape_graphql_string(state.as_str());
-    let expiry = escape_graphql_string(expiry);
-    let next = escape_graphql_string(&next.to_rfc3339());
-    let result = txn.execute_local_response(&format!(r#"mutation {{ update_AgentRequest(
-                docID: "{doc_id}", filter: {{ _docID: {{ _eq: "{doc_id}" }}, lifecycle_state: {{ _eq: "{state}" }},
-                    execution_generation: {{ _eq: "{owner}" }}, execution_lease_expires_at: {{ _eq: "{expiry}" }} }},
-                input: {{ execution_lease_expires_at: "{next}" }}
-            ) {{ _docID }} }}"#)).await?;
+    let next = next.to_rfc3339();
+    let rendered = Update::doc(
+        request_doc_id,
+        Input::new().set(fields::EXECUTION_LEASE_EXPIRES_AT, next.as_str()),
+    )
+    .filter(
+        Filter::eq(fields::DOC_ID, request_doc_id)
+            .and(Filter::eq(fields::LIFECYCLE_STATE, state.as_str()))
+            .and(Filter::eq(fields::EXECUTION_GENERATION, owner))
+            .and(Filter::eq(fields::EXECUTION_LEASE_EXPIRES_AT, expiry)),
+    )
+    .render();
+    let result = txn.run_local_response(&rendered).await?;
     anyhow::ensure!(
         result
             .data

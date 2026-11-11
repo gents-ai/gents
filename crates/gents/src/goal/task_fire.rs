@@ -14,7 +14,7 @@ pub struct TaskGoalRequestBinding {
     #[serde(default)]
     pub node_did: String,
     #[serde(default)]
-    pub agent_id: String,
+    pub agent_did: String,
     #[serde(default)]
     pub session_id: String,
     #[serde(default)]
@@ -133,16 +133,27 @@ pub fn validate_task_goal_declaration(
 
 pub(crate) async fn apply_claimed_task_goal_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
-    request: &crate::request::watcher::AgentRequest,
+    request: &gents_protocol::row::AgentRequest,
     now: &str,
 ) -> Result<()> {
     let owner = escape_graphql_string(&request.node_did);
-    let request_id = escape_graphql_string(&request.request_id);
-    let response = txn.execute_local_response(&format!(
-        r#"{{ TriggerFire(filter: {{owner_did: {{_eq: "{owner}"}}, request_id: {{_eq: "{request_id}"}}}}) {{
-            _docID session_id goal_id goal_objective goal_token_budget goal_assignment_applied
-        }} }}"#,
-    )).await?;
+    let response = {
+        use gents_protocol::document_query::{
+            fields::trigger_fire as fields, Filter, Query, Selection,
+        };
+        let query = Query::select(
+            Selection::doc_id()
+                .field(fields::SESSION_ID)
+                .field(fields::GOAL_ID)
+                .field(fields::GOAL_OBJECTIVE)
+                .field(fields::GOAL_TOKEN_BUDGET)
+                .field(fields::GOAL_ASSIGNMENT_APPLIED),
+        )
+        .filter(Filter::eq(fields::OWNER_DID, &request.node_did))
+        .filter(Filter::eq(fields::REQUEST_ID, &request.request_id))
+        .render();
+        txn.run_local_response(&query).await?
+    };
     #[derive(Deserialize)]
     struct Assignment {
         #[serde(rename = "_docID")]
@@ -276,12 +287,17 @@ pub(crate) async fn apply_claimed_task_goal_in_txn(
         .await?
         .context("assigned Task Goal disappeared")?;
     request_head::retire_stale_assignment_continuations_in_txn(txn, &updated, None, now).await?;
-    let receipt_doc_id = escape_graphql_string(&assignment.doc_id);
-    txn.execute(&format!(
-        r#"mutation {{ update_TriggerFire(filter: {{_docID: {{_eq: "{receipt_doc_id}"}}}},
-        input: {{goal_assignment_applied: true}}) {{_docID}} }}"#
-    ))
-    .await?;
+    {
+        use gents_protocol::document_query::{
+            fields::trigger_fire as fields, Filter, Input, Update,
+        };
+        let rendered = Update::matching(
+            Filter::eq(fields::DOC_ID, &assignment.doc_id),
+            Input::new().set(fields::GOAL_ASSIGNMENT_APPLIED, true),
+        )
+        .render();
+        txn.run(&rendered).await?;
+    }
     crate::triggers::engine::durable::publish_goal_outcomes(
         txn,
         &updated.node_did,

@@ -1,15 +1,15 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::output::{MessagePublication, MessageRole, OutputOutcome, OutputSource};
 use std::collections::BTreeSet;
 
-use super::super::canonical_rows::{decode_transcript_message_row, AGENT_MESSAGE_FIELDS};
-use super::super::query::session_scope_filter;
 use super::super::SequencedMessage;
 use super::access::{ReadAccess, ReadCache};
 use super::reconstruct::{preload_request_output_segments, reconstruct_scoped_message_with_facts};
-use super::replay_candidates::provider_coordinate_for_candidate;
+use super::replay_candidates::{provider_coordinate_for_candidate, recovered_provider_provenance};
 use super::replay_violation;
+use gents_protocol::output::rows::{decode_transcript_message_row, AGENT_MESSAGE_FIELDS};
+use gents_protocol::session::session_scope_filter;
 
 /// The owned loop rebuilds context, prompt and folded messages from admission
 /// input. Other publications belonging to that request (notably tool results
@@ -26,9 +26,9 @@ pub(super) fn is_current_admission_input(
         )
         && (["prompt", "context"].into_iter().any(|key| {
             header.message_key
-                == super::super::canonical_rows::authored_message_key(request_doc_id, key)
+                == gents_protocol::output::rows::authored_message_key(request_doc_id, key)
         }) || header.message_key.starts_with(
-            &super::super::canonical_rows::authored_message_key(
+            &gents_protocol::output::rows::authored_message_key(
                 request_doc_id,
                 &crate::request::lifecycle::queue::folded_input_key(""),
             ),
@@ -41,6 +41,33 @@ pub(super) fn is_current_admission_input(
 )]
 pub(in crate::session) async fn load_sequenced_messages(
     node: &EmbeddedNode,
+    session_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+    through_sequence: Option<u32>,
+    after_sequence: Option<u32>,
+    exclude_request_doc_id: Option<&str>,
+    replay_profile: Option<crate::turn::provider_input::ProviderInputProfile>,
+) -> Result<Vec<SequencedMessage>> {
+    load_sequenced_messages_using(
+        ReadAccess::Node(node),
+        session_id,
+        node_did,
+        requester_did,
+        through_sequence,
+        after_sequence,
+        exclude_request_doc_id,
+        replay_profile,
+    )
+    .await
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "independent transcript range filters"
+)]
+pub(in crate::session) async fn load_sequenced_messages_using(
+    access: ReadAccess<'_, '_>,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
@@ -67,28 +94,16 @@ pub(in crate::session) async fn load_sequenced_messages(
         AgentMessage(filter: {{ {session_scope}{bounds} }}, order: {{ sequence: ASC }}) {{ {AGENT_MESSAGE_FIELDS} }}
     }}"#
     );
-    let response = crate::store::graphql::graphql_response_with_transaction_retry(
-        node,
-        &query,
-        "load_canonical_history",
-    )
-    .await?;
-    if response.has_errors() {
-        anyhow::bail!(
-            "loading canonical history for session_id={session_id}: {:?}",
-            response.errors
-        );
-    }
+    let response = access.query(&query, "load_canonical_history").await?;
     let data = response
-        .data
-        .as_ref()
+        .get("data")
         .context("canonical history query omitted data")?;
     let headers = data
         .get("AgentMessage")
         .and_then(serde_json::Value::as_array)
         .context("canonical history query omitted AgentMessage rows")?
         .iter()
-        .map(decode_transcript_message_row)
+        .map(|row| decode_transcript_message_row(row).map_err(anyhow::Error::from))
         .collect::<Result<Vec<_>>>()?;
     let mut cache = ReadCache {
         reuse_node_scans: true,
@@ -123,15 +138,21 @@ pub(in crate::session) async fn load_sequenced_messages(
         })
         .filter_map(|row| row.message.request_doc_id.clone())
         .collect::<Vec<_>>();
-    preload_request_output_segments(node, &output_requests, node_did, requester_did, &mut cache)
-        .await?;
+    preload_request_output_segments(
+        access,
+        &output_requests,
+        node_did,
+        requester_did,
+        &mut cache,
+    )
+    .await?;
     let mut messages = Vec::new();
     for row in headers.into_iter().filter(|row| {
         exclude_request_doc_id.is_none_or(|id| !is_current_admission_input(&row.message, id))
     }) {
         let sequence = row.message.sequence;
         let reconstructed = reconstruct_scoped_message_with_facts(
-            ReadAccess::Node(node),
+            access,
             &row.doc_id,
             node_did,
             requester_did,
@@ -144,32 +165,51 @@ pub(in crate::session) async fn load_sequenced_messages(
                 row.doc_id
             )
         })?;
+        let mut block_indices = match &reconstructed.message {
+            gents_protocol::message::Message::Assistant { content, .. } => {
+                (0..content.len()).collect()
+            }
+            _ => Vec::new(),
+        };
         let provider_source = if replay_profile.is_some()
             && reconstructed.origin.message.role == MessageRole::Assistant
-            && reconstructed.origin.message.outcome == OutputOutcome::Complete
-            && matches!(
-                reconstructed.origin.message.publication,
-                MessagePublication::RequestExecution { .. }
-            ) {
-            match provider_coordinate_for_candidate(
-                &reconstructed,
-                gents_protocol::rendered_request::CaptureScopeKind::Inference,
-            ) {
-                Ok(Some(coordinate)) => Some(gents_loop::claude_messages_body::ReplayTag {
-                    request_doc_id: reconstructed
-                        .origin
-                        .message
-                        .request_doc_id
-                        .clone()
-                        .ok_or_else(|| {
-                            replay_violation("provider coordinate requires request document")
-                        })?,
-                    source: OutputSource::ProviderTurn {
-                        scope: coordinate.scope,
-                        turn_index: coordinate.turn_index,
-                        attempt: coordinate.attempt,
-                    },
-                }),
+        {
+            let header = &reconstructed.origin.message;
+            let provenance = if header.outcome == OutputOutcome::Complete
+                && matches!(
+                    header.publication,
+                    MessagePublication::RequestExecution { .. }
+                ) {
+                provider_coordinate_for_candidate(
+                    &reconstructed,
+                    gents_protocol::rendered_request::CaptureScopeKind::Inference,
+                )
+                .map(|value| value.map(|coordinate| (coordinate, block_indices.clone())))
+            } else {
+                recovered_provider_provenance(
+                    &reconstructed,
+                    gents_protocol::rendered_request::CaptureScopeKind::Inference,
+                )
+            };
+            match provenance {
+                Ok(Some((coordinate, physical_indices))) => {
+                    block_indices = physical_indices;
+                    Some(gents_loop::claude_messages_body::ReplayTag {
+                        request_doc_id: reconstructed
+                            .origin
+                            .message
+                            .request_doc_id
+                            .clone()
+                            .ok_or_else(|| {
+                                replay_violation("provider coordinate requires request document")
+                            })?,
+                        source: OutputSource::ProviderTurn {
+                            scope: coordinate.scope,
+                            turn_index: coordinate.turn_index,
+                            attempt: coordinate.attempt,
+                        },
+                    })
+                }
                 Ok(None) => None,
                 Err(error) => {
                     tracing::debug!(header_doc_id = %row.doc_id, error = %error,
@@ -183,12 +223,7 @@ pub(in crate::session) async fn load_sequenced_messages(
         messages.push(SequencedMessage {
             provider_source,
             canonical_header_doc_id: Some(reconstructed.origin.doc_id),
-            block_indices: match &reconstructed.message {
-                gents_protocol::message::Message::Assistant { content, .. } => {
-                    (0..content.len()).collect()
-                }
-                _ => Vec::new(),
-            },
+            block_indices,
             sequence,
             message: reconstructed.message,
         });

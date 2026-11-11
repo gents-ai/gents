@@ -5,33 +5,25 @@ pub(super) struct ExistingNotification {
 }
 
 async fn existing_notification(
-    node: &EmbeddedNode,
-    parent: &crate::AgentRequest,
+    access: &crate::ConfigAccess,
+    parent: &gents_protocol::row::AgentRequest,
     message_key: &str,
 ) -> Result<Option<ExistingNotification>> {
-    let scope = crate::session::session_scope_filter(
-        &parent.node_did,
-        &parent.session_id,
-        parent.requester_did.as_deref(),
-    );
-    let message_key = escape_graphql_string(message_key);
-    let query = format!(
-        r#"{{
-            AgentMessage(
-                filter: {{ {scope}, message_key: {{ _eq: "{message_key}" }} }},
-                limit: 2
-            ) {{
-                _docID
-            }}
-        }}"#
-    );
-    let response = crate::store::graphql::graphql_with_transaction_retry(
-        node,
-        &query,
-        "existing_notification",
-    )
-    .await?;
-    let rows = crate::store::graphql::rows::<serde_json::Value>(&response, "AgentMessage")?;
+    use gents_protocol::document_query::{
+        fields::agent_message as message, session_scope, Filter, Query, Selection,
+    };
+    let query = Query::select(Selection::doc_id())
+        .filter(session_scope(
+            &parent.node_did,
+            &parent.session_id,
+            parent.requester_did.as_deref(),
+        ))
+        .filter(Filter::eq(message::MESSAGE_KEY, message_key))
+        .limit(2)
+        .render();
+    let response = access.read(&query).await?;
+    let rows: Vec<serde_json::Value> =
+        serde_json::from_value(response["data"]["AgentMessage"].clone())?;
     anyhow::ensure!(
         rows.len() <= 1,
         "canonical notification key {message_key} is ambiguous"
@@ -53,10 +45,10 @@ async fn existing_notification(
 }
 
 pub(super) async fn existing_tool_completion_notification(
-    node: &EmbeddedNode,
-    parent: &crate::AgentRequest,
+    access: &crate::ConfigAccess,
+    parent: &gents_protocol::row::AgentRequest,
     tool_call_id: &str,
 ) -> Result<Option<ExistingNotification>> {
     let key = background_completion_notification_message_key(tool_call_id, "tool");
-    existing_notification(node, parent, &key).await
+    existing_notification(access, parent, &key).await
 }

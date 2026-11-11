@@ -24,7 +24,7 @@ manual migration command exists or is needed. Measured on a clone of a real
   replicated schema differs from its own, so upgrade each desktop together with
   its node. Transcripts (`AgentMessage`) and the other client-authored
   collections keep their RC0 versions, so phones keep working throughout.
-- **Stop each node gracefully** (`gents service stop`, not a kill) before
+- **Stop each node gracefully** (`gents runtime service stop`, not a kill) before
   replacing its binary. A killed node's peers log replication timeouts on
   restart; they clear on retry, but a graceful stop avoids them.
 - **Client-authored collections keep their RC0 schema.** Phones and apps
@@ -57,7 +57,7 @@ manual migration command exists or is needed. Measured on a clone of a real
   `InferenceBackend`); so is a `Node` that a main build from before the
   canonical lineage registered. They still start, but log an error naming
   each affected collection and how to re-create the store, and report them
-  under `non_canonical_lineages` in `gents service update-check` (every managed
+  under `non_canonical_lineages` in `gents runtime service update-check` (every managed
   collection) and `/status` (the replicated collections it advertises). A
   desktop that pairs with one says which side is off the lineage instead of
   asking for matching versions. Every node that reported its pins on
@@ -71,7 +71,7 @@ manual migration command exists or is needed. Measured on a clone of a real
   update preflight compares the running endpoint with it and refuses with
   "recorded endpoint must match this home's HTTP listener" when a node was
   started with `--http-port` or `--http-addr` flags that were never persisted.
-  `gents service install` persists them.
+  `gents runtime service install` persists them.
 - A Tools document that sets `integrations.eth_tool_ids` keeps loading; the
   field is ignored with a warning because Ethereum tools left core. It is
   removed from that document the next time it is written (by any upgraded node
@@ -85,8 +85,8 @@ manual migration command exists or is needed. Measured on a clone of a real
 With the new binary:
 
 ```
-gents service update-check --home <HOME>   # preflight against the running node
-gents service update --home <HOME> ...     # cold backup, swap, restart, verify
+gents runtime service update-check --home <HOME>   # preflight against the running node
+gents runtime service update --home <HOME> ...     # cold backup, swap, restart, verify
 ```
 
 `update-check` reports `"schema_checked": true` when the running store's
@@ -102,7 +102,7 @@ only that store holds is not carried over; replicated data comes back from
 peers once it re-enrolls.
 
 ```
-gents service stop                                   # or stop however it runs
+gents runtime service stop                                   # or stop however it runs
 mv <HOME> <HOME>.off-lineage
 mkdir -p <HOME>/keys
 cp <HOME>.off-lineage/keys/<node-name>.key <HOME>/keys/

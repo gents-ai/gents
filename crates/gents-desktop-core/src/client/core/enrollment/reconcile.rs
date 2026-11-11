@@ -13,24 +13,13 @@ use super::super::super::principal_identity::PrincipalIdentity;
 use super::super::route_manager::ClientRouteManager;
 use super::super::sync_state::ClientSyncStateOwner;
 use super::super::{EnrollmentActivationError, EnrollmentActivationStage, P2P_OPERATION_TIMEOUT};
-use super::authority::load_status_enrollment_approvals;
 use super::map_p2p_error;
 use crate::client::peer_directory::RemovalCause;
+use gents::runtime::agent::p2p_reconcile::enrollment_member_authority::{
+    load_status_enrollment_approvals, EnrollmentAuthorityOutcome,
+};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::client::core) struct ApprovedStatusEnrollment {
-    pub(in crate::client::core) network_id: String,
-    pub(in crate::client::core) request_id: String,
-    pub(in crate::client::core) server_peer: String,
-    pub(in crate::client::core) server_ticket: String,
-    pub(in crate::client::core) admin_did: String,
-    pub(in crate::client::core) owner_node: String,
-    pub(in crate::client::core) request_digest: String,
-    pub(in crate::client::core) authorization_sequence: u64,
-    pub(in crate::client::core) authorization_expires_at: String,
-    pub(in crate::client::core) decided_at: String,
-}
-
+use gents::runtime::agent::p2p_reconcile::enrollment_projection::ApprovedStatusEnrollment;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::client::core) struct EnrollmentAuthorizationGeneration {
     pub request_digest: String,
@@ -49,18 +38,6 @@ impl EnrollmentAuthorizationGeneration {
             && record.enrollment_authorization_expires_at.as_deref() == Some(&self.expires_at)
             && gents_protocol::enrollment::authorization_lease_is_fresh_at(&self.expires_at, now)
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::client::core) enum EnrollmentAuthorityOutcome {
-    Current(ApprovedStatusEnrollment),
-    Conflicted { reason: String },
-}
-
-pub(super) enum DesktopApprovalProjection {
-    Routed(Box<ApprovedStatusEnrollment>),
-    CurrentWithoutRoute,
-    Absent,
 }
 
 pub(super) fn prioritized_current_approvals(
@@ -97,7 +74,7 @@ pub(in crate::client::core) fn enrollment_record_lacks_current_authority(
 }
 
 pub(in crate::client::core) async fn reconcile_status_enrollment_approvals(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     p2p: &Arc<dyn defra_p2p_adapter::P2POperations>,
     principal: &Arc<PrincipalIdentity>,
     local_peer_id: &str,
@@ -105,7 +82,7 @@ pub(in crate::client::core) async fn reconcile_status_enrollment_approvals(
     route_manager: &Arc<ClientRouteManager>,
 ) -> Result<BTreeMap<String, EnrollmentAuthorizationGeneration>> {
     let (outcomes, authorized_server_peers) =
-        load_status_enrollment_approvals(node.as_ref(), principal.as_ref(), local_peer_id).await?;
+        load_status_enrollment_approvals(node, principal.as_ref(), local_peer_id).await?;
     // The prune keys on authority presence, not on the receipt-gated outcomes:
     // a missing route receipt must not end a retirement whose decision and
     // revision still read current, or the peer it removed could be reinstalled
@@ -160,8 +137,20 @@ pub(in crate::client::core) async fn reconcile_status_enrollment_approvals(
     for existing in sync_state.records().into_iter().filter(|record| {
         record.source.as_deref() == Some("enrollment") && !outcomes.contains_key(&record.peer_id)
     }) {
+        if existing.is_managed_runtime() {
+            demote_enrollment_peer(sync_state, &existing.peer_id).await;
+            continue;
+        }
+        // Authority that still reads as current, only without its route
+        // receipt, is a teardown the receipt undoes; authority that is gone
+        // ended this desktop's access.
+        let cause = if authority_server_peers.contains(&existing.peer_id) {
+            RemovalCause::Reconciliation
+        } else {
+            RemovalCause::AuthorityEnded
+        };
         let removal = route_manager
-            .remove_peer(sync_state, &existing.peer_id, RemovalCause::Reconciliation)
+            .remove_peer(sync_state, &existing.peer_id, cause)
             .await?;
         if let Some(error) = removal.cleanup_error {
             tracing::warn!(peer_id = %existing.peer_id, error = %error, "revoked enrollment route cleanup will retry");
@@ -205,6 +194,26 @@ pub(in crate::client::core) async fn reconcile_status_enrollment_approvals(
             .into_iter()
             .find(|record| record.peer_id == approval.server_peer);
         let applied = async {
+            if !current.as_ref().is_some_and(|record| record.is_managed_runtime()) {
+                use gents::runtime::agent::p2p_reconcile::endpoint::{resolve_graphql_endpoint, EndpointError};
+                let access = gents::store::config_client::ConfigAccess::local_as(node.clone(), principal.did().parse()?);
+                match resolve_graphql_endpoint(&access, &approval.owner_node, principal.as_ref()).await {
+                    Ok(endpoint) => {
+                        if current.as_ref().and_then(|record| record.graphql.as_deref()) != Some(endpoint.url()) {
+                            sync_state.remember_enrollment_endpoint(
+                                &approval.server_peer, &approval.owner_node, &approval.request_digest,
+                                &approval.authorization_expires_at, endpoint.url(),
+                            ).await?;
+                        }
+                    }
+                    Err(EndpointError::Unavailable(_)) => {
+                        tracing::debug!(peer_id, node_did = %approval.owner_node, "enrolled runtime has no signed HTTP advertisement yet");
+                    }
+                    Err(error) => {
+                        tracing::warn!(peer_id, node_did = %approval.owner_node, %error, "signed runtime HTTP advertisement rejected");
+                    }
+                }
+            }
             let label = sync_state
                 .advertised_enrollment_label(&approval.server_peer)
                 .unwrap_or_else(|| "Enrolled Agent".to_string());

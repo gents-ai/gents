@@ -1,4 +1,4 @@
-import { act, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -8,7 +8,11 @@ import { avatarSrc } from "@/lib/avatar";
 import { deployment } from "./config-panel-wiring/fixtures";
 import { node, renderIn, renderRouted, testApp } from "./app-fixture";
 
-function cardFor(nodeDid: string, more: Record<string, unknown> = {}) {
+function cardFor(
+  nodeDid: string,
+  more: Record<string, unknown> = {},
+  trigger = <button type="button">avatar</button>,
+) {
   const app = testApp({
     snapshot: {
       bootstrap: {
@@ -20,12 +24,7 @@ function cardFor(nodeDid: string, more: Record<string, unknown> = {}) {
     },
   });
   const [shown] = fleetNodes(app.stores.fleet.getState());
-  renderIn(
-    app,
-    <NodeHoverCard deployment={shown!}>
-      <button type="button">avatar</button>
-    </NodeHoverCard>,
-  );
+  renderIn(app, <NodeHoverCard deployment={shown!}>{trigger}</NodeHoverCard>);
 }
 
 describe("a node's hover card", () => {
@@ -107,6 +106,66 @@ describe("a node's hover card", () => {
     expect(writeText).toHaveBeenCalledWith("did:key:remote");
     vi.unstubAllGlobals();
   });
+
+  it("stays closed over the page its link opened until the pointer returns", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      cardFor("did:key:remote", {}, <a href="#node">node</a>);
+      const link = screen.getByRole("link", { name: "node" });
+      await user.click(link);
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+      expect(screen.queryByText("Agents")).toBeNull();
+      await user.unhover(link);
+      await user.hover(link);
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+      expect(await screen.findByText("Agents")).toBeVisible();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("opens again on focus after its link is followed from the keyboard", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      cardFor("did:key:remote", {}, <a href="#node">node</a>);
+      const link = screen.getByRole("link", { name: "node" });
+      await user.tab();
+      expect(link).toHaveFocus();
+      await user.keyboard("{Enter}");
+      await user.tab();
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+      expect(screen.queryByText("Agents")).toBeNull();
+      await user.tab();
+      expect(link).toHaveFocus();
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+      expect(await screen.findByText("Agents")).toBeVisible();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("opens for a later mouse hover after its link is tapped", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      cardFor("did:key:remote", {}, <a href="#node">node</a>);
+      const link = screen.getByRole("link", { name: "node" });
+      /* a touch tap's pointerleave arrives before its click */
+      fireEvent.pointerDown(link, { pointerType: "touch" });
+      fireEvent.pointerUp(link, { pointerType: "touch" });
+      fireEvent.pointerLeave(link, { pointerType: "touch" });
+      fireEvent.click(link, { detail: 1 });
+      link.blur();
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+      await user.hover(link);
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+      expect(await screen.findByText("Agents")).toBeVisible();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("an agent's hover card", () => {
@@ -114,7 +173,7 @@ describe("an agent's hover card", () => {
     const app = testApp({ deployments: [node()] });
     const [shown] = fleetNodes(app.stores.fleet.getState());
     const view = renderRouted(app, { name: "sessions" }, () => (
-      <AgentHoverCard deployment={shown!} agentId="default">
+      <AgentHoverCard deployment={shown!} agentDid="default">
         <button type="button">agent</button>
       </AgentHoverCard>
     ));
@@ -127,15 +186,15 @@ describe("an agent's hover card", () => {
     );
     expect(app.stores.selection.getState()).toMatchObject({
       nodeDid: shown!.nodeDid,
-      agentId: "default",
+      agentDid: "default",
     });
   });
 
   it("counts the tasks that run with the agent, and leaves the line out at none", async () => {
-    const task = (taskId: string, agentId: string) => ({
+    const task = (taskId: string, agentDid: string) => ({
       ...deployment.tasks[0]!,
       taskId,
-      agentId,
+      agentDid,
     });
     const app = testApp({
       deployments: [
@@ -147,7 +206,7 @@ describe("an agent's hover card", () => {
     const [shown] = fleetNodes(app.stores.fleet.getState());
     renderIn(
       app,
-      <AgentHoverCard deployment={shown!} agentId="default">
+      <AgentHoverCard deployment={shown!} agentDid="default">
         <button type="button">agent</button>
       </AgentHoverCard>,
     );

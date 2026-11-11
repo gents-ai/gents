@@ -322,7 +322,7 @@ pub async fn discover_models(
             let Some(credential) = oauth_credential else {
                 tracing::Span::current().record("failure_class", "auth");
                 anyhow::bail!(
-                    "ChatGPT Codex model discovery requires an OAuthCredential document; run `gents codex-login` for the node DID first"
+                    "ChatGPT Codex model discovery requires an OAuthCredential document; run `gents accounts login codex` for the node DID first"
                 );
             };
             request = request.bearer_auth(&credential.access_token);
@@ -349,7 +349,7 @@ pub async fn discover_models(
             let Some(credential) = oauth_credential else {
                 tracing::Span::current().record("failure_class", "auth");
                 anyhow::bail!(
-                    "Grok OAuth model discovery requires an OAuthCredential document; run `gents grok-login` for the node DID first"
+                    "Grok OAuth model discovery requires an OAuthCredential document; run `gents accounts login grok` for the node DID first"
                 );
             };
             request = request.bearer_auth(&credential.access_token);
@@ -369,7 +369,7 @@ pub async fn discover_models(
             let Some(credential) = oauth_credential else {
                 tracing::Span::current().record("failure_class", "auth");
                 anyhow::bail!(
-                    "Claude subscription model discovery requires an OAuthCredential document; run `gents claude-login --node-did <did>` for the node DID first"
+                    "Claude subscription model discovery requires an OAuthCredential document; run `gents accounts login claude --node-did <did>` for the node DID first"
                 );
             };
             request = request

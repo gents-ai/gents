@@ -7,6 +7,7 @@ use super::*;
 pub(super) struct PackInstaller {
     pub(super) core: SelfConfigCore,
     pub(super) node: Arc<EmbeddedNode>,
+    pub(super) actor: Option<Arc<dyn NodeIdentity>>,
     /// `None` resolves from the registry in memory and installs no plugins.
     pub(super) home: Option<std::path::PathBuf>,
 }
@@ -27,7 +28,11 @@ pub(super) fn installs_kind(kind: &crate::pack::PackKind) -> bool {
     )
 }
 
-pub(super) struct ConfigPackDistribution(pub(super) crate::pack::resolve::ResolvedNamedPack);
+/// A resolved pack and the provenance its installation records.
+pub(super) struct ConfigPackDistribution(
+    pub(super) crate::pack::resolve::ResolvedNamedPack,
+    pub(super) crate::pack::PackSource,
+);
 
 impl ConfigPackDistribution {
     pub(super) fn manifest(&self) -> &crate::pack::PackManifest {
@@ -39,11 +44,7 @@ impl ConfigPackDistribution {
     }
 
     pub(super) fn source(&self) -> &'static str {
-        match self.0.from {
-            crate::pack::resolve::ResolvedFrom::Installed => "installed",
-            crate::pack::resolve::ResolvedFrom::Store => "store",
-            crate::pack::resolve::ResolvedFrom::Registry { .. } => "registry",
-        }
+        self.1.kind()
     }
 
     /// Pin the preview's resolution so applying it resolves the same pack
@@ -115,6 +116,7 @@ impl PackInstaller {
         self.validate(args)?;
         let coordinate = args.package.trim();
         if let Some(local) = crate::pack::local::classify(coordinate) {
+            let source = crate::pack::PackSource::of_local_name(&local);
             let home = self
                 .home
                 .as_deref()
@@ -169,6 +171,7 @@ impl PackInstaller {
                     archive,
                     from: crate::pack::resolve::ResolvedFrom::Store,
                 },
+                source,
             ));
         }
         let registry_url = crate::pack::registry::resolve_registry_url(None);
@@ -191,7 +194,7 @@ impl PackInstaller {
             }
             _ => coordinate.to_owned(),
         };
-        let access = crate::store::config_client::ConfigAccess::local(self.node.clone());
+        let access = self.core.access()?;
         let installed = crate::pack::installed_packs(
             self.home.as_deref(),
             Some((&access, self.core.node_did())),
@@ -206,7 +209,8 @@ impl PackInstaller {
             },
         )
         .await?;
-        let distribution = ConfigPackDistribution(resolved);
+        let source = crate::pack::PackSource::of_resolution(&resolved);
+        let distribution = ConfigPackDistribution(resolved, source);
         anyhow::ensure!(
             operation == "get" || installs_kind(&distribution.manifest().metadata.kind),
             "pack {:?} is {:?}; the model-facing installer supports document and plugins-only packs",
@@ -236,7 +240,7 @@ impl PackInstaller {
                 .transpose()
                 .map_err(Into::into);
         }
-        let access = crate::store::config_client::ConfigAccess::local(self.node.clone());
+        let access = self.core.access()?;
         let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
         crate::pack::read_installed_pack(&access, self.core.node_did(), &coordinate)
             .await?
@@ -265,6 +269,7 @@ impl PackInstaller {
                             plugin,
                             false,
                         )
+                        .map_err(anyhow::Error::from)
                     });
                 result
                     .err()
@@ -284,11 +289,9 @@ impl PackInstaller {
         bindings: &crate::pack::PackInferenceBindings,
     ) -> anyhow::Result<()> {
         let owner = self.core.node_did();
-        crate::store::config_client::ConfigAccess::transact_local_write(
-            &self.node,
-            Some(self.core.identity()?),
-            "self_config.pack_profile_choice",
-            |txn| {
+        self.core
+            .access()?
+            .transact_write("self_config.pack_profile_choice", |txn| {
                 Box::pin(async move {
                     for profile in bindings.values() {
                         let backend = ops::profile_backend_id(txn, owner, profile).await?;
@@ -296,9 +299,8 @@ impl PackInstaller {
                     }
                     Ok(())
                 })
-            },
-        )
-        .await
+            })
+            .await
     }
 
     pub(super) async fn preview(

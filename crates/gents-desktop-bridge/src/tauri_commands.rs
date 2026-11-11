@@ -6,6 +6,7 @@ pub mod db_explorer;
 pub mod e2e;
 pub mod external_url;
 pub mod inference_setup;
+pub mod join_requests;
 pub mod lifecycle;
 pub mod mailbox;
 pub mod managed_server;
@@ -14,7 +15,6 @@ pub mod packs;
 pub mod peers;
 pub(crate) mod service_executable;
 pub mod tasks;
-pub mod tools_explain;
 pub mod ux_plugins;
 
 #[cfg(test)]
@@ -43,7 +43,7 @@ where
         "desktop://client-updated",
         ClientUpdateEvent::coarse("config"),
     );
-    build_client_snapshot_with_grants(Some(core), Some(&state.policy), snapshot_grants(state))
+    build_client_snapshot_with_grants(Some(core), &state.policy, snapshot_grants(state))
         .await
         .map_err(BridgeError::untyped)
 }

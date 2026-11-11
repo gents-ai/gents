@@ -111,6 +111,7 @@ export function Fact({
 }) {
   return (
     <span
+      data-selectable
       title={title ?? (typeof children === "string" ? children : undefined)}
       className={`max-w-[28rem] truncate text-sm text-muted-foreground max-md:max-w-full max-md:break-all max-md:whitespace-normal md:[[data-slot=field-row]>&]:max-w-[min(28rem,50%)] md:[[data-slot=field-row]>&]:shrink-0 ${mono ? "font-mono text-xs" : ""}`}
     >
@@ -212,5 +213,26 @@ export function Unfold({
         {children}
       </div>
     </div>
+  );
+}
+
+/** Configuration shown read-only: values at full strength, and nothing
+    offered that would change them. Editors mark what only changes things
+    with `data-readonly-hide`. */
+export function ReadOnlyConfig({
+  readOnly,
+  children,
+}: {
+  readOnly: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <fieldset
+      disabled={readOnly}
+      data-readonly={readOnly ? "" : undefined}
+      className="m-0 min-w-0 border-0 p-0 data-readonly:[&_*:disabled]:opacity-100! data-readonly:[&_[data-disabled]]:opacity-100! data-readonly:[&_[data-readonly-hide]]:hidden"
+    >
+      {children}
+    </fieldset>
   );
 }

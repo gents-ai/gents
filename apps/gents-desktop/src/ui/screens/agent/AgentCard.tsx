@@ -19,8 +19,7 @@ import { useHomeFolder } from "@/hooks/useHomeFolder";
 import { useHomeDid, useNodeReach } from "@/hooks/useClient";
 import { isLocalNode } from "@/lib/firstRun";
 import { InferenceSummary, OnlineStatus, StateDot, counted } from "../NodeFacts";
-import { AgentInitials } from "../parts";
-import { agentName } from "../behavior";
+import { AgentMark } from "../parts";
 import { span, useMinute } from "../time";
 import { lastRunFailed } from "./automation";
 import { limitNote } from "./ProviderUsage";
@@ -186,9 +185,10 @@ export function AgentMarks({
   return (
     <span aria-hidden className="flex shrink-0 items-center">
       {agentIds.slice(0, MARKS).map((agentId) => (
-        <AgentInitials
+        <AgentMark
           key={agentId}
-          name={agentName(agentId, deployment)}
+          agentDid={agentId}
+          deployment={deployment}
           className={mark}
         />
       ))}
@@ -209,7 +209,7 @@ function AgentsValue({ deployment }: { deployment: NodeView }) {
   if (agents.length === 0) return <span className="truncate">None</span>;
   return (
     <>
-      <AgentMarks deployment={deployment} agentIds={agents.map((a) => a.agentId)} />
+      <AgentMarks deployment={deployment} agentIds={agents.map((a) => a.agentDid)} />
       <span className="truncate text-muted-foreground">
         {counted(agents.length, "agent")}
       </span>
@@ -423,19 +423,19 @@ export function AgentCard({
     doing, and what runs with it on its own. */
 export function AgentSummaryCards({
   deployment,
-  agentId,
+  agentDid,
 }: {
   deployment: NodeView;
-  agentId: string;
+  agentDid: string;
 }) {
-  const agent = agentOf(deployment, agentId);
+  const agent = agentOf(deployment, agentDid);
   const sessions = useFleet((s) => s.sessionsOf[nodeKeyOf(deployment)] ?? NO_SESSIONS);
   if (!agent) return null;
-  const env = deployment.agentEnvironments.find((e) => e.agentId === agentId);
+  const env = deployment.agentEnvironments.find((e) => e.agentDid === agentDid);
   const backend = backendOf(deployment, agent);
-  const mine = sessions.filter((s) => s.agentId === agentId);
+  const mine = sessions.filter((s) => s.agentDid === agentDid);
   const live = mine.filter((s) => isLive(s.turnState)).length;
-  const tasks = deployment.tasks.filter((t) => t.agentId === agentId).length;
+  const tasks = deployment.tasks.filter((t) => t.agentDid === agentDid).length;
   const section = (section: string, item?: string): Route => ({
     name: "agent",
     nodeDid: deployment.nodeDid,

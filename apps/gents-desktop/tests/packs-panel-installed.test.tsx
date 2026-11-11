@@ -54,13 +54,13 @@ describe("PacksPanel installed packs", () => {
   });
 
   it("says what a pack installed, each kind linked to its section", async () => {
-    const tag = ["gents:pack:research"];
+    const tag = ["gents:pack:demo/research"];
     const view = {
       ...deployment,
       agents: [
         ...deployment.agents,
-        { ...deployment.agents[0]!, agentId: "r1", tags: tag },
-        { ...deployment.agents[0]!, agentId: "r2", tags: tag },
+        { ...deployment.agents[0]!, agentDid: "r1", tags: tag },
+        { ...deployment.agents[0]!, agentDid: "r2", tags: tag },
       ],
       skills: deployment.skills.map((s) => ({ ...s, tags: tag })),
     };

@@ -4,10 +4,12 @@ import type { MailboxItemView } from "@source-inc/gents-desktop-client";
 import { useStore } from "zustand";
 import { useApp } from "@/app/AppContext";
 import { chatDraftsFor } from "../../hooks/chatDrafts";
+import { sendStatus } from "../../hooks/chatDeliveryView";
+import { useSendDeadlineClock } from "../../hooks/useSendDeadlineClock";
 
-/** Where this client's answer to `m` is: sent and waiting to be confirmed,
-    or confirmed, from the answers it keeps until delivery is known, and
-    whether one is still being sent. */
+/** Where this client's answer to `m` is: saved and not yet confirmed (sending,
+    or failed with Retry), or confirmed and waiting for the question to close,
+    and whether one is still being sent. */
 export function useAnswerDelivery(m: MailboxItemView) {
   const { stores } = useApp();
   const clientDid = useStore(
@@ -21,13 +23,11 @@ export function useAnswerDelivery(m: MailboxItemView) {
     m.sessionId,
     m.itemId,
   );
-  const requests = stores.chat.use.chatRequestsInFlight();
+  const now = useSendDeadlineClock(drafts);
   return {
-    pending: drafts.some(
-      (draft) => !draft.result || draft.result.outcome === "deliveryUnknown",
-    ),
-    confirmed: drafts.some((draft) => draft.result && !draft.result.outcome),
+    pending: drafts.some((draft) => !draft.confirmed),
+    confirmed: drafts.some((draft) => draft.confirmed === true),
     /* the answer is still on its way, so whether it arrived is not yet known */
-    inFlight: drafts.some((draft) => requests.has(draft.requestId)),
+    inFlight: drafts.some((draft) => sendStatus(draft, now) === "pending"),
   };
 }

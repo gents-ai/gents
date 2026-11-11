@@ -46,7 +46,7 @@ pub async fn check_dir(dir: &Path) -> CheckReport {
         }
         if manifest.metadata.kind != PackKind::Plugins {
             report.problems.push(format!(
-                "build the plugins ({}) with gents pack build before checking its configuration",
+                "build the plugins ({}) with gents config pack build before checking its configuration",
                 unbuilt.join(", ")
             ));
         }
@@ -67,6 +67,7 @@ pub async fn check_dir(dir: &Path) -> CheckReport {
         match load_config(&archive) {
             Ok(config) => {
                 if config
+                    .documents
                     .event_sources
                     .iter()
                     .any(|source| source.filter.is_some())
@@ -161,8 +162,8 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
     Ok(())
 }
 
-pub fn load_config(archive: &PackArchive) -> Result<crate::documents::PackConfig> {
-    let config = crate::pack::load_pack_config(
+pub fn load_config(archive: &PackArchive) -> Result<crate::pack::AuthoredPackConfig> {
+    let config = crate::pack::load_pack_authoring_config(
         archive.manifest(),
         &crate::pack::PackInstallOptions {
             node_did: PLACEHOLDER_OWNER.into(),
@@ -170,7 +171,7 @@ pub fn load_config(archive: &PackArchive) -> Result<crate::documents::PackConfig
         &|path| archive.asset(path).map(Vec::from),
         &|_| None,
     )?;
-    crate::store::config_client::DesiredStateApplyPlan::from_pack_config(&config)?;
+    crate::store::config_client::DesiredStateApplyPlan::from_pack_config(&config.documents)?;
     Ok(config)
 }
 

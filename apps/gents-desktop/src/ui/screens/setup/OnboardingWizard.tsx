@@ -184,6 +184,7 @@ export function OnboardingWizard({
     allowLocal ? "local" : "remote",
   );
   const [address, setAddress] = useState("");
+  const [candidateName, setCandidateName] = useState("");
   const enrollmentRequests = useEnrollmentRequests();
   const snapshot = useStore(stores.client, (state) => state.snapshot);
   const [enrollment, setEnrollment] = useState<EnrollmentRequestView | null>(null);
@@ -334,6 +335,7 @@ export function OnboardingWizard({
       });
       failedPhase = "client-error";
       await actions.commitLocalServerAutoStart(requestedName);
+      await actions.enrollLocalServer();
       await actions.awaitLocalServerPairing();
       await finishProvisioning(initialized.nodeDid);
     } catch (e) {
@@ -346,7 +348,9 @@ export function OnboardingWizard({
   const enrol = async () => {
     dispatch({ type: "requesting" });
     try {
-      const request = await actions.requestStatusEnrollment(address.trim());
+      const request = candidateName.trim()
+        ? await actions.requestStatusEnrollment(address.trim(), candidateName.trim())
+        : await actions.requestStatusEnrollment(address.trim());
       setEnrollment(request);
       dispatch({ type: "requested" });
     } catch (e) {
@@ -377,7 +381,8 @@ export function OnboardingWizard({
                 : activationError
                   ? "Access is approved. The client will retry the secure connection automatically."
                   : active?.state === "approved"
-                    ? "Approval received. Finishing your secure connection…"
+                    ? (target?.chatRefusal?.detail ??
+                      "Approval received. Finishing your secure connection…")
                     : !observed
                       ? "Approval status is unavailable. Refresh to check again."
                       : active
@@ -565,6 +570,9 @@ export function OnboardingWizard({
                   </Field>
                 </div>
               </div>
+              <p className="text-xs text-muted-foreground">
+                Continuing connects this desktop and grants it access to the local node.
+              </p>
               {homeRoot ? (
                 <ManagedRuntimeAuthorityPicker
                   home={homeRoot}
@@ -643,6 +651,14 @@ export function OnboardingWizard({
                     placeholder="Paste an invitation or enter a server address"
                   />
                 </Field>
+                <Field label="Your name (optional)">
+                  <Input
+                    disabled={busy}
+                    value={candidateName}
+                    onChange={(event) => setCandidateName(event.target.value)}
+                  />
+                </Field>
+                <button type="submit" hidden />
                 <p className="text-xs text-muted-foreground">
                   Paste an invitation or enter the node’s status address. The node’s
                   administrator must approve this device’s access request.

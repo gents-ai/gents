@@ -1,37 +1,49 @@
 import { useState, type KeyboardEvent } from "react";
 import { Target, X } from "lucide-react";
-import type { GoalView } from "@source-inc/gents-desktop-client";
+import type { GoalControlView } from "@source-inc/gents-desktop-client";
+import { GOAL_STALE_HOLD, type GoalShown } from "../../../hooks/goalState";
 import type { SlashCommand } from "../useSlashMenu";
 
 /** A met or removed goal can be replaced; the runtime refuses to replace any
     other, and starts no goal while the session is busy. */
-export const goalIsLive = (goal: GoalView | null | undefined) =>
+export const goalIsLive = (goal: GoalControlView | null | undefined) =>
   Boolean(goal) && goal?.status !== "complete" && goal?.status !== "stopped";
 
-export const goalIsEditable = (goal: GoalView | null | undefined) =>
+export const goalIsEditable = (goal: GoalControlView | null | undefined) =>
   goal?.status === "active" || goal?.status === "paused";
 
-export function goalCommand(
-  goal: GoalView | null | undefined,
-  busy: boolean,
-): SlashCommand {
+/** `/goal` for what the chat shows; `null` is a new chat, which a Goal
+    starts. Only a current Goal or current absence offers it (Lean
+    `SessionObservation.offered`). */
+export function goalCommand(shown: GoalShown | null, busy: boolean): SlashCommand {
+  if (shown?.kind === "unavailable")
+    return { id: "goal", description: shown.hold, disabled: true };
+  if (shown?.kind === "pending")
+    return {
+      id: "goal",
+      description: "Available once this chat's Goal is read",
+      disabled: true,
+    };
+  if (shown?.kind === "goal" && !shown.current)
+    return { id: "goal", description: GOAL_STALE_HOLD, disabled: true };
+  const goal = shown?.kind === "goal" ? shown.goal : null;
   if (goalIsEditable(goal))
-    return { id: "goal", description: "Edit this session's goal" };
+    return { id: "goal", description: "Edit this session's Goal" };
   if (goalIsLive(goal))
     return {
       id: "goal",
-      description: "Resume or remove this session's goal first",
+      description: "Resume or remove this session's Goal first",
       disabled: true,
     };
   if (busy)
     return {
       id: "goal",
-      description: "Available when the agent finishes",
+      description: "Available when the Agent finishes",
       disabled: true,
     };
   return {
     id: "goal",
-    description: "Set a goal the agent works toward until it's met",
+    description: "Set a Goal the Agent works toward until it's met",
   };
 }
 
@@ -95,10 +107,10 @@ export function GoalChip({
     <div className="flex items-center gap-2 px-2 pt-2" data-testid="goal-mode">
       <span className="inline-flex h-6 items-center gap-1.5 rounded-full border border-border bg-background pr-1 pl-2 text-xs text-muted-foreground">
         <Target className="size-3 shrink-0" />
-        <span className="text-foreground">{editing ? "Editing goal" : "Goal"}</span>
+        <span className="text-foreground">{editing ? "Editing Goal" : "Goal"}</span>
         <button
           type="button"
-          aria-label={editing ? "Cancel editing the goal" : "Leave goal mode"}
+          aria-label={editing ? "Cancel editing the Goal" : "Leave Goal mode"}
           title="Cancel (Esc)"
           onClick={onCancel}
           className="grid size-4 cursor-pointer place-items-center rounded-full hover:bg-accent hover:text-foreground"

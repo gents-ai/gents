@@ -24,6 +24,29 @@ pub async fn load_history(
     load_history_through_sequence(node, session_id, node_did, requester_did, None).await
 }
 
+#[cfg(test)]
+pub(crate) async fn load_history_with_access(
+    access: &crate::ConfigAccess,
+    session_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+) -> Result<Vec<Message>> {
+    Ok(super::output::sequenced::load_sequenced_messages_using(
+        super::output::access::ReadAccess::Config(access),
+        session_id,
+        node_did,
+        requester_did,
+        None,
+        None,
+        None,
+        None,
+    )
+    .await?
+    .into_iter()
+    .map(|row| row.message)
+    .collect())
+}
+
 pub(crate) async fn load_history_through_sequence(
     node: &EmbeddedNode,
     session_id: &str,
@@ -47,14 +70,18 @@ pub(crate) async fn load_history_through_sequence(
 }
 
 pub(crate) async fn load_sequenced_history_for_request(
-    node: &EmbeddedNode,
-    request: &crate::request::watcher::AgentRequest,
+    node: &std::sync::Arc<EmbeddedNode>,
+    request: &gents_protocol::row::AgentRequest,
     through_sequence: Option<u32>,
     after_sequence: Option<u32>,
     provider_profile: crate::turn::provider_input::ProviderInputProfile,
 ) -> Result<Vec<SequencedMessage>> {
-    super::output::sequenced::load_sequenced_messages(
-        node,
+    let access = crate::store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(request.agent_did.clone())?,
+    );
+    super::output::sequenced::load_sequenced_messages_using(
+        super::output::access::ReadAccess::Config(&access),
         &request.session_id,
         &request.node_did,
         request.requester_did.as_deref(),
@@ -67,9 +94,13 @@ pub(crate) async fn load_sequenced_history_for_request(
 }
 
 pub(crate) async fn retry_has_published_input(
-    node: &EmbeddedNode,
-    request: &crate::request::watcher::AgentRequest,
+    node: &std::sync::Arc<EmbeddedNode>,
+    request: &gents_protocol::row::AgentRequest,
 ) -> Result<bool> {
+    let access = crate::store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(request.agent_did.clone())?,
+    );
     let Some(mut parent_id) = request.retry_parent_request_doc_id.clone() else {
         return Ok(false);
     };
@@ -79,35 +110,56 @@ pub(crate) async fn retry_has_published_input(
             visited.insert(parent_id.clone()),
             "retry parent chain contains a cycle"
         );
-        let parent = crate::store::graphql::escape_graphql_string(&parent_id);
-        let scope = super::query::session_scope_filter(
-            &request.node_did,
-            &request.session_id,
-            request.requester_did.as_deref(),
-        );
-        let key = crate::store::graphql::escape_graphql_string(
-            &super::canonical_rows::authored_message_key(&parent_id, "prompt"),
-        );
-        let query = format!(
-            r#"{{
-            AgentRequest(filter: {{ _docID: {{ _eq: "{parent}" }} }}, limit: 2) {{
-                _docID node_did requester_did session_id lifecycle_state retry_parent_request_doc_id
-            }}
-            AgentMessage(filter: {{ {scope}, message_key: {{ _eq: "{key}" }} }}, limit: 2) {{ _docID }}
-            AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{parent}" }},
-                lifecycle_state: {{ _in: ["pending", "running"] }},
-                _or: [{{ await_mode: {{ _eq: "foreground" }} }}, {{ await_mode: {{ _eq: null }} }}] }}, limit: 1) {{ _docID }}
-        }}"#
-        );
-        let response = crate::store::graphql::graphql_with_transaction_retry(
-            node,
-            &query,
-            "resolve retry frontier",
-        )
-        .await?;
+        let rendered = {
+            use gents_protocol::document_query::{
+                fields::{
+                    agent_message as message_fields, agent_request as request_fields,
+                    agent_tool_call as tool_call_fields,
+                },
+                session_scope, Filter, Query, QuerySet, Selection,
+            };
+            let key = gents_protocol::output::rows::authored_message_key(&parent_id, "prompt");
+            let parent_request = Query::select(
+                Selection::doc_id()
+                    .field(request_fields::NODE_DID)
+                    .field(request_fields::REQUESTER_DID)
+                    .field(request_fields::SESSION_ID)
+                    .field(request_fields::LIFECYCLE_STATE)
+                    .field(request_fields::RETRY_PARENT_REQUEST_DOC_ID),
+            )
+            .filter(Filter::eq(request_fields::DOC_ID, parent_id.as_str()))
+            .limit(2);
+            let prompts = Query::select(Selection::doc_id())
+                .filter(session_scope(
+                    &request.node_did,
+                    &request.session_id,
+                    request.requester_did.as_deref(),
+                ))
+                .filter(Filter::eq(message_fields::MESSAGE_KEY, key))
+                .limit(2);
+            let foreground_tool_calls = Query::select(Selection::doc_id())
+                .filter(Filter::eq(
+                    tool_call_fields::REQUEST_DOC_ID,
+                    parent_id.as_str(),
+                ))
+                .filter(Filter::any_of(
+                    tool_call_fields::LIFECYCLE_STATE,
+                    ["pending", "running"],
+                ))
+                .filter(Filter::any([
+                    Filter::eq(tool_call_fields::AWAIT_MODE, "foreground"),
+                    Filter::is_null(tool_call_fields::AWAIT_MODE),
+                ]))
+                .limit(1);
+            QuerySet::new()
+                .plain(&parent_request)
+                .plain(&prompts)
+                .plain(&foreground_tool_calls)
+                .render()
+        };
+        let response = access.read(&rendered).await?;
         let rows = response
-            .data
-            .as_ref()
+            .get("data")
             .context("retry frontier query omitted data")?;
         let parents = rows["AgentRequest"]
             .as_array()
@@ -152,30 +204,6 @@ pub(crate) async fn retry_has_published_input(
     }
 }
 
-#[cfg(test)]
-pub(super) async fn load_history_projection(
-    node: &EmbeddedNode,
-    session_id: &str,
-    node_did: &str,
-    requester_did: Option<&str>,
-    through_sequence: Option<u32>,
-    current_input_request_doc_id: Option<&str>,
-) -> Result<Vec<Message>> {
-    Ok(load_sequenced_history_projection(
-        node,
-        session_id,
-        node_did,
-        requester_did,
-        through_sequence,
-        None,
-        current_input_request_doc_id,
-    )
-    .await?
-    .into_iter()
-    .map(|row| row.message)
-    .collect())
-}
-
 pub(crate) async fn load_sequenced_history_projection(
     node: &EmbeddedNode,
     session_id: &str,
@@ -200,4 +228,26 @@ pub(crate) async fn load_sequenced_history_projection(
     tracing::Span::current().record("history_message_count", history.len() as i64);
     tracing::debug!(session_id = %session_id, ?through_sequence, ?after_sequence, ?current_input_request_doc_id, count = history.len(), "loaded canonical history");
     Ok(history)
+}
+
+pub(crate) async fn load_sequenced_history_projection_on(
+    access: &crate::store::config_client::ConfigAccess,
+    session_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+    through_sequence: Option<u32>,
+    after_sequence: Option<u32>,
+    current_input_request_doc_id: Option<&str>,
+) -> Result<Vec<SequencedMessage>> {
+    super::output::sequenced::load_sequenced_messages_using(
+        super::output::access::ReadAccess::Config(access),
+        session_id,
+        node_did,
+        requester_did,
+        through_sequence,
+        after_sequence,
+        current_input_request_doc_id,
+        None,
+    )
+    .await
 }

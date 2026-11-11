@@ -496,6 +496,7 @@ fn replay_assembly_config() -> LoopConfig {
         additional_params: None,
         structured_output: None,
         tool_choice: None,
+        configuration_guard: None,
         on_rendered_request: None,
         turn_compactor: None,
         active_reduction_keys: Vec::new(),
@@ -869,6 +870,62 @@ async fn a_seeded_dispatch_assembles_the_same_request_as_a_fresh_resolution() {
     );
 }
 
+#[tokio::test]
+async fn recovered_reasoning_does_not_regain_missing_physical_identity() {
+    let tag = provider_tag(0);
+    let config = replay_assembly_config();
+    let mut evidence =
+        producing_capture(&AssemblyOnlyModel, &config, &replay_assembly_content()).await;
+    evidence.origin = ReplayOrigin::RecoveredProvider;
+    evidence.complete = false;
+    let replay = LoopReplayInput {
+        issuer: Some(evidence.issuer.clone()),
+        wire: Some(crate::claude_messages_body::ReplayWire::ClaudeMessages),
+        resolve: Some(counting_resolver(
+            vec![ReplayEvidenceRow {
+                tag: tag.clone(),
+                evidence,
+            }],
+            vec![tag.clone()],
+            Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        )),
+        ..LoopReplayInput::default()
+    };
+    let mut history = replay_assembly_history(&tag);
+    history[1].physical_header = None;
+    history[1].block_indices.clear();
+    let mut next = vec![TaggedMessage::unassociated(Message::user("next"))];
+    let request = assemble_provider_request(
+        &AssemblyOnlyModel,
+        &mut history,
+        &mut next,
+        &[],
+        &config,
+        &replay,
+    )
+    .await
+    .unwrap();
+    let body = config
+        .provider_input_counter
+        .project_body(&request)
+        .unwrap();
+    let flat = crate::provider_input::replay_frontier::flatten(
+        &body,
+        crate::claude_messages_body::ReplayWire::ClaudeMessages,
+    )
+    .unwrap();
+    assert!(!flat.iter().any(|item| matches!(
+        item,
+        crate::provider_input::replay_frontier::FlatItem::Reasoning(_)
+    )));
+    let Message::Assistant { content, .. } = &history[1].message else {
+        panic!("assistant row")
+    };
+    assert!(content
+        .iter()
+        .any(|block| matches!(block, AssistantContent::Text(_))));
+}
+
 #[test]
 fn stripping_all_reasoning_keeps_ordinary_blocks_and_their_indices() {
     let reasoning = |text: &str| {
@@ -1020,4 +1077,55 @@ async fn rebuilt_request_over_the_calibrated_budget_cannot_fit_and_keeps_the_ses
         config.context_calibration.anchor().is_some(),
         "a failed reduction keeps the anchor"
     );
+}
+
+#[tokio::test]
+async fn every_provider_assembly_rechecks_configuration_before_reading_input() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut config = replay_assembly_config();
+    config.configuration_guard = Some(Arc::new({
+        let calls = Arc::clone(&calls);
+        move || {
+            let calls = Arc::clone(&calls);
+            Box::pin(async move {
+                if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Ok(())
+                } else {
+                    Err(ProviderConfigurationGuardError::Unavailable(Box::new(
+                        std::io::Error::other("revoked"),
+                    )))
+                }
+            })
+        }
+    }));
+    let replay = LoopReplayInput::default();
+    let mut history = Vec::new();
+    let mut new_messages = vec![TaggedMessage::unassociated(Message::user("first"))];
+    assemble_provider_request(
+        &AssemblyOnlyModel,
+        &mut history,
+        &mut new_messages,
+        &[],
+        &config,
+        &replay,
+    )
+    .await
+    .unwrap();
+    let before = new_messages.clone();
+    let result = assemble_provider_request(
+        &AssemblyOnlyModel,
+        &mut history,
+        &mut new_messages,
+        &[],
+        &config,
+        &replay,
+    )
+    .await;
+    assert!(result.is_err());
+    assert_eq!(
+        new_messages, before,
+        "denied assembly must not consume pending inputs"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
 }

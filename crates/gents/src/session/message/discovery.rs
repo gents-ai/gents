@@ -1,16 +1,17 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::session::AgentSession;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::target::session_target_allowed;
-use crate::session::origin::{SessionLineage, SessionScope};
+use crate::session::origin::SessionLineage;
 use crate::store::config_client::ConfigAccess;
 use crate::store::graphql::escape_graphql_string;
 use crate::tools::surface::AgentToolConfig;
+use gents_protocol::session::SessionScope;
 
 const PAGE_SIZE: usize = 100;
 const SCAN_PAGES: usize = 10;
@@ -95,8 +96,8 @@ struct SessionScopeCursor {
     requester_did: Option<String>,
 }
 
-impl From<&crate::AgentRequest> for SessionScopeCursor {
-    fn from(caller: &crate::AgentRequest) -> Self {
+impl From<&gents_protocol::row::AgentRequest> for SessionScopeCursor {
+    fn from(caller: &gents_protocol::row::AgentRequest) -> Self {
         Self {
             node_did: caller.node_did.clone(),
             session_id: caller.session_id.clone(),
@@ -129,6 +130,104 @@ fn relationship(lineage: &SessionLineage, scope: &SessionScope, caller_node: &st
     }
 }
 
+/// One listed session's send and interrupt authority (Lean
+/// `DurableLineage.listedSession`, with `target_allowed` from
+/// [`session_target_allowed`]): a send target keeps its own authority, the
+/// caller's starter named by its verified creation receipt is listed with
+/// none, and any other session is unlisted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ListedSession {
+    pub can_message: bool,
+    pub can_interrupt: bool,
+}
+
+pub(super) fn listed_session(
+    target_allowed: bool,
+    verified_starter_receipt: bool,
+    interrupt_allowed: bool,
+) -> Option<ListedSession> {
+    if target_allowed {
+        Some(ListedSession {
+            can_message: true,
+            can_interrupt: interrupt_allowed,
+        })
+    } else {
+        verified_starter_receipt.then_some(ListedSession {
+            can_message: false,
+            can_interrupt: false,
+        })
+    }
+}
+
+/// The caller's starter entry when the starter is not one of its send targets.
+/// It is built from the caller's own verified creation receipt: the starter's
+/// scope, and the receipt's verified signer as its Agent. The starter's
+/// session row and requests lie outside the caller's requester scope and are
+/// not read, so the activity, trigger and time filters, which need them,
+/// exclude this entry.
+async fn starter_entry(
+    node: &Arc<EmbeddedNode>,
+    caller: &gents_protocol::row::AgentRequest,
+    tools: &AgentToolConfig,
+    lineage: &SessionLineage,
+    filter: &SessionFilter,
+) -> Result<Option<Value>> {
+    let (Some(starter), Some(agent_did)) = (
+        lineage.started_by.as_ref(),
+        lineage.started_by_signer.as_deref(),
+    ) else {
+        return Ok(None);
+    };
+    let target_allowed = starter.scope.requester_did.as_deref() == Some(caller.agent_did.as_str())
+        && super::resolve_send_target(
+            node,
+            &caller.node_did,
+            &caller.agent_did,
+            tools,
+            &starter.scope.session_id,
+        )
+        .await?
+        .is_some_and(|target| target.node_did == starter.scope.node_did);
+    // A starter that is also a send target is listed by the paged scan.
+    if target_allowed {
+        return Ok(None);
+    }
+    let Some(entry) = listed_session(target_allowed, true, false) else {
+        return Ok(None);
+    };
+    let agent_matches = |agent: &String| match tools.target(agent) {
+        Some(target) => {
+            target.agent_did == agent_did && target.target_node_did == starter.scope.node_did
+        }
+        None => agent == agent_did,
+    };
+    if filter.status.is_some()
+        || filter.caused_by_trigger_id.is_some()
+        || filter.caused_by_correlation.is_some()
+        || filter.created_after.is_some()
+        || filter.updated_after.is_some()
+        || filter
+            .relationship
+            .as_ref()
+            .is_some_and(|value| value != "started_you")
+        || filter
+            .agent
+            .as_ref()
+            .is_some_and(|agent| !agent_matches(agent))
+    {
+        return Ok(None);
+    }
+    let target = tools.targets.iter().find(|target| {
+        target.target_node_did == starter.scope.node_did && target.agent_did == agent_did
+    });
+    Ok(Some(json!({
+        "session_id": starter.scope.session_id, "node_did": starter.scope.node_did,
+        "agent": target.map_or(agent_did, |target| target.name.as_str()), "agent_did": agent_did,
+        "relationship": "started_you",
+        "can_message": entry.can_message, "can_interrupt": entry.can_interrupt
+    })))
+}
+
 fn last_activity(session: &AgentSession) -> &str {
     session
         .observation
@@ -144,7 +243,7 @@ async fn matches_trigger(
     if filter.caused_by_trigger_id.is_none() && filter.caused_by_correlation.is_none() {
         return Ok(true);
     }
-    let mut predicate = crate::session::session_scope_filter(
+    let mut predicate = gents_protocol::session::session_scope_filter(
         &session.node_did,
         &session.session_id,
         session.requester_did.as_deref(),
@@ -171,12 +270,13 @@ async fn matches_trigger(
 
 pub(crate) async fn agent_session_list(
     node: &Arc<EmbeddedNode>,
-    caller: &crate::AgentRequest,
+    caller: &gents_protocol::row::AgentRequest,
     tools: &AgentToolConfig,
     args: &AgentSessionListArgs,
 ) -> Result<Value> {
     args.validate()?;
-    let access = ConfigAccess::local(node.clone());
+    let access =
+        ConfigAccess::local_as(node.clone(), identity::Did::new(caller.agent_did.clone())?);
     let filter = args.filter.clone().unwrap_or_default();
     let created_after = filter
         .created_after
@@ -202,7 +302,20 @@ pub(crate) async fn agent_session_list(
                 && chrono::DateTime::parse_from_rfc3339(&cursor.created_at).is_ok()
         });
     if let Some(anchor) = &cursor {
-        let response = access.execute(&format!("{{AgentSession(filter: {{_docID: {{_eq: {}}}, requester_did: {{_eq: {}}}}}, limit: 1) {{_docID created_at session_id node_did}}}}", quoted(&anchor.doc_id), quoted(&caller.node_did))).await?;
+        use gents_protocol::document_query::{
+            fields::agent_session as fields, Filter, Query, Selection,
+        };
+        let rendered = Query::select(
+            Selection::doc_id()
+                .field(fields::CREATED_AT)
+                .field(fields::SESSION_ID)
+                .field(fields::NODE_DID),
+        )
+        .filter(Filter::eq(fields::DOC_ID, &anchor.doc_id))
+        .filter(Filter::eq(fields::REQUESTER_DID, &caller.agent_did))
+        .limit(1)
+        .render();
+        let response = access.read(&rendered).await?;
         let rows = response["data"]["AgentSession"]
             .as_array()
             .context("cursor query omitted session rows")?;
@@ -217,20 +330,26 @@ pub(crate) async fn agent_session_list(
     let lineage =
         crate::session::origin::lineage(&access, &SessionScope::of_request(caller)).await?;
     let limit = args.limit.unwrap_or(20);
+    // The starter heads the first page outside `limit`: it has no row in the
+    // caller's requester scope to anchor a cursor on.
+    let starter = match &cursor {
+        None => starter_entry(node, caller, tools, &lineage, &filter).await?,
+        Some(_) => None,
+    };
     let mut result = Vec::new();
     let mut next_cursor = None;
     let mut exhausted = false;
     for _ in 0..SCAN_PAGES {
         let mut predicates = vec![format!(
             "{{requester_did: {{_eq: {}}}, session_id: {{_ne: {}}}}}",
-            quoted(&caller.node_did),
+            quoted(&caller.agent_did),
             quoted(&caller.session_id)
         )];
         if let Some(agent) = &filter.agent {
-            let agent_id = tools
+            let agent_did = tools
                 .target(agent)
-                .map_or(agent.as_str(), |target| target.agent_id.as_str());
-            predicates.push(format!("{{agent_id: {{_eq: {}}}}}", quoted(agent_id)));
+                .map_or(agent.as_str(), |target| target.agent_did.as_str());
+            predicates.push(format!("{{agent_did: {{_eq: {}}}}}", quoted(agent_did)));
             if let Some(target) = tools.target(agent) {
                 predicates.push(format!(
                     "{{node_did: {{_eq: {}}}}}",
@@ -241,7 +360,7 @@ pub(crate) async fn agent_session_list(
         if let Some(after) = &cursor {
             predicates.push(format!("{{_or: [{{created_at: {{_lt: {time}}}}}, {{created_at: {{_eq: {time}}}, session_id: {{_lt: {session}}}}}, {{created_at: {{_eq: {time}}}, session_id: {{_eq: {session}}}, node_did: {{_lt: {node}}}}}]}}", time=quoted(&after.created_at), session=quoted(&after.session_id), node=quoted(&after.node_did)));
         }
-        let response = access.execute(&format!("{{AgentSession(filter: {{_and: [{}]}}, order: [{{created_at: DESC}}, {{session_id: DESC}}, {{node_did: DESC}}], limit: {PAGE_SIZE}) {{{}}}}}", predicates.join(","), crate::session::AGENT_SESSION_FIELDS)).await?;
+        let response = access.execute(&format!("{{AgentSession(filter: {{_and: [{}]}}, order: [{{created_at: DESC}}, {{session_id: DESC}}, {{node_did: DESC}}], limit: {PAGE_SIZE}) {{{}}}}}", predicates.join(","), gents_protocol::session::AGENT_SESSION_FIELDS)).await?;
         let rows = response["data"]["AgentSession"]
             .as_array()
             .context("session list omitted canonical rows")?;
@@ -250,7 +369,7 @@ pub(crate) async fn agent_session_list(
             break;
         }
         for (index, row) in rows.iter().enumerate() {
-            let session = crate::session::decode_session_row(row)?.session;
+            let session = gents_protocol::session::decode_session_row(row)?.session;
             let after = Cursor {
                 caller: SessionScopeCursor::from(caller),
                 filter: filter.clone(),
@@ -265,12 +384,22 @@ pub(crate) async fn agent_session_list(
             };
             next_cursor = Some(serde_json::to_string(&after)?);
             cursor = Some(after);
-            if !session_target_allowed(&session, &caller.node_did, tools) {
+            // The starter outside the caller's requester scope is listed by
+            // `starter_entry`, so this scan lists only send targets.
+            let target_allowed =
+                session_target_allowed(&session, &caller.node_did, &caller.agent_did, tools);
+            if !target_allowed {
                 continue;
             }
-            super::resolve_send_target(node, &caller.node_did, tools, &session.session_id)
-                .await?
-                .context("listed session is no longer messageable")?;
+            super::resolve_send_target(
+                node,
+                &caller.node_did,
+                &caller.agent_did,
+                tools,
+                &session.session_id,
+            )
+            .await?
+            .context("listed session is no longer messageable")?;
             let scope = SessionScope::from(&session);
             let relation = relationship(&lineage, &scope, &caller.node_did);
             if filter
@@ -293,8 +422,8 @@ pub(crate) async fn agent_session_list(
             if !matches_trigger(&access, &session, &filter).await? {
                 continue;
             }
-            let active = crate::request::interrupt::active_session_request(
-                node,
+            let active = crate::request::interrupt::active_session_request_with_access(
+                &access,
                 &scope.session_id,
                 &scope.node_did,
                 scope.requester_did.as_deref(),
@@ -304,28 +433,35 @@ pub(crate) async fn agent_session_list(
             if filter.status.as_ref().is_some_and(|value| value != status) {
                 continue;
             }
-            let can_interrupt =
-                super::interrupt_refusal(node, &SessionScope::of_request(caller), &scope)
-                    .await?
-                    .is_none();
+            let interrupt_allowed = super::interrupt_refusal(
+                node,
+                &caller.agent_did,
+                &SessionScope::of_request(caller),
+                &scope,
+            )
+            .await?
+            .is_none();
+            let Some(listed) = listed_session(target_allowed, false, interrupt_allowed) else {
+                continue;
+            };
             let agent = tools
                 .targets
                 .iter()
                 .find(|target| {
                     target.target_node_did == session.node_did
-                        && target.agent_id == session.agent_id
+                        && target.agent_did == session.agent_did
                 })
-                .map_or(session.agent_id.as_str(), |target| target.name.as_str());
+                .map_or(session.agent_did.as_str(), |target| target.name.as_str());
             result.push(json!({
                 "session_id": session.session_id, "node_did": session.node_did,
-                "agent": agent, "agent_id": session.agent_id,
+                "agent": agent, "agent_did": session.agent_did,
                 "title": session.title.as_ref().map(|title| &title.text),
                 "relationship": relation, "status": status,
                 "stopped_at": session.stopped_at,
                 "request_id": active.as_ref().map(|request| &request.request_id),
                 "lifecycle_state": active.as_ref().and_then(|request| request.lifecycle_state),
                 "last_activity_at": last_activity(&session),
-                "can_message": true, "can_interrupt": can_interrupt
+                "can_message": listed.can_message, "can_interrupt": listed.can_interrupt
             }));
             if result.len() == limit {
                 exhausted = index + 1 == rows.len() && rows.len() < PAGE_SIZE;
@@ -337,6 +473,7 @@ pub(crate) async fn agent_session_list(
             break;
         }
     }
+    result.splice(0..0, starter);
     Ok(
         json!({"ok": true, "sessions": result, "next_cursor": if exhausted { None } else { next_cursor }}),
     )

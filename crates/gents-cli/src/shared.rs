@@ -26,14 +26,13 @@ pub(crate) struct InitSummary {
     pub(crate) model_name: String,
     pub(crate) max_concurrent: i64,
     pub(crate) max_queue_depth: i64,
-    pub(crate) default_agent_id: String,
+    pub(crate) default_agent_did: String,
     pub(crate) tools_id: String,
     pub(crate) wide_open_preset_id: String,
     pub(crate) inference_profile_id: String,
     pub(crate) tool_package: ToolPackageArg,
     pub(crate) tool_ceiling: ToolCeilingArg,
     pub(crate) tool_root: Option<String>,
-    pub(crate) enable_memory: bool,
     pub(crate) enable_defra_query: bool,
     pub(crate) defra_query_collections: Vec<String>,
     pub(crate) created_node: bool,
@@ -42,62 +41,6 @@ pub(crate) struct InitSummary {
 
 pub(crate) type StoredInitConfig =
     gents::store::local::home::StoredInitConfig<ToolPackageArg, ToolCeilingArg>;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum CodexShimHealth {
-    Off,
-    Listening {
-        websocket: String,
-        auth_required: bool,
-        bound_node_did: String,
-        bound_agent_id: String,
-    },
-    Pending {
-        bound_agent_id: String,
-        reason: String,
-    },
-    Disabled {
-        reason: String,
-    },
-}
-
-impl CodexShimHealth {
-    pub(crate) fn is_degraded(&self) -> bool {
-        matches!(self, Self::Pending { .. } | Self::Disabled { .. })
-    }
-
-    pub(crate) fn to_json(&self) -> serde_json::Value {
-        match self {
-            Self::Off => serde_json::json!({ "status": "off" }),
-            Self::Listening {
-                websocket,
-                auth_required,
-                bound_node_did,
-                bound_agent_id,
-            } => serde_json::json!({
-                "status": "ok",
-                "websocket": websocket,
-                "auth_required": auth_required,
-                "bound_node_did": bound_node_did,
-                "bound_agent_id": bound_agent_id,
-            }),
-            Self::Pending {
-                bound_agent_id,
-                reason,
-            } => serde_json::json!({
-                "status": "pending",
-                "bound_agent_id": bound_agent_id,
-                "reason": reason,
-            }),
-            Self::Disabled { reason } => serde_json::json!({
-                "status": "disabled",
-                "reason": reason,
-            }),
-        }
-    }
-}
-
-pub(crate) type CodexShimHealthHandle = std::sync::Arc<std::sync::RwLock<CodexShimHealth>>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) struct P2pAdmissionState {
@@ -126,7 +69,7 @@ pub(crate) struct StoredRuntimeState {
     pub(crate) graphql: String,
     pub(crate) node_name: String,
     pub(crate) node_did: String,
-    pub(crate) default_agent_id: String,
+    pub(crate) default_agent_did: String,
     #[serde(default = "default_p2p_transport")]
     pub(crate) p2p_transport: String,
     #[serde(default)]
@@ -139,13 +82,6 @@ pub(crate) struct StoredRuntimeState {
 
 fn default_p2p_transport() -> String {
     "iroh".to_string()
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub(crate) struct P2pCollectionSubscriptionRow {
-    pub(crate) id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) name: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -189,26 +125,6 @@ pub(crate) struct P2pReplicatorDeleteRequest {
     pub(crate) id: String,
     #[serde(rename = "Collections")]
     pub(crate) collections: Vec<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct P2pSyncDocumentsRequest {
-    #[serde(rename = "collectionName")]
-    pub(crate) collection_name: String,
-    #[serde(rename = "docIDs")]
-    pub(crate) doc_ids: Vec<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct P2pSyncBranchableRequest {
-    #[serde(rename = "collectionID")]
-    pub(crate) collection_id: String,
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct P2pSyncVersionsRequest {
-    #[serde(rename = "versionIDs")]
-    pub(crate) version_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -322,11 +238,11 @@ pub(crate) async fn load_backend_observation(
     backend_id: &str,
 ) -> anyhow::Result<gents::documents::InferenceBackendObservation> {
     let query = format!(
-        "{{ InferenceBackend(filter: {{node_did: {{_eq: \"{}\"}}, backend_id: {{_eq: \"{}\"}}}}, limit: 2) {{backend_id catalogs catalog_freshness probe_status last_probe}} }}",
+        "{{ InferenceBackendObservation(filter: {{node_did: {{_eq: \"{}\"}}, backend_id: {{_eq: \"{}\"}}}}, limit: 2) {{backend_id catalogs catalog_freshness probe_status last_probe}} }}",
         gents::store::graphql::escape_graphql_string(node_did),
         gents::store::graphql::escape_graphql_string(backend_id),
     );
-    let rows = crate::graphql_rows(access, "InferenceBackend", &query).await?;
+    let rows = crate::graphql_rows(access, "InferenceBackendObservation", &query).await?;
     anyhow::ensure!(
         rows.len() == 1,
         "backend observation is missing or ambiguous"

@@ -71,9 +71,9 @@ function fromTrigger(node: NodeView, t: TriggerView): Automation {
 }
 
 function fromTask(node: NodeView, task: TaskView): Automation {
-  const agent = agentReadiness(node, task.agentId);
+  const agent = agentReadiness(node, task.agentDid);
   const agentName =
-    node.agents.find((a) => a.agentId === task.agentId)?.displayName ?? task.agentId;
+    node.agents.find((a) => a.agentDid === task.agentDid)?.displayName ?? task.agentDid;
   const readiness: Readiness =
     task.enabled === false
       ? { ok: false, reason: "Off" }

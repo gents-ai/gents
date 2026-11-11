@@ -6,7 +6,7 @@ use super::lookup_backend_observation;
 use crate::inference::llm::tool::Tool;
 use crate::store::identity::NodeIdentity;
 use crate::tools::builtin::defra_query::{CollectionScope, DefraQueryTool, QueryParams};
-use crate::{defra_node::EmbeddedNode, store::config_client::ConfigAccess};
+use crate::{defra_node::Node as EmbeddedNode, store::config_client::ConfigAccess};
 
 #[tokio::test]
 async fn runtime_observation_reads_do_not_wait_for_the_mutation_gate() {
@@ -51,19 +51,22 @@ async fn runtime_observation_reads_do_not_wait_for_the_mutation_gate() {
         .expect("writer acquires the canonical mutation gate");
 
     let missing_doc = document::DocID::new_v0_from_seed("missing-observation").to_string();
-    let query = DefraQueryTool::new(Arc::clone(&node), CollectionScope::all())
-        .with_actor(::identity::Did::new(owner.clone()).unwrap());
+    let actor = ::identity::Did::new(owner.clone()).unwrap();
+    let query =
+        DefraQueryTool::new(Arc::clone(&node), CollectionScope::all()).with_actor(actor.clone());
     let query_args = QueryParams {
         argv: vec!["fields".into()],
         collection: Some("AgentRequest".into()),
         options: Default::default(),
     };
+    let access = ConfigAccess::local(Arc::clone(&node));
+    let missing_docs = [missing_doc];
     let observations = tokio::time::timeout(OBSERVATION_TIMEOUT, async {
         tokio::join!(
             lookup_backend_observation(&node, &owner, "missing"),
             crate::session::max_sequence(&node, "missing", &owner, None),
-            crate::session::load_session_current_hop(&node, &owner, "missing"),
-            crate::tools::background::status::load_caused_request_terminal(&node, &missing_doc),
+            crate::session::load_session_current_hop(&node, &actor, &owner, "missing"),
+            crate::tools::background::status::load_caused_request_terminals(&access, &missing_docs),
             crate::load_inference_profile(&node, &owner, "missing"),
             Tool::call(&query, query_args),
         )
@@ -76,9 +79,9 @@ async fn runtime_observation_reads_do_not_wait_for_the_mutation_gate() {
     assert!(backend.unwrap().is_none());
     assert_eq!(sequence.unwrap(), 0);
     assert_eq!(hop.unwrap(), 0);
-    assert!(terminal.unwrap().is_none());
+    assert!(terminal.unwrap().is_empty());
     assert!(profile.unwrap().is_none());
     let schema: serde_json::Value = serde_json::from_str(&query_result.unwrap()).unwrap();
     assert!(schema.is_object());
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }

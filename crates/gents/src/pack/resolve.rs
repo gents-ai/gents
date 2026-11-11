@@ -137,7 +137,7 @@ fn offline_pack_error(
     {
         Some(RegistryError::Unreachable { .. }) => anyhow::anyhow!(
             "{pinned} is not in the pack store of {} and the registry at {registry_url} \
-             could not be reached; fetch it while online with `gents pack fetch {pinned} \
+             could not be reached; fetch it while online with `gents config pack fetch {pinned} \
              --store`, or name a directory or .pack file.",
             home.display()
         ),
@@ -303,7 +303,7 @@ mod tests {
             "{message}"
         );
         assert!(
-            message.contains("gents pack fetch gents/nowhere --store"),
+            message.contains("gents config pack fetch gents/nowhere --store"),
             "{message}"
         );
     }
@@ -320,7 +320,7 @@ mod tests {
         let message = format!("{error:#}");
         assert!(message.contains("gents/nowhere@9.9.9"), "{message}");
         assert!(
-            message.contains("gents pack fetch gents/nowhere@9.9.9 --store"),
+            message.contains("gents config pack fetch gents/nowhere@9.9.9 --store"),
             "{message}"
         );
     }

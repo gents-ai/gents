@@ -1,5 +1,4 @@
 import Proofs.Basic
-import Proofs.SessionHydration.State
 import Mathlib.Data.Finset.Basic
 
 namespace Enrollment
@@ -22,6 +21,8 @@ inductive DecisionKind where | approved | denied deriving DecidableEq, Repr
 inductive RevisionKind where | active | revoked deriving DecidableEq, Repr
 inductive RouteDirection where | clientToServer | serverToClient deriving DecidableEq, Repr
 
+/-- Enrollment binds its signed offer and decisions to the hosting node DID;
+this is peer admission context, not an Agent DID or document access grant. -/
 structure Offer where
   offerId : String
   challenge : String
@@ -52,6 +53,7 @@ structure Request where
   serverPeer : PeerId
   candidateDid : Did
   candidatePeer : PeerId
+  candidateName : Option String := none
   observedCandidatePeer : PeerId
   resolvedCandidateDid : Did
   candidateTicketPeer : PeerId
@@ -68,10 +70,14 @@ def enrollmentDigestDomain : String := "gents-enrollment-request-v1"
 
 def stringBytes (value : String) : WireBytes := value.toUTF8.data.toList
 
+def candidateNameFields : Option String → List String
+  | none => []
+  | some name => ["candidate-name-v1", name]
+
 def canonicalRequestTextFields (r : Request) : List String :=
   [r.requestId, r.offerId, r.challenge, r.networkId, r.adminDid,
    r.serverPeer, r.candidateDid, r.candidatePeer, r.ownerNode, r.profile,
-   r.clientNonce, r.issuedAt, r.expiresAt]
+   r.clientNonce, r.issuedAt, r.expiresAt] ++ candidateNameFields r.candidateName
 
 def textFieldsToBytes (fields : List String) : CanonicalFields := fields.map stringBytes
 
@@ -264,6 +270,14 @@ structure RouteReceipt where
   applied : Bool
   deriving DecidableEq, Repr
 
+/-- A local copy already delivered to a node. Revoking a grant cannot erase
+copies held by that node or outside Gents. -/
+structure ReplicatedCopy where
+  holder : Did
+  collection : String
+  documentId : String
+  deriving DecidableEq, Repr
+
 structure State where
   observedOffers : Finset Offer := ∅
   adminPins : Finset NetworkAdminPin := ∅
@@ -275,6 +289,7 @@ structure State where
   memberships : Finset Membership := ∅
   routeReceipts : Finset RouteReceipt := ∅
   appliedRoutes : Finset AppliedRoute := ∅
+  replicatedCopies : Finset ReplicatedCopy := ∅
   deriving DecidableEq
 
 def challengeBindingFor (r : Request) : ChallengeBinding :=
@@ -511,40 +526,6 @@ instance (r : Request) (m : Membership) : Decidable (membershipOwnedBy r m) := b
 instance (r : Request) (route : AppliedRoute) : Decidable (routeOwnedBy r route) := by
   unfold routeOwnedBy; infer_instance
 
-def membershipCurrentlyAuthorized (s : State) (membership : Membership) : Prop :=
-  ∃ r ∈ s.acceptedRequests, ∃ d ∈ s.decisions,
-    currentApproval s r d ∧ membership = membershipFor r d
-
-def routeForDirection (r : Request) (d : Decision) : RouteDirection → AppliedRoute
-  | .clientToServer => clientToServerRoute r d
-  | .serverToClient => serverToClientRoute r d
-
-def routeCurrentlyAuthorized (s : State) (direction : RouteDirection)
-    (route : AppliedRoute) : Prop :=
-  ∃ r ∈ s.acceptedRequests, ∃ d ∈ s.decisions,
-    currentApproval s r d ∧ membershipFor r d ∈ s.memberships ∧
-    route = routeForDirection r d direction
-
-instance (s : State) (direction : RouteDirection) (route : AppliedRoute) : Decidable
-    (routeCurrentlyAuthorized s direction route) := by
-  unfold routeCurrentlyAuthorized; infer_instance
-
-def clientRouteCurrentlyAuthorized (s : State) (route : AppliedRoute) : Prop :=
-  routeCurrentlyAuthorized s .clientToServer route
-
-def serverRouteCurrentlyAuthorized (s : State) (route : AppliedRoute) : Prop :=
-  routeCurrentlyAuthorized s .serverToClient route
-
-instance (s : State) (membership : Membership) : Decidable
-    (membershipCurrentlyAuthorized s membership) := by
-  unfold membershipCurrentlyAuthorized; infer_instance
-instance (s : State) (route : AppliedRoute) : Decidable
-    (clientRouteCurrentlyAuthorized s route) := by
-  unfold clientRouteCurrentlyAuthorized; infer_instance
-instance (s : State) (route : AppliedRoute) : Decidable
-    (serverRouteCurrentlyAuthorized s route) := by
-  unfold serverRouteCurrentlyAuthorized; infer_instance
-
 def enrollmentReady (s : State) (r : Request) : Prop :=
   ∃ d ∈ s.decisions, currentApproval s r d ∧
     membershipFor r d ∈ s.memberships ∧
@@ -554,53 +535,5 @@ def enrollmentReady (s : State) (r : Request) : Prop :=
 
 instance (s : State) (r : Request) : Decidable (enrollmentReady s r) := by
   unfold enrollmentReady; infer_instance
-
-def toHydrationRoute (route : AppliedRoute) : SessionHydration.AppliedPairingRoute :=
-  { peer := route.peer, requester := route.requester, node := route.node }
-
-def toHydrationMembership (membership : Membership) : SessionHydration.VerifiedActiveMembership :=
-  { network := membership.networkId, member := membership.memberDid }
-
-def projectedHydrationCatalogFor (s : State) (selectedNetwork : String)
-    (direction : RouteDirection)
-    (sessions : Finset SessionHydration.SessionOwner) : SessionHydration.Catalog :=
-  { appliedPairingRoutes :=
-      (s.appliedRoutes.filter fun (route : AppliedRoute) =>
-        route.networkId = selectedNetwork ∧ route.direction = direction ∧
-          route.live = true ∧ routeCurrentlyAuthorized s direction route).image toHydrationRoute
-  , selectedNetwork
-  , verifiedActiveMemberships :=
-      (s.memberships.filter fun membership =>
-        membership.networkId = selectedNetwork ∧ membership.active = true ∧
-          membership.adminSigned = true ∧ membership.fresh = true ∧
-          membershipCurrentlyAuthorized s membership).image toHydrationMembership
-  , sessions
-  , closureInputs := [] }
-
-def projectedClientToServerHydrationCatalog (s : State) (selectedNetwork : String)
-    (sessions : Finset SessionHydration.SessionOwner) : SessionHydration.Catalog :=
-  projectedHydrationCatalogFor s selectedNetwork .clientToServer sessions
-
-def projectedServerToClientHydrationCatalog (s : State) (selectedNetwork : String)
-    (sessions : Finset SessionHydration.SessionOwner) : SessionHydration.Catalog :=
-  projectedHydrationCatalogFor s selectedNetwork .serverToClient sessions
-
-def projectedHydrationCatalog := projectedClientToServerHydrationCatalog
-
-def hydrationRequestForDirection (r : Request) (session : String) :
-    RouteDirection → SessionHydration.Request
-  | .clientToServer =>
-    { key := r.requestId, peer := r.candidatePeer, requester := r.candidateDid
-    , node := r.ownerNode, session }
-  | .serverToClient =>
-    { key := r.requestId, peer := r.serverPeer, requester := r.candidateDid
-    , node := r.ownerNode, session }
-
-def hydrationRequestFor (r : Request) (session : String) : SessionHydration.Request :=
-  hydrationRequestForDirection r session .clientToServer
-
-def reverseHydrationRequestFor (r : Request) (session : String) : SessionHydration.Request :=
-  { key := r.requestId, peer := r.serverPeer, requester := r.candidateDid
-  , node := r.ownerNode, session }
 
 end Enrollment

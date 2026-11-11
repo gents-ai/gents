@@ -42,8 +42,6 @@ mod editor_history;
 mod editor_images;
 #[path = "support/editor_inventory.rs"]
 mod editor_inventory;
-#[path = "support/editor_inventory_permissions.rs"]
-mod editor_inventory_permissions;
 #[path = "support/editor_questions.rs"]
 mod editor_questions;
 #[path = "support/editor_related_work.rs"]
@@ -75,8 +73,6 @@ mod ports;
 mod retained_schema_upgrade;
 #[path = "support/runtime_replacement.rs"]
 mod runtime_replacement;
-#[path = "support/speech.rs"]
-mod speech;
 mod support;
 
 use fake_llm::{ChatAction, FakeLlm};
@@ -111,8 +107,6 @@ enum Journey {
     EditorGoalDelivery,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorReview,
-    #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
-    EditorReviewPermissions,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorInventory,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
@@ -151,7 +145,6 @@ impl Journey {
             Self::EditorDelivery => Some("delivery"),
             Self::EditorGoalDelivery => Some("goal-delivery"),
             Self::EditorReview => Some("review"),
-            Self::EditorReviewPermissions => Some("review-permissions"),
             Self::EditorInventory => Some("review-inventory"),
             Self::EditorUndo => Some("undo"),
             Self::EditorWorkspace => Some("workspace"),
@@ -498,30 +491,6 @@ async fn editor_pages_real_file_captures_across_reload_and_new_activity() -> Res
 
 #[cfg(feature = "editor-e2e")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn editor_retries_recorded_file_review_after_reenrollment() -> Result<()> {
-    let temp = tempfile::tempdir()?;
-    exercise(temp.path(), Journey::EditorReviewPermissions)
-        .await
-        .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "editor.log",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
-        })?;
-    copy_editor_evidence(temp.path(), "editor-review-permissions-canonical.json")
-}
-
-#[cfg(feature = "editor-e2e")]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn editor_recovers_blocked_and_limited_goals_without_submitting_the_draft() -> Result<()> {
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorGoalRecovery)
@@ -836,10 +805,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                     return action;
                 }
             }
-            if matches!(
-                journey,
-                Journey::EditorReview | Journey::EditorReviewPermissions
-            ) {
+            if matches!(journey, Journey::EditorReview) {
                 if let Some(action) = editor_review::reply(request) {
                     return action;
                 }
@@ -924,8 +890,10 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         }),
     )?;
     let node_home = root.join("runtime");
+    let homes = support::homes::ProcessHomes::under(root);
     let mut init = Command::new(&cli);
     init.current_dir(root)
+        .envs(homes.env())
         .env_remove("GENTS_SYSTEM_LOG")
         .args(["init", "--store-key-custody", "file", "--home"])
         .arg(&node_home)
@@ -1021,7 +989,10 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         did
     };
     let mut host_command = Command::new(&host_binary);
-    host_command.args(["--serve", "--home"]).arg(paths.root());
+    host_command
+        .envs(homes.env())
+        .args(["--serve", "--home"])
+        .arg(paths.root());
     if journey.editor_scenario().is_some()
         || matches!(
             journey,
@@ -1044,12 +1015,39 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         console::ConsoleChild::spawn(host_command.as_std(), &root.join("client-host.log"))?;
     wait_listener(&mut host, &paths).await?;
     let mut client = Attachment::start_with_binary(&paths, &host_binary).await;
+    // The operator observes and configures as the User `init` made the Node's
+    // administrator, whose `session_read` covers the client's sessions and
+    // requests; the Node key holds no relation on them.
+    let operator =
+        gents_desktop_core::client::PrincipalIdentity::load_existing(&homes.cli_identity())?;
     let access = gents::ConfigAccess::Graphql(
-        gents::store::config_client::GraphqlEndpoint::as_principal(graphql, identity.did()),
+        gents::store::config_client::GraphqlEndpoint::as_principal(graphql, operator.did())
+            .with_client_signing_capability(operator.client_signing_capability()?)?,
     );
     if matches!(journey, Journey::Conversation | Journey::RuntimeReplacement) {
         client
             .call(1, "client_connect_local", json!({"nodeHome":node_home}))
+            .await;
+        if matches!(journey, Journey::Conversation) && predecessor.is_none() {
+            let pending =
+                gents_server::server_host::pending_managed_enrollments(&node_home, graphql).await?;
+            let members =
+                gents_server::server_host::managed_enrollment_members(&node_home, graphql).await?;
+            ensure!(
+                pending
+                    .iter()
+                    .all(|entry| entry.candidate_did != client_did),
+                "ordinary local connect authored an enrollment request"
+            );
+            ensure!(
+                members
+                    .iter()
+                    .all(|entry| entry.candidate_did != client_did),
+                "ordinary local connect granted enrollment authority"
+            );
+        }
+        client
+            .call(2, "client_enroll_local", json!({"nodeHome":node_home}))
             .await;
     } else {
         let pending = client
@@ -1082,9 +1080,40 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         })
         .await
         .context("runtime did not observe the enrollment request")??;
+        // Approval admits the route only; the Node's authority for the
+        // enrolled User is the separate explicit grant (Lean
+        // `Identity.EnrollmentGrant`).
+        let granted = Command::new(&cli)
+            .current_dir(root)
+            .envs(homes.env())
+            .args([
+                "runtime",
+                "p2p",
+                "enrollment",
+                "grant",
+                pending_id,
+                "--home",
+            ])
+            .arg(&node_home)
+            .kill_on_drop(true)
+            .output();
+        let granted = tokio::time::timeout(Duration::from_secs(30), granted).await??;
+        ensure!(
+            granted.status.success(),
+            "enrollment grant failed: {}",
+            String::from_utf8_lossy(&granted.stderr)
+        );
         let approved = Command::new(&cli)
             .current_dir(root)
-            .args(["p2p", "enrollment", "approve", pending_id, "--home"])
+            .envs(homes.env())
+            .args([
+                "runtime",
+                "p2p",
+                "enrollment",
+                "approve",
+                pending_id,
+                "--home",
+            ])
             .arg(&node_home)
             .kill_on_drop(true)
             .output();
@@ -1121,10 +1150,10 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         return Ok(());
     }
 
-    let agent_id = deployment["agents"]
+    let agent_did = deployment["agents"]
         .as_array()
         .and_then(|agents| agents.iter().find(|agent| agent["isDefault"] == true))
-        .and_then(|agent| agent["agentId"].as_str())
+        .and_then(|agent| agent["agentDid"].as_str())
         .context("runtime default agent")?;
     if matches!(
         journey,
@@ -1138,7 +1167,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             Journey::EditorDelivery | Journey::EditorGoalDelivery
         ) {
             client
-                .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+                .call(id, "client_enroll_local", json!({"nodeHome":node_home}))
                 .await;
             id += 1;
             wait_chat_deployment(&mut client, &mut id, node_did, &access).await?;
@@ -1147,70 +1176,18 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             &mut client,
             &mut id,
             node_did,
-            agent_id,
+            agent_did,
             provider.endpoint(),
         )
         .await?;
     }
-    let speech = if matches!(journey, Journey::Conversation) {
+    if matches!(journey, Journey::Conversation) {
         client
-            .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+            .call(id, "client_enroll_local", json!({"nodeHome":node_home}))
             .await;
         id += 1;
-        let service = speech::SpeechService::start().await?;
-        access
-            .write(
-                "seed_editor_speech_service",
-                &format!(
-                    r#"mutation {{ create_ToolServiceRegistry(input: {{
-                node_did:"{}", service_id:"editor-speech", display_name:"Editor speech",
-                hostname:"127.0.0.1", mcp_port:{}, mcp_path:"/mcp", enabled:true, send_node_did:true
-            }}) {{ _docID }} }}"#,
-                    gents::store::graphql::escape_graphql_string(node_did),
-                    service.port,
-                ),
-            )
-            .await?;
-        let services = client
-            .call(id, "client_speech_services", json!({"nodeDid":node_did}))
-            .await;
-        id += 1;
-        ensure!(
-            services.as_array().is_some_and(|services| services
-                .iter()
-                .any(|service| service["serviceId"] == "editor-speech")),
-            "configured speech service was not discovered: {services}"
-        );
-        let tools = client
-            .call(
-                id,
-                "client_speech_tools",
-                json!({"nodeDid":node_did,"serviceId":"editor-speech"}),
-            )
-            .await;
-        id += 1;
-        ensure!(
-            tools.as_array().is_some_and(|tools| tools.len() == 2),
-            "speech adapter tools were not discovered: {tools}"
-        );
-        Some(service)
-    } else {
-        None
-    };
-    let content =
-        if speech.is_some() {
-            let transcript = client.call(id, "client_speech_recognize", json!({"request": {
-            "tool":{"nodeDid":node_did,"serviceId":"editor-speech","toolName":"transcribe"},
-            "clip":{"pcm":"AAAAAA==","sampleRate":48000},"language":"en"
-        }})).await;
-            id += 1;
-            transcript
-                .as_str()
-                .context("configured speech transcript")?
-                .to_owned()
-        } else {
-            "Return the fixture response.".to_owned()
-        };
+    }
+    let content = "Return the fixture response.".to_owned();
     let receipt = if matches!(journey, Journey::Goal) {
         let mut recovery = EditRecoveryHost {
             process: &mut host,
@@ -1225,7 +1202,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             &mut id,
             node_did,
             &client_did,
-            agent_id,
+            agent_did,
             &identity,
             &mut recovery,
         )
@@ -1237,7 +1214,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         Journey::EditorGoalRecovery | Journey::EditorGoalSteering
     ) {
         let request = json!({
-            "nodeDid":node_did, "agentId":agent_id,
+            "nodeDid":node_did, "agentDid":agent_did,
             "cwd": journey.is_steering().then_some(root),
             "action":{"kind":"create", "objective":"Return the fixture response.", "tokenBudget":"1000"}
         });
@@ -1250,7 +1227,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 id,
                 "desktop_chat_send",
                 json!({"request":{
-                    "nodeDid":node_did,"agentId":agent_id,"content":content,"delivery":"queue",
+                    "nodeDid":node_did,"agentDid":agent_did,"content":content,"delivery":"queue",
                     "cwd": journey.is_steering().then_some(root)
                 }}),
             )
@@ -1380,9 +1357,9 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 continuation_gate.add_permits(1);
             }
         }));
-        configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
+        configured_actions::seed_editor_settings(&access, node_did, agent_did).await?;
         client
-            .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+            .call(id, "client_enroll_local", json!({"nodeHome":node_home}))
             .await;
         let editor = run_editor_journey(
             root,
@@ -1494,12 +1471,25 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 "goal controls must preserve the current owned turn"
             );
         }
+        // The snapshot carries the Goal state `desktop_session_goal` reads
+        // (Lean `SessionObservation.State`), so it shows a Goal only as the
+        // Agent's verified observation shows it; that no Goal document
+        // reaches the client is checked on its own store after the host stops.
         let projection = read_session(&mut client, &mut id, node_did, session).await?;
+        let shown = &projection["goal"]["observation"];
         ensure!(
             projection["sessionId"] == session
                 && projection["nodeDid"] == node_did
-                && projection["goal"].is_null(),
-            "ordinary client routes must not replicate raw Goal documents"
+                && projection["goal"]["kind"] == "observed"
+                && projection["goal"]["next"] == "control_goal"
+                && shown["nodeDid"] == node_did
+                && shown["sessionId"] == session
+                && shown["goal"]["goalId"] == view["goal"]["goalId"]
+                && shown["goal"]["status"] == view["goal"]["status"]
+                && shown["goal"]["objective"] == view["goal"]["objective"],
+            "the session snapshot must show the Agent's verified Goal observation: {} vs {}",
+            projection["goal"],
+            view["goal"]
         );
     }
     if matches!(journey, Journey::Editor) {
@@ -1547,9 +1537,9 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
         }));
-        configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
+        configured_actions::seed_editor_settings(&access, node_did, agent_did).await?;
         client
-            .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+            .call(id, "client_enroll_local", json!({"nodeHome":node_home}))
             .await;
         let approval_home = node_home.clone();
         let approval_path = root.join("approval-fixture.txt");
@@ -1622,7 +1612,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 && stopped.iter().all(|row| row["lifecycle_state"] == "interrupted"),
             "both editor Stop actions must reach distinct requests in the same session: {stopped:?}"
         );
-        configured_actions::verify_editor_settings(&access, node_did, agent_id).await?;
+        configured_actions::verify_editor_settings(&access, node_did, agent_did).await?;
         let submitted = access.execute(&format!(
             r#"{{ AgentRequest(filter: {{ node_did: {{_eq: "{}"}}, purpose: {{_eq: "normal"}} }}) {{ content input }} }}"#,
             gents::store::graphql::escape_graphql_string(node_did),
@@ -1651,7 +1641,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         id += 1;
         let binding = selected["agentConfigs"]
             .as_array()
-            .and_then(|agents| agents.iter().find(|agent| agent["agent_id"] == agent_id))
+            .and_then(|agents| agents.iter().find(|agent| agent["agent_did"] == agent_did))
             .context("selected agent configuration")?;
         ensure!(
             selected["inferenceProfiles"]
@@ -1762,7 +1752,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             home: &node_home,
             binary: &host_binary,
             node_did,
-            agent_id,
+            agent_did,
             session,
             client_did: &client_did,
             original_doc_id: &original_doc_id,
@@ -1794,35 +1784,6 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 .is_ok_and(|value| value["output"]["kind"] == "loading"),
         "a request's answer escaped its session scope"
     );
-    if let Some(speech) = speech.as_ref() {
-        let clip = client
-            .call(
-                id,
-                "client_speech_synthesize",
-                json!({"request":{
-                    "tool":{"nodeDid":node_did,"serviceId":"editor-speech","toolName":"synthesize"},
-                    "text":"First part and final part.","sampleRate":48000
-                }}),
-            )
-            .await;
-        id += 1;
-        let clip: gents_protocol::client_media::MediaPcmClip = serde_json::from_value(clip)?;
-        ensure!(clip.sample_rate == 48000 && clip.samples()? == [i16::MIN, i16::MAX]);
-        let calls = speech.calls.lock().unwrap();
-        ensure!(
-            calls.len() == 2 && calls.iter().all(|(actor, _)| actor == &client_did),
-            "speech calls must use the actual client actor exactly once per operation"
-        );
-        ensure!(
-            calls[0].1["arguments"]["audio"]
-                == json!({"data":"AAAAAA==","format":"pcm_s16le","sampleRate":48000,"channels":1})
-        );
-        ensure!(calls[1].1["arguments"]["text"] == "First part and final part.");
-        ensure!(
-            calls[1].1["arguments"].get("language").is_none()
-                && calls[1].1["arguments"].get("voice").is_none()
-        );
-    }
     if matches!(journey, Journey::Goal) {
         wait_goal(&mut client, &mut id, node_did, session, "paused").await?;
         let requests = access
@@ -1925,7 +1886,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             &access,
             node_did,
             session,
-            agent_id,
+            agent_did,
             &client_did,
             options,
             root,
@@ -1936,9 +1897,9 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             root.join("editor-history-canonical.json"),
             serde_json::to_vec_pretty(&evidence)?,
         )?;
-        configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
+        configured_actions::seed_editor_settings(&access, node_did, agent_did).await?;
         client
-            .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+            .call(id, "client_enroll_local", json!({"nodeHome":node_home}))
             .await;
         id += 1;
         let completion_path = root.join("finish-history-provider");
@@ -2048,9 +2009,9 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         journey,
         Journey::EditorRelatedWork | Journey::EditorRelatedWorkFailure
     ) {
-        editor_related_work::configure(&access, node_did, agent_id).await?;
+        editor_related_work::configure(&access, node_did, agent_did).await?;
         client
-            .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+            .call(id, "client_enroll_local", json!({"nodeHome":node_home}))
             .await;
         id += 1;
         let result = tokio::try_join!(
@@ -2087,9 +2048,9 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         )?;
     }
     if matches!(journey, Journey::EditorQuestions) {
-        editor_related_work::configure(&access, node_did, agent_id).await?;
+        editor_related_work::configure(&access, node_did, agent_did).await?;
         client
-            .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+            .call(id, "client_enroll_local", json!({"nodeHome":node_home}))
             .await;
         let editor_result = run_editor_journey(
             root,
@@ -2122,9 +2083,9 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         )?;
     }
     if matches!(journey, Journey::EditorImages) {
-        configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
+        configured_actions::seed_editor_settings(&access, node_did, agent_did).await?;
         client
-            .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+            .call(id, "client_enroll_local", json!({"nodeHome":node_home}))
             .await;
         run_editor_journey(
             root,
@@ -2143,9 +2104,9 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         )?;
     }
     if matches!(journey, Journey::EditorWorkspace) {
-        configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
+        configured_actions::seed_editor_settings(&access, node_did, agent_did).await?;
         client
-            .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+            .call(id, "client_enroll_local", json!({"nodeHome":node_home}))
             .await;
         run_editor_journey(
             root,
@@ -2166,7 +2127,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     }
     if matches!(journey, Journey::EditorInventory) {
         editor_inventory::prepare(root).await?;
-        configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
+        configured_actions::seed_editor_settings(&access, node_did, agent_did).await?;
         ensure!(
             client
                 .call(id, "client_runtime_is_local", json!({"nodeDid":node_did}))
@@ -2237,23 +2198,6 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             node_did,
             session,
             &client_did,
-            &identity,
-        )
-        .await?;
-        let permissions = editor_review::verify_permission_recovery(
-            &mut client,
-            &mut id,
-            &access,
-            root,
-            &node_home,
-            &client_did,
-            &evidence,
-            &identity,
-        )
-        .await?;
-        tokio::fs::write(
-            root.join("editor-inventory-permissions-canonical.json"),
-            serde_json::to_vec_pretty(&permissions)?,
         )
         .await?;
         tokio::fs::write(
@@ -2262,12 +2206,9 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         )
         .await?;
     }
-    if matches!(
-        journey,
-        Journey::EditorReview | Journey::EditorReviewPermissions
-    ) {
+    if matches!(journey, Journey::EditorReview) {
         editor_review::prepare(root)?;
-        configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
+        configured_actions::seed_editor_settings(&access, node_did, agent_did).await?;
         ensure!(
             client
                 .call(id, "client_runtime_is_local", json!({"nodeDid": node_did}))
@@ -2308,27 +2249,10 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             root.join("editor-review-canonical.json"),
             serde_json::to_vec_pretty(&evidence)?,
         )?;
-        if matches!(journey, Journey::EditorReviewPermissions) {
-            let permissions = editor_review::verify_permission_recovery(
-                &mut client,
-                &mut id,
-                &access,
-                root,
-                &node_home,
-                &client_did,
-                &evidence,
-                &identity,
-            )
-            .await?;
-            std::fs::write(
-                root.join("editor-review-permissions-canonical.json"),
-                serde_json::to_vec_pretty(&permissions)?,
-            )?;
-        }
     }
     if matches!(journey, Journey::EditorUndo) {
         editor_undo::prepare(root)?;
-        configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
+        configured_actions::seed_editor_settings(&access, node_did, agent_did).await?;
         ensure!(
             client
                 .call(id, "client_runtime_is_local", json!({"nodeDid":node_did}))
@@ -2385,9 +2309,9 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     }
     if matches!(journey, Journey::EditorGoalReplacement) {
         editor_goal_replacement::prepare(root)?;
-        configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
+        configured_actions::seed_editor_settings(&access, node_did, agent_did).await?;
         client
-            .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+            .call(id, "client_enroll_local", json!({"nodeHome":node_home}))
             .await;
         id += 1;
         let releases: Vec<_> = (0..3)
@@ -2440,9 +2364,9 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         drop(releases);
     }
     if matches!(journey, Journey::EditorGoalRemoval) {
-        configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
+        configured_actions::seed_editor_settings(&access, node_did, agent_did).await?;
         client
-            .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+            .call(id, "client_enroll_local", json!({"nodeHome":node_home}))
             .await;
         id += 1;
         let releases: Vec<_> = (0..2)
@@ -2493,9 +2417,9 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 "title":editor_goal_recovery::TITLE, "blockedReason":editor_goal_recovery::BLOCKED_REASON,
             }))?,
         )?;
-        configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
+        configured_actions::seed_editor_settings(&access, node_did, agent_did).await?;
         client
-            .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+            .call(id, "client_enroll_local", json!({"nodeHome":node_home}))
             .await;
         id += 1;
         let release = root.join("finish-recovered-goal-provider");
@@ -2619,9 +2543,9 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 "captured":editor_retry::CAPTURED,
             }))?,
         )?;
-        configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
+        configured_actions::seed_editor_settings(&access, node_did, agent_did).await?;
         client
-            .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+            .call(id, "client_enroll_local", json!({"nodeHome":node_home}))
             .await;
         id += 1;
         let editor_result = run_editor_journey(
@@ -2657,15 +2581,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         )?;
     }
     if matches!(journey, Journey::Conversation) {
-        configured_actions::exercise(
-            &mut client,
-            &mut id,
-            &access,
-            node_did,
-            agent_id,
-            &client_did,
-        )
-        .await?;
+        configured_actions::exercise(&mut client, &mut id, &access, node_did).await?;
     }
     if matches!(journey, Journey::Conversation | Journey::Editor) {
         client = exercise_message_edit(
@@ -2673,7 +2589,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             &mut id,
             node_did,
             session,
-            agent_id,
+            agent_did,
             &mut EditRecoveryHost {
                 process: &mut host,
                 binary: &host_binary,
@@ -2695,6 +2611,31 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     stop(&mut host)
         .await
         .context("stopping the fixture client host")?;
+    if matches!(journey, Journey::Goal) {
+        // Ordinary client routes replicate no application document (Lean
+        // `ScopeTemplates.builtinCatalog`, `Identity.unlisted_collection_stays_local`):
+        // the client's own store holds the Goal caller receipts it wrote, and
+        // no Goal.
+        let reopened = Arc::new(
+            ClientCore::start_with_paths_and_options(
+                paths.clone(),
+                ClientCoreOptions::local_only(),
+            )
+            .await?,
+        );
+        let local = gents::store::config_client::ConfigAccess::local(reopened.node_arc())
+            .execute("{ Goal { _docID } PendingChatSubmission { _docID } }")
+            .await;
+        reopened.shutdown().await?;
+        let local = local?;
+        ensure!(
+            local["data"]["PendingChatSubmission"]
+                .as_array()
+                .is_some_and(|rows| !rows.is_empty())
+                && local["data"]["Goal"].as_array().is_some_and(Vec::is_empty),
+            "ordinary client routes must not replicate raw Goal documents: {local}"
+        );
+    }
     Ok(())
 }
 
@@ -2759,7 +2700,10 @@ impl EditRecoveryHost<'_> {
             .await
             .context("stopping the retained-history helper")?;
         let mut command = Command::new(self.binary);
-        command.args(["--serve", "--home"]).arg(self.paths.root());
+        command
+            .envs(support::homes::ProcessHomes::under(self.root).env())
+            .args(["--serve", "--home"])
+            .arg(self.paths.root());
         if self.editor_store {
             command.arg("--editor-store");
         }
@@ -2902,7 +2846,7 @@ async fn exercise_message_edit(
                 )
                 .await;
             *id += 1;
-            if view["sessionId"] == child {
+            if view["kind"] == "observed" && view["observation"]["sessionId"] == child {
                 return;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -2917,13 +2861,13 @@ async fn exercise_message_edit(
         "desktop_chat_send",
         json!({"request": {
             "requestId": request_id, "clientDid": client_did,
-            "nodeDid": node_did, "sessionId": child, "agentId": agent,
+            "nodeDid": node_did, "sessionId": child, "agentDid": agent,
             "content": "Return the edited fixture response."
         }}),
     )
     .await?;
     *id += 1;
-    let request_query = format!("{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, request_id: {{_eq: \"{}\"}}}}) {{_docID request_id session_id requester_did agent_id content input admission_signer_did admission_signature created_at valid_until}} }}",
+    let request_query = format!("{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, request_id: {{_eq: \"{}\"}}}}) {{_docID request_id session_id requester_did agent_did content input admission_signer_did admission_signature created_at valid_until}} }}",
         gents::store::graphql::escape_graphql_string(node_did), gents::store::graphql::escape_graphql_string(&request_id));
     let admitted = access.execute(&request_query).await?;
     ensure!(
@@ -2938,66 +2882,28 @@ async fn exercise_message_edit(
     wait_chat_deployment(&mut client, id, node_did, access)
         .await
         .context("restoring the runtime route after the send helper restart")?;
-    let recovered = client
+    // The reply was discarded and the helper restarted: the client retries
+    // the same identity, which the runtime holds as the same request (Lean
+    // `ClientOptimisticSend`).
+    let sent = client
         .call(
             *id,
-            "desktop_chat_submission_recover",
-            json!({"query": {
-                "clientDid": client_did, "nodeDid": node_did, "requestId": request_id
+            "desktop_chat_send",
+            json!({"request": {
+                "requestId": request_id, "clientDid": client_did,
+                "nodeDid": node_did, "sessionId": child, "agentDid": agent,
+                "content": "Return the edited fixture response."
             }}),
         )
         .await;
-    ensure!(
-        recovered["kind"] == "prepared",
-        "restart lost the caller receipt: {recovered}"
-    );
-    let sent = &recovered["result"];
+    *id += 1;
     ensure!(
         sent["requestId"] == request_id,
-        "recovery replaced the original request"
+        "the retry replaced the original request: {sent}"
     );
     ensure!(
         access.execute(&request_query).await? == admitted,
-        "recovery duplicated or changed the signed request"
-    );
-    *id += 1;
-    ensure!(
-        sent["submissionReceipt"]["nodeDid"] == node_did
-            && sent["submissionReceipt"]["requestId"] == request_id
-            && sent["submissionReceipt"]["sessionId"] == child,
-        "the recovered receipt lost its original scope"
-    );
-    discard_successful_reply(
-        &mut client,
-        *id,
-        "desktop_chat_submission_acknowledge",
-        json!({"receipt": sent["submissionReceipt"].clone()}),
-    )
-    .await?;
-    *id += 1;
-    client.close().await;
-    recovery.restart().await?;
-    client = Attachment::start(paths).await;
-    wait_chat_deployment(&mut client, id, node_did, access)
-        .await
-        .context("restoring the runtime route after the acknowledgement helper restart")?;
-    let acknowledged = client
-        .call(
-            *id,
-            "desktop_chat_submission_recover",
-            json!({"query": {
-                "clientDid": client_did, "nodeDid": node_did, "requestId": request_id
-            }}),
-        )
-        .await;
-    *id += 1;
-    ensure!(
-        acknowledged["result"] == *sent,
-        "a lost acknowledgement reply changed or retired the recoverable outcome"
-    );
-    ensure!(
-        access.execute(&request_query).await? == admitted,
-        "acknowledgement recovery duplicated or changed the signed request"
+        "the retry duplicated or changed the signed request"
     );
     ensure!(
         sent["sessionId"] == child,
@@ -3037,12 +2943,12 @@ fn runtime_server_command(binary: &Path, root: &Path, home: &Path, port: u16) ->
     let mut command = Command::new(binary);
     command
         .current_dir(root)
+        .envs(support::homes::ProcessHomes::under(root).env())
         .env_remove("GENTS_SYSTEM_LOG")
         .args(["server", "--home"])
         .arg(home)
         .arg("--http-port")
-        .arg(port.to_string())
-        .arg("--no-codex-shim");
+        .arg(port.to_string());
     command
 }
 
@@ -3067,6 +2973,7 @@ async fn run_editor_journey(
         "The extension checkout has no tests/editor.mjs"
     );
     let mut editor = Command::new("node");
+    editor.envs(support::homes::ProcessHomes::under(root).env());
     if scenario == "full" && std::env::var("GENTS_VSCODE_STARTUP_CUSTODY").as_deref() == Ok("file")
     {
         let startup_paths = DesktopPaths::from_root(root.join("startup-client"));
@@ -3110,26 +3017,13 @@ async fn read_session(
     node_did: &str,
     session: &str,
 ) -> Result<Value> {
-    read_session_page(client, id, node_did, session, None).await
-}
-
-async fn read_session_page(
-    client: &mut Attachment,
-    id: &mut u32,
-    node_did: &str,
-    session: &str,
-    before: Option<&str>,
-) -> Result<Value> {
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             let result = client
                 .try_call(
                     *id,
                     "desktop_session_snapshot",
-                    json!({
-                        "nodeDid":node_did, "sessionId":session, "timelineLimit":40,
-                        "timelineBeforeItemKey":before,
-                    }),
+                    json!({"nodeDid":node_did, "sessionId":session, "timelineLimit":40}),
                 )
                 .await;
             *id += 1;
@@ -3155,6 +3049,7 @@ async fn wait_goal(
     session: &str,
     status: &str,
 ) -> Result<Value> {
+    let mut last = Value::Null;
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             let view = client
@@ -3165,24 +3060,27 @@ async fn wait_goal(
                 )
                 .await;
             *id += 1;
-            if view["nodeDid"] == node_did
-                && view["sessionId"] == session
-                && view["goal"]["status"] == status
+            let observation = &view["observation"];
+            if view["kind"] == "observed"
+                && observation["nodeDid"] == node_did
+                && observation["sessionId"] == session
+                && observation["goal"]["status"] == status
             {
-                return view;
+                return observation.clone();
             }
+            last = view;
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
     .await
-    .context("the signed goal observation did not reach the client")
+    .with_context(|| format!("the signed goal observation did not reach the client; last: {last}"))
 }
 
 async fn configure_inference(
     client: &mut Attachment,
     id: &mut u32,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
     endpoint: &str,
 ) -> Result<()> {
     let local = client
@@ -3226,7 +3124,7 @@ async fn configure_inference(
     ensure!(deployment["nodeDid"] == node_did);
     let mut agent = deployment["agentConfigs"]
         .as_array()
-        .and_then(|rows| rows.iter().find(|row| row["agent_id"] == agent_id))
+        .and_then(|rows| rows.iter().find(|row| row["agent_did"] == agent_did))
         .context("the setup default agent configuration")?
         .clone();
     agent["inference_profile_id"] = json!("editor-setup");
@@ -3250,11 +3148,10 @@ async fn configure_inference(
         .await;
     *id += 1;
     ensure!(
-        observed["agentConfigs"].as_array().is_some_and(|rows| rows
-            .iter()
-            .any(
-                |row| row["agent_id"] == agent_id && row["inference_profile_id"] == "editor-setup"
-            )),
+        observed["agentConfigs"]
+            .as_array()
+            .is_some_and(|rows| rows.iter().any(|row| row["agent_did"] == agent_did
+                && row["inference_profile_id"] == "editor-setup")),
         "the selected model was not bound to the default agent: {observed}"
     );
     Ok(())
@@ -3295,6 +3192,12 @@ async fn wait_for_status(child: &mut Child, cli: &Path, home: &Path, port: u16) 
                 "runtime exited before readiness"
             );
             let output = Command::new(cli)
+                .envs(
+                    support::homes::ProcessHomes::under(
+                        home.parent().context("runtime home parent")?,
+                    )
+                    .env(),
+                )
                 .args(["status", "--home"])
                 .arg(home)
                 .arg("--graphql")

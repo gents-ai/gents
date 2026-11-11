@@ -569,7 +569,7 @@ export function ConfirmDelete({
   }
   return (
     <AlertDialog open={open} onOpenChange={close}>
-      <AlertDialogContent aria-modal="true">
+      <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>Delete {label}?</AlertDialogTitle>
           <AlertDialogDescription>

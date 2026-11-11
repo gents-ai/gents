@@ -69,7 +69,7 @@ describe("buildUxHost: ctx.send", () => {
   it("sends in the selected session from a gesture, with the selected agent", async () => {
     gesture(true);
     const app = testApp({
-      selection: { sessionId: "s1", nodeDid: "did:a", agentId: "b1" },
+      selection: { sessionId: "s1", nodeDid: "did:a", agentDid: "b1" },
     });
     const sendMessage = vi.spyOn(app.actions, "sendMessage").mockResolvedValue(null);
     const host = buildUxHost(app, route);
@@ -91,12 +91,12 @@ describe("buildUxHost: ctx.send", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
-  it.each(["sessionId", "nodeDid", "agentId"] as const)(
+  it.each(["sessionId", "nodeDid", "agentDid"] as const)(
     "does not retarget a confirmed message after %s changes",
     async (field) => {
       gesture(true);
       const app = testApp({
-        selection: { sessionId: "s1", nodeDid: "did:a", agentId: "a1" },
+        selection: { sessionId: "s1", nodeDid: "did:a", agentDid: "a1" },
       });
       vi.mocked(window.confirm).mockImplementation(() => {
         app.stores.selection.setState({ [field]: "different" });
@@ -209,10 +209,12 @@ describe("buildUxHost: bridge verbs", () => {
   it("exposes no raw bridge verb", () => {
     const host = buildUxHost(testApp(), route);
     expect("bridge" in host).toBe(false);
-    /* data: the declared-surface door; onShellChange: the host's route
-       feed for the frames, never a plugin-facing verb */
+    /* data: the declared-surface door; notify: the plugin notification
+       owner; onShellChange: the host's route feed for the frames, never a
+       plugin-facing verb */
     expect(Object.keys(host).sort()).toEqual([
       "data",
+      "notify",
       "onShellChange",
       "os",
       "plugin",

@@ -1,6 +1,5 @@
 use super::TerminalJobProgress;
 use crate::store::config_client::ConfigApplyTxn;
-use crate::store::graphql::escape_graphql_string;
 use anyhow::{Context, Result};
 
 /// Retained images share the accepted tool's DID and request binding and commit
@@ -18,18 +17,24 @@ pub(super) async fn retain_file_changes(
         changes.belongs_to(tool_call_doc_id),
         "file changes belong to another physical tool"
     );
-    let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
-    let binding = txn.execute(&format!(
-        r#"{{ AgentToolCall(docID: "{}", filter: {{ request_doc_id: {{ _eq: "{}" }}, {scope} }}) {{ _docID }} }}"#,
-        escape_graphql_string(tool_call_doc_id), escape_graphql_string(request_doc_id),
-    )).await?;
+    let binding = {
+        use gents_protocol::document_query::{
+            fields::agent_tool_call as fields, session_scope, Filter, Query, Selection,
+        };
+        let rendered = Query::<fields::Doc>::select(Selection::doc_id())
+            .doc_id(tool_call_doc_id)
+            .filter(Filter::eq(fields::REQUEST_DOC_ID, request_doc_id))
+            .filter(session_scope(node_did, session_id, requester_did))
+            .render();
+        txn.run(&rendered).await?
+    };
     anyhow::ensure!(
         binding["data"]["AgentToolCall"].as_array().is_some_and(
             |rows| rows.len() == 1 && rows[0]["_docID"].as_str() == Some(tool_call_doc_id)
         ),
         "file changes lost their physical tool binding"
     );
-    let session_scope = crate::session::origin::SessionScope {
+    let session_scope = gents_protocol::session::SessionScope {
         node_did: node_did.to_owned(),
         session_id: session_id.to_owned(),
         requester_did: requester_did.map(str::to_owned),
@@ -39,10 +44,24 @@ pub(super) async fn retain_file_changes(
         "node_did": node_did, "session_id": session_id,
         "requester_did": requester_did,
     });
-    let existing = txn.execute(&format!(
-        r#"{{ ToolFileChange(filter: {{ tool_call_doc_id: {{ _eq: "{}" }} }}, limit: 2) {{ _docID tool_call_doc_id request_doc_id node_did session_id requester_did file_changes }} }}"#,
-        escape_graphql_string(tool_call_doc_id),
-    )).await?;
+    let existing = {
+        use gents_protocol::document_query::{
+            fields::tool_file_change as fields, Filter, Query, Selection,
+        };
+        let rendered = Query::<fields::Doc>::select(
+            Selection::doc_id()
+                .field(fields::TOOL_CALL_DOC_ID)
+                .field(fields::REQUEST_DOC_ID)
+                .field(fields::NODE_DID)
+                .field(fields::SESSION_ID)
+                .field(fields::REQUESTER_DID)
+                .field(fields::FILE_CHANGES),
+        )
+        .filter(Filter::eq(fields::TOOL_CALL_DOC_ID, tool_call_doc_id))
+        .limit(2)
+        .render();
+        txn.run(&rendered).await?
+    };
     let rows = existing["data"]["ToolFileChange"]
         .as_array()
         .context("file change lookup omitted observations")?;

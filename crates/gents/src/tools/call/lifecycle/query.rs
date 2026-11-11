@@ -7,13 +7,13 @@ pub use result::{
 };
 pub(crate) use result::{
     load_tool_call_arguments_in_txn, load_tool_call_read, load_tool_call_read_in_txn,
-    load_tool_file_change_observation_in_txn, CanonicalToolCallRead,
+    CanonicalToolCallRead,
 };
 
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde::Deserialize;
 
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
@@ -78,6 +78,10 @@ struct ToolCallRow {
 }
 
 impl ToolCallLifecycle {
+    /// Reads without an actor. Agent-owned rows (the tool call, its request
+    /// and session) are invisible to it, so it exists only for fixtures;
+    /// runtime readers load as the owning Agent through `load_as`.
+    #[cfg(test)]
     pub async fn load(
         node: Arc<EmbeddedNode>,
         session_id: &str,
@@ -88,6 +92,56 @@ impl ToolCallLifecycle {
         Self::load_filtered(node, format!("session_id:{{_eq:\"{escaped_session_id}\"}},tool_call_id:{{_eq:\"{escaped_tool_call_id}\"}}")).await
     }
 
+    pub(crate) async fn load_as(
+        node: Arc<EmbeddedNode>,
+        actor: identity::Did,
+        session_id: &str,
+        tool_call_id: &str,
+    ) -> Result<Option<Self>> {
+        let session = escape_graphql_string(session_id);
+        let tool = escape_graphql_string(tool_call_id);
+        let filter = format!("session_id:{{_eq:\"{session}\"}},tool_call_id:{{_eq:\"{tool}\"}}");
+        ConfigAccess::transact_local_readonly(&node, Some(actor), "tool_call.load_as", |txn| {
+            let node = node.clone();
+            let filter = &filter;
+            Box::pin(async move { Self::load_filtered_in_txn(txn, node, filter).await })
+        })
+        .await
+    }
+
+    pub(crate) async fn load_by_doc_id_as(
+        node: Arc<EmbeddedNode>,
+        actor: identity::Did,
+        doc_id: &str,
+        node_did: &str,
+        session_id: &str,
+        requester_did: Option<&str>,
+    ) -> Result<Option<Self>> {
+        ConfigAccess::transact_local_readonly(
+            &node,
+            Some(actor),
+            "tool_call.load_by_doc_id_as",
+            |txn| {
+                let node = node.clone();
+                Box::pin(async move {
+                    Self::load_by_doc_id_in_txn(
+                        txn,
+                        node,
+                        doc_id,
+                        node_did,
+                        session_id,
+                        requester_did,
+                    )
+                    .await
+                })
+            },
+        )
+        .await
+    }
+
+    /// Reads without an actor; see [`Self::load`]. Runtime readers use
+    /// `load_by_doc_id_as` or `load_by_doc_id_in_txn` with the owning Agent.
+    #[cfg(test)]
     pub async fn load_by_doc_id(
         node: Arc<EmbeddedNode>,
         doc_id: &str,
@@ -114,11 +168,13 @@ impl ToolCallLifecycle {
         requester_did: Option<&str>,
     ) -> Result<Option<Self>> {
         let physical = escape_graphql_string(doc_id);
-        let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
+        let scope =
+            gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
         Self::load_filtered_in_txn(txn, node, &format!("{scope},_docID:{{_eq:\"{physical}\"}}"))
             .await
     }
 
+    #[cfg(test)]
     async fn load_filtered(node: Arc<EmbeddedNode>, filter: String) -> Result<Option<Self>> {
         ConfigAccess::transact_local_readonly(&node, None, "tool_call.load", |txn| {
             let node = node.clone();
@@ -285,6 +341,8 @@ impl ToolCallLifecycle {
         }
         let arguments = if let Some(effect) = &plugin_effect {
             let binding = super::delivery::ToolOutputBinding {
+                actor: accepted.actor.clone(),
+                agent_signer: accepted.agent_signer.clone(),
                 node: node.clone(),
                 tool_call_doc_id: row.doc_id.clone(),
                 request_doc_id: accepted.request_doc_id.clone(),
@@ -324,15 +382,21 @@ impl ToolCallLifecycle {
         let selected_tool_identity =
             decode_selected_tool_identity(row.selected_service_id, row.selected_tool_name)?;
 
-        let scope = crate::session::session_scope_filter(
-            owner,
-            &row.session_id,
-            row.requester_did.as_deref(),
-        );
-        let request_doc = escape_graphql_string(&accepted.request_doc_id);
-        let request_response = txn.execute_local_response(&format!(
-            r#"{{ AgentRequest(filter: {{ {scope}, _docID: {{ _eq: "{request_doc}" }} }}, limit: 2) {{ request_id }} }}"#
-        )).await?;
+        let request_response = {
+            use gents_protocol::document_query::{
+                fields::agent_request as fields, session_scope, Filter, Query, Selection,
+            };
+            let rendered = Query::select(Selection::new().field(fields::REQUEST_ID))
+                .filter(session_scope(
+                    owner,
+                    &row.session_id,
+                    row.requester_did.as_deref(),
+                ))
+                .filter(Filter::eq(fields::DOC_ID, &accepted.request_doc_id))
+                .limit(2)
+                .render();
+            txn.run_local_response(&rendered).await?
+        };
         anyhow::ensure!(
             !request_response.has_errors(),
             "tool owner request lookup failed: {:?}",
@@ -363,6 +427,8 @@ impl ToolCallLifecycle {
             .ok_or_else(|| anyhow!("AgentToolCall is missing node_did"))?;
 
         Ok(Some(Self {
+            actor: accepted.actor.clone(),
+            agent_signer: accepted.agent_signer.clone(),
             node,
             request_id,
             request_doc_id: row.request_doc_id.filter(|value| !value.trim().is_empty()),
@@ -401,43 +467,6 @@ impl ToolCallLifecycle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
-    use crate::request::streaming::DefraStreamWriter;
-    use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
-    use std::time::Duration;
-
-    async fn claimed_request(
-        node: &Arc<EmbeddedNode>,
-        request_id: &str,
-        session_id: &str,
-        node_did: &str,
-        requester_did: Option<&str>,
-    ) -> RequestLifecycle {
-        let now = crate::store::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-        let request_id = crate::store::graphql::escape_graphql_string(request_id);
-        let session_id = crate::store::graphql::escape_graphql_string(session_id);
-        let node_did = crate::store::graphql::escape_graphql_string(node_did);
-        let requester_did_field = crate::session::requester_did_create_field(requester_did);
-        let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", node_did: "{node_did}", agent_id: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "query fixture", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3, request_hop: 0, {requester_did_field} }}) {{ _docID }} }}"#)).await;
-        assert!(!created.has_errors(), "{:#?}", created.errors);
-        let row = crate::store::graphql::graphql_with_transaction_retry(node, &format!(
-            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
-            crate::request::watcher::AGENT_REQUEST_FIELDS,
-        ), "test.tool_call.load_request").await.unwrap();
-        let row: gents_protocol::row::AgentRequestRow =
-            crate::store::graphql::first_row(&row, "AgentRequest")
-                .unwrap()
-                .unwrap();
-        let mut lifecycle = RequestLifecycle::new_with_node_did(
-            node.clone(),
-            "general",
-            &node_did,
-            row.try_into().unwrap(),
-            60,
-        );
-        assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-        lifecycle
-    }
 
     #[tokio::test]
     async fn accepted_tool_reads_retain_the_callers_snapshot_through_terminal_commit() {
@@ -457,45 +486,53 @@ mod tests {
         let session_id = tool.session_id.clone();
         let did = fixture.node_did;
         let requester = tool.requester_did.clone();
+        let actor = tool.actor().clone();
         let tool = Arc::new(tokio::sync::Mutex::new(tool));
-        ConfigAccess::transact_local_readonly(&node, None, "test.tool.accepted_snapshot", |txn| {
-            let node = node.clone();
-            let tool = tool.clone();
-            let (doc_id, session_id, did, requester) = (&doc_id, &session_id, &did, &requester);
-            Box::pin(async move {
-                let before = ToolCallLifecycle::load_by_doc_id_in_txn(
-                    txn,
-                    node.clone(),
-                    doc_id,
-                    did,
-                    session_id,
-                    requester.as_deref(),
-                )
-                .await?
-                .expect("accepted physical tool");
-                assert_eq!(before.state, ToolCallState::Running);
-                tokio::spawn(async move { tool.lock().await.complete("finished").await }).await??;
-                let after = ToolCallLifecycle::load_by_doc_id_in_txn(
-                    txn,
-                    node,
-                    doc_id,
-                    did,
-                    session_id,
-                    requester.as_deref(),
-                )
-                .await?
-                .expect("same accepted physical tool");
-                assert_eq!(after.state, ToolCallState::Running);
-                assert_eq!(after.accepted_header_doc_id, before.accepted_header_doc_id);
-                assert_eq!(after.execution_generation, before.execution_generation);
-                assert_eq!(after.arguments, before.arguments);
-                Ok::<_, anyhow::Error>(())
-            })
-        })
+        ConfigAccess::transact_local_readonly(
+            &node,
+            Some(actor.clone()),
+            "test.tool.accepted_snapshot",
+            |txn| {
+                let node = node.clone();
+                let tool = tool.clone();
+                let (doc_id, session_id, did, requester) = (&doc_id, &session_id, &did, &requester);
+                Box::pin(async move {
+                    let before = ToolCallLifecycle::load_by_doc_id_in_txn(
+                        txn,
+                        node.clone(),
+                        doc_id,
+                        did,
+                        session_id,
+                        requester.as_deref(),
+                    )
+                    .await?
+                    .expect("accepted physical tool");
+                    assert_eq!(before.state, ToolCallState::Running);
+                    tokio::spawn(async move { tool.lock().await.complete("finished").await })
+                        .await??;
+                    let after = ToolCallLifecycle::load_by_doc_id_in_txn(
+                        txn,
+                        node,
+                        doc_id,
+                        did,
+                        session_id,
+                        requester.as_deref(),
+                    )
+                    .await?
+                    .expect("same accepted physical tool");
+                    assert_eq!(after.state, ToolCallState::Running);
+                    assert_eq!(after.accepted_header_doc_id, before.accepted_header_doc_id);
+                    assert_eq!(after.execution_generation, before.execution_generation);
+                    assert_eq!(after.arguments, before.arguments);
+                    Ok::<_, anyhow::Error>(())
+                })
+            },
+        )
         .await
         .unwrap();
-        let fresh = ToolCallLifecycle::load_by_doc_id(
+        let fresh = ToolCallLifecycle::load_by_doc_id_as(
             node.clone(),
+            actor,
             &doc_id,
             &did,
             &session_id,
@@ -505,107 +542,72 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(fresh.state, ToolCallState::Completed);
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
         tokio::fs::remove_dir_all(fixture.path).await.unwrap();
     }
 
     #[tokio::test]
     async fn load_preserves_requester_route_and_selected_tool_identity() {
-        let data_path = std::env::temp_dir().join(format!(
-            "agent-tool-call-query-route-{}",
-            uuid::Uuid::new_v4()
-        ));
-        let node = Arc::new(
-            crate::test_support::node_builder()
-                .data_path(&data_path)
-                .build()
-                .await
-                .expect("embedded node"),
-        );
-        crate::ensure_runtime_schemas(node.as_ref())
+        use crate::tools::call::lifecycle::admission_fixture::{
+            publish_accepted_on_claimed_request, published_admission_with_owner,
+            PublishedAdmissionOptions,
+        };
+        // The request is client-admitted for its User and claimed by its
+        // selected Agent; the requester route is the User, not the Agent.
+        let (fixture, mut request) = published_admission_with_owner(PublishedAdmissionOptions {
+            name: "tool-call-query-route".into(),
+            real_identity: true,
+            ..Default::default()
+        })
+        .await
+        .expect("published admission");
+        let node = fixture.node.clone();
+        let requester = fixture.requester_identity.did().to_owned();
+        let mut spawn = fixture.tool;
+        spawn
+            .complete("spawned")
             .await
-            .expect("runtime schemas");
-
-        let node_did = "did:test:host";
-        let mut request = claimed_request(
-            &node,
-            "request-routed",
-            "session-routed",
-            node_did,
-            Some("did:test:coordinator"),
-        )
-        .await;
-        let writer = DefraStreamWriter::new(node.clone(), node_did, Duration::from_millis(1));
-        request
-            .begin_owned_execution(&writer)
-            .await
-            .expect("owned execution");
-        writer
-            .start_provider_attempt(
-                &request.request().doc_id,
-                0,
-                0,
-                "inference.1".parse().unwrap(),
-            )
-            .await;
+            .expect("settle the first call");
         let arguments = serde_json::json!({
             "service_id": "metrics-prod",
             "tool_name": "query_metrics",
             "arguments": {},
         });
-        let message = Message::Assistant {
-            request_id: None,
-            id: Some("routed-provider-message".into()),
-            content: vec![AssistantContent::ToolCall(ToolCall {
-                raw_arguments: None,
-                id: "tool-call-routed".into(),
-                call_id: Some("routed-provider-call".into()),
-                function: ToolFunction::new("call_tool".into(), arguments.clone()),
-                signature: None,
-                additional_params: None,
-            })],
-        };
-        let mut published = writer
-            .publish_native_turn(&request, 0, 0, &message)
-            .await
-            .expect("canonical publication accepted call_tool");
-        let accepted = published
-            .accepted_tools
-            .pop()
-            .expect("accepted native tool call");
-        let deadline = request
-            .claimed_deadline_at()
-            .expect("claimed request deadline");
         let selected = crate::tools::mcp::meta::selected_tool_identity(
             "call_tool",
             &serde_json::to_string(&arguments).expect("arguments text"),
         )
         .expect("call_tool carries a selected tool identity");
-        let mut lifecycle = ToolCallLifecycle::from_accepted(
+        let mut lifecycle = publish_accepted_on_claimed_request(
             node.clone(),
-            node_did.to_string(),
-            Some("did:test:coordinator".to_string()),
-            accepted,
-            deadline,
+            &mut request,
+            &fixture.node_did,
+            1,
+            "call_tool",
+            "tool-call-routed",
+            arguments,
             AwaitMode::Foreground,
+            false,
         )
-        .expect("accepted lifecycle")
+        .await
+        .expect("canonical publication accepted call_tool")
         .with_selected_tool_identity(Some(selected));
         lifecycle.start_running().await.expect("dispatch tool call");
 
-        let loaded = ToolCallLifecycle::load(node.clone(), "session-routed", "tool-call-routed")
-            .await
-            .expect("load tool call")
-            .expect("persisted tool call");
+        let actor = lifecycle.actor().clone();
+        let session_id = lifecycle.session_id().to_owned();
+        let loaded =
+            ToolCallLifecycle::load_as(node.clone(), actor, &session_id, "tool-call-routed")
+                .await
+                .expect("load tool call")
+                .expect("persisted tool call");
 
-        assert_eq!(
-            loaded.requester_did.as_deref(),
-            Some("did:test:coordinator")
-        );
+        assert_eq!(loaded.requester_did.as_deref(), Some(requester.as_str()));
+        assert_ne!(loaded.requester_did.as_deref(), Some(loaded.actor.as_str()));
         let selected = loaded.selected_tool_identity.expect("selected identity");
         assert_eq!(selected.service_id, "metrics-prod");
         assert_eq!(selected.tool_name, "query_metrics");
-        node.shutdown().await;
-        let _ = std::fs::remove_dir_all(&data_path);
+        node.shutdown().await.expect("shut down test node");
+        let _ = std::fs::remove_dir_all(&fixture.path);
     }
 }

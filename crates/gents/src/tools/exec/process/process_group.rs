@@ -139,7 +139,8 @@ mod tests {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .kill_on_drop(true);
-        let mut child = ManagedChild::new(command.spawn().unwrap());
+        let mut child =
+            ManagedChild::new(crate::tools::exec::native_spawn::spawn_tokio(&mut command).unwrap());
         let identity =
             crate::tools::exec::ownership::ProcessIdentity::of_live(child.pgid().unwrap()).unwrap();
         let stdout = child.inner.stdout.take().unwrap();

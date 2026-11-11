@@ -5,7 +5,6 @@ import type {
   OperationalStatus,
 } from "@source-inc/gents-desktop-client";
 import type { BridgeErrorCode } from "@source-inc/gents-desktop-client/generated/BridgeErrorCode";
-import { sessionHydrationLabel, visibleSessionHydration } from "./sessionHydration";
 
 export type DesktopStartupPhase =
   | "checking-managed-server"
@@ -191,13 +190,32 @@ export type SessionLoadState = {
   nodeDid: string | null;
   found: boolean | null;
   error: string | null;
+  /** a read of this target is running or scheduled; a waiting phase without
+      one offers its action instead of waiting on a notice that may never
+      come (Lean `ClientSessionLoad.phase_has_exit`) */
+  reread: boolean;
 };
+
+/** The selection match every session view shares: the same session, and the
+    same node unless either side names none (Lean
+    `ClientSessionLoad.matchesSelection`). */
+export function selectionMatches(
+  selectedSessionId: string | null,
+  selectedNodeDid: string | null,
+  target: { sessionId: string | null; nodeDid?: string | null } | null,
+): boolean {
+  return (
+    !!target &&
+    target.sessionId === selectedSessionId &&
+    (!selectedNodeDid || !target.nodeDid || target.nodeDid === selectedNodeDid)
+  );
+}
 
 export type SessionLoadingLayer =
   "localDatabase" | "p2p" | "sessionSync" | "sync" | "runtime" | "inference";
 
 export type SessionLoadingAction =
-  "retryLocal" | "retryHydration" | "configureInference";
+  "retryLocal" | "reloadSession" | "configureInference";
 
 export type SessionLoadingStatus = {
   layer: SessionLoadingLayer;
@@ -210,7 +228,7 @@ export type SessionLoadingStatus = {
 type SessionLoadingInput = {
   selectedSessionId: string | null;
   selectedNodeDid: string | null;
-  session: Pick<DesktopSessionSnapshot, "sessionId" | "nodeDid" | "hydration"> | null;
+  session: Pick<DesktopSessionSnapshot, "sessionId" | "nodeDid"> | null;
   sessionLoad: SessionLoadState;
   operationalState: DeploymentOperationalState | null;
 };
@@ -224,14 +242,8 @@ export function projectSessionLoadingStatus({
 }: SessionLoadingInput): SessionLoadingStatus | null {
   if (!selectedSessionId) return null;
 
-  const sessionMatches =
-    session?.sessionId === selectedSessionId &&
-    (!selectedNodeDid || !session.nodeDid || session.nodeDid === selectedNodeDid);
-  const loadMatches =
-    sessionLoad.sessionId === selectedSessionId &&
-    (!selectedNodeDid ||
-      !sessionLoad.nodeDid ||
-      sessionLoad.nodeDid === selectedNodeDid);
+  const sessionMatches = selectionMatches(selectedSessionId, selectedNodeDid, session);
+  const loadMatches = selectionMatches(selectedSessionId, selectedNodeDid, sessionLoad);
 
   if (loadMatches && sessionLoad.phase === "pending" && !sessionMatches) {
     return {
@@ -239,12 +251,16 @@ export function projectSessionLoadingStatus({
       phase: "loading",
       title: "Waiting for session update",
       detail: "Waiting for the latest conversation update.",
-      action: null,
+      action: followUpAction(sessionLoad.reread),
     };
   }
 
   if (loadMatches && isSessionDeliveryPhase(sessionLoad.phase) && !sessionMatches) {
-    return sessionDeliveryStatus(sessionLoad.phase, sessionLoad.error);
+    return sessionDeliveryStatus(
+      sessionLoad.phase,
+      sessionLoad.error,
+      sessionLoad.reread,
+    );
   }
 
   if (loadMatches && sessionLoad.phase === "loading" && sessionLoad.error) {
@@ -264,7 +280,7 @@ export function projectSessionLoadingStatus({
       layer: "localDatabase",
       phase: "loading",
       title: "Loading session",
-      detail: "Reading saved messages from the local database.",
+      detail: "Reading saved messages from the runtime.",
       action: null,
     };
   }
@@ -274,7 +290,7 @@ export function projectSessionLoadingStatus({
       layer: "localDatabase",
       phase: "failed",
       title: "Couldn’t load this session",
-      detail: sessionLoad.error ?? "The local database read failed.",
+      detail: sessionLoad.error ?? "The runtime read failed.",
       action: "retryLocal",
     };
   }
@@ -284,71 +300,23 @@ export function projectSessionLoadingStatus({
       layer: "localDatabase",
       phase: "loading",
       title: "Opening session",
-      detail: "Preparing the exact local session read.",
+      detail: "Preparing the runtime session read.",
       action: null,
     };
   }
 
-  const hydration = visibleSessionHydration(
-    sessionMatches ? session?.hydration : null,
-    selectedSessionId,
-    selectedNodeDid,
-  );
-  if (hydration?.phase === "unreadable") {
-    return {
-      layer: "sessionSync",
-      phase: "blocked",
-      title: "Not readable from this client",
-      detail:
-        hydration.detail ??
-        "This session belongs to another requester, so this client cannot read it.",
-      action: null,
-    };
-  }
-  if (hydration?.phase === "failed") {
-    return {
-      layer: "sessionSync",
-      phase: "failed",
-      title: "Session sync failed",
-      detail: hydration.detail
-        ? `The node refused the session history: ${hydration.detail}.`
-        : "The node could not finish sending the requested session history.",
-      action: "retryHydration",
-    };
-  }
-  if (hydration?.phase === "serving") {
-    return {
-      layer: "sessionSync",
-      phase: "loading",
-      title: "Syncing session history",
-      detail: sessionHydrationLabel(hydration),
-      action: null,
-    };
-  }
-  if (hydration?.phase === "requested") {
-    const routeBlocker = operationalState?.admissionBlocker;
-    if (routeBlocker?.layer === "p2p" || routeBlocker?.layer === "route")
-      return sessionStatusFromOperational(routeBlocker);
-    return {
-      layer: "sessionSync",
-      phase: "loading",
-      title: "Requesting session history",
-      detail: "Waiting for the enrolled node to begin the secure transfer.",
-      action: null,
-    };
-  }
-
+  /* the load names the selection and no read runs, yet nothing is shown: a
+     writer dropped the shown session without moving the selection, so no
+     read follows on its own */
   if (!sessionMatches) {
-    const routeBlocker = operationalState?.admissionBlocker;
-    if (routeBlocker?.layer === "p2p" || routeBlocker?.layer === "route")
-      return sessionStatusFromOperational(routeBlocker);
+    if (loadMatches && sessionLoad.phase === "loaded" && sessionLoad.found === false)
+      return null;
     return {
-      layer: "sessionSync",
-      phase: "blocked",
-      title: "Waiting for session history",
-      detail:
-        "No local messages were found yet. Waiting for the enrolled node’s session projection.",
-      action: operationalState ? null : "retryLocal",
+      layer: "localDatabase",
+      phase: "loading",
+      title: "Loading session",
+      detail: "Reading the session from its runtime.",
+      action: "retryLocal",
     };
   }
 
@@ -377,9 +345,18 @@ function sessionStatusFromOperational(
   };
 }
 
+/* With no read running or scheduled, a waiting phase offers a fresh read of
+   the selected session, the narrowest recovery the shell has. Its wording,
+   and whether it should reopen the session instead, are still a product
+   decision. */
+function followUpAction(reread: boolean): SessionLoadingAction | null {
+  return reread ? null : "retryLocal";
+}
+
 function sessionDeliveryStatus(
   phase: SessionDeliveryPhase,
   detail: string | null,
+  reread: boolean,
 ): SessionLoadingStatus {
   switch (phase) {
     case "delivering":
@@ -388,7 +365,7 @@ function sessionDeliveryStatus(
         phase: "loading",
         title: "Sending message",
         detail: detail ?? "Waiting for the node to pick up the message.",
-        action: null,
+        action: followUpAction(reread),
       };
     case "notConnected":
       return {
@@ -398,7 +375,7 @@ function sessionDeliveryStatus(
         detail:
           detail ??
           "The message is saved on this computer and sends when the connection returns.",
-        action: null,
+        action: followUpAction(reread),
       };
     case "accepted":
       return {
@@ -407,7 +384,7 @@ function sessionDeliveryStatus(
         title: "Message picked up",
         detail:
           detail ?? "The node accepted the message. Its session is on the way back.",
-        action: null,
+        action: followUpAction(reread),
       };
   }
 }

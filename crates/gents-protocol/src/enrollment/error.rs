@@ -2,6 +2,8 @@
 pub enum EnrollmentError {
     #[error("invalid live replicated-schema digest in enrollment offer")]
     InvalidLiveSchemaDigest,
+    #[error("invalid or expired enrollment renewal intent")]
+    RenewalIntentInvalid,
     #[error("unsupported enrollment request version {version}")]
     UnsupportedRequestVersion { version: u8 },
     #[error("request offer_id mismatch")]
@@ -14,8 +16,8 @@ pub enum EnrollmentError {
     RequestAdminDidMismatch,
     #[error("request server_peer mismatch")]
     RequestServerPeerMismatch,
-    #[error("request owner_agent mismatch")]
-    RequestOwnerAgentMismatch,
+    #[error("request owner_node_did mismatch")]
+    RequestOwnerNodeMismatch,
     #[error("request profile mismatch")]
     RequestProfileMismatch,
     #[error("request cannot extend the signed offer lifetime")]
@@ -82,8 +84,8 @@ pub enum EnrollmentError {
     DecisionCandidateDidMismatch,
     #[error("decision candidate_peer mismatch")]
     DecisionCandidatePeerMismatch,
-    #[error("decision owner_agent mismatch")]
-    DecisionOwnerAgentMismatch,
+    #[error("decision owner_node_did mismatch")]
+    DecisionOwnerNodeMismatch,
     #[error("decision signer mismatch")]
     DecisionSignerMismatch,
     #[error("decision_id mismatch")]
@@ -120,8 +122,8 @@ pub enum EnrollmentError {
     RevisionMemberDidMismatch,
     #[error("revision member_peer mismatch")]
     RevisionMemberPeerMismatch,
-    #[error("revision owner_agent mismatch")]
-    RevisionOwnerAgentMismatch,
+    #[error("revision owner_node_did mismatch")]
+    RevisionOwnerNodeMismatch,
     #[error("revision signer mismatch")]
     RevisionSignerMismatch,
     #[error("authorization revision sequence must be positive")]
@@ -160,8 +162,8 @@ pub enum EnrollmentError {
     ReceiptMemberPeerMismatch,
     #[error("receipt server_peer mismatch")]
     ReceiptServerPeerMismatch,
-    #[error("receipt owner_agent mismatch")]
-    ReceiptOwnerAgentMismatch,
+    #[error("receipt owner_node_did mismatch")]
+    ReceiptOwnerNodeMismatch,
     #[error("receipt authorization sequence mismatch")]
     ReceiptSequenceMismatch,
     #[error("receipt authorization lease mismatch")]

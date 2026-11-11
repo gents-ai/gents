@@ -14,6 +14,7 @@ import {
   Bell,
   Command as CommandIcon,
   Play,
+  Package,
   Search,
   Waypoints,
   Workflow,
@@ -59,6 +60,7 @@ import { SessionStatus } from "./SessionStatus";
 import { agentName } from "./behavior";
 import { Hint } from "./Hint";
 import { SEARCH_FIELD } from "@/lib/textAssist";
+import { readInstalledPacks, shortName, useInstalledPacks } from "./packs/model";
 
 const store = createStore<{ open: boolean; kind: SearchFilter; asked: number }>(() => ({
   open: false,
@@ -137,7 +139,6 @@ export function SearchPalette() {
         ref={palette.popupRef}
         initialFocus={searchInput}
         showCloseButton={false}
-        aria-modal="true"
         className="flex flex-col gap-0 overflow-hidden p-0 sm:max-w-xl"
         style={{
           top: "calc(var(--viewport-top) + var(--viewport-height) * 0.12)",
@@ -162,6 +163,9 @@ function useEntries(): SearchEntry[] {
   const commands = useCommands();
   const automationsOn = useFlag("automations");
   const hidden = useHidden();
+  const { actions } = useApp();
+  const packsOn = useFlag("packs");
+  const installed = useInstalledPacks().packs;
   const fleet = useFleet(
     useShallow((s) => ({
       nodes: s.nodes,
@@ -171,6 +175,12 @@ function useEntries(): SearchEntry[] {
       nodeKeys: s.nodeKeys,
     })),
   );
+  const selectedNode = fleet.nodes[selected ?? fleet.nodeKeys[0] ?? ""];
+  const packsHere =
+    packsOn && selectedNode !== undefined && isLocalNode(selectedNode, homeDid);
+  useEffect(() => {
+    if (packsHere && installed === null) void readInstalledPacks(actions);
+  }, [packsHere, installed, actions]);
   return useMemo(() => {
     const nodes = fleet.nodeKeys.flatMap((key) => fleet.nodes[key] ?? []);
     const nodeName = (nodeDid: string) => {
@@ -192,11 +202,11 @@ function useEntries(): SearchEntry[] {
         .filter((n) => !hidden.node(n.nodeDid))
         .flatMap((n) =>
           n.agents
-            .filter((a) => !hidden.agent(n.nodeDid, a.agentId))
+            .filter((a) => !hidden.agent(n.nodeDid, a.agentDid))
             .map((a) => ({
-              agentId: a.agentId,
+              agentDid: a.agentDid,
               nodeDid: n.nodeDid,
-              name: a.displayName ?? a.agentId,
+              name: a.displayName ?? a.agentDid,
               node: nodeName(n.nodeDid),
               pack: packOrigin(a.tags),
             })),
@@ -228,7 +238,7 @@ function useEntries(): SearchEntry[] {
               icon: Play,
             }))
           : [],
-      agentName: (s) => agentName(s.agentId, fleet.nodes[s.nodeDid] ?? null),
+      agentName: (s) => agentName(s.agentDid, fleet.nodes[s.nodeDid] ?? null),
       nodeName,
       places: [
         ...(nodeDid
@@ -247,6 +257,15 @@ function useEntries(): SearchEntry[] {
           route: { name: "settings", section: s.id } as Route,
           icon: s.icon,
         })),
+        ...(packsHere && nodeDid
+          ? (installed ?? []).map((p) => ({
+              key: `setting:pack:${p.pack}`,
+              title: shortName(p.pack),
+              group: `${nodeName(nodeDid)} · Packs`,
+              route: { name: "packs", item: p.pack } as Route,
+              icon: Package,
+            }))
+          : []),
       ],
       /* every command that can run here, as the palette opens */
       actions: commands
@@ -259,7 +278,17 @@ function useEntries(): SearchEntry[] {
           run: () => void c.run(0),
         })),
     });
-  }, [fleet, selected, sections, homeDid, commands, automationsOn, hidden]);
+  }, [
+    fleet,
+    selected,
+    sections,
+    homeDid,
+    commands,
+    automationsOn,
+    hidden,
+    packsHere,
+    installed,
+  ]);
 }
 
 function PaletteBody({
@@ -522,7 +551,7 @@ function Row({
       {e.kind === "session" && (
         <NodeAgentStack
           nodeDid={e.session.nodeDid}
-          agentId={e.session.agentId}
+          agentDid={e.session.agentDid}
           size="sm"
         />
       )}

@@ -17,6 +17,7 @@ Do not duplicate changing versions in instructions.
 | --- | --- |
 | Runtime documents, admission, tasks and recovery | `crates/gents/src/` |
 | Provider turn execution and input assembly | `crates/gents-loop/src/` |
+| Eval and optimization drivers | `crates/gents-eval/` |
 | Canonical wire types and database vocabulary | `crates/gents-protocol/`, `crates/gents-schemas/` |
 | Executable models and model-driven contracts | `crates/gents/proofs/`, `crates/gents-lean-contract/` |
 | CLI and installed editor helpers | `crates/gents-cli/`, `crates/gents-client-host/`, `crates/gents-media-host/` |
@@ -57,12 +58,15 @@ Do not duplicate changing versions in instructions.
 - The owned loop is the sole provider-input boundary. Durable transcripts may
   be permissive; sanitize and narrow them there.
 - DefraDB authenticates actors as DIDs and enforces document authorization
-  through ACP. Keep Gents node identity bound to those DIDs; do not add a parallel
-  identity or authorization layer. Agents are reusable configuration. The
-  operating convention is one active runtime per node; enforcement is
-  deferred. Do not add host identity, leases, or host-migration machinery. Validate
-  configured paths/resources through existing owners and fail affected work
-  clearly when unavailable. Paths/observations are not portable identity data.
+  through ACP; do not add a parallel identity or authorization layer. User keys
+  stay on clients, which sign user configuration, plugin installs and agent creation.
+  The node key authenticates peer admission and synchronization and owns node-local
+  operational documents not caused by an agent; enrollment grants no document access. Each node-local Agent has a runtime-managed DID and owns the
+  data it creates. Clients connect to its hosting runtime. The operating convention
+  is one active runtime per node; enforcement is deferred. Do not add host identity,
+  leases, or host-migration machinery. Validate configured paths/resources through
+  existing owners and fail affected work clearly when unavailable. Paths and
+  observations are not portable identity data.
 - Tools, MCP services, agent targets, skills, tasks, callbacks, schedules,
   and event sources are documents. Tool groups are nested settings within Tools.
   Extend existing reconcilers and owners instead of adding side channels.
@@ -78,10 +82,11 @@ Do not duplicate changing versions in instructions.
   Agent is its only configuration selection. Title and creation provenance live
   within the session; request state and derived UI observations keep their existing
   owners. Use the canonical protocol session type rather than another writable copy.
-- Client sync has one observation owner: the p2p observability adapter reads
-  DefraDB status, `ClientSyncStateOwner` combines facts, and
-  `project_sync_health` derives product state. Keep runtime readiness separate
-  and do not add UI-local sync heuristics.
+- Discovery and enrollment use P2P; clients read runtime data through authenticated
+  GraphQL and observe it through subscriptions. `ClientSyncStateOwner` combines
+  the discovery and enrollment facts and `project_sync_health` derives product
+  state from them and the runtime connections. Keep runtime
+  readiness separate and do not add UI-local sync heuristics.
 - Rig is a provider client behind `gents_loop::rig_compat` and
   `gents_loop::provider_input`, re-exported by the inference owner
   (`llm::rig_compat`) and the turn owner (`provider_input`) for callers here. Rig's own types stay inside those two
@@ -94,7 +99,7 @@ Do not duplicate changing versions in instructions.
   Persisted messages remain native. DefraDB is the pinned public dependency in
   the workspace `Cargo.toml`; investigate node, schema, identity, and
   transaction behavior there. Claude subscriptions use Anthropic Messages HTTP
-  with a node-scoped `OAuthCredential` written by `gents claude-login` and
+  with a node-scoped `OAuthCredential` written by `gents accounts login claude` and
   refreshed by gents; the `claude` binary is not a dependency.
 
 ## Foundation
@@ -284,6 +289,7 @@ edit. Recheck when the source, dependency inputs or a concrete failure warrants
 it. Keep test, browser and installed-editor evidence distinct.
 
 Before pushing native implementation changes, run `cargo test -p gents`,
+`make test-eval-drivers` (`cargo test -p gents-eval`),
 `cargo check --workspace --all-targets` and `make lint` (clippy, `-D warnings`).
 Run `lake build` for proof changes and the relevant CLI or desktop suites for
 affected consumers. The named intentionally red specification layers above

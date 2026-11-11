@@ -2,7 +2,7 @@
 
 Run `CARGO_INCREMENTAL=0 cargo test -p gents-cli --test cli_enrollment -- --nocapture`.
 
-The runtime starts through `gents init` and `gents server`. The app starts
+The runtime starts through `gents init` and `gents runtime server`. The app starts
 through the same `ClientCore` used by desktop and iOS. Enrollment consumes the
 runtime's `/status` offer, creates a pending request, and uses operator approval.
 The test must not install replicators or pairing documents itself.
@@ -60,13 +60,11 @@ the phone's existing replica. It must not create another pairing, reset the
 session's replication progress, or request a full network replay. Data-plane
 convergence and local page ordering/completeness need separate assertions.
 
-The contract requests session selection alongside conversation delivery; the
-hydration owner may defer admission until the active request finishes. Reply
-delivery is observed through local queries, not conditioned on hydration being
-its cause. It does not refresh the UI or request recovery while waiting for the
-reply. After reconnecting and completing three turns, it waits for hydration
-completion, reads one-message local pages, and checks ordering, completeness,
-and unchanged pairing/hydration fields (including served progress, not just IDs).
+Reply delivery is observed through local queries. P2P does not hydrate
+sessions. The contract does not refresh the UI or request recovery while waiting
+for the reply. After reconnecting and completing three turns, it reads
+one-message local pages and checks ordering, completeness, and unchanged
+pairing fields.
 Untouched-session exclusion still needs
 its own multi-session scenario; these checks do not establish that policy.
 

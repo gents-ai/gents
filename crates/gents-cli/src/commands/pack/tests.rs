@@ -1,8 +1,12 @@
-use super::install::{check_expected_digest, check_wire_target, install_documents_command};
+use super::install::{
+    check_expected_digest, check_wire_target, install_documents_command_with_local,
+};
 use super::scope::resolve_plugin_slot_owner;
 use super::source::names_a_directory;
 use super::*;
-use gents::pack::{PackKind, PackManifest};
+use crate::packs::EditedDocuments;
+use gents::pack::{PackChangeError, PackKind, PackManifest};
+use gents::plugin::authority::GrantError;
 
 #[tokio::test]
 async fn a_bare_subject_spec_is_a_pack_name_even_when_the_cwd_has_that_directory() {
@@ -61,7 +65,7 @@ fn a_document_pack_materializes_a_valid_configuration() {
     let pack = test_support::fixture_pack_source("documents_fixture", home.path());
     let root = tempfile::tempdir().unwrap();
     gents::pack::materialize::materialize(pack.archive(), root.path()).unwrap();
-    let config = gents::pack::load_pack_config(
+    let config = gents::pack::load_pack_authoring_config(
         pack.manifest(),
         &gents::pack::PackInstallOptions {
             node_did: "did:key:zPackCatalogValidationOwner".into(),
@@ -70,7 +74,9 @@ fn a_document_pack_materializes_a_valid_configuration() {
         &|_| None,
     )
     .unwrap();
-    gents::store::config_client::DesiredStateApplyPlan::from_pack_config(&config).unwrap();
+    assert!(config.agent("fixture-worker").is_some());
+    gents::store::config_client::DesiredStateApplyPlan::from_pack_config(&config.documents)
+        .unwrap();
 }
 
 #[tokio::test]
@@ -178,6 +184,114 @@ fn documents_pack_dir(version: &str) -> tempfile::TempDir {
     dir
 }
 
+#[test]
+fn document_pack_preview_shows_the_install_variable_and_its_target() {
+    let dir = documents_pack_dir("1.0.0");
+    let config_path = dir.path().join("pack_config.json");
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
+    config["tasks"] =
+        json!([{ "task_id": "research", "prompt_template": "${GENTS_TEST_3317_UNSET:-fallback}" }]);
+    std::fs::write(config_path, serde_json::to_vec(&config).unwrap()).unwrap();
+    let (bytes, _) = gents::pack::archive::pack_dir(dir.path()).unwrap();
+    let archive = gents::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
+    let source =
+        super::source::PackSource::received(archive, gents::pack::PackSource::Installed).unwrap();
+    let preview = super::install::install_variable_preview(&source, "did:key:node").unwrap();
+    assert_eq!(preview["kind"], "install_literal");
+    assert_eq!(preview["uses"][0]["path"], "/node/node_did");
+    assert_eq!(
+        preview["uses"][0]["document"],
+        json!({"collection": "Node", "id": "did:key:node"})
+    );
+    assert_eq!(
+        preview["uses"][0]["variables"],
+        json!([{"name": "GENTS_PACK_NODE_DID", "source": "runtime", "present": true}])
+    );
+    let task = preview["uses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["path"] == "/tasks/0/prompt_template")
+        .unwrap();
+    assert_eq!(
+        task["document"],
+        json!({"collection": "Task", "id": "research"})
+    );
+    assert_eq!(
+        task["variables"],
+        json!([{"name": "GENTS_TEST_3317_UNSET", "source": "default", "present": false}])
+    );
+    for item in preview["uses"].as_array().unwrap() {
+        assert!(item.get("resolved").is_none(), "{item}");
+    }
+}
+
+#[test]
+fn dependency_preview_reads_installed_literals_instead_of_the_current_environment() {
+    let dir = documents_pack_dir("1.0.0");
+    let config_path = dir.path().join("pack_config.json");
+    let mut authored: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
+    authored["tools"][0]["display_name"] = json!("${DISPLAY_LABEL:-fallback}");
+    std::fs::write(config_path, serde_json::to_vec(&authored).unwrap()).unwrap();
+    let (bytes, _) = gents::pack::archive::pack_dir(dir.path()).unwrap();
+    let source = super::source::PackSource::received(
+        gents::pack::archive::PackArchive::from_bytes(&bytes).unwrap(),
+        gents::pack::PackSource::Installed,
+    )
+    .unwrap();
+    let config: gents::documents::PackConfig = serde_json::from_value(json!({
+        "node": {"node_did": "did:key:node"},
+        "tools": [{"node_did": "did:key:node", "tools_id": "demo-tools", "display_name": "installed value"}]
+    })).unwrap();
+    let preview = super::install::reused_variable_preview(&source, &config).unwrap();
+    let node = preview["uses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["path"] == "/node/node_did")
+        .unwrap();
+    assert!(node.get("resolved").is_none(), "{node}");
+    let target = preview["uses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["path"] == "/tools/0/display_name")
+        .unwrap();
+    assert_eq!(
+        target["variables"],
+        json!([{"name": "DISPLAY_LABEL", "source": "installed", "present": true}])
+    );
+    assert!(
+        !preview.to_string().contains("installed value"),
+        "a preview shows an installed variable's value: {preview}"
+    );
+    assert_eq!(
+        target["document"],
+        json!({"collection": "Tools", "id": "demo-tools"})
+    );
+}
+
+#[test]
+fn dependency_variable_overrides_are_scoped_and_reject_duplicates() {
+    let parse = super::install::parse_dependency_variables;
+    let values = parse(&["acme/alpha:HOST=one=two".into(), "acme/beta:HOST=".into()]).unwrap();
+    assert_eq!(values["acme/alpha"]["HOST"].as_deref(), Some("one=two"));
+    assert_eq!(values["acme/beta"]["HOST"].as_deref(), Some(""));
+    assert!(parse(&["acme/alpha:HOST=one".into(), "acme/alpha:HOST=two".into()]).is_err());
+    assert!(parse(&["HOST=one".into()]).is_err());
+}
+
+#[test]
+fn remote_plugin_routing_does_not_resolve_install_variables() {
+    let config = json!({"tools": [{"integrations": {"plugins": [{"plugin": "${UNSET_PLUGIN}"}]}}]});
+    assert!(super::install::has_plugin_references(&config));
+    assert!(!super::install::has_plugin_references(
+        &json!({"tools": [{"integrations": {"plugins": []}}]})
+    ));
+}
+
 async fn initialized_home() -> tempfile::TempDir {
     use clap::Parser;
     let home = tempfile::tempdir().unwrap();
@@ -192,7 +306,7 @@ async fn initialized_home() -> tempfile::TempDir {
         home.path().to_str().unwrap(),
     ])
     .unwrap();
-    let crate::cli::Command::Init(init_args) = cli.command else {
+    let Some(crate::cli::Command::Init(init_args)) = cli.command else {
         panic!("expected init")
     };
     crate::commands::init::init(init_args).await.unwrap();
@@ -212,7 +326,12 @@ async fn plugin_store_record_error_releases_the_owned_offline_store() {
     let records = reopened
         .execute("{ PackInstallation(limit: 1) { coordinate } }")
         .await;
-    reopened.local_node().unwrap().shutdown().await;
+    reopened
+        .local_node()
+        .unwrap()
+        .shutdown()
+        .await
+        .expect("node shutdown");
     assert_eq!(
         records.unwrap()["data"]["PackInstallation"],
         serde_json::json!([])
@@ -227,6 +346,7 @@ fn document_install_args(
     PackInstallArgs {
         package: spec.to_str().unwrap().to_owned(),
         inference_slots,
+        dependency_variables: Vec::new(),
         preview: false,
         scope: ScopeArgs {
             home: Some(home.to_path_buf()),
@@ -248,7 +368,7 @@ async fn install_from(
     home: &std::path::Path,
     spec: &std::path::Path,
     inference_slots: Vec<String>,
-) -> Result<serde_json::Value> {
+) -> Result<serde_json::Value, PackChangeError> {
     crate::request_helpers::capture_report(install(document_install_args(
         home,
         spec,
@@ -271,16 +391,21 @@ async fn documents_command_closes_its_owned_store_on_success_and_failure() {
         let pack = resolve_pack_source(&args.package, None, home.path())
             .await
             .unwrap();
-        let (access, _) = crate::resolve_config_access(Some(home.path()), None)
-            .await
-            .unwrap();
+        let (access, _, local_endpoint) =
+            crate::resolve_pack_config_access(Some(home.path()), None)
+                .await
+                .unwrap();
         let query = "{ Tools(limit: 1) { _docID } }";
         let before = access.execute(query).await.unwrap();
         assert!(before["data"]["Tools"].is_array(), "{before}");
         let retained_node = access.local_node().unwrap().clone();
-        let outcome =
-            crate::request_helpers::capture_report(install_documents_command(access, &pack, &args))
-                .await;
+        let outcome = crate::request_helpers::capture_report(install_documents_command_with_local(
+            access,
+            &pack,
+            &args,
+            local_endpoint,
+        ))
+        .await;
         assert_eq!(outcome.is_err(), invalid_binding, "{outcome:?}");
         if let Err(error) = outcome {
             assert!(
@@ -299,7 +424,12 @@ async fn documents_command_closes_its_owned_store_on_success_and_failure() {
         let (reopened, _) = crate::resolve_config_access(Some(home.path()), None)
             .await
             .expect("command shutdown and handle release must allow immediate store reopen");
-        reopened.local_node().unwrap().shutdown().await;
+        reopened
+            .local_node()
+            .unwrap()
+            .shutdown()
+            .await
+            .expect("node shutdown");
         drop(reopened);
     }
 }
@@ -341,6 +471,54 @@ async fn documents_install_writes_an_operator_home_record() {
     assert_eq!(entry["other_stored_versions"][0]["version"], "1.1.0");
 }
 
+async fn edit_demo_tools(home: &std::path::Path) {
+    let (access, _) = crate::resolve_config_access(Some(home), None)
+        .await
+        .unwrap();
+    // The home's client edits the installed document as an operator
+    // would, through its signed desired-state apply.
+    let node_did = access
+        .local_node()
+        .unwrap()
+        .node_identity_did()
+        .unwrap()
+        .to_owned();
+    access
+        .transact_write("test.edit_pack_document", |txn| {
+            let node_did = &node_did;
+            Box::pin(async move {
+                use gents::documents::apply_desired_state_plan;
+                use gents::store::config_client::{
+                    read_desired_state_record_in_txn, DesiredStateApplyDocument,
+                    DesiredStateApplyPlan,
+                };
+                let (_, mut tools) = read_desired_state_record_in_txn(
+                    txn,
+                    gents::Collection::Tools,
+                    node_did,
+                    "demo-tools",
+                )
+                .await?
+                .expect("installed pack tools");
+                tools["display_name"] = "edited".into();
+                let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+                    collection: gents::Collection::Tools,
+                    add: tools.clone(),
+                    update: tools,
+                }])?;
+                apply_desired_state_plan(txn, &plan).await.map(|_| ())
+            })
+        })
+        .await
+        .unwrap();
+    access
+        .local_node()
+        .unwrap()
+        .shutdown()
+        .await
+        .expect("node shutdown");
+}
+
 #[tokio::test]
 async fn documents_install_rolls_back_its_record_on_failure() {
     let home = initialized_home().await;
@@ -351,29 +529,158 @@ async fn documents_install_rolls_back_its_record_on_failure() {
     let before = gents::pack::read_home_install(home.path(), "gents/demo_pack")
         .unwrap()
         .unwrap();
-    {
-        let (access, _) = crate::resolve_config_access(Some(home.path()), None)
-            .await
-            .unwrap();
-        access
-                .write(
-                    "test.edit_pack_document",
-                    r#"mutation { update_Tools(filter: {tools_id: {_eq: "demo-tools"}}, input: {display_name: "edited"}) { _docID } }"#,
-                )
-                .await
-                .unwrap();
-        access.local_node().unwrap().shutdown().await;
-    }
+    edit_demo_tools(home.path()).await;
 
     let second = documents_pack_dir("1.1.0");
     let error = install_from(home.path(), second.path(), Vec::new())
         .await
         .unwrap_err();
+    assert!(
+        matches!(&error, PackChangeError::Edited { edited, .. } if !edited.is_empty()),
+        "{error:#}"
+    );
     assert!(format!("{error:#}").contains("were edited"), "{error:#}");
 
     assert_eq!(
         gents::pack::read_home_install(home.path(), "gents/demo_pack").unwrap(),
         Some(before)
+    );
+}
+
+#[tokio::test]
+async fn a_plugins_pack_asking_for_authority_is_a_typed_refusal() {
+    let home = tempfile::tempdir().unwrap();
+    let pack = tempfile::tempdir().unwrap();
+    std::fs::create_dir(pack.path().join("plugins")).unwrap();
+    std::fs::write(
+        pack.path().join("plugins/echo.afb"),
+        super::super::plugin::testing::build_echo_plugin(),
+    )
+    .unwrap();
+    std::fs::write(pack.path().join("README.md"), "# widget").unwrap();
+    std::fs::write(
+        pack.path().join("manifest.json"),
+        serde_json::to_vec(&json!({
+            "manifest_version": 1, "name": "widget", "namespace": "acme", "version": "1.0.0",
+            "description": "test plugin pack", "authors": ["acme"], "tags": [], "kind": "plugins",
+            "assets": ["README.md", "plugins/echo.afb"],
+            "plugins": [{
+                "name": "echo", "description": "test", "artifact": "plugins/echo.afb",
+                "language": "rust", "input_schema": {"type": "object"},
+                "manifold": {
+                    "fs": "None", "net": {"OutboundHttp": ["api.example.com"]}, "env": "None",
+                    "crypto": false, "child_process": false,
+                },
+            }],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let install = |grant_authority| {
+        crate::packs::install(
+            home.path().to_owned(),
+            pack.path().to_str().unwrap().to_owned(),
+            None,
+            Vec::new(),
+            EditedDocuments::Refuse,
+            grant_authority,
+            false,
+            None,
+        )
+    };
+
+    let error = install(false).await.unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            PackChangeError::Grant(GrantError::Ungranted { plugin, asks })
+                if plugin == "echo" && asks.contains("HTTP to api.example.com")
+        ),
+        "{error:#}"
+    );
+    assert!(gents::plugin::store::list_records(home.path())
+        .unwrap()
+        .is_empty());
+    install(true)
+        .await
+        .expect("granting the authority installs the pack");
+}
+
+#[tokio::test]
+async fn update_returns_the_edited_refusal_for_one_package() {
+    let home = initialized_home().await;
+    let first = documents_pack_dir("1.0.0");
+    install_from(home.path(), first.path(), Vec::new())
+        .await
+        .unwrap();
+    edit_demo_tools(home.path()).await;
+    let newer = documents_pack_dir("1.1.0");
+    let (bytes, _) = gents::pack::archive::pack_dir(newer.path()).unwrap();
+    let digest = {
+        use sha2::Digest;
+        format!("{:x}", sha2::Sha256::digest(&bytes))
+    };
+    let (registry, _state) =
+        super::registry::tests::serve_fake_pack("demo_pack", "1.1.0", bytes, digest).await;
+    let update = |edited| {
+        crate::packs::update(
+            home.path().to_owned(),
+            Some("gents/demo_pack".to_owned()),
+            Some(registry.clone()),
+            edited,
+        )
+    };
+
+    let error = update(EditedDocuments::Refuse).await.unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            PackChangeError::Edited { coordinate, edited }
+                if coordinate == "gents/demo_pack" && !edited.is_empty()
+        ),
+        "{error:#}"
+    );
+
+    let report = update(EditedDocuments::Keep).await.unwrap();
+    assert_eq!(report["updated"], json!(["gents/demo_pack"]), "{report}");
+    let (access, _) = crate::resolve_config_access(Some(home.path()), None)
+        .await
+        .unwrap();
+    let tools = access
+        .execute(r#"{ Tools(filter: {tools_id: {_eq: "demo-tools"}}) { display_name } }"#)
+        .await;
+    access
+        .local_node()
+        .unwrap()
+        .shutdown()
+        .await
+        .expect("node shutdown");
+    assert_eq!(
+        tools.unwrap()["data"]["Tools"][0]["display_name"],
+        "edited",
+        "keep leaves the edited document as it was"
+    );
+}
+
+#[tokio::test]
+async fn remove_returns_the_edited_refusal() {
+    let home = initialized_home().await;
+    let pack = documents_pack_dir("1.0.0");
+    install_from(home.path(), pack.path(), Vec::new())
+        .await
+        .unwrap();
+    edit_demo_tools(home.path()).await;
+
+    let error = crate::packs::remove(
+        home.path().to_owned(),
+        "gents/demo_pack".to_owned(),
+        EditedDocuments::Refuse,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&error, PackChangeError::Edited { edited, .. } if !edited.is_empty()),
+        "{error:#}"
     );
 }
 
@@ -483,7 +790,7 @@ fn expect_digest_mismatch_names_both_digests_and_pack_show() {
         "{:#}",
         check_expected_digest(Some("sha256:expected"), "sha256:actual").unwrap_err()
     );
-    for needle in ["sha256:expected", "sha256:actual", "gents pack show"] {
+    for needle in ["sha256:expected", "sha256:actual", "gents config pack show"] {
         assert!(error.contains(needle), "{needle} missing from {error}");
     }
 }

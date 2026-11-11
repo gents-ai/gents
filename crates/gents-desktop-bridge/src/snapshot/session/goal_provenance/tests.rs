@@ -1,116 +1,43 @@
 use super::*;
 use gents_protocol::output::MessagePublication;
 
+/// The transcript a running runtime published in `session_id` for a Goal
+/// opening (`source_prompt`, which started `goal_id`) followed by ordinary
+/// turns whose first prompt is `followup_prompt` pages and forks with exactly
+/// one Goal marker on the opening and its copies.
 pub(crate) async fn assert_paged_native_forks(
     access: &gents::store::config_client::ConfigAccess,
-    opening: &gents_desktop_core::client::ClientStoreRows,
-    followup: &gents_protocol::row::AgentRequestRow,
+    session: &gents_protocol::session::AgentSession,
+    goal_id: &str,
+    source_prompt: &str,
+    followup_prompt: &str,
 ) {
-    use gents::session::canonical_rows::{
-        output_segment_create_variables, transcript_message_create_variables,
-        CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-    };
     use gents::session::{ForkBoundary, ForkParams};
 
-    let session = &opening.sessions[0];
-    let node = gents::store::graphql::escape_graphql_string(&session.node_did);
-    access.write("goal_marker.paged_session", &format!(r#"mutation {{
-        create_Agent(input: {{node_did:"{node}",agent_id:"default",inference_profile_id:"fixture",enabled:true}}) {{_docID}}
-        create_AgentSession(input: {{node_did:"{node}",requester_did:"{node}",agent_id:"default",session_id:"session",created_at:"2026-10-25T00:00:00Z"}}) {{_docID}}
-    }}"#)).await.unwrap();
-    let mut publications = opening
-        .transcript_messages
-        .iter()
-        .zip(&opening.output_segments)
-        .filter(|(header, _)| !header.message.message_key.ends_with(":context"))
-        .map(|(header, segment)| (header.message.clone(), segment.segment.clone()))
-        .collect::<Vec<_>>();
-    let source_prompt = publications[0].0.message_key.clone();
-    let mut followup_prompt = String::new();
-    for index in 0..4_u32 {
-        for (offset, original) in publications[..2].to_vec().iter().enumerate() {
-            let (mut header, mut segment) = original.clone();
-            let key = format!("ordinary-{index}-{offset}");
-            if index == 0 && offset == 0 {
-                followup_prompt = key.clone();
-            }
-            header.message_key = key.clone();
-            header.sequence = 4 + index * 2 + u32::try_from(offset).unwrap();
-            header.request_doc_id = followup.doc_id.clone();
-            segment.request_doc_id = followup.doc_id.clone().unwrap();
-            segment.source = gents_protocol::output::OutputSource::Authored { key };
-            publications.push((header, segment));
-        }
-    }
-    access
-        .transact_write("goal_marker.persist_timeline", |txn| {
-            let publications = publications.clone();
-            let node = node.clone();
-            Box::pin(async move {
-                let mut terminals = std::collections::BTreeMap::new();
-                for (mut header, segment) in publications {
-                    let response = txn
-                        .execute_with_variables(
-                            CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-                            &output_segment_create_variables(&segment)?,
-                        )
-                        .await?;
-                    let close = gents::store::graphql::created_doc_id(&response, "AgentOutputSegment")?;
-                    let gents_protocol::output::MessageBlock::Text { text } = &mut header.blocks[0]
-                    else {
-                        panic!("the Goal marker fixture publishes text messages");
-                    };
-                    text.output.close_doc_id = close;
-                    let response = txn.execute_with_variables(
-                        CREATE_AGENT_MESSAGE_MUTATION,
-                        &transcript_message_create_variables(&header)?,
-                    )
-                    .await?;
-                    terminals.insert(
-                        header.request_doc_id.unwrap(),
-                        gents::store::graphql::created_doc_id(&response, "AgentMessage")?,
-                    );
-                }
-                txn.execute_with_variables(
-                    &format!(r#"mutation($input: AgentRequestMutationInputArg!) {{
-                        update_AgentRequest(filter: {{node_did: {{_eq: "{node}"}}, session_id: {{_eq: "session"}}}}, input: $input) {{_docID}}
-                    }}"#),
-                    &serde_json::json!({"input": {
-                        "lifecycle_state": "completed",
-                        "terminal_output": gents_protocol::output::TerminalOutput::NoMessage,
-                    }}),
-                ).await?;
-                for (request, message) in terminals {
-                    txn.execute_with_variables(
-                        &format!(r#"mutation($input: AgentRequestMutationInputArg!) {{
-                            update_AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}, input: $input) {{_docID}}
-                        }}"#, gents::store::graphql::escape_graphql_string(&request)),
-                        &serde_json::json!({"input": {"terminal_output":
-                            gents_protocol::output::TerminalOutput::Message { message_doc_id: message }
-                        }}),
-                    ).await?;
-                }
-                Ok::<_, anyhow::Error>(())
-            })
-        })
-        .await
-        .unwrap();
-
-    assert_native_pages(access, session, "session", 10, Some(&source_prompt)).await;
+    let source = session.session_id.as_str();
+    assert_native_pages(access, session, source, goal_id, 10, Some(source_prompt)).await;
     let first = gents::session::fork_on(
         access,
         ForkParams {
-            source_session_id: "session",
+            source_session_id: source,
             boundary: ForkBoundary::UserTurn(3),
             caller_node_did: &session.node_did,
             caller_requester_did: session.requester_did.as_deref(),
-            target_agent_id: None,
+            target_agent_did: None,
         },
     )
     .await
     .unwrap();
     assert_eq!(first.copied_messages, 6);
-    assert_native_pages(access, session, &first.session_id, 6, Some(&source_prompt)).await;
+    assert_native_pages(
+        access,
+        session,
+        &first.session_id,
+        goal_id,
+        6,
+        Some(source_prompt),
+    )
+    .await;
     let second = gents::session::fork_on(
         access,
         ForkParams {
@@ -118,25 +45,33 @@ pub(crate) async fn assert_paged_native_forks(
             boundary: ForkBoundary::UserTurn(2),
             caller_node_did: &session.node_did,
             caller_requester_did: session.requester_did.as_deref(),
-            target_agent_id: None,
+            target_agent_did: None,
         },
     )
     .await
     .unwrap();
     assert_eq!(second.copied_messages, 4);
-    assert_native_pages(access, session, &second.session_id, 4, Some(&source_prompt)).await;
+    assert_native_pages(
+        access,
+        session,
+        &second.session_id,
+        goal_id,
+        4,
+        Some(source_prompt),
+    )
+    .await;
     for (key, child, count, marked) in [
-        (followup_prompt.as_str(), "edit-followup", 2, true),
-        (source_prompt.as_str(), "edit-opening", 0, false),
+        (followup_prompt, "edit-followup", 2, true),
+        (source_prompt, "edit-opening", 0, false),
     ] {
         let copied = gents::session::fork_edit_on(
             access,
             ForkParams {
-                source_session_id: "session",
+                source_session_id: source,
                 boundary: ForkBoundary::BeforeMessageKey(key),
                 caller_node_did: &session.node_did,
                 caller_requester_did: session.requester_did.as_deref(),
-                target_agent_id: None,
+                target_agent_did: None,
             },
             child,
             &session.node_did,
@@ -148,8 +83,9 @@ pub(crate) async fn assert_paged_native_forks(
             access,
             session,
             child,
+            goal_id,
             count,
-            marked.then_some(source_prompt.as_str()),
+            marked.then_some(source_prompt),
         )
         .await;
     }
@@ -159,6 +95,7 @@ async fn assert_native_pages(
     access: &gents::store::config_client::ConfigAccess,
     source_session: &gents_protocol::session::AgentSession,
     session_id: &str,
+    goal_id: &str,
     expected_items: usize,
     opening_key: Option<&str>,
 ) {
@@ -193,7 +130,7 @@ async fn assert_native_pages(
                     .await
                     .unwrap()
                     .as_deref(),
-                Some("goal-0")
+                Some(goal_id)
             );
         }
         let rows = super::super::render_transcript_rows_with_provenance(
@@ -203,7 +140,8 @@ async fn assert_native_pages(
             &source_session.node_did,
             session_id,
         )
-        .await;
+        .await
+        .expect("transcript provenance read");
         assert!(
             rows.len() <= 2,
             "{session_id} must retain the requested page bound"
@@ -253,8 +191,8 @@ async fn assert_native_pages(
         "{session_id} opening count"
     );
     if let Some((key, goal)) = markers.first() {
-        assert_eq!(goal, "goal-0");
-        if session_id == "session" {
+        assert_eq!(goal, goal_id);
+        if session_id == source_session.session_id {
             assert_eq!(Some(key.as_str()), opening_key);
         }
     }
@@ -357,7 +295,9 @@ pub(crate) async fn assert_copied_opening(
             )
             .unwrap();
         let measured = crate::tests::support::CountingRead::new(access.clone());
-        attach(&measured, &[], &page, Some(&dependencies), &mut snapshot).await;
+        attach(&measured, &[], &page, Some(&dependencies), &mut snapshot)
+            .await
+            .unwrap();
         assert!(measured.queries() <= 2, "{fault} must batch origin reads");
         let markers = snapshot
             .messages

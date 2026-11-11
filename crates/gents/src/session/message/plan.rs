@@ -1,10 +1,10 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 
 use std::sync::Arc;
 
-use crate::request::lifecycle::{SessionMessageCause, SessionMessageTarget};
 use crate::store::config_client::ConfigAccess;
+use gents_protocol::request_lifecycle::{SessionMessageCause, SessionMessageTarget};
 
 use super::{AgentMessageDelivery, Delivery, RenderedBody};
 
@@ -33,6 +33,7 @@ impl Plan {
         &mut self,
         node_did: &str,
         parent: &gents_protocol::request_input::RequestInput,
+        signer: &crate::store::identity::ManagedAgentSigner,
     ) -> Result<()> {
         let create = match &mut self.write {
             PlannedWrite::Request { create, .. } | PlannedWrite::Goal { create, .. } => create,
@@ -40,9 +41,11 @@ impl Plan {
         create.input.session_creation =
             Some(gents_protocol::request_input::SessionCreationIntent::AgentNew);
         create.input.cwd = parent.agent_new_cwd(create.node_did == node_did);
-        let signer =
-            crate::store::identity::RegisteredIdentity::from_registered_did(node_did, None)?;
-        crate::sign_agent_request_create(&signer, create).await
+        anyhow::ensure!(
+            signer.did() == create.admission.signer_did,
+            "session creation signer differs from its admission actor"
+        );
+        crate::sign_agent_request_create(signer, create).await
     }
     pub(crate) fn hop(&self) -> u32 {
         self.hop
@@ -73,81 +76,57 @@ impl Plan {
     }
 }
 
-async fn target_goal_assignment(
+pub(super) async fn target_goal_assignment(
     node: &Arc<EmbeddedNode>,
     cause: &SessionMessageCause,
     target: &SessionMessageTarget,
 ) -> Result<Option<gents_protocol::request_input::GoalAssignmentInput>> {
     use gents_protocol::request_input::GoalAssignmentInput;
-    if target.node_did == cause.caller_node_did {
-        return ConfigAccess::transact_local_readonly(
-            node,
-            None,
-            "session_message.target_goal",
-            |txn| {
-                Box::pin(async move {
-                    let Some(session) = crate::session::load_agent_session_row_in_txn(
+    anyhow::ensure!(
+        target.node_did == cause.caller_node_did,
+        "cross-runtime agent delivery is not supported; the destination Goal is read only on its own runtime"
+    );
+    ConfigAccess::transact_local_readonly(
+        node,
+        Some(identity::Did::new(&cause.caller_agent_did)?),
+        "session_message.target_goal",
+        |txn| {
+            Box::pin(async move {
+                let Some(session) =
+                    crate::store::config_client::agent_session::load_agent_session_row_in_txn(
                         txn,
                         &target.node_did,
                         &target.session_id,
-                        Some(&cause.caller_node_did),
+                        Some(&cause.caller_agent_did),
                     )
                     .await?
-                    else {
-                        return Ok(None);
-                    };
-                    anyhow::ensure!(
-                        session.session.agent_id == target.agent_id,
-                        "session-message target Agent differs from its canonical session"
-                    );
-                    let goal = crate::goal::load_canonical_goal_in_txn(
-                        txn,
-                        &target.node_did,
-                        &target.session_id,
-                    )
-                    .await?;
-                    Ok(goal.and_then(|goal| {
-                        goal.assignment_root_request_doc_id
-                            .map(|root| GoalAssignmentInput {
-                                goal_id: goal.goal_id,
-                                root_request_doc_id: Some(root),
-                            })
-                    }))
-                })
-            },
-        )
-        .await;
-    }
-    let verifier = crate::store::identity::RegisteredIdentity::from_registered_did(
-        cause.caller_node_did.clone(),
-        None,
-    )?;
-    let state = crate::goal::load_session_goal_observation_state(
-        &ConfigAccess::local(node.clone()),
-        &verifier,
-        &target.node_did,
-        &target.session_id,
-        Some(&cause.caller_node_did),
+                else {
+                    return Ok(None);
+                };
+                anyhow::ensure!(
+                    session.session.agent_did == target.agent_did,
+                    "session-message target Agent differs from its canonical session"
+                );
+                let goal = crate::goal::load_canonical_goal_in_txn(
+                    txn,
+                    &target.node_did,
+                    &target.session_id,
+                )
+                .await?;
+                Ok(goal.and_then(|goal| {
+                    goal.assignment_root_request_doc_id
+                        .map(|root| GoalAssignmentInput {
+                            goal_id: goal.goal_id,
+                            root_request_doc_id: Some(root),
+                        })
+                }))
+            })
+        },
     )
-    .await?;
-    match state {
-        crate::goal::SessionGoalObservationState::NoReadableSession => Ok(None),
-        crate::goal::SessionGoalObservationState::Unknown => {
-            anyhow::bail!("The target chat's Goal state is still syncing. Read the chat and retry the message.")
-        }
-        crate::goal::SessionGoalObservationState::Observed(observation) => {
-            Ok(observation.goal.and_then(|goal| {
-                goal.assignment_root_request_doc_id
-                    .map(|root| GoalAssignmentInput {
-                        goal_id: goal.snapshot.goal_id,
-                        root_request_doc_id: Some(root),
-                    })
-            }))
-        }
-    }
+    .await
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub(crate) async fn plan(
     node: &Arc<EmbeddedNode>,
     cause: &SessionMessageCause,
@@ -155,6 +134,7 @@ pub(crate) async fn plan(
     rendered: RenderedBody,
     title: Option<&str>,
     interrupt: bool,
+    signer: &crate::store::identity::ManagedAgentSigner,
 ) -> Result<Result<Plan, String>> {
     plan_with_delivery(
         node,
@@ -167,6 +147,7 @@ pub(crate) async fn plan(
         } else {
             AgentMessageDelivery::Queue
         },
+        signer,
     )
     .await
 }
@@ -178,19 +159,20 @@ pub(crate) async fn plan_with_delivery(
     rendered: RenderedBody,
     title: Option<&str>,
     delivery: AgentMessageDelivery,
+    signer: &crate::store::identity::ManagedAgentSigner,
 ) -> Result<Result<Plan, String>> {
     let request_id = uuid::Uuid::new_v4().to_string();
-    let local = target.node_did == cause.caller_node_did;
-    if !local && delivery == AgentMessageDelivery::Steer {
+    if target.node_did != cause.caller_node_did {
         return Ok(Err(
-            "steering requires a local target session; use delivery=queue".to_owned(),
+            "cross-runtime agent delivery requires the authenticated HTTP delivery path, which is not available yet".to_owned(),
         ));
     }
     if crate::session::session_is_stopped(
         node,
+        &identity::Did::new(&cause.caller_agent_did)?,
         &target.node_did,
         &target.session_id,
-        Some(&cause.caller_node_did),
+        Some(&cause.caller_agent_did),
     )
     .await?
     {
@@ -198,56 +180,60 @@ pub(crate) async fn plan_with_delivery(
             "session is stopped; use agent_resume before sending another message".to_owned(),
         ));
     }
-    let active = if local {
-        match crate::request::interrupt::active_session_request(
-            node,
-            &target.session_id,
-            &target.node_did,
-            Some(&cause.caller_node_did),
-        )
-        .await?
-        {
-            Some(active) => {
-                let active_doc_id = active
-                    .doc_id
-                    .as_deref()
-                    .context("active session request lacks physical identity")?;
-                Some(
-                    crate::request::binding::load_agent_request_by_doc_id(node, active_doc_id)
-                        .await?
-                        .context("active session request disappeared")?,
+    let access = ConfigAccess::local_as(node.clone(), identity::Did::new(&cause.caller_agent_did)?);
+    let active = match crate::request::interrupt::active_session_request_with_access(
+        &access,
+        &target.session_id,
+        &target.node_did,
+        Some(&cause.caller_agent_did),
+    )
+    .await?
+    {
+        Some(active) => {
+            let active_doc_id = active
+                .doc_id
+                .as_deref()
+                .context("active session request lacks physical identity")?;
+            Some(
+                crate::request::binding::load_agent_request_by_doc_id_with_access(
+                    &access,
+                    active_doc_id,
                 )
-            }
-            None => None,
+                .await?
+                .context("active session request disappeared")?,
+            )
         }
-    } else {
-        None
+        None => None,
     };
     let steer_head = (delivery == AgentMessageDelivery::Steer)
         .then(|| active.as_ref().map(|request| request.doc_id.clone()));
     let own_hop = match &active {
         Some(active) => active.request_hop.max(
-            crate::session::load_session_current_hop(node, &target.node_did, &target.session_id)
-                .await?,
+            crate::session::load_session_current_hop(
+                node,
+                &identity::Did::new(&cause.caller_agent_did)?,
+                &target.node_did,
+                &target.session_id,
+            )
+            .await?,
         ),
         None => {
-            crate::session::load_session_current_hop(node, &target.node_did, &target.session_id)
-                .await?
+            crate::session::load_session_current_hop(
+                node,
+                &identity::Did::new(&cause.caller_agent_did)?,
+                &target.node_did,
+                &target.session_id,
+            )
+            .await?
         }
     };
-    let hop = crate::request::lifecycle::next_request_hop(
-        crate::request::lifecycle::RequestHopCause::CrossSession {
+    let hop = gents_protocol::request_lifecycle::next_request_hop(
+        gents_protocol::request_lifecycle::RequestHopCause::CrossSession {
             cause_hop: cause.caller_hop,
         },
         own_hop,
     );
     let write = if let Some((objective, token_budget)) = rendered.goal {
-        if !local {
-            return Ok(Err(
-                "a Task that declares a Goal can only address this principal's own sessions"
-                    .to_owned(),
-            ));
-        }
         if active.is_some() {
             return Ok(Err(
                 "a Task that declares a Goal requires an idle session".to_owned()
@@ -263,6 +249,7 @@ pub(crate) async fn plan_with_delivery(
             hop,
             None,
             None,
+            signer,
         )
         .await?;
         PlannedWrite::Goal {
@@ -303,6 +290,7 @@ pub(crate) async fn plan_with_delivery(
                         goal_assignment: target_goal_assignment(node, cause, target).await?,
                         ..Default::default()
                     },
+                    signer,
                 )
                 .await?,
             delivery: match (&steering, delivery) {

@@ -180,7 +180,7 @@ def viewName : View → String
 def renderedKinds : View → List String
   | .live streams | .retainedPartial streams =>
       streams.filterMap fun stream => match stream.1.kind with
-        | .signature | .encrypted | .redacted => none
+        | .signature | .encrypted | .redacted | .reasoningStop => none
         | .text => some "text"
         | .reasoning => some "reasoning"
         | .summary => some "summary"

@@ -2,7 +2,16 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+mod agent_bindings;
+pub use agent_bindings::{
+    load_pack_install_config_with_provisioner, rewrite_references as bind_agent_references,
+    AgentProvisioner,
+};
 pub mod archive;
+pub use agent_bindings::{
+    agent_slot_reference, load_pack_authoring_config, load_pack_install_config, AuthoredPackConfig,
+    BoundPackConfig, PackAgentBindings, AGENT_SLOT_REFERENCE_PREFIX,
+};
 pub mod authoring;
 pub mod home_install;
 mod inference;
@@ -31,22 +40,40 @@ pub use inference::{
     bind_pack_install_config, inference_profile_options, inspect_pack_inference_bindings,
     install_pack_documents, install_pack_documents_with_expectations,
     preview_pack_inference_bindings, PackInferenceBindingPreview, PackInferenceProfileOption,
+    SlotBindingError,
 };
-pub(crate) use installation::sdl_paths;
+pub(crate) use inference::{
+    inspect_pack_inference_bindings_with_node_binding,
+    preview_pack_inference_bindings_with_node_binding,
+};
+#[cfg(test)]
+pub(crate) use installation::record_plugin_store_change_as_with_node_binding;
 pub use installation::{
-    apply_prepared_dependency_schemas, document_pack_schema_paths, ensure_plugins_unreferenced,
-    install_documents_with_plugins, install_prepared_document_graph,
-    install_prepared_document_pack, installed_catalog, installed_pack_documents, installed_packs,
-    list_installed_packs, plugin_data_unique_keys, prepare_document_pack_install,
-    preview_installed_pack_scope, read_installed_pack, record_plugin_store_change,
-    record_plugin_store_change_as, referenced_pack_digests, remove_pack, DriftPolicy,
-    InstallReport, InstalledCatalogEntry, InstalledPack, InstalledPackPlugin,
-    InstalledPackScopePreview, PackIdentity, PluginStoreChangeError, PreparedDependency,
-    PreparedDocumentPackInstall, RemoveReport, Retained,
+    apply_hosted_document_graph, apply_prepared_dependency_schemas, assemble_document_graph_report,
+    declared_readers, document_pack_schema_paths, ensure_plugins_unreferenced,
+    hosted_document_graph, install_prepared_document_graph, install_prepared_document_pack,
+    installed_catalog, installed_pack_documents, installed_packs, list_installed_packs,
+    plugin_data_unique_keys, prepare_document_pack_archive,
+    prepare_document_pack_archive_with_runtime, prepare_document_pack_install,
+    prepare_hosted_document_pack_archive, read_installed_pack, record_plugin_store_change,
+    record_plugin_store_change_as, record_staged_plugin_store_change, referenced_pack_digests,
+    remove_pack, DependencyVariableOverrides, DriftPolicy, HostedDocumentGraph,
+    HostedPackPreparation, InstallReport, InstalledCatalogEntry, InstalledPack,
+    InstalledPackPlugin, PackChangeError, PackIdentity, PackRemovalError, PackSource,
+    PackSourceHistory, PluginStoreChangeError, PreparedDependency, PreparedDocumentPackInstall,
+    RemoveReport, Retained,
+};
+pub(crate) use installation::{
+    prepare_document_pack_archive_with_provisioner,
+    record_staged_plugin_store_change_as_with_node_binding, sdl_paths, PluginStageContext,
+};
+pub use installation::{
+    stage_hosted_pack, HostedHomePublication, HostedPackStage, HostedPackStageError,
 };
 pub use loader::{
     authored_document_schema, authored_pack_config_schema, decode_pack_config,
     ensure_pack_leaves_default_unselected, load_pack_config, pin_pack_plugins,
+    DependencyVariableResolver,
 };
 pub use manifest_validation::{validate_manifest, validate_pack_manifest};
 pub use plugin::{
@@ -54,7 +81,9 @@ pub use plugin::{
     PluginService, MAX_TOOL_INSTRUCTIONS_BYTES, PLUGIN_ARTIFACT_PREFIX, SUPPORTED_PLUGIN_LANGUAGES,
 };
 pub(crate) use provenance::pack_artifact_document_digest;
-pub use provenance::{pack_document_digests, pack_origin_from_tags, pack_origin_tag};
+pub use provenance::{
+    pack_document_digests, pack_origin_from_tags, pack_origin_tag, PackOriginError,
+};
 pub use ux::{
     is_valid_directive_name, is_valid_ux_data_tool_name, PackUxPlugin, UxContributions,
     UxDataSurface, MAX_UX_DATA_SURFACE_ID_LEN, UX_PLUGIN_AREAS, UX_PLUGIN_PREFIX,
@@ -168,7 +197,7 @@ impl PackManifest {
                     .to_owned()
             };
             anyhow::bail!(
-                "graph packs are retired; run `gents pack remove {}/{}` and install the 2.x version",
+                "graph packs are retired; run `gents config pack remove {}/{}` and install the 2.x version",
                 text("namespace", crate::pack::archive::DEFAULT_NAMESPACE),
                 text("name", "<name>")
             );

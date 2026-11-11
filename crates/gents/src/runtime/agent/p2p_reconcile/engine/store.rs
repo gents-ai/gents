@@ -8,9 +8,10 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::Utc;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 
-use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::store::config_client::ConfigAccess;
+use crate::store::graphql::{escape_graphql_string, fence_arrivals};
 use crate::store::identity::NodeIdentity;
 
 use super::super::enrollment_reconcile::EnrollmentAuthorityHandle;
@@ -41,6 +42,78 @@ pub struct GraphqlPairingStateStore {
 }
 
 impl GraphqlPairingStateStore {
+    fn runtime_access(&self) -> Result<ConfigAccess> {
+        anyhow::ensure!(
+            self.node.node_identity_did() == Some(self.identity.did()),
+            "pairing state requires the configured runtime identity"
+        );
+        Ok(ConfigAccess::local_as(
+            self.node.clone(),
+            identity::Did::new(self.identity.did())?,
+        ))
+    }
+
+    pub(super) async fn runtime_query(&self, query: &str) -> Result<defra_node::QueryResponse> {
+        self.runtime_access()?
+            .transact_readonly("p2p.query_pairing_state", |txn| {
+                Box::pin(async move { txn.execute_local_response(query).await })
+            })
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn verify_applied_owners(
+        txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+        peer_id: &str,
+        selected: &[String],
+        runtime: &identity::Did,
+    ) -> Result<()> {
+        fence_arrivals(txn, "PeerPairingApplied").await?;
+        let response = {
+            use gents_protocol::document_query::{
+                fields::peer_pairing_applied as fields, Query, Selection,
+            };
+            txn.run(
+                &Query::select(
+                    Selection::doc_id()
+                        .field(fields::PEER_ID)
+                        .field(fields::NODE_DID),
+                )
+                .render(),
+            )
+            .await?
+        };
+        let mut ids = Vec::new();
+        for row in
+            gents_protocol::graphql::graphql_rows_from_response(&response, "PeerPairingApplied")
+        {
+            let id = row["_docID"]
+                .as_str()
+                .context("applied pairing has no document ID")?;
+            let in_partition = row["peer_id"].as_str() == Some(peer_id)
+                && row["node_did"].as_str() == Some(runtime.as_str());
+            if selected.iter().any(|selected| selected == id) {
+                anyhow::ensure!(
+                    in_partition,
+                    "selected applied pairing belongs to another partition"
+                );
+            }
+            if in_partition {
+                ids.push(id.to_owned());
+            }
+        }
+        if !ids.is_empty() {
+            let owners = txn.document_owners("PeerPairingApplied", &ids).await?;
+            anyhow::ensure!(
+                owners.len() == ids.len()
+                    && owners
+                        .iter()
+                        .all(|owner| owner.visible && owner.owner.as_ref() == Some(runtime)),
+                "applied pairing has another native owner"
+            );
+        }
+        Ok(())
+    }
     /// Construct a store for explicit `PeerPairingDesired` ownership only;
     /// runtime data-plane materialization must use
     /// [`Self::with_enrollment_authority`] so it cannot bypass the durable
@@ -138,21 +211,58 @@ impl GraphqlPairingStateStore {
     /// scan but not by a `peer_id` filter, so twins are found by scanning the
     /// collection once for the whole sweep.
     async fn load_applied_rows(&self) -> Result<Vec<AppliedStateRow>> {
-        let query = r#"{
-            PeerPairingApplied {
-                _docID
-                peer_id
-                collections
-                replicator_addresses
-                replicator_filter
-                enrollment_request_digest
-                enrollment_authorization_sequence
-                enrollment_authorization_expires_at
-            }
-        }"#;
-        let response =
-            graphql_with_transaction_retry(&self.node, query, "query PeerPairingApplied").await?;
-        Ok(rows::<AppliedStateRow>(&response, "PeerPairingApplied")?)
+        let query = {
+            use gents_protocol::document_query::{
+                fields::peer_pairing_applied as fields, Filter, Query, Selection,
+            };
+            Query::select(
+                Selection::doc_id()
+                    .field(fields::PEER_ID)
+                    .field(fields::COLLECTIONS)
+                    .field(fields::REPLICATOR_ADDRESSES)
+                    .field(fields::REPLICATOR_FILTER)
+                    .field(fields::ENROLLMENT_REQUEST_DIGEST)
+                    .field(fields::ENROLLMENT_AUTHORIZATION_SEQUENCE)
+                    .field(fields::ENROLLMENT_AUTHORIZATION_EXPIRES_AT),
+            )
+            .filter(Filter::eq(fields::NODE_DID, self.identity.did()))
+            .render()
+        };
+        let runtime = identity::Did::new(self.identity.did())?;
+        self.runtime_access()?
+            .transact_readonly("p2p.load_applied_owned", |txn| {
+                let query = &query;
+                let runtime = &runtime;
+                Box::pin(async move {
+                    let response = txn.run_local_response(query).await?;
+                    let found = rows::<AppliedStateRow>(&response, "PeerPairingApplied")?;
+                    let ids = found
+                        .iter()
+                        .map(|row| row.doc_id.clone())
+                        .collect::<Vec<_>>();
+                    if ids.is_empty() {
+                        return Ok::<_, anyhow::Error>(found);
+                    }
+                    let owners = txn.document_owners("PeerPairingApplied", &ids).await?;
+                    anyhow::ensure!(
+                        owners.len() == ids.len(),
+                        "applied pairing owner lookup is incomplete"
+                    );
+                    Ok::<_, anyhow::Error>(
+                        found
+                            .into_iter()
+                            .filter(|row| {
+                                owners.iter().any(|owner| {
+                                    owner.doc_id == row.doc_id
+                                        && owner.visible
+                                        && owner.owner.as_ref() == Some(runtime)
+                                })
+                            })
+                            .collect(),
+                    )
+                })
+            })
+            .await
     }
 }
 
@@ -164,31 +274,114 @@ impl PairingStateStore for GraphqlPairingStateStore {
 
     async fn load_desired_with_authority(&self, peer_id: &str) -> Result<LoadedPairingDesired> {
         let raw_peer_id = peer_id.to_string();
-        let peer_id = escape_graphql_string(peer_id);
-        let query = format!(
-            r#"{{
-                PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{
-                    peer_id
-                    node_did
-                    replicator_addresses
-                    template
-                    source
-                    enrollment_request_digest
-                    enrollment_authorization_sequence
-                    enrollment_authorization_expires_at
-                }}
-                DataPlanePairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{
-                    peer_id
-                    node_did
-                    collections
-                    replicator_addresses
-                    template
-                    source
-                }}
-            }}"#
-        );
+        let query = {
+            use gents_protocol::document_query::{fields, Filter, Query, QuerySet, Selection};
+            QuerySet::new()
+                .plain(
+                    &Query::select(
+                        Selection::doc_id()
+                            .field(fields::peer_pairing_desired::ACTOR_DID)
+                            .field(fields::peer_pairing_desired::PEER_ID)
+                            .field(fields::peer_pairing_desired::NODE_DID)
+                            .field(fields::peer_pairing_desired::REPLICATOR_ADDRESSES)
+                            .field(fields::peer_pairing_desired::TEMPLATE)
+                            .field(fields::peer_pairing_desired::SOURCE)
+                            .field(fields::peer_pairing_desired::ENROLLMENT_REQUEST_DIGEST)
+                            .field(fields::peer_pairing_desired::ENROLLMENT_AUTHORIZATION_SEQUENCE)
+                            .field(
+                                fields::peer_pairing_desired::ENROLLMENT_AUTHORIZATION_EXPIRES_AT,
+                            ),
+                    )
+                    .filter(Filter::eq(fields::peer_pairing_desired::PEER_ID, peer_id)),
+                )
+                .plain(
+                    &Query::select(
+                        Selection::doc_id()
+                            .field(fields::data_plane_pairing_desired::ACTOR_DID)
+                            .field(fields::data_plane_pairing_desired::PEER_ID)
+                            .field(fields::data_plane_pairing_desired::NODE_DID)
+                            .field(fields::data_plane_pairing_desired::COLLECTIONS)
+                            .field(fields::data_plane_pairing_desired::REPLICATOR_ADDRESSES)
+                            .field(fields::data_plane_pairing_desired::TEMPLATE)
+                            .field(fields::data_plane_pairing_desired::SOURCE),
+                    )
+                    .filter(Filter::eq(
+                        fields::data_plane_pairing_desired::PEER_ID,
+                        peer_id,
+                    )),
+                )
+                .render()
+        };
+        let runtime = identity::Did::new(self.identity.did())?;
         let response =
-            graphql_with_transaction_retry(&self.node, &query, "query pairing desired state")
+            self.runtime_access()?
+                .transact_readonly("p2p.query_pairing_desired", |txn| {
+                    let query = &query;
+                    let runtime = &runtime;
+                    Box::pin(async move {
+                        let response = txn.run_local_response(query).await?;
+                        let ids = rows::<serde_json::Value>(&response, "PeerPairingDesired")?
+                            .into_iter()
+                            .map(|row| {
+                                anyhow::ensure!(
+                                    row["actor_did"].as_str() == Some(runtime.as_str()),
+                                    "desired pairing has another source actor"
+                                );
+                                row["_docID"]
+                                    .as_str()
+                                    .map(str::to_owned)
+                                    .context("desired pairing has no document ID")
+                            })
+                            .collect::<Result<Vec<_>>>()?;
+                        if !ids.is_empty() {
+                            let owners = txn.document_owners("PeerPairingDesired", &ids).await?;
+                            anyhow::ensure!(
+                                owners.len() == ids.len()
+                                    && owners.iter().all(|owner| owner.visible
+                                        && owner.owner.as_ref() == Some(runtime)),
+                                "desired pairing has another native owner"
+                            );
+                        }
+                        let overlays =
+                            rows::<serde_json::Value>(&response, "DataPlanePairingDesired")?;
+                        let mut overlay_ids = Vec::new();
+                        let mut overlay_actors = Vec::new();
+                        for row in overlays {
+                            let doc = row["_docID"]
+                                .as_str()
+                                .context("pairing overlay has no document ID")?
+                                .to_owned();
+                            let actor = identity::Did::new(
+                                row["actor_did"]
+                                    .as_str()
+                                    .context("pairing overlay has no author")?,
+                            )?;
+                            anyhow::ensure!(
+                                &actor != runtime,
+                                "pairing overlay uses runtime authority"
+                            );
+                            overlay_ids.push(doc);
+                            overlay_actors.push(actor);
+                        }
+                        if !overlay_ids.is_empty() {
+                            let owners = txn
+                                .document_owners("DataPlanePairingDesired", &overlay_ids)
+                                .await?;
+                            anyhow::ensure!(
+                                owners.len() == overlay_ids.len()
+                                    && overlay_ids.iter().zip(&overlay_actors).all(
+                                        |(id, actor)| owners
+                                            .iter()
+                                            .any(|owner| owner.doc_id == *id
+                                                && owner.visible
+                                                && owner.owner.as_ref() == Some(actor))
+                                    ),
+                                "pairing overlay has another native owner"
+                            );
+                        }
+                        Ok::<_, anyhow::Error>(response)
+                    })
+                })
                 .await?;
         let materialized_entry = self
             .data_plane_materialized_entry(&raw_peer_id)
@@ -287,6 +480,15 @@ impl PairingStateStore for GraphqlPairingStateStore {
     }
 
     async fn persist_applied(&self, peer_id: &str, applied: &LoadedPairingApplied) -> Result<()> {
+        let access = self.runtime_access()?;
+        let runtime = identity::Did::new(self.identity.did())?;
+        let raw_peer_id = peer_id.to_owned();
+        let selected = applied
+            .doc_id
+            .iter()
+            .chain(&applied.duplicate_doc_ids)
+            .cloned()
+            .collect::<Vec<_>>();
         if applied.state.is_empty() {
             let delete_observed =
                 if applied.doc_id.is_none() && applied.duplicate_doc_ids.is_empty() {
@@ -304,22 +506,27 @@ impl PairingStateStore for GraphqlPairingStateStore {
             let peer_id = escape_graphql_string(peer_id);
             let mutation = format!(
                 r#"mutation {{ {delete_observed}
-                    current: delete_PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{ _docID }}
-                }}"#
+                    current: delete_PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{peer_id}" }}, node_did: {{_eq: "{}"}} }}) {{ _docID }}
+                }}"#,
+                escape_graphql_string(self.identity.did())
             );
-            return Ok(
-                crate::store::config_client::ConfigAccess::write_local_response(
-                    &self.node,
-                    "p2p.delete_pairing_applied",
-                    &mutation,
-                )
-                .await
-                .map(|_| ())?,
-            );
+            return access
+                .transact_write("p2p.delete_pairing_applied", |txn| {
+                    let mutation = &mutation;
+                    let runtime = &runtime;
+                    let selected = &selected;
+                    let peer_id = &raw_peer_id;
+                    Box::pin(async move {
+                        txn.validate_runtime_actor(runtime)?;
+                        Self::verify_applied_owners(txn, peer_id, selected, runtime).await?;
+                        txn.execute(mutation).await?;
+                        Ok::<_, anyhow::Error>(())
+                    })
+                })
+                .await;
         }
 
         let peer_id = escape_graphql_string(peer_id);
-        let collections = graphql_nullable_string_array(&applied.state.collections);
         let replicator_addresses =
             graphql_nullable_string_array(&applied.state.replicator_addresses);
         let replicator_filter = graphql_nullable_filter_literal(&applied.state.replicator_filter);
@@ -334,10 +541,11 @@ impl PairingStateStore for GraphqlPairingStateStore {
         let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
         let save = format!(
             r#"upsert_PeerPairingApplied(
-                    filter: {{ peer_id: {{ _eq: "{peer_id}" }} }},
+                    filter: {{ peer_id: {{ _eq: "{peer_id}" }}, node_did: {{_eq: "{}"}} }},
                     add: {{
                         peer_id: "{peer_id}",
-                        collections: {collections},
+                        node_did: "{}",
+                        parent_linked: false,
                         replicator_addresses: {replicator_addresses},
                         replicator_filter: {replicator_filter},
                         enrollment_request_digest: {digest},
@@ -347,7 +555,6 @@ impl PairingStateStore for GraphqlPairingStateStore {
                         updated_at: "{now}"
                     }},
                     update: {{
-                        collections: {collections},
                         replicator_addresses: {replicator_addresses},
                         replicator_filter: {replicator_filter},
                         enrollment_request_digest: {digest},
@@ -356,6 +563,8 @@ impl PairingStateStore for GraphqlPairingStateStore {
                         updated_at: "{now}"
                     }}
                 ) {{ _docID }}"#,
+            escape_graphql_string(self.identity.did()),
+            escape_graphql_string(self.identity.did()),
         );
         let delete_duplicates = if applied.duplicate_doc_ids.is_empty() {
             String::new()
@@ -369,25 +578,39 @@ impl PairingStateStore for GraphqlPairingStateStore {
             )
         };
         let mutation = format!("mutation {{ {delete_duplicates} {save} }}");
-        Ok(
-            crate::store::config_client::ConfigAccess::write_local_response(
-                &self.node,
-                "p2p.save_pairing_applied",
-                &mutation,
-            )
+        access
+            .transact_write("p2p.save_pairing_applied", |txn| {
+                let mutation = &mutation;
+                let runtime = &runtime;
+                let selected = &selected;
+                let peer_id = &raw_peer_id;
+                Box::pin(async move {
+                    txn.validate_runtime_actor(runtime)?;
+                    Self::verify_applied_owners(txn, peer_id, selected, runtime).await?;
+                    let response = txn.execute(mutation).await?;
+                    let doc = gents_protocol::graphql::extract_mutation_doc_id(
+                        &response,
+                        "PeerPairingApplied",
+                    )?;
+                    crate::store::config_client::maybe_link_deferred_operation_in_txn(
+                        txn,
+                        "PeerPairingApplied",
+                        &doc,
+                        runtime,
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
             .await
-            .map(|_| ())?,
-        )
     }
 
     async fn list_peer_ids(&self) -> Result<BTreeSet<String>> {
         let query = r#"{
             PeerPairingDesired { peer_id }
             DataPlanePairingDesired { peer_id }
-            PeerPairingApplied { peer_id }
         }"#;
-        let response =
-            graphql_with_transaction_retry(&self.node, query, "query pairing peer ids").await?;
+        let response = self.runtime_query(query).await?;
         let mut ids = BTreeSet::new();
         for row in rows::<PeerIdRow>(&response, "PeerPairingDesired")? {
             if !row.peer_id.trim().is_empty() {
@@ -399,7 +622,7 @@ impl PairingStateStore for GraphqlPairingStateStore {
                 ids.insert(row.peer_id);
             }
         }
-        for row in rows::<PeerIdRow>(&response, "PeerPairingApplied")? {
+        for row in self.load_applied_rows().await? {
             if !row.peer_id.trim().is_empty() {
                 ids.insert(row.peer_id);
             }

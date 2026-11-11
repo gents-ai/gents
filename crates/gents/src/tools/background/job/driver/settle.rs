@@ -5,7 +5,7 @@ use gents_protocol::job::{
     JobControlKind, JobFailure, JobPauseReason, JobState, JobSuspend, JobSuspendKind,
 };
 
-use super::super::admit::Refusal;
+use super::super::admit::{PolicyDenialDetail, Refusal};
 use crate::plugin::job_calls::job_state;
 use crate::store::config_client::ConfigApplyTxn;
 use crate::tools::call::lifecycle::{PluginJobTerminal, ToolCallLifecycle, ToolCallState};
@@ -17,6 +17,7 @@ pub enum Settlement {
     Fail(JobFailure),
     Suspend(JobSuspend),
     Refused(Refusal),
+    RefusedWithDetail(Refusal, PolicyDenialDetail),
     /// `Refused(StepFailed)` with the third step's own error, so the caller
     /// learns what the guest got wrong without reading the host log.
     StepFailed {
@@ -53,25 +54,32 @@ pub(super) fn terminal(settlement: Settlement, tool: &str, address: &str) -> Opt
         reason,
         progress: Some((job_state(state, None), None, Some(event))),
     };
-    let refused = |refusal: Refusal, last_error: Option<&str>| {
-        let code = refusal.code()?;
-        let (state, status) = if refusal == Refusal::TimedOut {
-            (ToolCallState::TimedOut, "timed_out")
-        } else {
-            (ToolCallState::Failed, "failed")
+    let refused =
+        |refusal: Refusal, detail: Option<PolicyDenialDetail>, last_error: Option<&str>| {
+            let code = refusal.code()?;
+            let (state, status) = if refusal == Refusal::TimedOut {
+                (ToolCallState::TimedOut, "timed_out")
+            } else {
+                (ToolCallState::Failed, "failed")
+            };
+            let (message, next) = detail.map_or_else(
+                || refusal_text(refusal, tool, address),
+                |detail| {
+                    let (message, next) = detail.guidance();
+                    (message, next.to_owned())
+                },
+            );
+            let message = match last_error {
+                Some(last_error) => format!("{message}; last: {last_error}"),
+                None => message.to_owned(),
+            };
+            Some(killed(
+                state,
+                json!({"status": status, "code": code, "message": message, "next": next}),
+                Some(code.to_owned()),
+                message,
+            ))
         };
-        let (message, next) = refusal_text(refusal, tool, address);
-        let message = match last_error {
-            Some(last_error) => format!("{message}; last: {last_error}"),
-            None => message.to_owned(),
-        };
-        Some(killed(
-            state,
-            json!({"status": status, "code": code, "message": message, "next": next}),
-            Some(code.to_owned()),
-            message,
-        ))
-    };
     let paused = |reason: Option<JobPauseReason>, message: &str| Terminal {
         state: ToolCallState::Completed,
         output: json!({"status": "paused", "reason": reason, "message": message}),
@@ -102,8 +110,11 @@ pub(super) fn terminal(settlement: Settlement, tool: &str, address: &str) -> Opt
             reason: None,
             progress: Some((JobState::AwaitingUser, None, None)),
         },
-        Settlement::StepFailed { last_error } => refused(Refusal::StepFailed, Some(&last_error))?,
-        Settlement::Refused(refusal) => refused(refusal, None)?,
+        Settlement::StepFailed { last_error } => {
+            refused(Refusal::StepFailed, None, Some(&last_error))?
+        }
+        Settlement::Refused(refusal) => refused(refusal, None, None)?,
+        Settlement::RefusedWithDetail(refusal, detail) => refused(refusal, Some(detail), None)?,
         Settlement::Control(JobControlKind::Stop) => killed(
             ToolCallState::Cancelled,
             json!({"status": "cancelled", "message": "the job was stopped"}),
@@ -122,8 +133,9 @@ pub(in crate::tools::background::job) fn refusal_text(
     tool: &str,
     address: &str,
 ) -> (&'static str, String) {
-    let inspect =
-        format!("Next: `gents job show {address}`; the `{tool}` help says how a run is resumed");
+    let inspect = format!(
+        "Next: `gents automation job show {address}`; the `{tool}` help says how a run is resumed"
+    );
     match refusal {
         Refusal::Stalled => (
             "the job stopped making progress: every child is terminal and the step spawned nothing and sent no message",
@@ -140,7 +152,7 @@ pub(in crate::tools::background::job) fn refusal_text(
         ),
         Refusal::EngineChanged => (
             "the job's plugin changed since the job was pinned",
-            format!("Next: call `{tool}` again to start a new run; `gents job show {address}` keeps the old one"),
+            format!("Next: call `{tool}` again to start a new run; `gents automation job show {address}` keeps the old one"),
         ),
         Refusal::DepthExceeded => (
             "the job would run too deep in a chain of jobs",

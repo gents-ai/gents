@@ -57,8 +57,10 @@ export function createBridgeHttpAdapter(
       throw new Error("Native picker is unavailable in the live browser bridge");
     },
     requestAttachments: unsupported("requestAttachments"),
+    provisionAgentIdentity: unsupported("provisionAgentIdentity"),
     removePeer: unsupported("removePeer"),
     renamePeer: unsupported("renamePeer"),
+    dismissEndedAccess: unsupported("dismissEndedAccess"),
     listWorkspace: unsupported("listWorkspace"),
     fetchRequestTimeline: unsupported("fetchRequestTimeline"),
     fetchSessionGoal: unsupported("fetchSessionGoal"),
@@ -67,18 +69,9 @@ export function createBridgeHttpAdapter(
     recoverGoalSubmission: unsupported("recoverGoalSubmission"),
     resumeGoalSubmission: unsupported("resumeGoalSubmission"),
     acknowledgeGoalSubmission: unsupported("acknowledgeGoalSubmission"),
-    recoverChatSubmission: async (query) =>
-      client.postJson("/desktop/chat/recover", query),
-    acknowledgeChatSubmission: async (receipt) => {
-      await client.postJson("/desktop/chat/acknowledge", receipt);
-    },
-    explainToolSurface: unsupported("explainToolSurface"),
-    fetchNetworkStatus: unsupported("fetchNetworkStatus"),
-    listMailbox: unsupported("listMailbox"),
     observeMailboxItem: unsupported("observeMailboxItem"),
     startMailboxRequest: unsupported("startMailboxRequest"),
     dismissMailboxItem: unsupported("dismissMailboxItem"),
-    resendRequest: unsupported("resendRequest"),
     retryRequest: unsupported("retryRequest"),
     forkSessionBeforeMessage: unsupported("forkSessionBeforeMessage"),
     saveSkillConfig: unsupported("saveSkillConfig"),
@@ -102,9 +95,8 @@ export function createBridgeHttpAdapter(
     searchPacks: (query, page) =>
       client.postJson("/desktop/packs/search", { query, page }),
     packInfo: (pack) => client.postJson("/desktop/packs/info", { package: pack }),
-    installPack: async (request) => {
-      await client.postJson("/desktop/packs/install", request, 300_000);
-    },
+    installPack: (request) =>
+      client.postJson("/desktop/packs/install", request, 300_000),
     updatePack: unsupported("updatePack"),
     removePack: unsupported("removePack"),
     bindPackPlugin: unsupported("bindPackPlugin"),
@@ -150,10 +142,9 @@ export function createBridgeHttpAdapter(
         nodeDid: nodeDid ?? null,
         requestId: requestId ?? null,
         timelineLimit: timelinePage?.limit,
-        timelineBeforeItemKey: timelinePage?.beforeItemKey ?? null,
       }),
-    retrySessionHydration: async (sessionId, nodeDid) => {
-      await client.postJson("/desktop/session/hydration/retry", {
+    reloadSession: async (sessionId, nodeDid) => {
+      await client.postJson("/desktop/session/reload", {
         sessionId,
         nodeDid,
       });
@@ -166,7 +157,7 @@ export function createBridgeHttpAdapter(
       const normalized: TauriDriverChatRequest = {
         ...request,
         nodeDid: request.nodeDid,
-        agentId: request.agentId ?? null,
+        agentDid: request.agentDid ?? null,
         sessionId: request.sessionId ?? null,
         content: request.content,
       };
@@ -182,8 +173,6 @@ export function createBridgeHttpAdapter(
       client.postJson("/desktop/queue/edit", request),
     setSessionArchived: async (request) =>
       client.postJson("/desktop/session/archive", request),
-    sessionHistory: async (request) =>
-      client.postJson("/desktop/session/history", request),
     renameSession: async (request) => {
       await client.postJson("/desktop/session/rename", request);
     },

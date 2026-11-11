@@ -204,27 +204,19 @@
         { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Reconstruction.lean", "symbol": "CanonicalOutput.forkHeader" },
         { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Hydration.lean", "symbol": "CanonicalOutput.Hydration.forkMetadataMatches" },
         { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Hydration.lean", "symbol": "CanonicalOutput.Hydration.buildManifest" },
-        { "file": "crates/gents/proofs/Proofs/SessionHydration/State.lean", "symbol": "SessionHydration.buildDocuments" },
-        { "file": "crates/gents/proofs/Proofs/SessionHydration/Receiver.lean", "symbol": "SessionHydration.projectCanonicalSnapshot" }
+        { "file": "crates/gents/proofs/Proofs/FileInventory/Source.lean", "symbol": "FileInventory.buildDocuments" }
       ],
       "generated_groups": [
-        "session_hydration_decision_cases",
-        "session_hydration_closure_cases",
-        "session_hydration_apply_cases",
-        "session_hydration_progress_cases",
-        "session_hydration_durable_cases"
+        "file_inventory_closure_cases"
       ],
       "fixture_status": "summary_only",
       "native_owner_paths": [
         "crates/gents/src/session/fork.rs",
-        "crates/gents/src/runtime/agent/p2p_reconcile/session_hydration.rs",
-        "crates/gents/src/runtime/agent/p2p_reconcile/session_hydration_reconcile.rs",
-        "crates/gents-protocol/src/session_hydration.rs",
+        "crates/gents/src/file_inventory/selection.rs",
         "crates/gents-desktop-core/src/client/query/session_transcript.rs"
       ],
       "consumer_paths": [
-        "crates/gents/src/runtime/agent/p2p_reconcile/session_hydration_closure.rs",
-        "crates/gents/tests/conformance/session_hydration.rs",
+        "crates/gents/src/file_inventory/closure.rs",
         "crates/gents/src/session/tests.rs",
         "crates/gents-desktop-core/src/client/query/tests/transcript_pagination.rs",
         "crates/gents/tests/e2e_triggers/app_collection_pairing_p2p_e2e.rs"
@@ -235,7 +227,7 @@
         "Reject fork metadata mismatch, reordered child headers, missing origins, conflicting origins, and denied origins with distinct outcomes.",
         "Build an authorized transitive manifest containing selected headers, every referenced closure and extent segment, terminal selection dependencies, and recursive fork origins.",
         "Permit authorized fork dependencies across sessions without treating arbitrary parent-session history as selected.",
-        "Keep missing dependencies loading/incomplete, denial rejected, twins conflicted, and served completion contingent on exact signed identity coverage plus reconstruction.",
+        "Keep missing dependencies loading/incomplete, denial rejected, and twins conflicted.",
         "Exercise actual document sets and expected manifests; the currently emitted hydration booleans and counts are insufficient native reconstruction inputs."
       ],
       "retired_bindings": [
@@ -346,8 +338,7 @@
         "crates/gents-desktop-core/src/client/store/turns.rs",
         "crates/gents-desktop-core/src/client/store/indexing.rs",
         "crates/gents-desktop-core/src/client/observe/projection_store.rs",
-        "crates/gents-desktop-core/src/client/query/session_transcript.rs",
-        "crates/gents-cli/src/commands/codex_shim/turn/active.rs"
+        "crates/gents-desktop-core/src/client/query/session_transcript.rs"
       ],
       "consumer_paths": [
         "crates/gents-protocol/src/client_protocol/tests.rs",

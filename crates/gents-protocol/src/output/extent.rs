@@ -1,10 +1,10 @@
 //! Exact open-source extent validation used before a recovery/producer close:
 //! gaps, twins and malformed runs fail rather than yielding a shorter prefix.
 //! Closure authority and uniqueness remain with the caller.
-use super::reconstruction::{ObservedSegment, ReconstructedStream};
-use super::{OutputSource, OutputWriter, ReconstructionError, StreamPayload};
+use super::reconstruction::{ObservedSegment, ReconstructedStream, StreamDeclarations};
+use super::{OutputSource, OutputWriter, ReconstructionError};
 use chrono::DateTime;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct OpenSourceExtent {
@@ -92,7 +92,7 @@ pub fn inspect_open_source(
         slots.entry(n).or_default().push(r);
     }
     let mut streams: Vec<ReconstructedStream> = vec![];
-    let mut positions = BTreeSet::new();
+    let mut declarations = StreamDeclarations::default();
     let mut last_time = None;
     for (expected, (ordinal, slot)) in slots.iter().enumerate() {
         let expected = u32::try_from(expected).map_err(|_| bad("ordinal exceeds u32"))?;
@@ -129,13 +129,7 @@ pub fn inspect_open_source(
                 .get(offset..end)
                 .ok_or_else(|| bad("runs split UTF-8 or exceed payload"))?;
             if let Some(decl) = &run.declaration {
-                if run.stream as usize != streams.len()
-                    || !positions.insert((
-                        decl.block_index,
-                        decl.part_index,
-                        matches!(decl.payload, StreamPayload::ReasoningSignature),
-                    ))
-                {
+                if run.stream as usize != streams.len() || !declarations.admit(decl, run.bytes) {
                     return Err(bad(
                         "stream declarations are not dense or positions conflict",
                     ));
@@ -145,11 +139,13 @@ pub fn inspect_open_source(
                     text: part.to_owned(),
                 })
             } else {
-                streams
+                let stream = streams
                     .get_mut(run.stream as usize)
-                    .ok_or_else(|| bad("continuation before declaration"))?
-                    .text
-                    .push_str(part)
+                    .ok_or_else(|| bad("continuation before declaration"))?;
+                if !declarations.allows_continuation(&stream.declaration) {
+                    return Err(bad("continuation after reasoning stop"));
+                }
+                stream.text.push_str(part)
             };
             offset = end
         }

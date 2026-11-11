@@ -8,7 +8,7 @@ pub(super) async fn load_rows<T>(
 where
     T: DeserializeOwned,
 {
-    required_rows(access, collection, query)
+    query_rows(access, collection, query)
         .await?
         .into_iter()
         .map(serde_json::from_value)
@@ -16,7 +16,7 @@ where
         .with_context(|| format!("decoding {collection} rows"))
 }
 
-pub(super) async fn required_rows(
+pub(super) async fn query_rows(
     access: &ConfigAccess,
     collection_name: &str,
     query: &str,
@@ -24,12 +24,11 @@ pub(super) async fn required_rows(
     let response = access
         .execute(query)
         .await
-        .with_context(|| format!("reading required timeline collection {collection_name}"))?;
-    decode_required_rows(&response, collection_name)
+        .with_context(|| format!("reading timeline collection {collection_name}"))?;
+    decode_rows(&response, collection_name)
 }
 
-/// DefraDB may answer a read denied by node access control with HTTP 200 and empty `data`.
-fn decode_required_rows(response: &Value, collection: &str) -> Result<Vec<Value>> {
+pub(super) fn decode_rows(response: &Value, collection: &str) -> Result<Vec<Value>> {
     anyhow::ensure!(
         response
             .get("errors")
@@ -37,17 +36,16 @@ fn decode_required_rows(response: &Value, collection: &str) -> Result<Vec<Value>
         "timeline {collection} query failed: {}",
         response["errors"]
     );
-    let data = response.get("data");
-    anyhow::ensure!(
-        !data
-            .and_then(Value::as_object)
-            .is_some_and(serde_json::Map::is_empty),
-        "timeline {collection} read returned no data: the node probably denied it to this identity (anonymous or not its principal); read as the node's principal"
-    );
-    let rows = data
-        .and_then(|data| data.get(collection))
-        .and_then(Value::as_array)
-        .with_context(|| format!("timeline query omitted required {collection} row array"))?;
+    let data = response
+        .get("data")
+        .and_then(Value::as_object)
+        .context("timeline query omitted or malformed data")?;
+    let Some(value) = data.get(collection) else {
+        return Ok(Vec::new());
+    };
+    let rows = value
+        .as_array()
+        .with_context(|| format!("timeline query returned malformed {collection} row array"))?;
     anyhow::ensure!(
         rows.iter().all(Value::is_object),
         "timeline {collection} query returned a non-document row"
@@ -60,31 +58,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn missing_or_malformed_required_rows_are_not_empty_timelines() {
+    fn absent_roots_are_empty_but_malformed_responses_and_errors_fail() {
+        for response in [
+            serde_json::json!({"data": {}}),
+            serde_json::json!({"data": {"s0": [{"_docID": "other"}]}}),
+            serde_json::json!({"errors": [], "data": {"AgentMessage": []}}),
+        ] {
+            assert!(decode_rows(&response, "AgentMessage").unwrap().is_empty());
+        }
         for response in [
             serde_json::json!({}),
-            serde_json::json!({"data": {}}),
+            serde_json::json!({"data": null}),
+            serde_json::json!({"data": []}),
             serde_json::json!({"data": {"AgentMessage": null}}),
             serde_json::json!({"data": {"AgentMessage": {}}}),
             serde_json::json!({"data": {"AgentMessage": [null]}}),
             serde_json::json!({"errors": [{"message": "denied"}], "data": {"AgentMessage": []}}),
         ] {
             assert!(
-                decode_required_rows(&response, "AgentMessage").is_err(),
+                decode_rows(&response, "AgentMessage").is_err(),
                 "{response}"
             );
         }
-        let denied = decode_required_rows(&serde_json::json!({"data": {}}), "AgentMessage")
-            .unwrap_err()
-            .to_string();
-        assert!(denied.contains("probably denied"), "{denied}");
-        assert!(decode_required_rows(
-            &serde_json::json!({
-                "errors": [], "data": {"AgentMessage": []}
-            }),
-            "AgentMessage"
-        )
-        .unwrap()
-        .is_empty());
     }
 }

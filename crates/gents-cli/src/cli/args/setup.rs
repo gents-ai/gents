@@ -87,6 +87,9 @@ pub(crate) fn store_key_custody(
 
 #[derive(clap::Args)]
 pub(crate) struct InitArgs {
+    /// Set by the interactive menu, never by a flag.
+    #[arg(skip)]
+    pub(crate) picked_connection: Option<crate::interactive_backend::PickedConnection>,
     #[arg(long, help = "Node home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
     #[arg(long, hide = true)]
@@ -213,12 +216,6 @@ pub(crate) struct InitArgs {
         help = "Root directory for local file/bash tools. Defaults to the current working directory"
     )]
     pub(crate) tool_root: Option<PathBuf>,
-    #[arg(
-        long,
-        default_value_t = false,
-        help = "Enable the feature-gated per-agent memory tool in the default Tools"
-    )]
-    pub(crate) enable_memory: bool,
     #[arg(
         long,
         default_value_t = false,

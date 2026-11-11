@@ -3,9 +3,9 @@ use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole, Outp
 use gents_protocol::row::{AgentRequestRow, AgentToolCallRow};
 use serde::Deserialize;
 
-use crate::session::canonical_rows::TranscriptMessageRow;
 use crate::store::config_client::ConfigApplyTxn;
 use crate::store::graphql::{escape_graphql_string, response_has_documents};
+use gents_protocol::output::rows::TranscriptMessageRow;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ToolAccountingRejection {
@@ -90,21 +90,39 @@ pub(super) async fn account_tools_in_txn(
         .session_id
         .as_deref()
         .context("request missing session")?;
-    let scope =
-        crate::session::session_scope_filter(agent, session, request.requester_did.as_deref());
     let escaped_request = escape_graphql_string(request_id);
-    let response = txn
-        .execute_local_response(&format!(
-            r#"{{
-        AgentToolCall(filter: {{ {scope}, request_doc_id: {{ _eq: "{escaped_request}" }} }}) {{
-            _docID tool_call_key request_doc_id node_did requester_did session_id
-            message_sequence tool_call_id tool_name lifecycle_state await_mode
-            started_at deadline_at spawned_by_tool_call_doc_id
-            plugin_parent_tool_call_doc_id plugin_effect_ordinal terminal_output
-        }}
-    }}"#
+    let response = {
+        use gents_protocol::document_query::{
+            fields::agent_tool_call as fields, session_scope, Filter, Query, Selection,
+        };
+        let rendered = Query::select(
+            Selection::doc_id()
+                .field(fields::TOOL_CALL_KEY)
+                .field(fields::REQUEST_DOC_ID)
+                .field(fields::NODE_DID)
+                .field(fields::REQUESTER_DID)
+                .field(fields::SESSION_ID)
+                .field(fields::MESSAGE_SEQUENCE)
+                .field(fields::TOOL_CALL_ID)
+                .field(fields::TOOL_NAME)
+                .field(fields::LIFECYCLE_STATE)
+                .field(fields::AWAIT_MODE)
+                .field(fields::STARTED_AT)
+                .field(fields::DEADLINE_AT)
+                .field(fields::SPAWNED_BY_TOOL_CALL_DOC_ID)
+                .field(fields::PLUGIN_PARENT_TOOL_CALL_DOC_ID)
+                .field(fields::PLUGIN_EFFECT_ORDINAL)
+                .field(fields::TERMINAL_OUTPUT),
+        )
+        .filter(session_scope(
+            agent,
+            session,
+            request.requester_did.as_deref(),
         ))
-        .await?;
+        .filter(Filter::eq(fields::REQUEST_DOC_ID, request_id))
+        .render();
+        txn.run_local_response(&rendered).await?
+    };
     let tools: Vec<ToolDocument> = crate::store::graphql::rows(&response, "AgentToolCall")?;
     for header in headers.iter().filter(|h| matches!(&h.message.publication,
         MessagePublication::RequestExecution { execution_generation } if execution_generation == generation)
@@ -334,7 +352,6 @@ mod tests {
             let child_doc = child.doc_id().unwrap().to_owned();
             let generation = parent.execution_generation().unwrap().to_owned();
             let request_doc = parent.request_doc_id().unwrap().to_owned();
-            let agent = parent.node_did().to_owned();
             let session = parent.session_id().to_owned();
             let normal = name.ends_with("_normal");
             if normal {
@@ -343,34 +360,47 @@ mod tests {
                     .await
                     .unwrap();
             }
-            let result = ConfigAccess::transact_local_write(
-                &node,
-                None,
-                "test.plugin_child_accounting",
-                |txn| {
+            let access = ConfigAccess::local_with_optional_agent_signer(
+                node.clone(),
+                request_owner.actor_did().unwrap(),
+                request_owner.managed_agent_signer(),
+            )
+            .unwrap();
+            let result = access
+                .transact_write("test.plugin_child_accounting", |txn| {
                     let request_doc = request_doc.clone();
                     let session = session.clone();
-                    let agent = agent.clone();
                     let generation = generation.clone();
                     Box::pin(async move {
                         let response = txn
                             .execute(&format!(
                                 r#"{{ AgentRequest(docID: "{}") {{ {} }} }}"#,
                                 escape_graphql_string(&request_doc),
-                                crate::request::watcher::AGENT_REQUEST_FIELDS,
+                                gents_protocol::row::AGENT_REQUEST_FIELDS,
                             ))
                             .await?;
                         let request: AgentRequestRow =
                             serde_json::from_value(response["data"]["AgentRequest"][0].clone())?;
+                        // Transcript rows are scoped by the request's node and
+                        // requester, not by the Agent that reads them.
+                        let node_did = request
+                            .node_did
+                            .clone()
+                            .ok_or_else(|| anyhow::anyhow!("request has no node"))?;
+                        let requester = request.requester_did.clone();
                         let headers = crate::session::load_request_headers_in_txn(
                             txn,
                             &session,
-                            &agent,
-                            None,
+                            &node_did,
+                            requester.as_deref(),
                             &request_doc,
                         )
                         .await?;
-                        let mut reader = crate::session::TxnCanonicalReader::new(txn, &agent, None);
+                        let mut reader = crate::session::TxnCanonicalReader::new(
+                            txn,
+                            &node_did,
+                            requester.as_deref(),
+                        );
                         reader.observe_headers(&headers);
                         account_tools_in_txn(
                             txn,
@@ -383,9 +413,8 @@ mod tests {
                         )
                         .await
                     })
-                },
-            )
-            .await;
+                })
+                .await;
             if normal {
                 assert_eq!(
                     result.is_ok(),
@@ -394,7 +423,7 @@ mod tests {
             } else {
                 result.unwrap();
             }
-            let response = ConfigAccess::local(node.clone()).execute(&format!(
+            let response = access.execute(&format!(
                 r#"{{ AgentToolCall(docID: "{}") {{ lifecycle_state started_at stuck_since terminal_output }} }}"#,
                 escape_graphql_string(&child_doc),
             )).await.unwrap();
@@ -416,7 +445,7 @@ mod tests {
                 "{name}"
             );
             drop(request_owner);
-            node.shutdown().await;
+            node.shutdown().await.expect("shut down test node");
             let _ = std::fs::remove_dir_all(path);
         }
     }

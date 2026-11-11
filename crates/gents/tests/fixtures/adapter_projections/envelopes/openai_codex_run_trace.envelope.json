@@ -59,7 +59,7 @@
   },
   "redaction_mode": "training_safe",
   "source_node_did": "did:test:planner",
-  "source_agent_id": "planner",
+  "source_agent_did": "planner",
   "source_request_id": "req-codex-1",
   "source_session_id": "thread-codex-1"
 }

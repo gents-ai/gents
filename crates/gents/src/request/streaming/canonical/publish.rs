@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::output::reconstruction::ObservedSegment;
 use gents_protocol::output::{
     MessageBlock, MessagePublication, OutputOutcome, OutputSegment, OutputSource, OutputWriter,
@@ -8,13 +8,15 @@ use gents_protocol::output::{
 };
 
 use crate::request::lifecycle::execution_policy::{authorize_output_append, LeaseObservation};
-use crate::session::canonical_rows::{
-    decode_transcript_message_row, output_segment_create_variables,
-    transcript_message_create_variables, AGENT_MESSAGE_FIELDS, CREATE_AGENT_MESSAGE_MUTATION,
-    CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+use crate::store::config_client::session_children::{
+    output_segment_bound_variables, transcript_message_bound_variables,
 };
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
-use crate::store::graphql::{created_doc_id, escape_graphql_string, mutation_documents};
+use crate::store::graphql::{created_doc_id, mutation_documents};
+use gents_protocol::output::rows::{
+    decode_transcript_message_row, AGENT_MESSAGE_FIELDS, CREATE_AGENT_MESSAGE_MUTATION,
+    CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+};
 
 use super::{
     source::load_request_in_txn, ProviderCloseRejection, ProviderPublicationPlan,
@@ -76,38 +78,62 @@ fn created_tool_call_doc_ids(
         .collect()
 }
 
-pub(crate) async fn publish_provider_turn(
+pub(in crate::request::streaming) async fn publish_provider_turn_with_signer(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor: identity::Did,
+    signer: Option<crate::store::identity::ManagedAgentSigner>,
     generation: &str,
     plan: ProviderPublicationPlan,
 ) -> Result<PublishedProviderTurn> {
-    publish_provider_turn_with_time(node, generation, plan, None).await
+    publish_provider_turn_with_time(node, actor, signer, generation, plan, None).await
 }
 
 #[cfg(test)]
-pub(crate) async fn publish_provider_turn_at(
-    node: &std::sync::Arc<EmbeddedNode>,
+pub(crate) async fn publish_provider_turn_at_with_access(
+    access: &ConfigAccess,
     generation: &str,
     plan: ProviderPublicationPlan,
     now: DateTime<Utc>,
 ) -> Result<PublishedProviderTurn> {
-    publish_provider_turn_with_time(node, generation, plan, Some(now)).await
+    let node = access
+        .local_node()
+        .context("fixture requires local access")?;
+    let actor = identity::Did::new(access.actor_did().context("missing fixture actor")?)?;
+    publish_provider_turn_with_time(
+        node,
+        actor,
+        access.managed_agent_signer(),
+        generation,
+        plan,
+        Some(now),
+    )
+    .await
 }
 
 pub(in crate::request::streaming) async fn publish_provider_turn_with_time(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor: identity::Did,
+    signer: Option<crate::store::identity::ManagedAgentSigner>,
     generation: &str,
     plan: ProviderPublicationPlan,
     fixture_now: Option<DateTime<Utc>>,
 ) -> Result<PublishedProviderTurn> {
     let plan = std::sync::Arc::new(plan);
-    ConfigAccess::transact_local_idempotent(
-        node,
-        None,
+    let exemplar = plan
+        .final_flush
+        .as_ref()
+        .context("provider publication has no output")?;
+    let node_did = exemplar.node_did.clone();
+    let session_id = exemplar.session_id.clone();
+    let repair_actor = actor.clone();
+    let access =
+        ConfigAccess::local_with_optional_agent_signer(node.clone(), actor.clone(), signer)?;
+    let result = access.transact_idempotent(
         IdempotentTransactionRetry::Standard,
         "streaming.publish_provider_turn",
         move |txn| {
             let plan = std::sync::Arc::clone(&plan);
+            let actor = actor.clone();
             let message_key = plan.message_key.clone();
             let encoded = std::sync::Arc::clone(&plan.encoded);
             let expected = std::sync::Arc::clone(&plan.expected);
@@ -153,7 +179,7 @@ pub(in crate::request::streaming) async fn publish_provider_turn_with_time(
                     .iter()
                     .find(|row| row.segment.close.is_some())
                     .map(|row| row.segment.writer.clone());
-                let published = replay_publication_in_txn(txn, &mut reader, ReplayPublication { exemplar, generation, accepted_writer: accepted_writer.as_ref(), message_key: &message_key, expected: expected.as_ref(), background_calls: &background_calls })
+                let published = replay_publication_in_txn(txn, &mut reader, ReplayPublication { actor: &actor, exemplar, generation, accepted_writer: accepted_writer.as_ref(), message_key: &message_key, expected: expected.as_ref(), background_calls: &background_calls })
                 .await?;
                 if let Some(consumption) = plan.consumes_folded.as_ref() {
                     crate::request::lifecycle::queue::ensure_folded_consumed_in_txn(txn, consumption).await?;
@@ -186,7 +212,7 @@ pub(in crate::request::streaming) async fn publish_provider_turn_with_time(
             if prepared.close.as_ref().is_some_and(|candidate| candidate != &derived_close) {
                 return Err(ProviderCloseRejection::InvalidExtent.into());
             }
-            let mut variables = output_segment_create_variables(prepared)?;
+            let mut variables = output_segment_bound_variables(txn, prepared).await?;
             variables["input"]["close"] = serde_json::to_value(&derived_close)?;
             let created = txn.execute_with_variables(
                 CREATE_AGENT_OUTPUT_SEGMENT_MUTATION, &variables,
@@ -203,11 +229,14 @@ pub(in crate::request::streaming) async fn publish_provider_turn_with_time(
             );
             let mut tool_call_keys = Vec::with_capacity(encoded.tool_calls.len());
             let mut tool_inputs = Vec::with_capacity(encoded.tool_calls.len());
+            let (session_doc_id, agent_did) = crate::store::config_client::session_children::agent_session_child_binding_in_txn(
+                txn, &prepared.node_did, &prepared.session_id, prepared.requester_did.as_deref(),
+            ).await?;
             for tool in &encoded.tool_calls {
                 let await_mode = if background_calls.contains(&tool.id) {
-                    crate::tools::call::lifecycle::AwaitMode::Background
+                    gents_protocol::tool_call::AwaitMode::Background
                 } else {
-                    crate::tools::call::lifecycle::AwaitMode::Foreground
+                    gents_protocol::tool_call::AwaitMode::Foreground
                 };
                 let tool_call_key = format!("{}:{}:{}", prepared.request_doc_id, message_key, tool.native_index);
                 tool_call_keys.push(tool_call_key.clone());
@@ -216,6 +245,10 @@ pub(in crate::request::streaming) async fn publish_provider_turn_with_time(
                         "request_id": request.request_id,
                         "request_doc_id": prepared.request_doc_id,
                         "session_id": prepared.session_id,
+                        "session_doc_id": session_doc_id,
+                        "agent_did": agent_did,
+                        "creator_did": agent_did,
+                        "parent_linked": false,
                         "node_did": prepared.node_did,
                         "requester_did": prepared.requester_did,
                         "message_sequence": sequence,
@@ -252,10 +285,10 @@ pub(in crate::request::streaming) async fn publish_provider_turn_with_time(
                 created_at: prepared.created_at.clone(),
             };
             let created = txn.execute_with_variables(
-                CREATE_AGENT_MESSAGE_MUTATION, &transcript_message_create_variables(&message)?,
+                CREATE_AGENT_MESSAGE_MUTATION, &transcript_message_bound_variables(txn, &message).await?,
             ).await?;
             let message_doc_id = created_doc_id(&created, "AgentMessage")?;
-            let (_, reconstructed) = reader.load_created_message(&message_doc_id, &close_doc_id).await?;
+            let (_, reconstructed) = Box::pin(reader.load_created_message(&message_doc_id, &close_doc_id)).await?;
             anyhow::ensure!(
                 &reconstructed == expected.as_ref(),
                 "first publication native message changed"
@@ -273,6 +306,8 @@ pub(in crate::request::streaming) async fn publish_provider_turn_with_time(
             }
             let accepted_tools = encoded.tool_calls.iter().zip(tool_doc_ids).map(|(tool, tool_call_doc_id)| {
                 crate::request::streaming::AcceptedToolCall {
+                    actor: actor.clone(),
+                    agent_signer: txn.managed_agent_signer(),
                     tool_call_doc_id,
                     request_doc_id: prepared.request_doc_id.clone(),
                     session_id: prepared.session_id.clone(),
@@ -284,9 +319,9 @@ pub(in crate::request::streaming) async fn publish_provider_turn_with_time(
                     execution_generation: generation.to_owned(),
                     arguments: PayloadRef { close_doc_id: close_doc_id.clone(), stream: tool.arguments_stream },
                     await_mode: if background_calls.contains(&tool.id) {
-                        crate::tools::call::lifecycle::AwaitMode::Background
+                        gents_protocol::tool_call::AwaitMode::Background
                     } else {
-                        crate::tools::call::lifecycle::AwaitMode::Foreground
+                        gents_protocol::tool_call::AwaitMode::Foreground
                     },
                 }
             }).collect();
@@ -297,10 +332,19 @@ pub(in crate::request::streaming) async fn publish_provider_turn_with_time(
                 accepted_tools,
             })
         })},
-    ).await
+    ).await?;
+    crate::store::config_client::session_children::publish_agent_session_child_relationships_with_access(
+        &access,
+        &node_did,
+        &repair_actor,
+        &session_id,
+    )
+    .await?;
+    Ok(result)
 }
 
 struct ReplayPublication<'a> {
+    actor: &'a identity::Did,
     exemplar: &'a OutputSegment,
     generation: &'a str,
     accepted_writer: Option<&'a OutputWriter>,
@@ -315,6 +359,7 @@ async fn replay_publication_in_txn(
     replay: ReplayPublication<'_>,
 ) -> Result<PublishedProviderTurn> {
     let ReplayPublication {
+        actor,
         exemplar,
         generation,
         accepted_writer,
@@ -322,16 +367,22 @@ async fn replay_publication_in_txn(
         expected,
         background_calls,
     } = replay;
-    let requester = exemplar.requester_did.as_ref().map_or_else(
-        || "null".to_owned(),
-        |did| format!("\"{}\"", escape_graphql_string(did)),
-    );
-    let response = txn.execute_local_response(&format!(
-        r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{}" }}, request_doc_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: {requester} }} }}) {{ {AGENT_MESSAGE_FIELDS} }} }}"#,
-        escape_graphql_string(message_key),
-        escape_graphql_string(&exemplar.request_doc_id),
-        escape_graphql_string(&exemplar.node_did),
-    )).await?;
+    let rendered = {
+        use gents_protocol::document_query::{
+            fields::agent_message as fields, Filter, Query, Selection,
+        };
+        let requester = match exemplar.requester_did.as_deref() {
+            Some(did) => Filter::eq(fields::REQUESTER_DID, did),
+            None => Filter::is_null(fields::REQUESTER_DID),
+        };
+        Query::select(Selection::owned(AGENT_MESSAGE_FIELDS))
+            .filter(Filter::eq(fields::MESSAGE_KEY, message_key))
+            .filter(Filter::eq(fields::REQUEST_DOC_ID, &exemplar.request_doc_id))
+            .filter(Filter::eq(fields::NODE_DID, &exemplar.node_did))
+            .filter(requester)
+            .render()
+    };
+    let response = txn.run_local_response(&rendered).await?;
     let rows = response
         .data
         .as_ref()
@@ -377,10 +428,26 @@ async fn replay_publication_in_txn(
         else {
             continue;
         };
-        let response = txn.execute_local_response(&format!(
-            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID request_doc_id session_id node_did requester_did message_sequence tool_call_id tool_name lifecycle_state await_mode }} }}"#,
-            escape_graphql_string(tool_call_doc_id),
-        )).await?;
+        let rendered = {
+            use gents_protocol::document_query::{
+                fields::agent_tool_call as fields, Filter, Query, Selection,
+            };
+            Query::select(
+                Selection::doc_id()
+                    .field(fields::REQUEST_DOC_ID)
+                    .field(fields::SESSION_ID)
+                    .field(fields::NODE_DID)
+                    .field(fields::REQUESTER_DID)
+                    .field(fields::MESSAGE_SEQUENCE)
+                    .field(fields::TOOL_CALL_ID)
+                    .field(fields::TOOL_NAME)
+                    .field(fields::LIFECYCLE_STATE)
+                    .field(fields::AWAIT_MODE),
+            )
+            .filter(Filter::eq(fields::DOC_ID, tool_call_doc_id))
+            .render()
+        };
+        let response = txn.run_local_response(&rendered).await?;
         let tools = response
             .data
             .as_ref()
@@ -417,21 +484,23 @@ async fn replay_publication_in_txn(
                     == Some("pending"),
             "publication replay pending tool binding changed"
         );
-        let await_mode = crate::tools::call::lifecycle::AwaitMode::from_persisted(
+        let await_mode = gents_protocol::tool_call::AwaitMode::from_persisted(
             tool["await_mode"]
                 .as_str()
                 .context("publication replay lacks await mode")?,
         )
         .context("publication replay has invalid await mode")?;
         let planned = if background_calls.contains(id) {
-            crate::tools::call::lifecycle::AwaitMode::Background
+            gents_protocol::tool_call::AwaitMode::Background
         } else {
-            crate::tools::call::lifecycle::AwaitMode::Foreground
+            gents_protocol::tool_call::AwaitMode::Foreground
         };
         if await_mode != planned {
             return Err(ProviderReplayRejection::AwaitModeChanged.into());
         }
         accepted_tools.push(crate::request::streaming::AcceptedToolCall {
+            actor: actor.clone(),
+            agent_signer: txn.managed_agent_signer(),
             tool_call_doc_id: tool_call_doc_id.clone(),
             request_doc_id: exemplar.request_doc_id.clone(),
             session_id: exemplar.session_id.clone(),

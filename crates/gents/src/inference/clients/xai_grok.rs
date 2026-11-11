@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use futures::StreamExt as _;
 use gents_loop::provider_patches::patch_store_false;
 use rig::http_client::{
@@ -615,7 +615,7 @@ mod tests {
             XAI_OAUTH_PROVIDER,
             &OAuthAuthProblem::Missing,
         );
-        assert!(msg.contains("gents grok-login"), "{msg}");
+        assert!(msg.contains("gents accounts login grok"), "{msg}");
     }
 
     /// The capture seam must be installed below this wrapper so the row
@@ -657,7 +657,7 @@ mod tests {
                 request_id: "req-1".to_string(),
                 node_did: "did:key:agent".to_string(),
                 requester_did: String::new(),
-                agent_id: "behavior".to_string(),
+                agent_did: "behavior".to_string(),
                 session_id: "session".to_string(),
                 model_name: "configured-model".to_string(),
                 provider_family: None,

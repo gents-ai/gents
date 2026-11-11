@@ -3,13 +3,13 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use gents::documents::{EvalSplit, EvalTier};
-use gents::eval::checks::verdict_detail;
-use gents::eval::report::build::reason_code;
-use gents::eval::report::{
-    load_report, load_report_among, load_runs, report_refused, run_header, SlotCounts, SlotReport,
-};
 use gents::eval::{
-    load_verdicts, Invalidation, OutcomeKind, ProviderReason, RunHeader, VerdictRecord,
+    load_run, load_verdicts, Invalidation, OutcomeKind, ProviderReason, RunHeader, VerdictRecord,
+};
+use gents_eval::checks::verdict_detail;
+use gents_eval::report::build::reason_code;
+use gents_eval::report::{
+    load_report, load_report_among, load_runs, report_refused, run_header, SlotCounts, SlotReport,
 };
 use serde::Serialize;
 
@@ -98,7 +98,7 @@ pub(super) async fn list(
 }
 
 fn run_size(ctx: &EvalContext, run_id: &str) -> (Option<u64>, Option<String>) {
-    let Some(dir) = gents::eval::runner::run_dir(&ctx.runs_dir(), run_id)
+    let Some(dir) = gents_eval::runner::run_dir(&ctx.runs_dir(), run_id)
         .ok()
         .filter(|dir| dir.is_dir())
     else {
@@ -176,7 +176,7 @@ pub(crate) struct TrialView {
     pub(crate) home: Option<PathBuf>,
     pub(crate) verdicts: Vec<TrialVerdict>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) requests: Option<Vec<gents::eval::runner::embedded::RetainedRequest>>,
+    pub(crate) requests: Option<Vec<gents_eval::runner::embedded::RetainedRequest>>,
 }
 
 pub(super) async fn trial(
@@ -221,6 +221,13 @@ pub(super) async fn trial(
         ))
     });
     let requests = if args.requests {
+        let run = load_run(&ctx.access, &ctx.owner, &args.run_id)
+            .await?
+            .context("run disappeared while inspecting the trial")?;
+        anyhow::ensure!(
+            ctx.evaluator.did() == run.evaluator_did,
+            "retained trial inspection requires the evaluator identity that created the run"
+        );
         let trials = gents::eval::load_trials(&ctx.access, &ctx.owner, &args.run_id).await?;
         let trial = trials
             .iter()
@@ -232,14 +239,15 @@ pub(super) async fn trial(
             latest.trial_id
         );
         Some(
-            gents::eval::runner::embedded::inspect_retained_requests(
+            gents_eval::runner::embedded::inspect_retained_requests(
                 &ctx.runtime,
                 &ctx.runs_dir(),
-                &gents::eval::runner::TrialLocator {
+                &gents_eval::runner::TrialLocator {
                     trial_node_did: latest.trial_node_did.clone(),
                     session_id: latest.session_id.clone(),
                     home_hint: latest.home_hint.clone(),
                 },
+                ctx.evaluator.as_ref(),
             )
             .await?,
         )

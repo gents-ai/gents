@@ -42,5 +42,5 @@ pub fn engine_guard_next(plugin: &InstalledPlugin) -> String {
         .owner_pack_coordinate
         .clone()
         .unwrap_or_else(|| format!("{}/{}", plugin.namespace, plugin.name));
-    format!("Next: the operator reinstalls {pack} with `gents pack install`")
+    format!("Next: the operator reinstalls {pack} with `gents config pack install`")
 }

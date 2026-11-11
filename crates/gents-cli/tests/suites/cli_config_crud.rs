@@ -12,7 +12,17 @@ async fn config_tools_list_show_and_remove_canonical_document() -> Result<()> {
     fs::create_dir_all(&home)?;
     let port = allocate_port()?;
     let graphql = graphql_url(port);
-    let init = run_init_json(&home, &["--node-name", "crud-agent"])?;
+    let init = run_init_json(
+        &home,
+        &[
+            "--node-name",
+            "crud-agent",
+            "--inference-url",
+            "http://127.0.0.1:9/v1",
+            "--model-name",
+            "m",
+        ],
+    )?;
     let owner = node_did_from_init(&init)?;
     let mut server = spawn_server(&home, port)?;
     wait_for_port(port, &mut server)?;
@@ -47,7 +57,17 @@ async fn agent_set_rejects_missing_context() -> Result<()> {
     fs::create_dir_all(&home)?;
     let port = allocate_port()?;
     let graphql = graphql_url(port);
-    let init = run_init_json(&home, &["--node-name", "agent-crud-agent"])?;
+    let init = run_init_json(
+        &home,
+        &[
+            "--node-name",
+            "agent-crud-agent",
+            "--inference-url",
+            "http://127.0.0.1:9/v1",
+            "--model-name",
+            "m",
+        ],
+    )?;
     let owner = node_did_from_init(&init)?;
     let profile = init["init"]["inference_profile_id"]
         .as_str()
@@ -66,8 +86,6 @@ async fn agent_set_rejects_missing_context() -> Result<()> {
             &graphql,
             "--node-did",
             &owner,
-            "--agent-id",
-            "broken",
             "--context-id",
             "missing-context",
             "--inference-profile-id",
@@ -75,8 +93,21 @@ async fn agent_set_rejects_missing_context() -> Result<()> {
         ],
     )?;
     assert!(
-        error.contains("field context_id references missing AgentContext \"missing-context\""),
+        error.contains("selected AgentContext is unavailable"),
         "{error}"
+    );
+    let agents = graphql_query(
+        &graphql,
+        &format!(
+            r#"{{ Agent(filter: {{context_id: {{_eq: "missing-context"}}, node_did: {{_eq: "{}"}}}}) {{ _docID }} }}"#,
+            escape_graphql_string(&owner)
+        ),
+    )
+    .await?;
+    assert_eq!(
+        agents["data"]["Agent"],
+        json!([]),
+        "a refused Agent publication leaves no Agent behind"
     );
     drop(server);
     Ok(())

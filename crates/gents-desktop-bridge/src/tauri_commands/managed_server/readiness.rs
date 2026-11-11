@@ -1,6 +1,7 @@
 use super::native::{native_service, run_native};
 use super::port::{
-    observe_port_readiness_with_identity_interaction, occupied_port_message, PortReadiness,
+    observe_port_readiness, occupied_port_message, status_unreadable_error, user_status_signer,
+    PortReadiness,
 };
 use super::start_wait::{
     begin_start_wait, finish_start_wait, relock_start, wait_unlocked, LifecycleGuard, StartWait,
@@ -9,7 +10,6 @@ use super::status::{emit_status, restarts_since};
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
 use crate::types::ManagedServerStatus;
-use gents_desktop_core::local_runtime::OperatorIdentityInteraction;
 use gents_protocol::serve_lifecycle::outdated_runtime_message;
 use std::future::Future;
 use std::path::Path;
@@ -66,7 +66,7 @@ where
 }
 
 pub(super) fn managed_selection_outdated_message() -> &'static str {
-    "The selected managed runtime predates this app. Update it with `gents service update --home <node-home>` using a compatible packaged build, or explicitly reinstall it through external administration. Its running service and executable will be preserved."
+    "The selected managed runtime predates this app. Update it with `gents runtime service update --home <node-home>` using a compatible packaged build, or explicitly reinstall it through external administration. Its running service and executable will be preserved."
 }
 
 pub(super) fn ensure_selected_restart_compatible(
@@ -97,11 +97,12 @@ where
     let result = await_runtime_readiness(
         MANAGED_SERVER_READY_TIMEOUT,
         MANAGED_SERVER_POLL_INTERVAL,
-        || {
-            observe_port_readiness_with_identity_interaction(
+        || async {
+            observe_port_readiness(
                 node_home,
-                OperatorIdentityInteraction::Allow,
+                user_status_signer(state, node_home).await.as_ref(),
             )
+            .await
         },
         || observe_native_progress(app, state),
     )
@@ -138,6 +139,9 @@ where
     loop {
         let (observed_booting, occupied) = match probe().await? {
             PortReadiness::Ready(status) => return Ok(Readiness::Ready(status)),
+            PortReadiness::StatusUnreadable { cause, .. } => {
+                return Err(anyhow::Error::new(status_unreadable_error(&cause)))
+            }
             PortReadiness::Outdated { version } => {
                 return Ok(Readiness::Outdated {
                     message: outdated_runtime_message(version.as_deref()),

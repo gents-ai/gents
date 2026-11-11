@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use tokio::sync::Mutex;
 
 pub(crate) mod auxiliary;
@@ -16,6 +16,8 @@ pub(crate) mod native_encoding;
 
 #[derive(Clone, Debug)]
 pub struct AcceptedToolCall {
+    pub(crate) actor: identity::Did,
+    pub(crate) agent_signer: Option<crate::store::identity::ManagedAgentSigner>,
     pub(crate) tool_call_doc_id: String,
     pub(crate) request_doc_id: String,
     pub(crate) session_id: String,
@@ -26,7 +28,7 @@ pub struct AcceptedToolCall {
     pub(crate) tool_name: String,
     pub(crate) execution_generation: String,
     pub(crate) arguments: gents_protocol::output::PayloadRef,
-    pub(crate) await_mode: crate::tools::call::lifecycle::AwaitMode,
+    pub(crate) await_mode: gents_protocol::tool_call::AwaitMode,
 }
 
 /// Maximum UTF-8 byte length of the reasoning preview persisted while a
@@ -45,6 +47,8 @@ use gents_loop::stream_writer::PendingOutput;
 pub use gents_loop::stream_writer::StreamWriter;
 
 pub struct DefraStreamWriter {
+    actor_did: String,
+    agent_signer: Option<crate::store::identity::ManagedAgentSigner>,
     node: Arc<EmbeddedNode>,
     batch_interval: Duration,
     buffers: Mutex<RapidHashMap<String, StreamBuffer>>,
@@ -60,6 +64,7 @@ struct ProviderTail {
     next_ordinal: u32,
     capture_scope: Option<gents_protocol::rendered_request::CaptureScope>,
     pending_flush: Option<PreparedProviderFlush>,
+    stopped_reasoning: std::collections::BTreeSet<u32>,
 }
 
 /// A native commit can outlive its awaiting caller. Retain the exact record
@@ -132,8 +137,7 @@ impl DefraStreamWriter {
         key: &str,
         message: &gents_protocol::message::Message,
     ) -> Result<String> {
-        self.publish_authored_message_with_time(lifecycle, key, message, None)
-            .await
+        Box::pin(self.publish_authored_message_with_time(lifecycle, key, message, None)).await
     }
 
     pub(crate) async fn publish_authored_message_with_time(
@@ -175,9 +179,29 @@ impl DefraStreamWriter {
             close: None,
             created_at: chrono::Utc::now().to_rfc3339(),
         };
+        let mut consumes_folded = crate::request::lifecycle::queue::FoldedConsumption::for_key(
+            request,
+            key,
+            lifecycle.folded_selection(),
+        );
+        if let (Some(consumption), Some((verifier, agent))) =
+            (consumes_folded.as_mut(), lifecycle.steering_admission())
+        {
+            consumption.require_verification();
+            if let Ok((candidate, admission)) = Box::pin(
+                verifier.verify_folded_for_claim(&consumption.folded_request_doc_id, agent),
+            )
+            .await
+            {
+                consumption.mark_verified();
+                if let Some(admission) = admission {
+                    consumption.bind_client_admission(candidate, admission);
+                }
+            }
+        }
         let plan = canonical::ProviderPublicationPlan {
             final_flush: Some(segment),
-            message_key: crate::session::canonical_rows::authored_message_key(&request.doc_id, key),
+            message_key: gents_protocol::output::rows::authored_message_key(&request.doc_id, key),
             encoded,
             expected: Arc::new(message.clone()),
             tool_deadline_at: lifecycle
@@ -185,18 +209,16 @@ impl DefraStreamWriter {
                 .context("authored publication is missing request deadline")?
                 .to_rfc3339(),
             background_calls: Vec::new(),
-            consumes_folded: crate::request::lifecycle::queue::FoldedConsumption::for_key(
-                request,
-                key,
-                lifecycle.folded_selection(),
-            ),
+            consumes_folded,
         };
-        let published = canonical::publish_provider_turn_with_time(
+        let published = Box::pin(canonical::publish_provider_turn_with_time(
             &self.node,
+            identity::Did::new(self.actor_did.clone())?,
+            self.agent_signer.clone(),
             lifecycle.execution_generation()?,
             plan,
             fixture_now,
-        )
+        ))
         .await?;
         Ok(published.message_doc_id)
     }
@@ -234,18 +256,33 @@ impl DefraStreamWriter {
 
     pub(crate) async fn flush_owned_partial(
         &self,
-        request: &crate::request::watcher::AgentRequest,
+        request: &gents_protocol::row::AgentRequest,
         generation: &str,
         message: &gents_protocol::message::Message,
     ) -> Result<bool> {
+        self.flush_owned_partial_with_stop(request, generation, message, None)
+            .await
+    }
+
+    async fn flush_owned_partial_with_stop(
+        &self,
+        request: &gents_protocol::row::AgentRequest,
+        generation: &str,
+        message: &gents_protocol::message::Message,
+        stop: Option<u32>,
+    ) -> Result<bool> {
         use gents_protocol::output::{OutputSegment, OutputSource, OutputWriter};
         let message = &*native_encoding::persisted_native_message(message);
-        let encoded = native_encoding::encode_native_message(message)?;
         let mut tails = self.provider_tails.lock().await;
         let tail = tails
             .get_mut(&request.doc_id)
             .context("provider attempt is not active")?;
         let acknowledged = self.acknowledge_provider_flush(tail, generation).await?;
+        let mut stopped = tail.stopped_reasoning.clone();
+        if let Some(block) = stop {
+            anyhow::ensure!(stopped.insert(block), "reasoning block was already stopped");
+        }
+        let encoded = native_encoding::encode_native_message_with_stops(message, &stopped)?;
         let turn = tail.turn;
         let attempt = tail.attempt;
         let capture_scope = tail
@@ -275,6 +312,7 @@ impl DefraStreamWriter {
             close: None,
             created_at: chrono::Utc::now().to_rfc3339(),
         };
+        tail.stopped_reasoning = stopped;
         tail.pending_flush = Some(PreparedProviderFlush {
             segment,
             streams: encoded.streams,
@@ -294,7 +332,14 @@ impl DefraStreamWriter {
             pending.segment.ordinal == Some(tail.next_ordinal),
             "pending provider flush disagrees with its acknowledged cursor"
         );
-        canonical::append_provider_segment(&self.node, generation, &pending.segment).await?;
+        canonical::append_provider_segment_with_signer(
+            &self.node,
+            identity::Did::new(self.actor_did.clone())?,
+            self.agent_signer.clone(),
+            generation,
+            &pending.segment,
+        )
+        .await?;
         let pending = tail
             .pending_flush
             .take()
@@ -323,7 +368,7 @@ impl DefraStreamWriter {
 
     pub(crate) async fn close_owned_attempt(
         &self,
-        request: &crate::request::watcher::AgentRequest,
+        request: &gents_protocol::row::AgentRequest,
         generation: &str,
         turn: usize,
         attempt: u32,
@@ -358,8 +403,15 @@ impl DefraStreamWriter {
             close: None,
             created_at: chrono::Utc::now().to_rfc3339(),
         };
-        let partial_message_doc_id =
-            canonical::close_provider_attempt(&self.node, generation, &segment, close).await?;
+        let partial_message_doc_id = canonical::close_provider_attempt_with_signer(
+            &self.node,
+            identity::Did::new(self.actor_did.clone())?,
+            self.agent_signer.clone(),
+            generation,
+            &segment,
+            close,
+        )
+        .await?;
         tails.remove(&request.doc_id);
         drop(tails);
         if let Some(message_doc_id) = partial_message_doc_id {
@@ -382,7 +434,6 @@ impl DefraStreamWriter {
 
         let request = lifecycle.request();
         let message = &*native_encoding::persisted_native_message(message);
-        let encoded = std::sync::Arc::new(native_encoding::encode_native_message(message)?);
         let expected = std::sync::Arc::new(message.clone());
         let mut tails = self.provider_tails.lock().await;
         let tail = tails
@@ -391,6 +442,10 @@ impl DefraStreamWriter {
             .context("provider acceptance has no exact active attempt")?;
         self.acknowledge_provider_flush(tail, lifecycle.execution_generation()?)
             .await?;
+        let encoded = std::sync::Arc::new(native_encoding::encode_native_message_with_stops(
+            message,
+            &tail.stopped_reasoning,
+        )?);
         let created_at = chrono::Utc::now().to_rfc3339();
         let capture_scope = tail
             .capture_scope
@@ -434,8 +489,10 @@ impl DefraStreamWriter {
                 created_at,
             }
         };
-        let published = canonical::publish_provider_turn(
+        let published = canonical::publish_provider_turn_with_signer(
             &self.node,
+            identity::Did::new(self.actor_did.clone())?,
+            self.agent_signer.clone(),
             lifecycle.execution_generation()?,
             canonical::ProviderPublicationPlan {
                 final_flush: Some(segment),
@@ -496,14 +553,46 @@ impl DefraStreamWriter {
             .map(tokio::time::Instant::from_std)
     }
 
-    pub fn new(node: Arc<EmbeddedNode>, _node_did: &str, batch_interval: Duration) -> Self {
+    pub fn new(node: Arc<EmbeddedNode>, actor_did: &str, batch_interval: Duration) -> Self {
         Self {
+            actor_did: actor_did.to_owned(),
+            agent_signer: None,
             node,
             batch_interval,
             buffers: Mutex::new(RapidHashMap::new()),
             published: Mutex::new(RapidHashMap::new()),
             provider_tails: Mutex::new(RapidHashMap::new()),
         }
+    }
+
+    pub fn new_managed(
+        node: Arc<EmbeddedNode>,
+        identity: &dyn crate::store::identity::NodeIdentity,
+        batch_interval: Duration,
+    ) -> Result<Self> {
+        let actor = identity::Did::new(identity.did())?;
+        crate::ConfigAccess::local_managed_agent(node.clone(), actor, identity)?;
+        let mut writer = Self::new(node, identity.did(), batch_interval);
+        writer.agent_signer = identity.managed_agent_signer();
+        Ok(writer)
+    }
+
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn new_for_lifecycle(
+        node: Arc<EmbeddedNode>,
+        lifecycle: &crate::request::lifecycle::RequestLifecycle,
+        batch_interval: Duration,
+    ) -> Result<Self> {
+        let actor = lifecycle.actor_did()?;
+        let signer = lifecycle.managed_agent_signer();
+        crate::ConfigAccess::local_with_optional_agent_signer(
+            node.clone(),
+            actor.clone(),
+            signer.clone(),
+        )?;
+        let mut writer = Self::new(node, actor.as_str(), batch_interval);
+        writer.agent_signer = signer;
+        Ok(writer)
     }
 
     pub(crate) async fn initialize_request_buffer(&self, request_doc_id: &str) -> Result<()> {
@@ -646,6 +735,22 @@ impl gents_loop::stream_writer::CanonicalStreamWriter<crate::request::lifecycle:
         message: &gents_protocol::message::Message,
     ) -> Result<bool, Self::Error> {
         Ok(DefraStreamWriter::flush_native_partial(self, lifecycle, message).await?)
+    }
+
+    async fn flush_reasoning_stop(
+        &self,
+        lifecycle: &crate::request::lifecycle::RequestLifecycle,
+        message: &gents_protocol::message::Message,
+        block_index: u32,
+    ) -> Result<bool, Self::Error> {
+        Ok(self
+            .flush_owned_partial_with_stop(
+                lifecycle.request(),
+                lifecycle.execution_generation()?,
+                message,
+                Some(block_index),
+            )
+            .await?)
     }
 
     async fn close_provider_attempt(

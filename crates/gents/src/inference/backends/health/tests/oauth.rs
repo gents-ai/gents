@@ -1,5 +1,28 @@
 use super::*;
 
+async fn oauth_backend_configuration(access: &crate::ConfigAccess, backend: &InferenceBackend) {
+    crate::documents::write_inference_backend_document(access, backend)
+        .await
+        .unwrap();
+}
+
+async fn oauth_backend_observation(
+    access: &crate::ConfigAccess,
+    runtime_access: &crate::ConfigAccess,
+    backend: &InferenceBackend,
+    status: &str,
+) {
+    oauth_backend_configuration(access, backend).await;
+    crate::inference::backends::registry::set_backend_probe_status_as(
+        runtime_access,
+        &backend.node_did,
+        &backend.backend_id,
+        status,
+    )
+    .await
+    .unwrap();
+}
+
 fn claude_backend() -> InferenceBackend {
     let mut claude = backend(
         "claude",
@@ -23,11 +46,132 @@ fn oauth_backend(
 }
 
 #[tokio::test]
-async fn oauth_kinds_probe_the_credential_document_fresh_is_healthy_and_promotes() {
-    let node = test_node().await;
-    let did = "did:key:z6MkProbe";
-    seed_credential(
+async fn scheduled_probe_requires_the_held_node_and_its_native_reader_grant() {
+    use crate::NodeIdentity;
+    // No default agent: its fixture backend is also enabled on this node and
+    // would make the runtime listing non-singular.
+    let (db, user, user_access) =
+        crate::test_support::signed_test_node_without_agent("health-runtime-owner").await;
+    let other = crate::support::test_db("health-foreign-owner").await;
+    let node = db.node.clone();
+    let did = db.node_identity.did();
+    let other_did = other.node_identity.did();
+    let models = ModelsListener::start();
+    let mut configured = backend("runtime-probe", models.endpoint());
+    configured.node_did = did.to_owned();
+    oauth_backend_configuration(&user_access, &configured).await;
+
+    let visible =
+        crate::inference::backends::registry::list_enabled_backends_for_runtime(&node, did)
+            .await
+            .unwrap();
+    assert_eq!(visible.len(), 1);
+    assert_eq!(visible[0].backend_id, configured.backend_id);
+    let doc = crate::inference::backends::registry::capture_backend_document(&node, &configured)
+        .await
+        .unwrap();
+    crate::inference::backends::registry::set_backend_probe_status_for_connection(
         &node,
+        &configured,
+        &doc,
+        "healthy",
+        Utc::now(),
+    )
+    .await
+    .unwrap();
+    let observation = user_access
+        .transact_readonly("test.runtime_probe.observation", |txn| {
+            Box::pin(async move {
+                crate::inference::backends::registry::lookup_backend_observation_in_txn(
+                    txn,
+                    did,
+                    "runtime-probe",
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(observation.probe_status.as_deref(), Some("healthy"));
+    assert!(
+        crate::inference::backends::registry::list_enabled_backends_for_runtime(&node, other_did)
+            .await
+            .is_err()
+    );
+    let health = BackendHealthMap::new();
+    let outcome = run_backend_probe_cycle(
+        node.clone(),
+        &reqwest::Client::new(),
+        &health,
+        &probe_options(),
+        other_did,
+    )
+    .await;
+    assert!(outcome.promotable.is_empty());
+    assert!(health.get("runtime-probe").await.is_none());
+    assert_eq!(models.requests(), 0);
+
+    let escaped = crate::store::graphql::escape_graphql_string(did);
+    let response = user_access
+        .execute(&format!(
+            r#"{{ Node(filter: {{node_did: {{_eq: "{escaped}"}}}}) {{_docID}} }}"#
+        ))
+        .await
+        .unwrap();
+    let rows = gents_protocol::graphql::graphql_rows_from_response(&response, "Node");
+    let parent = rows[0]["_docID"].as_str().unwrap();
+    crate::ConfigAccess::local_as(node.clone(), identity::Did::new(did).unwrap())
+        .grant_node_permission(
+            &identity::Did::new(user.did()).unwrap(),
+            crate::store::config_client::NodePermission::DacRelationDelete,
+        )
+        .await
+        .unwrap();
+    user_access
+        .delete_actor_relationship(
+            "Node",
+            parent,
+            "runtime_reader",
+            &identity::Did::new(did).unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        crate::inference::backends::registry::list_enabled_backends_for_runtime(&node, did)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        crate::inference::backends::registry::capture_backend_document(&node, &configured)
+            .await
+            .is_err()
+    );
+    assert!(
+        crate::inference::backends::registry::set_backend_probe_status_for_connection(
+            &node,
+            &configured,
+            &doc,
+            "healthy",
+            Utc::now(),
+        )
+        .await
+        .is_err()
+    );
+    models.shutdown().await;
+}
+
+#[tokio::test]
+async fn oauth_kinds_probe_the_credential_document_fresh_is_healthy_and_promotes() {
+    let (db, _user, user_access, _binding) =
+        crate::test_support::signed_test_node("health-oauth").await;
+    let node = db.node.clone();
+    let did = db.node_identity.did();
+    let runtime_access =
+        crate::inference::auth::credential::runtime_credential_access(&node, did).unwrap();
+    seed_credential(
+        &runtime_access,
         did,
         crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
         Utc::now() + chrono::Duration::hours(8),
@@ -42,7 +186,7 @@ async fn oauth_kinds_probe_the_credential_document_fresh_is_healthy_and_promotes
     claude.node_did = did.to_string();
     let models = ModelsListener::start();
     claude.endpoint = models.endpoint();
-    seed_backend_observation(&node, &claude, "unknown").await;
+    oauth_backend_observation(&user_access, &runtime_access, &claude, "unknown").await;
     let outcome = probe_backends_cycle(
         &node,
         &client,
@@ -86,10 +230,16 @@ async fn toggled_models_server(
 
 #[tokio::test]
 async fn scheduled_oauth_probe_failure_records_a_bounded_reason_and_recovers() {
-    let node = test_node().await;
+    let (db, _user, user_access, _binding) =
+        crate::test_support::signed_test_node("health-oauth").await;
+    let node = db.node.clone();
+    let did = db.node_identity.did();
+    let runtime_access =
+        crate::inference::auth::credential::runtime_credential_access(&node, did).unwrap();
     let mut claude = claude_backend();
+    claude.node_did = did.to_owned();
     seed_credential(
-        &node,
+        &runtime_access,
         &claude.node_did,
         crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
         Utc::now() + chrono::Duration::hours(8),
@@ -98,12 +248,21 @@ async fn scheduled_oauth_probe_failure_records_a_bounded_reason_and_recovers() {
     let available = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let (endpoint, server) = toggled_models_server(available.clone()).await;
     claude.endpoint = endpoint.clone();
-    upsert_backend_configuration(&node, &claude).await;
+    oauth_backend_configuration(&user_access, &claude).await;
     let health = BackendHealthMap::new();
     let mut schedule = ProbeSchedule::default();
 
     let before = Utc::now();
-    let outcome = scheduled_cycle(&node, &health, &mut schedule, true).await;
+    let outcome = run_scheduled_backend_probe_cycle(
+        node.clone(),
+        &reqwest::Client::new(),
+        &health,
+        &probe_options(),
+        did,
+        Some((&mut schedule, true)),
+        None,
+    )
+    .await;
     assert!(outcome.promotable.is_empty());
     let failed = health
         .get("claude")
@@ -120,23 +279,37 @@ async fn scheduled_oauth_probe_failure_records_a_bounded_reason_and_recovers() {
     assert!(reason.chars().count() <= MAX_PROBE_ERROR_CHARS + 3);
 
     available.store(true, Ordering::SeqCst);
-    let outcome = scheduled_cycle(&node, &health, &mut schedule, true).await;
+    let outcome = run_scheduled_backend_probe_cycle(
+        node.clone(),
+        &reqwest::Client::new(),
+        &health,
+        &probe_options(),
+        did,
+        Some((&mut schedule, true)),
+        None,
+    )
+    .await;
     assert_eq!(outcome.promotable, vec!["claude".to_string()]);
     let recovered = health.get("claude").await.unwrap();
     assert_modeled_probe(Some(&failed), &recovered, "probeSuccess");
     assert!(recovered.last_error.is_none());
-    let observation = crate::inference::backends::registry::lookup_backend_observation(
-        &node,
-        &claude.node_did,
-        &claude.backend_id,
-    )
-    .await
-    .unwrap()
-    .unwrap();
+    let observation = user_access
+        .transact_readonly("test.health.observation", |txn| {
+            let backend_id = &claude.backend_id;
+            Box::pin(async move {
+                crate::inference::backends::registry::lookup_backend_observation_in_txn(
+                    txn, did, backend_id,
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(observation.probe_status.as_deref(), Some("healthy"));
     assert!(observation.last_probe.is_some());
     server.abort();
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[test]
@@ -150,8 +323,12 @@ fn probe_errors_are_bounded_on_a_char_boundary() {
 
 #[tokio::test]
 async fn oauth_account_reference_is_probed_with_its_own_account() {
-    let node = test_node().await;
-    let did = "did:key:z6MkProbeAccount";
+    let (db, _user, user_access, _binding) =
+        crate::test_support::signed_test_node("health-oauth-account").await;
+    let node = db.node.clone();
+    let did = db.node_identity.did();
+    let runtime_access =
+        crate::inference::auth::credential::runtime_credential_access(&node, did).unwrap();
     let provider = crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
     let account = crate::inference::auth::credential::OAuthCredential {
         doc_id: None,
@@ -191,7 +368,7 @@ async fn oauth_account_reference_is_probed_with_its_own_account() {
     };
     let models = ModelsListener::start();
     grok.endpoint = models.endpoint();
-    seed_backend_observation(&node, &grok, "unknown").await;
+    oauth_backend_observation(&user_access, &runtime_access, &grok, "unknown").await;
     let outcome = probe_backends_cycle(
         &node,
         &client,
@@ -217,10 +394,14 @@ async fn oauth_account_reference_is_probed_with_its_own_account() {
 
 #[tokio::test]
 async fn oauth_account_reference_without_its_row_is_not_probed() {
-    let node = test_node().await;
-    let did = "did:key:z6MkProbe";
+    let (db, _user, user_access, _binding) =
+        crate::test_support::signed_test_node("health-oauth").await;
+    let node = db.node.clone();
+    let did = db.node_identity.did();
+    let runtime_access =
+        crate::inference::auth::credential::runtime_credential_access(&node, did).unwrap();
     seed_credential(
-        &node,
+        &runtime_access,
         did,
         crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER,
         Utc::now() + chrono::Duration::hours(8),
@@ -242,7 +423,7 @@ async fn oauth_account_reference_without_its_row_is_not_probed() {
     };
     let models = ModelsListener::start();
     grok.endpoint = models.endpoint();
-    seed_backend_observation(&node, &grok, "unknown").await;
+    oauth_backend_observation(&user_access, &runtime_access, &grok, "unknown").await;
     let outcome = probe_backends_cycle(
         &node,
         &client,
@@ -273,10 +454,14 @@ async fn oauth_account_reference_without_its_row_is_not_probed() {
 
 #[tokio::test]
 async fn oauth_kinds_fresh_grok_credential_stays_healthy_and_promotes() {
-    let node = test_node().await;
-    let did = "did:key:z6MkProbe";
+    let (db, _user, user_access, _binding) =
+        crate::test_support::signed_test_node("health-oauth").await;
+    let node = db.node.clone();
+    let did = db.node_identity.did();
+    let runtime_access =
+        crate::inference::auth::credential::runtime_credential_access(&node, did).unwrap();
     seed_credential(
-        &node,
+        &runtime_access,
         did,
         crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER,
         Utc::now() + chrono::Duration::hours(8),
@@ -295,7 +480,7 @@ async fn oauth_kinds_fresh_grok_credential_stays_healthy_and_promotes() {
     grok.node_did = did.to_string();
     let models = ModelsListener::start();
     grok.endpoint = models.endpoint();
-    seed_backend_observation(&node, &grok, "unknown").await;
+    oauth_backend_observation(&user_access, &runtime_access, &grok, "unknown").await;
     for _ in 0..3 {
         let outcome = probe_backends_cycle(
             &node,
@@ -322,10 +507,14 @@ async fn oauth_kinds_fresh_grok_credential_stays_healthy_and_promotes() {
 
 #[tokio::test]
 async fn oauth_kinds_stale_credential_without_refresh_token_still_demotes_after_k() {
-    let node = test_node().await;
-    let did = "did:key:z6MkProbe";
+    let (db, _user, user_access, _binding) =
+        crate::test_support::signed_test_node("health-oauth").await;
+    let node = db.node.clone();
+    let did = db.node_identity.did();
+    let runtime_access =
+        crate::inference::auth::credential::runtime_credential_access(&node, did).unwrap();
     seed_credential_with_refresh_token(
-        &node,
+        &runtime_access,
         did,
         crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER,
         Utc::now() - chrono::Duration::minutes(1),
@@ -337,11 +526,13 @@ async fn oauth_kinds_stale_credential_without_refresh_token_still_demotes_after_
         reqwest::Client::new(),
         BackendHealthMap::new(),
     );
-    let grok = oauth_backend(
+    let mut grok = oauth_backend(
         crate::inference::backends::provider::BackendProviderKind::XaiGrokOAuth,
         "grok",
         "https://cli-chat-proxy.grok.com/v1",
     );
+    grok.node_did = did.to_owned();
+    oauth_backend_configuration(&user_access, &grok).await;
     for cycle in 1..=3u32 {
         let outcome = probe_backends_cycle(
             &node,
@@ -377,11 +568,15 @@ impl Drop for TokenUrlOverrideGuard {
 
 #[tokio::test]
 async fn oauth_kinds_refresh_an_expired_credential_on_probe_and_recover() {
-    let node = test_node().await;
-    let did = "did:key:z6MkProbeExpired";
+    let (db, _user, user_access, _binding) =
+        crate::test_support::signed_test_node("health-oauth").await;
+    let node = db.node.clone();
+    let did = db.node_identity.did();
+    let runtime_access =
+        crate::inference::auth::credential::runtime_credential_access(&node, did).unwrap();
     let provider = crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
     seed_credential_with_refresh_token(
-        &node,
+        &runtime_access,
         did,
         provider,
         Utc::now() - chrono::Duration::minutes(1),
@@ -397,7 +592,7 @@ async fn oauth_kinds_refresh_an_expired_credential_on_probe_and_recover() {
     claude.node_did = did.to_string();
     let models = ModelsListener::start();
     claude.endpoint = models.endpoint();
-    seed_backend_observation(&node, &claude, "unknown").await;
+    oauth_backend_observation(&user_access, &runtime_access, &claude, "unknown").await;
 
     // TOKEN_URL_ENV is process-global; serialize changes to its override.
     let _env = TOKEN_URL_ENV.lock().await;
@@ -447,7 +642,7 @@ async fn oauth_kinds_refresh_an_expired_credential_on_probe_and_recover() {
         refresh_request.contains("refresh-TEST"),
         "the refresh must present the stored refresh token: {refresh_request}"
     );
-    let stored = crate::inference::auth::credential::lookup_oauth_credential_by_id(
+    let stored = crate::inference::auth::credential::test_support::lookup_oauth_credential_by_id(
         &node,
         &crate::inference::auth::credential::oauth_credential_id(did, provider),
     )
@@ -467,11 +662,15 @@ async fn oauth_kinds_refresh_an_expired_credential_on_probe_and_recover() {
 
 #[tokio::test]
 async fn a_hung_token_endpoint_does_not_stall_the_next_backend_probe() {
-    let node = test_node().await;
-    let did = "did:key:z6MkProbeHungRefresh";
+    let (db, _user, user_access, _binding) =
+        crate::test_support::signed_test_node("health-oauth").await;
+    let node = db.node.clone();
+    let did = db.node_identity.did();
+    let runtime_access =
+        crate::inference::auth::credential::runtime_credential_access(&node, did).unwrap();
     let provider = crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
     seed_credential_with_refresh_token(
-        &node,
+        &runtime_access,
         did,
         provider,
         Utc::now() - chrono::Duration::minutes(1),
@@ -489,8 +688,8 @@ async fn a_hung_token_endpoint_does_not_stall_the_next_backend_probe() {
     claude.endpoint = models.endpoint();
     let mut next = backend("next", models.endpoint());
     next.node_did = did.to_string();
-    seed_backend_observation(&node, &claude, "unknown").await;
-    seed_backend_observation(&node, &next, "unknown").await;
+    oauth_backend_observation(&user_access, &runtime_access, &claude, "unknown").await;
+    oauth_backend_observation(&user_access, &runtime_access, &next, "unknown").await;
 
     let _env = TOKEN_URL_ENV.lock().await;
     let _guard =
@@ -544,17 +743,22 @@ async fn a_hung_token_endpoint_does_not_stall_the_next_backend_probe() {
 
 #[tokio::test]
 async fn oauth_kinds_missing_credential_fails_with_login_hint() {
-    let node = test_node().await;
+    let (db, _user, user_access, _binding) =
+        crate::test_support::signed_test_node("health-missing").await;
+    let node = db.node.clone();
+    let did = db.node_identity.did();
     let (options, client, health_map) = (
         probe_options(),
         reqwest::Client::new(),
         BackendHealthMap::new(),
     );
-    let codex = oauth_backend(
+    let mut codex = oauth_backend(
         crate::inference::backends::provider::BackendProviderKind::ChatGptCodex,
         "codex",
         "https://chatgpt.com/backend-api/codex",
     );
+    codex.node_did = did.to_owned();
+    oauth_backend_configuration(&user_access, &codex).await;
     probe_backends_cycle(
         &node,
         &client,
@@ -564,7 +768,7 @@ async fn oauth_kinds_missing_credential_fails_with_login_hint() {
         &options,
         Some(OAuthProbeContext {
             node: node.clone(),
-            node_did: "did:key:z6MkNobody",
+            node_did: did,
         }),
     )
     .await;
@@ -574,12 +778,11 @@ async fn oauth_kinds_missing_credential_fails_with_login_hint() {
         .last_error
         .clone()
         .unwrap_or_default()
-        .contains("gents codex-login --node-did did:key:z6MkNobody"));
+        .contains(&format!("gents accounts login codex --node-did {did}")));
 }
 
 #[tokio::test]
 async fn subscription_probe_preserves_typed_refresh_rejections() {
-    let node = test_node().await;
     let models = ModelsListener::start();
     let _env = TOKEN_URL_ENV.lock().await;
     for (provider, override_env, kind, forbidden_event) in [
@@ -603,9 +806,14 @@ async fn subscription_probe_preserves_typed_refresh_rejections() {
             (403, r#"{"error":"forbidden"}"#, forbidden_event),
             (500, r#"{"error":"unavailable"}"#, "probeFail"),
         ] {
-            let did = format!("did:key:z6MkRejectedRefresh{provider}{status}");
+            let (db, _user, user_access, _binding) =
+                crate::test_support::signed_test_node("health-rejection").await;
+            let node = db.node.clone();
+            let did = db.node_identity.did().to_owned();
+            let runtime_access =
+                crate::inference::auth::credential::runtime_credential_access(&node, &did).unwrap();
             seed_credential(
-                &node,
+                &runtime_access,
                 &did,
                 provider,
                 Utc::now() - chrono::Duration::minutes(1),
@@ -613,6 +821,7 @@ async fn subscription_probe_preserves_typed_refresh_rejections() {
             .await;
             let mut backend = oauth_backend(kind, provider, &models.endpoint());
             backend.node_did = did.clone();
+            oauth_backend_configuration(&user_access, &backend).await;
             let (url, server) = one_shot_token_server(status, body).await;
             std::env::set_var(override_env, url);
             let health = BackendHealthMap::new();
@@ -640,10 +849,10 @@ async fn subscription_probe_preserves_typed_refresh_rejections() {
             );
             let error = snapshot.last_error.as_deref().unwrap();
             assert!(!error.contains("refresh-TEST") && !error.contains("access-TEST"));
+            node.shutdown().await.expect("node shutdown");
         }
     }
     models.shutdown().await;
-    node.shutdown().await;
 }
 
 #[tokio::test]
@@ -702,7 +911,7 @@ async fn subscription_probe_account_changes_retire_previous_measurement() {
         changed.state_for(&backend),
         Some(BackendHealthState::Degraded)
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -730,15 +939,19 @@ async fn oauth_kinds_are_skipped_without_a_probe_context() {
     );
 }
 
-/// A Claude gateway signed in with `gents claude-gateway-login` carries node
+/// A Claude gateway signed in with `gents accounts login claude-gateway` carries node
 /// OAuth credentials, so the probe must select its stored account and map it to
 /// the gateway refresh kind and product rather than the subscription's.
 #[tokio::test]
 async fn a_gateway_node_oauth_backend_probes_its_stored_gateway_account() {
-    let node = test_node().await;
-    let did = "did:key:z6MkProbeGateway";
+    let (db, _user, user_access, _binding) =
+        crate::test_support::signed_test_node("health-oauth").await;
+    let node = db.node.clone();
+    let did = db.node_identity.did();
+    let runtime_access =
+        crate::inference::auth::credential::runtime_credential_access(&node, did).unwrap();
     seed_credential(
-        &node,
+        &runtime_access,
         did,
         crate::claude_gateway_login::CLAUDE_GATEWAY_PROVIDER,
         Utc::now() + chrono::Duration::hours(8),
@@ -757,7 +970,7 @@ async fn a_gateway_node_oauth_backend_probes_its_stored_gateway_account() {
     gateway.node_did = did.to_string();
     let models = ModelsListener::start();
     gateway.endpoint = models.endpoint();
-    seed_backend_observation(&node, &gateway, "unknown").await;
+    oauth_backend_observation(&user_access, &runtime_access, &gateway, "unknown").await;
     let outcome = probe_backends_cycle(
         &node,
         &client,

@@ -43,8 +43,8 @@ export function NewSession() {
   const deployment = useSelectedNode();
   const choice = useAgentChoice();
   const nodeName = deployment?.node.displayName ?? deployment?.label ?? "the agent";
-  const env = deployment?.agentEnvironments.find((e) => e.agentId === choice.agentId);
-  const chosenName = agentName(choice.agentId, deployment);
+  const env = deployment?.agentEnvironments.find((e) => e.agentDid === choice.agentDid);
+  const chosenName = agentName(choice.agentDid, deployment);
   return (
     <div
       key={selectedNodeDid ?? "new"}
@@ -98,7 +98,7 @@ export function NewSession() {
       <NewSessionComposer />
       <p className="text-xs text-muted-foreground">
         <AccessSentence name={chosenName} env={env} />
-        {deployment && choice.agentId && (
+        {deployment && choice.agentDid && (
           <>
             {" "}
             <a
@@ -106,7 +106,7 @@ export function NewSession() {
                 name: "agent",
                 nodeDid: deployment.nodeDid,
                 section: "agents",
-                item: choice.agentId,
+                item: choice.agentDid,
               })}
               className="underline decoration-border underline-offset-4 hover:text-foreground"
             >
@@ -134,7 +134,7 @@ function NewSessionComposer() {
     send,
     setGoal,
     error: sendError,
-  } = useComposerSend(choice.agentId);
+  } = useComposerSend(choice.agentDid);
   const attachmentRoot = useRef<HTMLDivElement | null>(null);
   const textarea = useRef<HTMLDivElement | null>(null);
   const attachments = useAttachmentDraft(
@@ -142,13 +142,13 @@ function NewSessionComposer() {
     sendStatus.kind === "disabled",
     textarea,
   );
-  const agent = agentOf(deployment, choice.agentId);
+  const agent = agentOf(deployment, choice.agentDid);
   /* what nothing typed could get past stands in the input's place */
-  const reason = composerReason(deployment, choice.agentId, sendStatus);
+  const reason = composerReason(deployment, choice.agentDid, sendStatus);
   const picker = (
     <AgentPicker
       deployment={deployment}
-      agentId={choice.agentId}
+      agentDid={choice.agentDid}
       onChange={choice.setPicked}
     />
   );

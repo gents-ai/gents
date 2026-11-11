@@ -12,6 +12,7 @@ pub mod live;
 pub mod origin;
 pub mod reconstruction;
 pub mod recovery;
+pub mod rows;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -78,6 +79,8 @@ pub enum StreamPayload {
     ReasoningRedacted,
     /// The signature field of a reasoning text part; never rendered.
     ReasoningSignature,
+    /// A provider-confirmed end of one reasoning block; carries no bytes.
+    ReasoningStop,
     /// Native JSON argument text exactly as emitted; it may be incomplete
     /// until sealed and is never rewritten to canonicalize.
     ToolArguments {
@@ -134,6 +137,8 @@ pub struct OutputSegment {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requester_did: Option<String>,
     pub session_id: String,
+    /// The owning request, or for a fork copy the logical closing record it
+    /// reproduces within `session_id`.
     pub request_doc_id: String,
     pub source: OutputSource,
     /// The source's producer, the same on every record of the source.
@@ -238,8 +243,8 @@ pub enum MessagePublication {
         execution_generation: String,
     },
     RequestRecovery {
-        /// Recovery publishes only retained text from an unheaded provider
-        /// source; never fabricate native metadata.
+        /// Recovery publishes retained text and proven stopped reasoning from
+        /// an unheaded provider source; never fabricate native metadata.
         execution_generation: String,
     },
     /// Tool-owned invocation reply or completion notification. Payload
@@ -248,8 +253,11 @@ pub enum MessagePublication {
     ToolDelivery {
         tool_call_doc_id: String,
     },
-    /// No live request membership; all referenced payloads remain at origin.
-    /// Forks retain origin tool IDs as provenance, never copied executable rows.
+    /// No live request membership. References keep their logical closing
+    /// records; fork publication copies each referenced closure into the
+    /// destination session under that logical coordinate, so the fork reads
+    /// without its origin. Forks retain origin tool IDs as provenance, never
+    /// copied executable rows.
     Fork {
         origin_message_doc_id: String,
     },
@@ -286,10 +294,10 @@ pub enum TerminalOutput {
 ///
 /// Recovery of an unheaded provider source is deliberately narrower: close its
 /// committed extent Partial (or reuse its existing Partial closure), then
-/// publish only ordinary Text streams at native part zero as Full
-/// PresentedPayload references, in original block order, with outcome Partial
-/// and native_id and native_request_id None. Never turn argument/reasoning/media bytes into text or
-/// fabricate their missing metadata. If no eligible text stream exists, publish
+/// publish ordinary text and stopped reasoning at native part zero in original
+/// block order, with outcome Partial and native metadata absent. Never turn
+/// argument/reasoning/media bytes into text or fabricate missing metadata. If
+/// no eligible stream exists, publish
 /// no assistant header for that source; retain every omitted stream as
 /// diagnostic data. An existing published header is resolved unchanged, not
 /// replaced by this recovery policy. Provider-input narrowing still applies.

@@ -19,6 +19,7 @@ key: a patch can keep the stored value but never introduce or change one. -/
 def authPatchAllowed (stored candidate : BackendAuth) : Bool :=
   match candidate with
   | .apiKey _ => decide (candidate = stored)
+  | .credential .. => decide (candidate = stored)
   | .awsCredentials .. => decide (candidate = stored)
   | .googleCredentials _ => decide (candidate = stored)
   | .nodeOAuth a => decide (a = oauthRef stored)
@@ -173,22 +174,26 @@ theorem profile_selection_is_backend_choice
       backendChoiceAllowed dflt (current.bind backendOf) n := by
   simp [profileChoiceAllowed, h]
 
-/-- Additive and separate from document transactions; the shared schema owner
-supplies compatibility and exact-artifact validation, and document ACP is
-unchanged. -/
-def schemaPublicationAllowed (schemaGranted artifactMatches compatible : Bool) : Bool :=
-  schemaGranted && artifactMatches && compatible
+/-- The selected agent is the native actor for schema operations. The tool
+grant exposes the command but does not replace DefraDB's node permission. The
+native decision is independent of document ACP and may change after preview. -/
+def schemaPublicationAllowed (schemaGranted artifactMatches compatible nativeAllowed : Bool) : Bool :=
+  schemaGranted && artifactMatches && compatible && nativeAllowed
 
-theorem schema_publication_requires_grant (digest compatible : Bool) :
-    schemaPublicationAllowed false digest compatible = false := by
+theorem schema_publication_requires_grant (digest compatible nativeAllowed : Bool) :
+    schemaPublicationAllowed false digest compatible nativeAllowed = false := by
   simp [schemaPublicationAllowed]
 
-theorem schema_publication_requires_previewed_artifact (grant compatible : Bool) :
-    schemaPublicationAllowed grant false compatible = false := by
+theorem schema_publication_requires_previewed_artifact (grant compatible nativeAllowed : Bool) :
+    schemaPublicationAllowed grant false compatible nativeAllowed = false := by
   simp [schemaPublicationAllowed]
 
-theorem schema_publication_rejects_incompatible_contract (grant digest : Bool) :
-    schemaPublicationAllowed grant digest false = false := by
+theorem schema_publication_rejects_incompatible_contract (grant digest nativeAllowed : Bool) :
+    schemaPublicationAllowed grant digest false nativeAllowed = false := by
+  simp [schemaPublicationAllowed]
+
+theorem schema_publication_requires_native_authority (grant digest compatible : Bool) :
+    schemaPublicationAllowed grant digest compatible false = false := by
   simp [schemaPublicationAllowed]
 
 end SelfConfig

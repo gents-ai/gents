@@ -3,7 +3,6 @@ use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole};
 use serde_json::Value;
 
 use crate::store::config_client::ConfigApplyTxn;
-use crate::store::graphql::escape_graphql_string;
 use crate::tools::background::status::WaitToolArgs;
 use crate::tools::call::lifecycle::{query, ToolCallState};
 
@@ -115,7 +114,6 @@ async fn observe_waits(
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<bool> {
-    let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
     let headers = crate::session::load_request_headers_in_txn(
         txn,
         session_id,
@@ -202,14 +200,28 @@ async fn observe_waits(
         if !timed_out_running_handle(result, handle)? {
             continue;
         }
-        let handle_escaped = escape_graphql_string(handle);
-        let targets = txn
-            .execute(&format!(
-                r#"{{ AgentToolCall(filter: {{ {scope}, tool_call_id: {{ _eq: "{handle_escaped}" }} }},
-                    limit: 2) {{ _docID tool_call_id request_doc_id tool_call_key
-                    lifecycle_state status await_mode spawned_by_tool_call_doc_id }} }}"#
-            ))
-            .await?;
+        let targets = {
+            use gents_protocol::document_query::{
+                fields::agent_tool_call as fields, session_scope, Filter, Query, Selection,
+            };
+            let rendered = Query::select(
+                Selection::doc_id()
+                    .field(fields::TOOL_CALL_ID)
+                    .field(fields::REQUEST_DOC_ID)
+                    .field(fields::TOOL_CALL_KEY)
+                    .field(fields::LIFECYCLE_STATE)
+                    .field(fields::STATUS)
+                    .field(fields::AWAIT_MODE)
+                    .field(fields::SPAWNED_BY_TOOL_CALL_DOC_ID),
+            )
+            .filter(
+                session_scope(node_did, session_id, requester_did)
+                    .and(Filter::eq(fields::TOOL_CALL_ID, handle)),
+            )
+            .limit(2)
+            .render();
+            txn.run(&rendered).await?
+        };
         let targets = rows(&targets, "AgentToolCall")?;
         anyhow::ensure!(targets.len() <= 1, "ambiguous waited background handle");
         let Some(target) = targets.first() else {

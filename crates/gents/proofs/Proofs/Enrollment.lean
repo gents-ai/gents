@@ -1,8 +1,8 @@
 import Proofs.Enrollment.State
+import Proofs.Enrollment.AutoRenewal
 import Proofs.Enrollment.Transition
 import Proofs.Enrollment.Executable
 import Proofs.Enrollment.Properties
 import Proofs.Enrollment.DurableProjection
 import Proofs.Enrollment.RequestAdmission
-import Proofs.Enrollment.Observation
 import Proofs.Enrollment.Invite

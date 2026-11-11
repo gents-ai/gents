@@ -52,9 +52,9 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
                 let unavailable = summary
                     .unavailable_agents
                     .iter()
-                    .map(|(agent_id, reason)| {
+                    .map(|(agent_did, reason)| {
                         json!({
-                            "agent_id": agent_id,
+                            "agent_did": agent_did,
                             "reason": reason,
                             "message": reason.public_message(),
                             "next_step": (*reason == gents_protocol::node_readiness::AgentReadinessUnavailableReason::ToolSurfaceUnavailable)
@@ -99,28 +99,28 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         .and_then(Value::as_bool)
         .unwrap_or(false);
 
-    let agent_ids = bundle
+    let agent_dids = bundle
         .as_ref()
         .into_iter()
         .flat_map(|bundle| &bundle.config.agents)
-        .map(|agent| agent.agent_id.as_str())
+        .map(|agent| agent.agent_did.as_str())
         .collect::<std::collections::BTreeSet<_>>();
-    let default_agent_id = bundle
+    let default_agent_did = bundle
         .as_ref()
-        .and_then(|bundle| bundle.config.node.default_agent_id.as_deref());
-    let default_agent_check = match default_agent_id {
-        Some(agent_id) if agent_ids.contains(agent_id) => json!({
+        .and_then(|bundle| bundle.config.node.default_agent_did.as_deref());
+    let default_agent_check = match default_agent_did {
+        Some(agent_did) if agent_dids.contains(agent_did) => json!({
             "ok": true,
-            "default_agent_id": agent_id,
+            "default_agent_did": agent_did,
         }),
-        Some(agent_id) => json!({
+        Some(agent_did) => json!({
             "ok": false,
-            "default_agent_id": agent_id,
-            "error": format!("default agent {} is not present in Agent documents", agent_id),
+            "default_agent_did": agent_did,
+            "error": format!("default agent {} is not present in Agent documents", agent_did),
         }),
         None => json!({
             "ok": false,
-            "error": format!("Node {} is missing or has no default_agent_id", node_did),
+            "error": format!("Node {} is missing or has no default_agent_did", node_did),
         }),
     };
     let tool_ceiling_check = diagnose_tool_ceiling(init_config.as_ref());
@@ -557,7 +557,7 @@ mod tests {
         assert!(entries[1]["guidance"]
             .as_str()
             .unwrap()
-            .contains("claude-login"));
+            .contains("accounts login claude"));
         assert_eq!(entries[2]["ok"], false);
         assert!(entries[2]["guidance"].as_str().unwrap().contains("expired"));
         assert!(entries
@@ -587,7 +587,7 @@ mod tests {
             "credential_id": "claude-subscription:did:key:z6MkT",
             "guidance": "expired or revoked",
         });
-        let missing = json!({"ok": false, "guidance": "run gents claude-login"});
+        let missing = json!({"ok": false, "guidance": "run gents accounts login claude"});
         let read_error = json!({"ok": false, "error": "querying OAuthCredential returned errors"});
         assert!(claude_auth_gate(true, &fresh));
         assert!(

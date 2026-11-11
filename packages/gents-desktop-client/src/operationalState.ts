@@ -32,21 +32,22 @@ export type OperationalStatus = {
 };
 
 export type NodeReadinessDecision =
-  | { kind: "ready"; agentId: string; agentLabel: string }
+  | { kind: "ready"; agentDid: string; agentLabel: string }
   | {
       kind: "unavailable";
-      agentId: string;
+      agentDid: string;
       agentLabel: string;
       reason: AgentUnavailableReasonView;
     }
   | {
       kind: "unknown";
-      agentId: string | null;
+      agentDid: string | null;
       reason: AgentReadinessUnknownReasonView;
     };
 
 export type DeploymentOperationalState = {
   transport: OperationalStatus;
+  connection: OperationalStatus;
   route: OperationalStatus;
   sync: OperationalStatus;
   agent: OperationalStatus;
@@ -73,88 +74,84 @@ export function isLocalRuntimeSource(source?: string | null): boolean {
   return source === "local-standard";
 }
 
-function agentLabel(deployment: DeploymentSettings, agentId: string): string {
+function agentLabel(deployment: DeploymentSettings, agentDid: string): string {
   return (
     deployment.agents
-      .find((agent) => agent.agentId === agentId)
-      ?.displayName?.trim() || agentId
+      .find((agent) => agent.agentDid === agentDid)
+      ?.displayName?.trim() || agentDid
   );
 }
 
-function fallbackAgentId(deployment: DeploymentSettings): string | null {
-  const nodeDefault = deployment.node.defaultAgentId?.trim();
+function fallbackAgentDid(deployment: DeploymentSettings): string | null {
+  const nodeDefault = deployment.node.defaultAgentDid?.trim();
   if (
     nodeDefault &&
-    deployment.agents.some((agent) => agent.agentId === nodeDefault)
+    deployment.agents.some((agent) => agent.agentDid === nodeDefault)
   ) {
     return nodeDefault;
   }
   const markedDefault = deployment.agents.find((agent) => agent.isDefault);
   if (markedDefault) {
-    return markedDefault.agentId;
+    return markedDefault.agentDid;
   }
-  const conventional = `${deployment.nodeDid}:default`;
-  if (deployment.agents.some((agent) => agent.agentId === conventional)) {
-    return conventional;
-  }
-  return deployment.agents.find((agent) => agent.enabled)?.agentId ?? null;
+  return deployment.agents.find((agent) => agent.enabled)?.agentDid ?? null;
 }
 
-export function selectedAgentIdForDeployment(
+export function selectedAgentDidForDeployment(
   deployment: DeploymentSettings | null,
-  selectedAgentId: string | null,
+  selectedAgentDid: string | null,
 ): string | null {
   if (!deployment) return null;
   if (
-    selectedAgentId !== null &&
-    deployment.agents.some((agent) => agent.agentId === selectedAgentId)
+    selectedAgentDid !== null &&
+    deployment.agents.some((agent) => agent.agentDid === selectedAgentDid)
   ) {
-    return selectedAgentId;
+    return selectedAgentDid;
   }
-  return fallbackAgentId(deployment);
+  return fallbackAgentDid(deployment);
 }
 
 export function selectedNodeReadinessDecision(
   deployment: DeploymentSettings | null,
-  selectedAgentId: string | null,
+  selectedAgentDid: string | null,
 ): NodeReadinessDecision {
   if (!deployment) {
-    return { kind: "unknown", agentId: null, reason: "readiness_missing" };
+    return { kind: "unknown", agentDid: null, reason: "readiness_missing" };
   }
 
   const readiness = deployment.nodeReadiness;
-  const agentId = selectedAgentId ?? fallbackAgentId(deployment);
+  const agentDid = selectedAgentDid ?? fallbackAgentDid(deployment);
   if (readiness.source.state === "unknown") {
-    return { kind: "unknown", agentId, reason: readiness.source.reason };
+    return { kind: "unknown", agentDid, reason: readiness.source.reason };
   }
-  if (!agentId) {
+  if (!agentDid) {
     return {
       kind: "unknown",
-      agentId: null,
+      agentDid: null,
       reason: "agent_not_assigned",
     };
   }
 
   const readinessStatus = readiness.agents.find(
-    (candidate) => candidate.agentId === agentId,
+    (candidate) => candidate.agentDid === agentDid,
   );
   if (!readinessStatus) {
-    return { kind: "unknown", agentId, reason: "agent_not_assigned" };
+    return { kind: "unknown", agentDid, reason: "agent_not_assigned" };
   }
   if (readinessStatus.state === "ready") {
     return {
       kind: "ready",
-      agentId,
-      agentLabel: agentLabel(deployment, agentId),
+      agentDid,
+      agentLabel: agentLabel(deployment, agentDid),
     };
   }
   if (readinessStatus.state === "unknown") {
-    return { kind: "unknown", agentId, reason: readinessStatus.reason };
+    return { kind: "unknown", agentDid, reason: readinessStatus.reason };
   }
   return {
     kind: "unavailable",
-    agentId,
-    agentLabel: agentLabel(deployment, agentId),
+    agentDid,
+    agentLabel: agentLabel(deployment, agentDid),
     reason: readinessStatus.reason,
   };
 }
@@ -300,61 +297,95 @@ export function projectDeploymentTransportStatus(
       });
 }
 
+/** The chat write route (`ClientChatReadiness`): an authenticated runtime
+ * endpoint means ready, and the native fence's refusal names its cause and
+ * next action. Pairing is a P2P observation and is not read here. */
 export function projectRouteOperationalStatus(
-  routeReady: boolean,
-  pairingPending = false,
+  refusal: DeploymentView["chatRefusal"],
 ): OperationalStatus {
-  if (routeReady) {
-    return status({
+  return (
+    projectChatRefusalStatus(refusal) ??
+    status({
       kind: "ready",
       layer: "route",
       reason: "route_ready",
-      label: "Secure route is ready",
-      shortLabel: "Route ready",
-      detail: "The signed conversation route is ready.",
-    });
-  }
-  if (pairingPending) {
-    return status({
-      kind: "waiting",
-      layer: "route",
-      reason: "pairing_not_accepted",
-      label: "Waiting for pairing request acceptance",
-      shortLabel: "Waiting for pairing",
-      detail:
-        "The pairing request was sent and is waiting for the agent to accept it.",
-    });
-  }
+      label: "Runtime endpoint is ready",
+      shortLabel: "Ready",
+      detail: "Chat writes go to the authenticated runtime endpoint.",
+    })
+  );
+}
+
+/** The native chat write fence's refusal, as the composer shows it: the
+ * cause and next action come from the desktop core, never from a UI-local
+ * reading of pairing or source. */
+export function projectChatRefusalStatus(
+  refusal: DeploymentView["chatRefusal"],
+): OperationalStatus | null {
+  if (!refusal) return null;
+  const waiting = refusal.nextAction === "await_endpoint_advertisement";
   return status({
-    kind: "waiting",
+    kind: waiting ? "waiting" : "blocked",
     layer: "route",
-    reason: "route_not_ready",
-    label: "Preparing the secure route",
-    shortLabel: "Preparing",
-    detail:
-      "The agent is connected, but its signed conversation route is not ready yet.",
+    reason: refusal.cause,
+    label: waiting ? "Waiting for the runtime endpoint" : "Runtime is not connected",
+    shortLabel: waiting ? "Waiting for endpoint" : "Not connected",
+    detail: refusal.detail,
   });
+}
+
+export function runtimeConnectionBlocksAdmission(connection: string | null | undefined): boolean {
+  return connection !== "connected";
+}
+
+/** `RuntimeConnectionObservation.presentation`: each status names its own
+    reason, so an outage or a refusal never reads as a connection attempt.
+    `refused` is the runtime's own answer that it does not accept this
+    client's credentials; nothing it merely hides is shown as one. A null
+    status is a peer the observer has not reconciled yet; the bridge never
+    withholds a reconciled status, since admission reads it. */
+export function projectRuntimeConnectionStatus(
+  connection: string | null | undefined,
+): OperationalStatus {
+  switch (connection) {
+    case "connected":
+      return status({ kind: "ready", layer: "runtime", reason: "connected",
+        label: "Runtime is connected", shortLabel: "Connected",
+        detail: "The authenticated runtime connection is ready." });
+    case "noEndpoint":
+      return status({ kind: "blocked", layer: "runtime", reason: "no_endpoint",
+        label: "Runtime has no address", shortLabel: "No address",
+        detail: "This node has no runtime endpoint this app can connect to." });
+    case "refused":
+      return status({ kind: "blocked", layer: "runtime", reason: "refused",
+        label: "Runtime refused this app", shortLabel: "Refused",
+        detail: "The runtime does not accept this app's credentials. Ask its owner to restore this device's access; it reconnects by itself once they do." });
+    case "disconnected":
+      return status({ kind: "waiting", layer: "runtime", reason: "disconnected",
+        label: "Runtime unreachable", shortLabel: "Reconnecting",
+        detail: "The runtime connection was lost; reconnecting." });
+    default:
+      return status({ kind: "waiting", layer: "runtime", reason: "connecting",
+        label: "Connecting to runtime", shortLabel: "Connecting",
+        detail: "Waiting for the authenticated runtime connection." });
+  }
 }
 
 export function projectDeploymentOperationalState(
   deployment: DeploymentSettings,
-  selectedAgentId: string | null = null,
+  selectedAgentDid: string | null = null,
   syncHealth: SyncHealthView | null = null,
 ): DeploymentOperationalState {
   const transport = projectDeploymentTransportStatus(deployment.dialSucceeded);
+  const connection = projectRuntimeConnectionStatus(deployment.runtimeConnection);
 
-  const pairingPending =
-    !isLocalRuntimeSource(deployment.source) && !deployment.chatSafe;
-  const route = projectRouteOperationalStatus(
-    deployment.chatSafe,
-    pairingPending,
-  );
   const localRuntime = isLocalRuntimeSource(deployment.source);
+  const route = projectRouteOperationalStatus(deployment.chatRefusal);
   const sync = projectSyncOperationalStatus(syncHealth);
 
   const nodeReadiness = selectedNodeReadinessDecision(
     deployment,
-    selectedAgentId,
+    selectedAgentDid,
   );
   const agent = projectAgentOperationalStatus(nodeReadiness, localRuntime);
   const reconcilePhase = deployment.runtime?.reconcilePhase ?? "unknown";
@@ -379,25 +410,23 @@ export function projectDeploymentOperationalState(
 
   const agentBlocker = agent.kind === "ready" ? null : agent;
   const admissionBlocker =
-    transport.kind !== "ready"
-      ? transport
-      : route.kind !== "ready"
-        ? route
-        : agentBlocker;
+    projectChatRefusalStatus(deployment.chatRefusal) ??
+    (runtimeConnectionBlocksAdmission(deployment.runtimeConnection)
+      ? connection
+      : agentBlocker);
 
   const error =
-    deployment.lastError ?? deployment.runtime?.lastReconcileError ?? null;
+    deployment.runtime?.lastReconcileError ?? null;
   const summary = error
     ? status({
         kind: "blocked",
-        layer: "p2p",
+        layer: "runtime",
         reason: "deployment_error",
-        label: "Agent connection error",
+        label: "Runtime configuration error",
         shortLabel: "Error",
         detail: error,
       })
     : (admissionBlocker ??
-      (sync.kind !== "ready" ? sync : null) ??
       (reconcile.kind !== "ready"
         ? reconcile
         : status({
@@ -407,11 +436,12 @@ export function projectDeploymentOperationalState(
             label: "Agent is online",
             shortLabel: "Online",
             detail:
-              "Transport, signed route, and runtime readiness are current.",
+              "The runtime connection and agent readiness are current.",
           })));
 
   return {
     transport,
+    connection,
     route,
     sync,
     agent,
@@ -449,23 +479,67 @@ export function projectClientOperationalStatus(
   return null;
 }
 
-export type SyncHealthStateName =
-  "healthy" | "syncing" | "offline" | "failed" | "incompatible";
+export type SyncHealthStateName = "healthy" | "waiting" | "blocked";
 
 export function syncHealthState(
   syncHealth: SyncHealthView | null | undefined,
 ): SyncHealthStateName | null {
   switch (syncHealth?.state) {
     case "healthy":
-    case "syncing":
-    case "offline":
-    case "failed":
-    case "incompatible":
+    case "waiting":
+    case "blocked":
       return syncHealth.state;
     default:
       return null;
   }
 }
+
+type SyncCauseText = { label: string; shortLabel: string; detail: string };
+
+/** Presentation of each `ClientSyncHealth.Cause`; the bridge derives the cause. */
+const SYNC_CAUSE_TEXT: Record<string, SyncCauseText> = {
+  runtime_connecting: {
+    label: "Connecting to runtime",
+    shortLabel: "Connecting",
+    detail: "Waiting for the authenticated runtime connection.",
+  },
+  runtime_disconnected: {
+    label: "Runtime unreachable",
+    shortLabel: "Reconnecting",
+    detail: "The runtime connection was lost; reconnecting.",
+  },
+  runtime_refused: {
+    label: "Runtime refused this app",
+    shortLabel: "Refused",
+    detail:
+      "The runtime does not accept this app's credentials. Ask its owner to restore this device's access; it reconnects by itself once they do.",
+  },
+  runtime_no_endpoint: {
+    label: "Runtime has no endpoint",
+    shortLabel: "No endpoint",
+    detail: "This runtime has no endpoint this app can read. Connect the runtime again.",
+  },
+  enrollment_authentication: {
+    label: "Enrollment failed",
+    shortLabel: "Enroll again",
+    detail: "The enrolled runtime could not be authenticated. Enroll this device again.",
+  },
+  enrollment_route: {
+    label: "Finishing enrollment",
+    shortLabel: "Enrolling",
+    detail: "The enrollment route is not applied yet; retrying.",
+  },
+  discovery_degraded: {
+    label: "Discovery degraded",
+    shortLabel: "Discovery degraded",
+    detail: "The peer-to-peer transport probe is failing; retrying.",
+  },
+  discovery_offline: {
+    label: "Offline",
+    shortLabel: "Offline",
+    detail: "No configured peer can be reached. Check this device's network connection.",
+  },
+};
 
 export function projectSyncOperationalStatus(
   syncHealth: SyncHealthView | null | undefined,
@@ -476,33 +550,34 @@ export function projectSyncOperationalStatus(
       kind: "waiting",
       layer: "sync",
       reason: "sync_not_observed",
-      label: "Checking database sync",
+      label: "Checking sync",
       shortLabel: "Checking sync",
-      detail: "Waiting for the database sync coordinator's first observation.",
+      detail: "Waiting for the secure client's first sync observation.",
     });
   }
-  const label =
-    state === "healthy"
-      ? "Sync is healthy"
-      : state === "syncing"
-        ? "Syncing"
-        : state === "offline"
-          ? "Offline"
-          : state === "incompatible"
-            ? "Update required"
-            : "Sync failed";
+  if (state === "healthy") {
+    return status({
+      kind: "ready",
+      layer: "sync",
+      reason: "healthy",
+      label: "Sync is healthy",
+      shortLabel: "Sync healthy",
+      detail: "The runtime is reachable, enrollment is current and peers are discoverable.",
+    });
+  }
+  const cause = syncHealth?.cause ?? "unknown";
+  const text = SYNC_CAUSE_TEXT[cause] ?? {
+    label: "Sync needs attention",
+    shortLabel: "Sync",
+    detail: `Sync is ${state}.`,
+  };
   return status({
-    kind:
-      state === "healthy"
-        ? "ready"
-        : state === "syncing"
-          ? "syncing"
-          : "blocked",
+    kind: state,
     layer: "sync",
-    reason: state,
-    label,
-    shortLabel: state === "healthy" ? "Sync healthy" : label,
-    detail: syncHealth?.lastError ?? `Database synchronization is ${state}.`,
+    reason: cause,
+    label: text.label,
+    shortLabel: text.shortLabel,
+    detail: syncHealth?.lastError ?? text.detail,
   });
 }
 
@@ -511,12 +586,10 @@ export function syncHealthDiagnostics(
 ) {
   return {
     state: syncHealthState(syncHealth),
+    cause: syncHealth?.cause ?? null,
+    nextAction: syncHealth?.nextAction ?? null,
     lastError: syncHealth?.lastError ?? null,
     connectedPeerCount: syncHealth?.connectedPeerCount ?? 0,
-    pendingDagCount: syncHealth?.pendingDagCount ?? null,
-    persistedPendingDagCount: syncHealth?.persistedPendingDagCount ?? null,
-    pushRetryMarkerCount: syncHealth?.pushRetryMarkerCount ?? null,
-    exhaustedFetchCount: syncHealth?.exhaustedFetchCount ?? null,
-    quarantinedDagCount: syncHealth?.quarantinedDagCount ?? null,
+    activationErrorCount: syncHealth?.activationErrorCount ?? 0,
   };
 }

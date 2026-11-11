@@ -1,18 +1,18 @@
 use anyhow::Result;
-use defra_node::EmbeddedNode;
 use gents_protocol::output::OutputSource;
 
-use super::replay_candidates::load_canonical_assistant_candidates_with;
+use super::access::ReadAccess;
+use super::replay_candidates::load_canonical_assistant_candidates_using;
 use super::{replay_violation, CanonicalReplayScope};
 
 /// Resolve all requested tags from one physically bounded canonical candidate
 /// view. Preserve input order and every physical match (including zero or
 /// multiple matches) for the replay owner to reject, without a cross-boundary
 /// cache or a coordinate-to-single-winner map.
-pub(crate) async fn resolve_canonical_replay_tags(
-    node: &EmbeddedNode,
+pub(crate) async fn resolve_canonical_replay_tags_on(
+    access: &crate::store::config_client::ConfigAccess,
     scope: CanonicalReplayScope<'_>,
-    boundary: &crate::turn::provider_context_reduction::SourceBoundary,
+    boundary: &gents_protocol::transcript::SourceBoundary,
     tags: &[gents_loop::claude_messages_body::ReplayTag],
 ) -> Result<
     Vec<(
@@ -20,7 +20,38 @@ pub(crate) async fn resolve_canonical_replay_tags(
         Vec<gents_loop::claude_messages_body::ResolvedReplayEvidence>,
     )>,
 > {
-    use gents_loop::claude_messages_body::{reasoning_witness, ResolvedReplayEvidence};
+    resolve_canonical_replay_tags_using(ReadAccess::Config(access), access, scope, boundary, tags)
+        .await
+}
+
+#[cfg(test)]
+pub(crate) async fn resolve_canonical_replay_tags(
+    access: &crate::ConfigAccess,
+    scope: CanonicalReplayScope<'_>,
+    boundary: &gents_protocol::transcript::SourceBoundary,
+    tags: &[gents_loop::claude_messages_body::ReplayTag],
+) -> Result<
+    Vec<(
+        gents_loop::claude_messages_body::ReplayTag,
+        Vec<gents_loop::claude_messages_body::ResolvedReplayEvidence>,
+    )>,
+> {
+    resolve_canonical_replay_tags_on(access, scope, boundary, tags).await
+}
+
+async fn resolve_canonical_replay_tags_using(
+    access: ReadAccess<'_, '_>,
+    requests: &impl super::replay_request::ReplayRequestReader,
+    scope: CanonicalReplayScope<'_>,
+    boundary: &gents_protocol::transcript::SourceBoundary,
+    tags: &[gents_loop::claude_messages_body::ReplayTag],
+) -> Result<
+    Vec<(
+        gents_loop::claude_messages_body::ReplayTag,
+        Vec<gents_loop::claude_messages_body::ResolvedReplayEvidence>,
+    )>,
+> {
+    use gents_loop::claude_messages_body::ResolvedReplayEvidence;
 
     for tag in tags {
         replay_ensure!(
@@ -29,7 +60,8 @@ pub(crate) async fn resolve_canonical_replay_tags(
         );
     }
     let candidates =
-        load_canonical_assistant_candidates_with(node, node, scope, boundary, Some(tags)).await?;
+        load_canonical_assistant_candidates_using(access, requests, scope, boundary, Some(tags))
+            .await?;
     tags.iter()
         .map(|tag| {
             let OutputSource::ProviderTurn {
@@ -57,6 +89,10 @@ pub(crate) async fn resolve_canonical_replay_tags(
                             "canonical replay candidate is not an assistant message",
                         ));
                     };
+                    replay_ensure!(
+                        content.len() == candidate.block_indices.len(),
+                        "canonical replay block positions do not match the message"
+                    );
                     let capture = candidate.capture.as_ref().expect("capture filtered above");
                     // An undecodable capture leaves the turn without evidence
                     // of its producing prefix, which makes it non-replayable.
@@ -66,12 +102,25 @@ pub(crate) async fn resolve_canonical_replay_tags(
                     )
                     .ok();
                     Ok(ResolvedReplayEvidence {
-                        origin: gents_loop::claude_messages_body::ReplayOrigin::AcceptedProvider,
-                        reasoning: reasoning_witness(content),
+                        origin: if candidate.complete {
+                            gents_loop::claude_messages_body::ReplayOrigin::AcceptedProvider
+                        } else {
+                            gents_loop::claude_messages_body::ReplayOrigin::RecoveredProvider
+                        },
+                        reasoning: content
+                            .iter()
+                            .zip(&candidate.block_indices)
+                            .filter_map(|(block, index)| match block {
+                                gents_protocol::message::AssistantContent::Reasoning(reasoning) => {
+                                    Some((*index, reasoning.content.clone()))
+                                }
+                                _ => None,
+                            })
+                            .collect(),
                         issuer: capture.issuer.clone(),
                         wire: capture.wire,
                         physical_header: candidate.header_doc_id.clone(),
-                        complete: true,
+                        complete: candidate.complete,
                         captured,
                     })
                 })
@@ -83,13 +132,13 @@ pub(crate) async fn resolve_canonical_replay_tags(
 
 #[cfg(test)]
 pub(crate) async fn resolve_canonical_replay_tag(
-    node: &EmbeddedNode,
+    access: &crate::ConfigAccess,
     scope: CanonicalReplayScope<'_>,
-    boundary: &crate::turn::provider_context_reduction::SourceBoundary,
+    boundary: &gents_protocol::transcript::SourceBoundary,
     tag: &gents_loop::claude_messages_body::ReplayTag,
 ) -> Result<Vec<gents_loop::claude_messages_body::ResolvedReplayEvidence>> {
     Ok(
-        resolve_canonical_replay_tags(node, scope, boundary, std::slice::from_ref(tag))
+        resolve_canonical_replay_tags(access, scope, boundary, std::slice::from_ref(tag))
             .await?
             .pop()
             .expect("singleton replay resolution returns one entry")

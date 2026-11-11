@@ -20,7 +20,7 @@ pub struct DefinitionRef {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SubjectRef {
     pub pack_digest: String,
-    pub agent_id: String,
+    pub agent_slot: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -213,17 +213,31 @@ async fn create(
     name: &'static str,
     input: Value,
 ) -> Result<()> {
+    let schema = match name {
+        "EvalRun" => gents_protocol::schemas::EVAL_RUN,
+        "EvalTrial" => gents_protocol::schemas::EVAL_TRIAL,
+        "EvalVerdict" => gents_protocol::schemas::EVAL_VERDICT,
+        _ => anyhow::bail!("unsupported evaluation document {name}"),
+    };
+    let owner = input["owner_node_did"]
+        .as_str()
+        .context("evaluation record has no Node")?
+        .to_owned();
     let variables = json!({ "input": input });
     let mutation = format!(
         "mutation($input: {name}MutationInputArg!) {{ create_{name}(input: $input) {{ _docID }} }}"
     );
     access
         .transact_write(operation, |txn| {
-            let (variables, mutation) = (&variables, &mutation);
+            let (variables, mutation, owner) = (&variables, &mutation, &owner);
             Box::pin(async move {
-                txn.execute_with_variables(mutation, variables)
-                    .await
-                    .map(|_| ())
+                let response = txn
+                    .execute_client_signed_create(mutation, variables, schema)
+                    .await?;
+                let doc_id = gents_protocol::graphql::extract_mutation_doc_id(&response, name)?;
+                crate::store::config_client::publish_node_child_in_txn(txn, name, &doc_id, owner)
+                    .await?;
+                Ok::<(), anyhow::Error>(())
             })
         })
         .await
@@ -340,16 +354,22 @@ pub async fn invalidate_run(
     let variables = json!({
         "input": { "invalidated": { "at": now(), "by": by, "reason": reason } },
     });
+    let current_query = {
+        use gents_protocol::document_query::{
+            fields::eval_run as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::doc_id().field(fields::INVALIDATED))
+            .filter(Filter::eq(fields::OWNER_NODE_DID, owner))
+            .filter(Filter::eq(fields::RUN_ID, run_id))
+            .render()
+    };
     let run_id_owned = run_id.to_owned();
     access
         .transact_write("eval.invalidate_run", |txn| {
-            let (filter, variables, run_id) = (&filter, &variables, &run_id_owned);
+            let (filter, variables, run_id, current_query) =
+                (&filter, &variables, &run_id_owned, &current_query);
             Box::pin(async move {
-                let current = txn
-                    .execute(&format!(
-                        "{{ EvalRun(filter: {{ {filter} }}) {{ invalidated }} }}"
-                    ))
-                    .await?;
+                let current = txn.run(current_query).await?;
                 let row = current["data"]["EvalRun"]
                     .as_array()
                     .and_then(|rows| rows.first())
@@ -357,11 +377,14 @@ pub async fn invalidate_run(
                 if !row["invalidated"].is_null() {
                     return Err(anyhow::Error::new(AlreadyInvalidated));
                 }
-                Ok(txn.execute_with_variables(
+                let doc_id = row["_docID"].as_str().context("eval run has no physical ID")?;
+                Ok(txn.execute_client_signed_update(
                     &format!(
-                        r#"mutation($input: EvalRunMutationInputArg!) {{ update_EvalRun(filter: {{ {filter} }}, input: $input) {{ _docID }} }}"#
+                        r#"mutation($input: EvalRunMutationInputArg!) {{ update_EvalRun(filter: {{ _docID: {{ _eq: "{}" }}, {filter} }}, input: $input) {{ _docID }} }}"#,
+                        escape_graphql_string(doc_id),
                     ),
                     variables,
+                    gents_protocol::schemas::EVAL_RUN,
                 )
                 .await
                 .map(|_| ())?)
@@ -413,16 +436,22 @@ pub async fn complete_trial(
         trial_id = escape_graphql_string(trial_id),
     );
     let variables = json!({ "input": { "completion": serde_json::to_value(completion)? } });
+    let current_query = {
+        use gents_protocol::document_query::{
+            fields::eval_trial as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::doc_id().field(fields::COMPLETION))
+            .filter(Filter::eq(fields::OWNER_NODE_DID, owner))
+            .filter(Filter::eq(fields::TRIAL_ID, trial_id))
+            .render()
+    };
     let trial_id = trial_id.to_owned();
     access
         .transact_write("eval.complete_trial", |txn| {
-            let (filter, variables, trial_id) = (&filter, &variables, &trial_id);
+            let (filter, variables, trial_id, current_query) =
+                (&filter, &variables, &trial_id, &current_query);
             Box::pin(async move {
-                let current = txn
-                    .execute(&format!(
-                        "{{ EvalTrial(filter: {{ {filter} }}) {{ completion }} }}"
-                    ))
-                    .await?;
+                let current = txn.run(current_query).await?;
                 let row = current["data"]["EvalTrial"]
                     .as_array()
                     .and_then(|rows| rows.first())
@@ -430,11 +459,14 @@ pub async fn complete_trial(
                 if !row["completion"].is_null() {
                     return Err(anyhow::Error::new(AlreadyCompleted));
                 }
-                Ok(txn.execute_with_variables(
+                let doc_id = row["_docID"].as_str().context("eval trial has no physical ID")?;
+                Ok(txn.execute_client_signed_update(
                     &format!(
-                        "mutation($input: EvalTrialMutationInputArg!) {{ update_EvalTrial(filter: {{ {filter} }}, input: $input) {{ _docID }} }}"
+                        "mutation($input: EvalTrialMutationInputArg!) {{ update_EvalTrial(filter: {{ _docID: {{ _eq: \"{}\" }}, {filter} }}, input: $input) {{ _docID }} }}",
+                        escape_graphql_string(doc_id),
                     ),
                     variables,
+                    gents_protocol::schemas::EVAL_TRIAL,
                 )
                 .await
                 .map(|_| ())?)
@@ -588,168 +620,50 @@ pub async fn load_verdicts(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::defra_node::EmbeddedNode;
-    use crate::eval::TAXONOMY_VERSION;
-    use std::sync::Arc;
-
-    const OWNER: &str = "did:key:eval-owner";
-
-    async fn access() -> ConfigAccess {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-        for sdl in [
-            gents_protocol::schemas::EVAL_RUN,
-            gents_protocol::schemas::EVAL_TRIAL,
-            gents_protocol::schemas::EVAL_VERDICT,
-        ] {
-            node.add_collection(sdl).await.unwrap();
-        }
-        ConfigAccess::local(node)
-    }
-
-    fn origin(split: EvalSplit) -> RunOrigin {
-        RunOrigin {
-            definition: DefinitionRef {
-                definition_id: "monitor-findings".into(),
-                comparability_version: 1,
-                digest: "sha256:def".into(),
-            },
-            split,
-            case_ids: vec!["disk-warning".into()],
-            cells: vec![CellSpec {
-                cell_id: "baseline".into(),
-                label: "baseline".into(),
-                subject: SubjectRef {
-                    pack_digest: "sha256:pack".into(),
-                    agent_id: "monitor".into(),
-                },
-                inference_profile_id: "local".into(),
-            }],
-            trials_per_case: 2,
-            seed_base: 1000,
-            deadline_secs: Some(600),
-            concurrency: 1,
-            denominator_policy: DENOMINATOR_POLICY_V1.into(),
-            taxonomy_version: TAXONOMY_VERSION.into(),
-            max_infra_retries: 1,
-            check_registry_version: "checks-1".into(),
-            source_commit: "0deb7659c".into(),
-            source_dirty: false,
-            purpose: "eval".into(),
-            breaker_threshold: default_breaker_threshold(),
-        }
-    }
-
-    fn identity(run_id: &str, trial_id: &str) -> TrialIdentity {
-        TrialIdentity {
-            trial_id: trial_id.into(),
-            run_id: run_id.into(),
-            cell_id: "baseline".into(),
-            case_id: "disk-warning".into(),
-            trial_index: 0,
-            attempt: 0,
-            trial_node_did: "did:key:trial".into(),
-            session_id: format!("session-{trial_id}"),
-            seed: 1000,
-            home_hint: Some("/tmp/trial".into()),
-        }
-    }
-
-    fn completion() -> TrialCompletion {
-        TrialCompletion {
-            ended_at: "2026-09-21T00:00:00Z".into(),
-            stages: vec![StageCompletion {
-                stage_id: "check".into(),
-                request_id: Some("req-1".into()),
-                terminal_state: Some(RequestLifecycleState::Completed),
-                failure_kind: None,
-                provider_reason: None,
-            }],
-            usage: TrialUsage {
-                input_tokens: Some(10),
-                output_tokens: None,
-            },
-            anchor: Anchor {
-                terminal_states: vec![RequestLifecycleState::Completed],
-                requests: 1,
-                inference_calls: 3,
-            },
-            evidence_digest: None,
-        }
-    }
-
-    fn rival_completion() -> TrialCompletion {
-        TrialCompletion {
-            ended_at: "2026-09-22T11:22:33Z".into(),
-            stages: vec![StageCompletion {
-                stage_id: "other".into(),
-                request_id: Some("req-2".into()),
-                terminal_state: Some(RequestLifecycleState::Failed),
-                failure_kind: Some(OutcomeKind::Provider),
-                provider_reason: Some(ProviderReason::Unavailable),
-            }],
-            usage: TrialUsage {
-                input_tokens: Some(99),
-                output_tokens: Some(7),
-            },
-            anchor: Anchor {
-                terminal_states: vec![RequestLifecycleState::Failed],
-                requests: 4,
-                inference_calls: 5,
-            },
-            evidence_digest: Some("sha256:rival".into()),
-        }
-    }
-
-    fn draft(
-        run_id: &str,
-        trial_id: &str,
-        verdict_id: &str,
-        feedback: Option<&str>,
-    ) -> VerdictDraft {
-        VerdictDraft {
-            verdict_id: verdict_id.into(),
-            run_id: run_id.into(),
-            trial_id: trial_id.into(),
-            stage_id: "check".into(),
-            check: "mailbox_findings".into(),
-            check_version: "1".into(),
-            tier: EvalTier::Acceptance,
-            kind: OutcomeKind::Passed,
-            provider_reason: None,
-            score_bp: Some(10_000),
-            weight: 1,
-            raw: serde_json::json!({"detail": "ok"}),
-            feedback: feedback.map(str::to_owned),
-            regrade_of: None,
-        }
-    }
+    use crate::eval::test_support::{completion, draft, identity, origin, rival_completion};
 
     #[tokio::test]
     async fn a_run_round_trips_and_can_only_be_invalidated() {
-        let access = access().await;
+        let fixture = crate::eval::test_support::HeldEvalFixture::new()
+            .await
+            .unwrap();
+        let access = &fixture.access;
+        let owner = fixture.node_did.as_str();
         let run = create_run(
-            &access,
+            access,
             "run-1",
-            OWNER,
-            "did:key:evaluator",
+            owner,
+            fixture.user_did.as_str(),
             &origin(EvalSplit::Validation),
         )
         .await
         .unwrap();
         assert!(run.invalidated.is_none());
-        invalidate_run(&access, OWNER, "run-1", OWNER, "grader bug")
-            .await
-            .unwrap();
-        let loaded = load_run(&access, OWNER, "run-1").await.unwrap().unwrap();
+        invalidate_run(
+            access,
+            owner,
+            "run-1",
+            fixture.user_did.as_str(),
+            "grader bug",
+        )
+        .await
+        .unwrap();
+        let loaded = load_run(access, owner, "run-1").await.unwrap().unwrap();
         assert_eq!(loaded.origin, run.origin);
         let first = loaded.invalidated.expect("the run is invalidated");
         assert_eq!(first.reason, "grader bug");
 
-        let error = invalidate_run(&access, OWNER, "run-1", "did:key:other", "second thoughts")
-            .await
-            .unwrap_err();
+        let error = invalidate_run(
+            access,
+            owner,
+            "run-1",
+            fixture.other_did.as_str(),
+            "second thoughts",
+        )
+        .await
+        .unwrap_err();
         assert!(already_invalidated(&error).is_some(), "{error:#}");
-        let again = load_run(&access, OWNER, "run-1").await.unwrap().unwrap();
+        let again = load_run(access, owner, "run-1").await.unwrap().unwrap();
         assert_eq!(
             again.invalidated.expect("still invalidated"),
             first,
@@ -759,32 +673,36 @@ mod tests {
 
     #[tokio::test]
     async fn a_trial_completion_is_written_once() {
-        let access = access().await;
+        let fixture = crate::eval::test_support::HeldEvalFixture::new()
+            .await
+            .unwrap();
+        let access = &fixture.access;
+        let owner = fixture.node_did.as_str();
         create_run(
-            &access,
+            access,
             "run-2",
-            OWNER,
-            "did:key:evaluator",
+            owner,
+            fixture.user_did.as_str(),
             &origin(EvalSplit::Validation),
         )
         .await
         .unwrap();
-        create_trial(&access, OWNER, &identity("run-2", "trial-1"))
+        create_trial(access, owner, &identity("run-2", "trial-1"))
             .await
             .unwrap();
-        let before = load_trials(&access, OWNER, "run-2").await.unwrap();
+        let before = load_trials(access, owner, "run-2").await.unwrap();
         assert!(
             before[0].completion.is_none(),
             "a null completion is a fact"
         );
-        complete_trial(&access, OWNER, "trial-1", &completion())
+        complete_trial(access, owner, "trial-1", &completion())
             .await
             .unwrap();
-        let error = complete_trial(&access, OWNER, "trial-1", &rival_completion())
+        let error = complete_trial(access, owner, "trial-1", &rival_completion())
             .await
             .unwrap_err();
         assert!(already_completed(&error), "{error:#}");
-        let after = load_trials(&access, OWNER, "run-2").await.unwrap();
+        let after = load_trials(access, owner, "run-2").await.unwrap();
         let stored = after[0].completion.as_ref().expect("the trial completed");
         assert_eq!(stored.usage.output_tokens, None, "missing usage stays null");
         assert_eq!(
@@ -796,21 +714,25 @@ mod tests {
 
     #[tokio::test]
     async fn empty_lists_and_absent_values_round_trip() {
-        let access = access().await;
+        let fixture = crate::eval::test_support::HeldEvalFixture::new()
+            .await
+            .unwrap();
+        let access = &fixture.access;
+        let owner = fixture.node_did.as_str();
         let mut sparse = origin(EvalSplit::HeldOut);
         sparse.case_ids = Vec::new();
         sparse.deadline_secs = None;
-        create_run(&access, "run-3", OWNER, "did:key:evaluator", &sparse)
+        create_run(access, "run-3", owner, fixture.user_did.as_str(), &sparse)
             .await
             .unwrap();
-        let loaded = load_run(&access, OWNER, "run-3").await.unwrap().unwrap();
+        let loaded = load_run(access, owner, "run-3").await.unwrap().unwrap();
         assert_eq!(loaded.origin, sparse);
         assert!(loaded.origin.case_ids.is_empty());
         assert_eq!(loaded.origin.deadline_secs, None);
 
         let mut bare = identity("run-3", "trial-3");
         bare.home_hint = None;
-        create_trial(&access, OWNER, &bare).await.unwrap();
+        create_trial(access, owner, &bare).await.unwrap();
         let nothing_ran = TrialCompletion {
             ended_at: "2026-09-21T00:00:00Z".into(),
             stages: Vec::new(),
@@ -822,10 +744,10 @@ mod tests {
             },
             evidence_digest: None,
         };
-        complete_trial(&access, OWNER, "trial-3", &nothing_ran)
+        complete_trial(access, owner, "trial-3", &nothing_ran)
             .await
             .unwrap();
-        let trials = load_trials(&access, OWNER, "run-3").await.unwrap();
+        let trials = load_trials(access, owner, "run-3").await.unwrap();
         assert_eq!(trials[0].identity, bare);
         assert_eq!(trials[0].identity.home_hint, None);
         assert_eq!(trials[0].completion.as_ref(), Some(&nothing_ran));
@@ -853,34 +775,42 @@ mod tests {
         let parsed: TrialCompletion = serde_json::from_value(bare).unwrap();
         assert_eq!(parsed.evidence_digest, None);
 
-        let access = access().await;
+        let fixture = crate::eval::test_support::HeldEvalFixture::new()
+            .await
+            .unwrap();
+        let access = &fixture.access;
+        let owner = fixture.node_did.as_str();
         create_run(
-            &access,
+            access,
             "run-9",
-            OWNER,
-            "did:key:evaluator",
+            owner,
+            fixture.user_did.as_str(),
             &origin(EvalSplit::Validation),
         )
         .await
         .unwrap();
-        create_trial(&access, OWNER, &identity("run-9", "trial-9"))
+        create_trial(access, owner, &identity("run-9", "trial-9"))
             .await
             .unwrap();
         let mut digested = completion();
         digested.evidence_digest = Some("sha256:evidence".into());
-        complete_trial(&access, OWNER, "trial-9", &digested)
+        complete_trial(access, owner, "trial-9", &digested)
             .await
             .unwrap();
-        let trials = load_trials(&access, OWNER, "run-9").await.unwrap();
+        let trials = load_trials(access, owner, "run-9").await.unwrap();
         assert_eq!(trials[0].completion.as_ref(), Some(&digested));
     }
 
     #[tokio::test]
     async fn feedback_is_refused_off_the_train_split() {
-        let access = access().await;
+        let fixture = crate::eval::test_support::HeldEvalFixture::new()
+            .await
+            .unwrap();
+        let access = &fixture.access;
+        let owner = fixture.node_did.as_str();
         let error = append_verdict(
-            &access,
-            OWNER,
+            access,
+            owner,
             EvalSplit::Validation,
             &draft("r", "t", "v1", Some("hint")),
         )
@@ -888,36 +818,40 @@ mod tests {
         .unwrap_err();
         assert!(feedback_off_train(&error), "{error:#}");
         append_verdict(
-            &access,
-            OWNER,
+            access,
+            owner,
             EvalSplit::Train,
             &draft("r", "t", "v2", Some("hint")),
         )
         .await
         .unwrap();
         append_verdict(
-            &access,
-            OWNER,
+            access,
+            owner,
             EvalSplit::Validation,
             &draft("r", "t", "v3", None),
         )
         .await
         .unwrap();
-        let verdicts = load_verdicts(&access, OWNER, "r").await.unwrap();
+        let verdicts = load_verdicts(access, owner, "r").await.unwrap();
         assert_eq!(verdicts.len(), 2);
     }
 
     #[tokio::test]
     async fn a_non_evidence_verdict_stores_a_null_score() {
-        let access = access().await;
+        let fixture = crate::eval::test_support::HeldEvalFixture::new()
+            .await
+            .unwrap();
+        let access = &fixture.access;
+        let owner = fixture.node_did.as_str();
         let mut outage = draft("r2", "t", "v1", None);
         outage.kind = OutcomeKind::Provider;
         outage.provider_reason = Some(ProviderReason::Unavailable);
         outage.score_bp = Some(10_000);
-        append_verdict(&access, OWNER, EvalSplit::Validation, &outage)
+        append_verdict(access, owner, EvalSplit::Validation, &outage)
             .await
             .unwrap();
-        let verdicts = load_verdicts(&access, OWNER, "r2").await.unwrap();
+        let verdicts = load_verdicts(access, owner, "r2").await.unwrap();
         assert_eq!(
             verdicts[0].score_bp, None,
             "nobody can average a fabricated score"
@@ -930,10 +864,14 @@ mod tests {
 
     #[tokio::test]
     async fn a_score_above_the_maximum_is_refused_and_writes_nothing() {
-        let access = access().await;
+        let fixture = crate::eval::test_support::HeldEvalFixture::new()
+            .await
+            .unwrap();
+        let access = &fixture.access;
+        let owner = fixture.node_did.as_str();
         let mut impossible = draft("r3", "t", "v1", None);
         impossible.score_bp = Some(10_001);
-        let error = append_verdict(&access, OWNER, EvalSplit::Validation, &impossible)
+        let error = append_verdict(access, owner, EvalSplit::Validation, &impossible)
             .await
             .unwrap_err();
         assert!(
@@ -941,28 +879,29 @@ mod tests {
             "the error names the offending score: {error:#}"
         );
         assert!(
-            load_verdicts(&access, OWNER, "r3")
-                .await
-                .unwrap()
-                .is_empty(),
+            load_verdicts(access, owner, "r3").await.unwrap().is_empty(),
             "a refused verdict writes nothing"
         );
         impossible.score_bp = Some(crate::eval::SCORE_BP_MAX);
-        append_verdict(&access, OWNER, EvalSplit::Validation, &impossible)
+        append_verdict(access, owner, EvalSplit::Validation, &impossible)
             .await
             .expect("a perfect score is still allowed");
     }
 
     #[tokio::test]
     async fn an_unknown_persisted_provider_reason_fails_the_read() {
-        let access = access().await;
+        let fixture = crate::eval::test_support::HeldEvalFixture::new()
+            .await
+            .unwrap();
+        let access = &fixture.access;
+        let owner = fixture.node_did.as_str();
         create(
-            &access,
+            access,
             "eval.test_unknown_reason",
             "EvalVerdict",
             serde_json::json!({
                 "verdict_id": "v-bogus",
-                "owner_node_did": OWNER,
+                "owner_node_did": owner,
                 "run_id": "r4",
                 "trial_id": "t",
                 "stage_id": "check",
@@ -979,7 +918,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let error = load_verdicts(&access, OWNER, "r4").await.unwrap_err();
+        let error = load_verdicts(access, owner, "r4").await.unwrap_err();
         let rendered = format!("{error:#}");
         assert!(
             rendered.contains("unknown provider_reason") && rendered.contains("bogus"),

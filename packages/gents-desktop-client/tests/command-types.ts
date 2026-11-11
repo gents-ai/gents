@@ -15,6 +15,32 @@ invoke("desktop_pack_plugin_bind", {
   request: { plugin: "example/model", profile: null },
 });
 
+invoke("desktop_join_requests_list", { nodeDid: "did:key:z6MkNode" });
+invoke("desktop_join_members_list", { nodeDid: "did:key:z6MkNode" });
+invoke("desktop_join_history_read", { nodeDid: "did:key:z6MkNode" });
+invoke("desktop_join_request_decide", {
+  request: {
+    nodeDid: "did:key:z6MkNode",
+    requestId: "request",
+    decision: { kind: "revoke" },
+  },
+});
+invoke("desktop_join_request_decide", {
+  request: {
+    nodeDid: "did:key:z6MkNode",
+    requestId: "request",
+    decision: { kind: "approve", leaseSeconds: 30 * 24 * 60 * 60 },
+  },
+});
+invoke("desktop_join_request_decide", {
+  request: {
+    nodeDid: "did:key:z6MkNode",
+    requestId: "request",
+    // @ts-expect-error An approval carries its lease.
+    decision: { kind: "approve" },
+  },
+});
+
 // @ts-expect-error The native inventory has no such command.
 invoke("desktop_missing_command");
 // @ts-expect-error A required native argument cannot be omitted.
@@ -45,15 +71,6 @@ invoke("desktop_session_archive", {
     expectedRevision: "9007199254740993",
   },
 });
-invoke("desktop_session_history", {
-  request: {
-    nodeDid: "node",
-    visibility: "archived",
-    query: null,
-    cursor: null,
-    limit: 30,
-  },
-});
 invoke("desktop_session_archive", {
   request: {
     nodeDid: "node",
@@ -65,7 +82,7 @@ invoke("desktop_session_archive", {
 });
 
 invoke("desktop_mailbox_observe", {
-  request: { clientDid: "reader", itemId: "question" },
+  request: { clientDid: "reader", nodeDid: "runtime", itemId: "question" },
 });
 // @ts-expect-error The exact reader identity is required for a mailbox observation.
 invoke("desktop_mailbox_observe", { request: { itemId: "question" } });

@@ -365,7 +365,7 @@ fn agent_targets(name: &str) -> Vec<crate::documents::AgentTargetDocument> {
         target_id: format!("{name}-target"),
         node_did: "did:key:zTest".to_string(),
         target_node_did: "did:key:zTest".to_string(),
-        agent_id: name.to_string(),
+        agent_did: name.to_string(),
         name: name.to_string(),
         description: None,
         tags: Vec::new(),

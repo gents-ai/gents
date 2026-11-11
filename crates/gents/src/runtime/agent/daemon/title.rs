@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::output::TerminalOutput;
 use gents_protocol::request_admission::RequestPurpose;
 use tokio::sync::watch;
@@ -13,8 +13,8 @@ use crate::request::lifecycle::{
     ClaimOutcome, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult,
 };
 use crate::request::streaming::DefraStreamWriter;
-use crate::request::watcher::AgentRequest;
 use crate::session;
+use gents_protocol::row::AgentRequest;
 
 pub(super) mod review;
 
@@ -85,6 +85,7 @@ where
         }
         let node = Arc::clone(&self.node);
         let parent = request.clone();
+        let agent_identity = self.agent_config.agent_identity.clone();
         let Ok(service_work) = self
             .background_execution_registry
             .service_admission()
@@ -95,8 +96,13 @@ where
         tokio::spawn(Box::pin(async move {
             let _service_work = service_work;
             let result: Result<()> = async {
+                let access = crate::ConfigAccess::local_managed_agent(
+                    node.clone(),
+                    identity::Did::new(&parent.agent_did)?,
+                    agent_identity.as_ref(),
+                )?;
                 if !session::session_needs_generated_title(
-                    node.as_ref(),
+                    &access,
                     &parent.node_did,
                     parent.requester_did.as_deref(),
                     &parent.session_id,
@@ -105,12 +111,16 @@ where
                 {
                     return Ok(());
                 }
+                let signer = agent_identity
+                    .managed_agent_signer()
+                    .context("title request requires a managed Agent signer")?;
                 crate::request::lifecycle::materialize::write_pending_auxiliary_request(
                     &node,
                     &parent,
                     RequestPurpose::TitleAudit,
                     parent.content.clone(),
                     None,
+                    &signer,
                 )
                 .await?;
                 Ok(())
@@ -229,10 +239,10 @@ where
         let Ok(_service_work) = self.service_admission.admit() else {
             return Ok(None);
         };
-        let Some(request) = super::verify_request_at_claim_boundary(
+        let Some((request, client_claim)) = super::verify_request_at_claim_boundary(
             &self.verifier,
             Arc::clone(&self.node),
-            &self.agent_config.agent_id,
+            self.agent_config.agent_identity.as_ref(),
             request,
         )
         .await
@@ -245,13 +255,13 @@ where
         .context("admitted auxiliary request is missing execution origin")?;
         let mut lifecycle = RequestLifecycle::new_with_execution_binding(
             Arc::clone(&self.node),
-            &self.agent_config.agent_id,
-            self.agent_config.node_did(),
             request.clone(),
             self.agent_config.deadline_duration.as_secs(),
             origin,
             self.agent_config.backend_id.clone().unwrap_or_default(),
         );
+        lifecycle.bind_managed_agent(self.agent_config.agent_identity.as_ref())?;
+        lifecycle.set_client_claim_admission(client_claim);
         lifecycle.set_execution_lease_duration(self.agent_config.stream_liveness_timeout);
         lifecycle.set_configured_max_total_tokens(self.agent_config.max_total_tokens);
         match lifecycle.claim_with_identity().await {
@@ -265,16 +275,17 @@ where
             }
             Err(error) => return Err(error.context("claiming auxiliary request")),
         }
-        let writer = DefraStreamWriter::new(
+        let writer = DefraStreamWriter::new_managed(
             Arc::clone(&self.node),
-            self.agent_config.node_did(),
+            self.agent_config.agent_identity.as_ref(),
             Duration::from_millis(self.agent_config.stream_batch_ms),
-        );
+        )?;
         let title_request = lifecycle.request().clone();
         let (interrupt_tx, interrupt_rx) = watch::channel(None);
         let _observer = tokio_util::task::AbortOnDropHandle::new(
             crate::request::interrupt::spawn_request_interrupt_observer(
                 self.node.clone(),
+                lifecycle.access()?,
                 title_request.doc_id.clone(),
                 interrupt_tx,
                 shutdown.clone(),
@@ -335,8 +346,13 @@ where
         }
         if terminal == TerminalizeResult::Won {
             if let Some((title, parent_requester_did)) = title {
+                let access = crate::ConfigAccess::local_managed_agent(
+                    self.node.clone(),
+                    identity::Did::new(&title_request.agent_did)?,
+                    self.agent_config.agent_identity.as_ref(),
+                )?;
                 if let Err(error) = session::update_session_title_with_source(
-                    &self.node,
+                    &access,
                     &title_request.node_did,
                     parent_requester_did.as_deref(),
                     &title_request.session_id,
@@ -363,9 +379,14 @@ where
         mut interrupt_rx: watch::Receiver<Option<crate::request::interrupt::InterruptIntent>>,
         review: Option<review::ReviewExecution>,
     ) -> Result<AuxiliaryResult> {
+        let parent_access = crate::ConfigAccess::local_managed_agent(
+            self.node.clone(),
+            identity::Did::new(&request.agent_did)?,
+            self.agent_config.agent_identity.as_ref(),
+        )?;
         let Some(parent) = super::request::prepare_unless_interrupted(
             &mut interrupt_rx,
-            load_auxiliary_parent(&self.node, &request),
+            load_auxiliary_parent(&parent_access, &request),
         )
         .await
         else {
@@ -399,7 +420,7 @@ where
             ));
         let admission_context = AdmissionCallContext::for_request(
             &request,
-            &self.agent_config.agent_id,
+            &self.agent_config.agent_did,
             self.agent_config.backend_id.clone().unwrap_or_default(),
         );
         admission::scope_request(
@@ -412,8 +433,13 @@ where
                         .await;
                 }
                 let preparation = async {
+                    let access = crate::ConfigAccess::local_managed_agent(
+                        self.node.clone(),
+                        identity::Did::new(&request.agent_did)?,
+                        self.agent_config.agent_identity.as_ref(),
+                    )?;
                     if !session::session_needs_generated_title(
-                        self.node.as_ref(),
+                        &access,
                         &request.node_did,
                         parent.requester_did.as_deref(),
                         &request.session_id,
@@ -423,7 +449,7 @@ where
                         return Ok(None);
                     }
                     let recent = session::load_recent_titles_for_agent(
-                        self.node.as_ref(),
+                        &access,
                         &request.node_did,
                         &request.session_id,
                         RECENT_TITLE_LIMIT,
@@ -458,10 +484,14 @@ where
                     config.max_turns = 1;
                     config.retry_policy =
                         crate::runtime::agent::completion_retry::CompletionRetryPolicy::no_retry();
+                    let access = crate::store::config_client::ConfigAccess::local_managed_agent(
+                        self.node.clone(),
+                        identity::Did::new(request.agent_did.clone())?,
+                        self.agent_config.agent_identity.as_ref(),
+                    )?;
                     config.aggregate_token_budget =
                         crate::turn::completion_factory::aggregate_token_budget_for_request(
-                            self.node.as_ref(),
-                            &request,
+                            &access, &request,
                         )
                         .await?;
                     Ok::<_, anyhow::Error>(Some((prompt, config, source)))
@@ -574,29 +604,38 @@ where
     }
 }
 
+/// The parent receipt is read as the auxiliary request's Agent: DefraDB ACP
+/// decides visibility, and a denied read is not retried as the node.
 async fn load_auxiliary_parent(
-    node: &EmbeddedNode,
+    access: &crate::ConfigAccess,
     request: &AgentRequest,
 ) -> Result<AgentRequest> {
     let parent_doc_id = request
         .caused_by_parent_request_doc_id
         .as_deref()
         .context("auxiliary request lacks parent document")?;
-    let escaped = crate::store::graphql::escape_graphql_string(parent_doc_id);
-    let query = format!(
-        "{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{escaped}\" }} }}, limit: 1) {{ {} }} }}",
-        crate::request::admission::SIGNED_REQUEST_FIELDS
-    );
-    let response = crate::store::graphql::graphql_with_transaction_retry(
-        node,
-        &query,
-        "load auxiliary parent receipt",
-    )
-    .await?;
+    let query = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::owned(
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
+        ))
+        .filter(Filter::eq(fields::DOC_ID, parent_doc_id))
+        .limit(1)
+        .render()
+    };
+    let response = access
+        .read(&query)
+        .await
+        .context("load auxiliary parent receipt")?;
+    let value = response
+        .pointer("/data/AgentRequest/0")
+        .cloned()
+        .context("request parent request disappeared")?;
     let row: gents_protocol::row::AgentRequestRow =
-        crate::store::graphql::first_row(&response, "AgentRequest")?
-            .context("request parent request disappeared")?;
-    crate::request::admission::verify_request_receipt_signature(&row)?;
+        serde_json::from_value(value).context("decode auxiliary parent receipt")?;
+    crate::store::identity::request_receipt::verify_request_receipt_signature(&row)?;
     let parent = AgentRequest::try_from(row)?;
     anyhow::ensure!(
         parent.purpose == RequestPurpose::Normal
@@ -604,7 +643,7 @@ async fn load_auxiliary_parent(
             && request.caused_by_parent_request_id.as_deref() == Some(parent.request_id.as_str())
             && parent.node_did == request.node_did
             && parent.session_id == request.session_id
-            && parent.agent_id == request.agent_id,
+            && parent.agent_did == request.agent_did,
         "request parent receipt does not match signed provenance"
     );
     Ok(parent)

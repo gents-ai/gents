@@ -1,7 +1,7 @@
 use std::io::Write;
 
 use anyhow::Result;
-use gents::eval::report::{
+use gents_eval::report::{
     by_check, by_stage, case_view, compare as compare_reports, load_report, CompareOptions,
     EvalReport, PolicyOutcome,
 };
@@ -85,7 +85,7 @@ where
 
 fn with_policy<'a, T>(
     body: &'a T,
-    comparison: &'a gents::eval::report::Comparison,
+    comparison: &'a gents_eval::report::Comparison,
 ) -> WithPolicy<'a, T>
 where
     T: Serialize,
@@ -187,9 +187,9 @@ mod tests {
 
         let path = fixture.ctx.home_dir.join("policy.json");
         std::fs::create_dir_all(&fixture.ctx.home_dir).unwrap();
-        let policy = gents::eval::optimization::PolicyV2 {
+        let policy = gents_eval::optimization::PolicyV2 {
             min_pairs: 1,
-            ..gents::eval::optimization::PolicyV2::uncalibrated()
+            ..gents_eval::optimization::PolicyV2::uncalibrated()
         };
         std::fs::write(&path, serde_json::to_vec(&policy).unwrap()).unwrap();
         let path_arg = path.display().to_string();
@@ -212,18 +212,18 @@ mod tests {
             .await;
         let ctx = &fixture.ctx;
         let report =
-            gents::eval::report::load_report(&ctx.access, &ctx.owner, &ctx.runs_dir(), "r1")
+            gents_eval::report::load_report(&ctx.access, &ctx.owner, &ctx.runs_dir(), "r1")
                 .await
                 .unwrap();
-        let mut comparison = gents::eval::report::compare(
+        let mut comparison = gents_eval::report::compare(
             &report,
             &report,
             "baseline",
             "candidate",
-            &gents::eval::report::CompareOptions::default(),
+            &gents_eval::report::CompareOptions::default(),
         )
         .unwrap()
-        .with_policy(&gents::eval::optimization::PolicyV2::uncalibrated());
+        .with_policy(&gents_eval::optimization::PolicyV2::uncalibrated());
         let gates = &mut comparison.policy.as_mut().unwrap().gates;
         gates.min_effect = None;
         gates.cost_ok = None;
@@ -336,7 +336,7 @@ mod tests {
             super::super::render::breakdown_table(&breakdown, &mut out).unwrap();
             assert_eq!(String::from_utf8(out).unwrap(), format!("\n{expected}\n"));
         }
-        let help = Cli::try_parse_from(["gents", "eval", "--help"])
+        let help = Cli::try_parse_from(["gents", "utils", "eval", "--help"])
             .err()
             .map(|error| error.to_string())
             .unwrap_or_default();
@@ -348,7 +348,7 @@ mod tests {
         let missing = eval(&fixture, &with(&["--case", "zzz"])).await.unwrap_err();
         assert_eq!(missing.to_string(), "the comparison has no case \"zzz\"");
         assert!(Cli::try_parse_from([
-            "gents", "eval", "compare", "r1", "r1", "--by", "check", "--case", "val-a"
+            "gents", "utils", "eval", "compare", "r1", "r1", "--by", "check", "--case", "val-a"
         ])
         .is_err());
     }

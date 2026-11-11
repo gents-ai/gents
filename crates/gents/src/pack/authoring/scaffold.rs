@@ -289,8 +289,8 @@ fn ux_plugin_source(names: &Names) -> (String, String) {
         r#"// {title}: a UX plugin the desktop loads from this pack into a frame of
 // its own. Plain ESM, no build step; only `@gents/ux-sdk`, `react` and
 // `react/jsx-runtime` may be imported. Everything it does goes through
-// `ctx`, so disabling the plugin undoes all of it. Run `gents pack check`
-// to lint, `gents ux module` to see what the desktop receives. To read and
+// `ctx`, so disabling the plugin undoes all of it. Run `gents config pack check`
+// to lint, `gents config pack ux module` to see what the desktop receives. To read and
 // write the node's documents, declare a surface under `ux[].data` in the
 // manifest and use `useQuery` / `useWrite` from the SDK.
 import {{ NAV_AREA, PLUGIN_PAGE_AREA, TRANSCRIPT_DIRECTIVE_AREA, Group, Row }} from '@gents/ux-sdk'
@@ -400,7 +400,7 @@ pub fn echo_source(entry: &str) -> String {
             if (fwrite(buffer, 1, n, stdout) != n) return 1;\n    }\n    return ferror(stdin) ? 1 : 0;\n}\n",
         "source/main.cpp" => "#include <iostream>\n\nint main() {\n    std::cout << std::cin.rdbuf();\n    \
             return std::cout.good() ? 0 : 1;\n}\n",
-        // `gents pack build` wraps a JS or TS source in Afterburner's stdin/stdout
+        // `gents config pack build` wraps a JS or TS source in Afterburner's stdin/stdout
         // harness, which reads the input and calls `module.exports(input)`; the
         // source itself touches no stdin or stdout.
         "source/main.js" => "module.exports = (input) => input;\n",
@@ -418,7 +418,7 @@ fn config(names: &Names, template: Template) -> Value {
     let mut config = json!({
         "node": {},
         "agents": [{
-            "agent_id": agent,
+            "agent_slot": agent,
             "display_name": format!("{} worker", names.title),
             "context_id": format!("{kebab}-worker-context"),
             "inference_profile_id": "gents:inference-slot:worker",
@@ -436,7 +436,7 @@ fn config(names: &Names, template: Template) -> Value {
         "tasks": [{
             "task_id": format!("{kebab}-worker-task"),
             "display_name": format!("{} worker task", names.title),
-            "agent_id": agent,
+            "agent_did": crate::pack::agent_slot_reference(&agent),
             "prompt_template": "./tasks/worker_task/prompt.md",
         }],
     });
@@ -470,7 +470,7 @@ fn workflow_config(names: &Names) -> Value {
     json!({
         "node": {},
         "agents": [{
-            "agent_id": worker,
+            "agent_slot": worker,
             "display_name": format!("{} worker", names.title),
             "description": "Does one read-only task a workflow step gives it and answers in the shape asked.",
             "context_id": format!("{worker}-context"),
@@ -505,7 +505,7 @@ fn workflow_config(names: &Names) -> Value {
             },
         ],
         "agent_targets": [{
-            "agent_id": worker,
+            "agent_did": crate::pack::agent_slot_reference(&worker),
             "name": worker,
             "target_id": worker,
             "target_node_did": "${GENTS_PACK_NODE_DID}",
@@ -604,7 +604,7 @@ fn workflow_fixture(names: &Names) -> Value {
             "protocol": 1,
             "job": {"row_doc_id": "row-1", "chain_root_doc_id": "row-1", "chain": ["row-1"], "handle": ""},
             "caller": {"session_id": "session-1", "request_id": "request-1", "request_doc_id": "doc-1",
-                       "tool_call_id": "call_1", "node_did": "did:key:z6Mknode", "agent_id": "caller",
+                       "tool_call_id": "call_1", "node_did": "did:key:z6Mknode", "agent_did": "caller",
                        "request_hop": 0, "cwd": "/work"},
             "argv": [],
             "args": {"task": task},
@@ -654,18 +654,18 @@ fn readme(names: &Names, template: Template) -> String {
         Template::Workflow => (
             "ships one workflow: a job plugin that spawns the pack's worker and reads its reply",
             "See `plugins/<name>/TOOL.md` for the input and output. \
-             Prove it offline with `gents pack build` and `gents pack test`; ship it with `gents pack install --grant-authority` and \
-             `gents pack wire <namespace>/<name> --agent <agent> --targets-from <namespace>/<name>`.",
+             Prove it offline with `gents config pack build` and `gents config pack test`; ship it with `gents config pack install --grant-authority` and \
+             `gents config pack wire <namespace>/<name> --agent <agent> --targets-from <namespace>/<name>`.",
         ),
     };
     format!(
         "# {title}\n\n{title} {what}.\n\n\
-         ## Installation\n\n```sh\ngents pack install ./{name}\n```\n\n\
+         ## Installation\n\n```sh\ngents config pack install ./{name}\n```\n\n\
          ## Bindings and prerequisites\n\nBind the `worker` inference slot when installing, if the pack declares one.\n\n\
          ## Authority\n\nNo host files, commands or network access.\n\n\
          ## Inputs and outputs\n\n{io}\n\n\
          ## Completion and failure\n\nDescribe what finishing and failing look like.\n\n\
-         ## Validation\n\n```sh\ngents pack check ./{name}\n```\n\n\
+         ## Validation\n\n```sh\ngents config pack check ./{name}\n```\n\n\
          ## Operational history\n\nNone yet.\n",
         title = names.title,
         name = names.name,
@@ -817,7 +817,7 @@ mod tests {
         let check = super::super::check::check_dir(&dir).await;
         assert_eq!(
             check.problems,
-            ["build the plugins (demo_flow) with gents pack build before checking its configuration"],
+            ["build the plugins (demo_flow) with gents config pack build before checking its configuration"],
             "the only problem is the unbuilt artifact"
         );
     }
@@ -855,7 +855,7 @@ mod tests {
         let check = super::super::check::check_dir(&dir).await;
         assert_eq!(
             check.problems,
-            ["build the plugins (demo_flow) with gents pack build before checking its configuration"],
+            ["build the plugins (demo_flow) with gents config pack build before checking its configuration"],
         );
     }
 

@@ -6,7 +6,7 @@ pub(crate) mod apply;
 pub(crate) mod backend;
 pub(crate) mod behavior;
 pub(crate) mod binding;
-mod crud;
+pub(crate) mod crud;
 pub(crate) mod diff;
 pub(crate) mod export;
 pub(crate) mod profile;
@@ -34,6 +34,12 @@ pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
             AgentCommand::Create(args) => behavior::agent_create(args).await,
             AgentCommand::Clone(args) => behavior::agent_clone(args).await,
             AgentCommand::Disable(args) => behavior::agent_disable(args).await,
+            AgentCommand::GrantSelfConfig(args) => {
+                behavior::agent_self_config_permission(args, true).await
+            }
+            AgentCommand::RevokeSelfConfig(args) => {
+                behavior::agent_self_config_permission(args, false).await
+            }
             AgentCommand::List(args) => crud::config_list(crud::AGENT_SPEC, args).await,
             AgentCommand::Show(args) => behavior::agent_show(args).await,
             AgentCommand::Rm(args) => crud::config_rm(crud::AGENT_SPEC, args).await,
@@ -44,6 +50,7 @@ pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
             ToolsConfigCommand::Show(args) => crud::config_show(crud::TOOLS_SPEC, args).await,
             ToolsConfigCommand::Rm(args) => crud::config_rm(crud::TOOLS_SPEC, args).await,
             ToolsConfigCommand::AgentTargetEntry(args) => tools::agent_target_entry_command(args),
+            ToolsConfigCommand::Explain(command) => crate::commands::tools::dispatch(command).await,
         },
         ConfigCommand::Profile { command } => match command {
             InferenceProfileCommand::Set(args) => profile::inference_profile_set(args).await,
@@ -63,6 +70,7 @@ pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
         ConfigCommand::Mcp { command } => match command {
             ConfigMcpCommand::List(args) => crud::config_list(crud::MCP_SPEC, args).await,
             ConfigMcpCommand::Show(args) => crud::config_show(crud::MCP_SPEC, args).await,
+            ConfigMcpCommand::Service(command) => crate::commands::mcp::dispatch(command).await,
         },
         ConfigCommand::Skill { command } => match command {
             SkillCommand::Add(args) => skill::skill_add(args).await,
@@ -76,10 +84,17 @@ pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
         },
         ConfigCommand::WorkspaceRoot { command } => match command {
             WorkspaceRootCommand::Set(args) => workspace_root::workspace_root_set(args).await,
+            WorkspaceRootCommand::GrantReader(args) => {
+                workspace_root::workspace_root_grant_reader(args).await
+            }
+            WorkspaceRootCommand::RevokeReader(args) => {
+                workspace_root::workspace_root_revoke_reader(args).await
+            }
             WorkspaceRootCommand::List(args) => workspace_root::workspace_root_list(args).await,
             WorkspaceRootCommand::Show(args) => workspace_root::workspace_root_show(args).await,
             WorkspaceRootCommand::Rm(args) => workspace_root::workspace_root_rm(args).await,
         },
         ConfigCommand::Export(args) => export::config_export(args).await,
+        ConfigCommand::Pack { command } => crate::commands::pack::dispatch(command).await,
     }
 }

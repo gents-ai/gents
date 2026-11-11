@@ -13,7 +13,6 @@ use super::bootstrap::DesktopBootstrapSummary;
 pub struct P2PHealthView {
     pub status: String,
     pub connected_peer_count: usize,
-    pub replicator_count: usize,
     pub consecutive_failures: u32,
     pub last_error: Option<String>,
     pub last_ok_at: Option<String>,
@@ -24,24 +23,11 @@ pub struct P2PHealthView {
 #[serde(rename_all = "camelCase")]
 pub struct SyncHealthView {
     pub state: String,
+    pub cause: Option<String>,
+    pub next_action: Option<String>,
     pub last_error: Option<String>,
     pub connected_peer_count: usize,
     pub activation_error_count: usize,
-    pub pending_dag_count: Option<usize>,
-    pub persisted_pending_dag_count: Option<usize>,
-    pub push_retry_marker_count: Option<usize>,
-    pub exhausted_fetch_count: Option<u64>,
-    pub quarantined_dag_count: Option<usize>,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct PairingCollectionStatusView {
-    pub collection_id: String,
-    pub pairing_retry_count: u32,
-    pub last_retry_at: Option<String>,
-    pub last_retry_error_class: Option<String>,
-    pub stuck_since: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -90,14 +76,14 @@ pub enum AgentReadinessUnknownReasonView {
 )]
 pub enum AgentReadinessStatusView {
     Ready {
-        agent_id: String,
+        agent_did: String,
     },
     Unavailable {
-        agent_id: String,
+        agent_did: String,
         reason: AgentUnavailableReasonView,
     },
     Unknown {
-        agent_id: String,
+        agent_did: String,
         reason: AgentReadinessUnknownReasonView,
     },
 }
@@ -138,7 +124,7 @@ impl Default for NodeReadinessView {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentEnvironmentView {
-    pub agent_id: String,
+    pub agent_did: String,
     pub display_name: String,
     pub enabled: bool,
     pub is_default: bool,
@@ -166,7 +152,7 @@ pub struct TaskView {
     pub task_id: String,
     pub name: Option<String>,
     pub description: Option<String>,
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     pub prompt_template: Option<String>,
     pub goal_objective_template: Option<String>,
     pub goal_token_budget: Option<i64>,
@@ -197,7 +183,7 @@ pub struct TaskRunSummaryView {
     pub node_did: String,
     pub requester_did: Option<String>,
     pub session_id: Option<String>,
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     pub lifecycle_state: Option<gents_protocol::request_lifecycle::RequestLifecycleState>,
     pub execution_origin: Option<String>,
     pub caused_by_trigger_id: Option<String>,
@@ -234,6 +220,14 @@ pub struct TriggerView {
     pub fire_count: Option<i64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskOriginView {
+    pub node_did: String,
+    pub task_id: String,
+    pub task_name: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionSummary {
@@ -255,10 +249,13 @@ pub struct SessionSummary {
     #[ts(optional = nullable)]
     pub reply_preview: Option<String>,
     pub status: Option<String>,
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     pub latest_request_id: Option<String>,
     pub task_id: Option<String>,
     pub task_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub task_origin: Option<TaskOriginView>,
     pub trigger_id: Option<String>,
     pub trigger_kind: Option<String>,
     pub created_at: Option<String>,
@@ -304,7 +301,7 @@ pub struct MailboxItemView {
     pub request_id: Option<String>,
     pub cause_doc_id: Option<String>,
     pub target_node_did: String,
-    pub target_agent_id: String,
+    pub target_agent_did: String,
     pub expected_collection: Option<String>,
     pub parent_item_id: Option<String>,
     pub deadline_at: Option<String>,
@@ -357,7 +354,7 @@ impl From<&MailboxItemRow> for MailboxItemView {
             request_id: row.request_id.clone(),
             cause_doc_id: row.cause_doc_id.clone(),
             target_node_did: row.target_node_did.clone(),
-            target_agent_id: row.target_agent_id.clone(),
+            target_agent_did: row.target_agent_did.clone(),
             expected_collection: row.expected_collection.clone(),
             parent_item_id: row.parent_item_id.clone(),
             deadline_at: row.deadline_at.clone(),
@@ -366,23 +363,25 @@ impl From<&MailboxItemRow> for MailboxItemView {
     }
 }
 
+/// Why the native chat write fence refuses this deployment, with the next
+/// action that reopens it (`ClientChatReadiness.Cause` and `nextAction`).
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ClientRouteStatusView {
-    pub route_id: String,
-    pub direction: String,
-    pub directory_id: String,
-    pub transport_peer_id: Option<String>,
-    pub address: Option<String>,
-    pub template: Option<String>,
-    pub desired: bool,
-    pub applied: bool,
-    pub live_match: bool,
-    pub filter_summary: String,
-    pub last_error: Option<String>,
-    pub retry_count: u32,
-    pub last_retry_at: Option<String>,
-    pub last_retry_error_class: Option<String>,
+pub struct ChatRefusalView {
+    pub cause: String,
+    pub next_action: String,
+    pub detail: String,
+}
+
+impl From<gents_desktop_core::client::ChatRouteCause> for ChatRefusalView {
+    fn from(cause: gents_desktop_core::client::ChatRouteCause) -> Self {
+        let action = cause.next_action();
+        Self {
+            cause: cause.token().to_owned(),
+            next_action: action.token().to_owned(),
+            detail: action.description().to_owned(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -395,10 +394,24 @@ pub struct DeploymentView {
     pub source: Option<String>,
     pub graphql: Option<String>,
     pub dial_succeeded: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub runtime_connection: Option<String>,
     pub chat_safe: bool,
-    pub routes: Vec<ClientRouteStatusView>,
-    #[serde(default)]
-    pub pairing: Vec<PairingCollectionStatusView>,
+    pub chat_refusal: Option<ChatRefusalView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub pairing_ready: Option<bool>,
+    /// When this desktop's enrollment authorization on a joined node runs
+    /// out, after which reconciliation removes the node from this desktop;
+    /// none for a node this desktop reaches without enrollment. The node's
+    /// ACP grant carries no expiry of its own.
+    pub lease_expires_at: Option<String>,
+    /// Whether this desktop holds the node's signed operator endpoint, the
+    /// only path for its writes and operator reads (a fork, account
+    /// recovery). A joined node offers it once it advertises one; the node's
+    /// ACP still decides each signed request.
+    pub operator_access: bool,
     pub last_error: Option<String>,
     pub node: NodeView,
     pub node_config: Option<Node>,
@@ -430,23 +443,44 @@ pub struct DeploymentView {
 #[serde(rename_all = "camelCase")]
 pub struct DesktopRuntimeSnapshot {
     pub client_did: String,
-    pub local_peer_id: String,
-    pub listen_addresses: Vec<String>,
     pub p2p_health: P2PHealthView,
-    pub sync_health: Option<SyncHealthView>,
+    pub sync_health: SyncHealthView,
     pub enrollment_requests: Option<Vec<EnrollmentRequestView>>,
-    pub bootstrap_errors: Vec<String>,
-    pub last_mutation_error: Option<String>,
-    pub focused_request_id: Option<String>,
-    pub configured_peer_count: usize,
-    pub dialed_peer_count: usize,
-    pub peer_issue_count: usize,
     pub row_count: usize,
     pub approx_serialized_bytes: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub operator_config_authoritative_node_dids: Option<Vec<String>>,
     pub deployments: Vec<DeploymentView>,
+    pub ended_access: Vec<EndedAccessView>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct EndedAccessView {
+    pub node_did: String,
+    pub label: String,
+    /// "expired" when the lease ran out, "revoked" when the node withdrew it
+    /// before then.
+    pub reason: String,
+    pub ended_at: String,
+    pub lease_expires_at: String,
+}
+
+impl From<gents_desktop_core::client::EndedAccess> for EndedAccessView {
+    fn from(ended: gents_desktop_core::client::EndedAccess) -> Self {
+        Self {
+            node_did: ended.node_did,
+            label: ended.label,
+            reason: match ended.reason {
+                gents_desktop_core::client::EndedAccessReason::Expired => "expired",
+                gents_desktop_core::client::EndedAccessReason::Revoked => "revoked",
+            }
+            .to_owned(),
+            ended_at: ended.ended_at,
+            lease_expires_at: ended.lease_expires_at,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -524,38 +558,4 @@ impl PeerRemoveResponse {
             mutation: mutation.into(),
         }
     }
-}
-
-#[derive(Debug, Clone, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct NetworkStatusView {
-    pub local_peer_id: Option<String>,
-    pub local_peer_id_error: Option<String>,
-    pub listen_addresses: Vec<String>,
-    pub listen_addresses_error: Option<String>,
-    pub connected_peers: Vec<String>,
-    pub connected_peers_error: Option<String>,
-    pub replicators: Vec<NetworkReplicatorView>,
-    pub replicators_error: Option<String>,
-    pub saved_peers: Vec<NetworkSavedPeerView>,
-}
-
-#[derive(Debug, Clone, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct NetworkReplicatorView {
-    pub peer_id: Option<String>,
-    pub address: Option<String>,
-    pub collections: Vec<String>,
-    pub status: Option<u8>,
-    pub last_status_change: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct NetworkSavedPeerView {
-    pub peer_id: String,
-    pub label: String,
-    pub addr: String,
-    pub node_did: String,
-    pub source: Option<String>,
 }

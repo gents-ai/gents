@@ -44,6 +44,9 @@ mod retained_record_warnings;
 #[path = "tests/session_message_commit.rs"]
 mod session_message_commit;
 
+#[path = "tests/delegated_finality_tests.rs"]
+mod delegated_finality_tests;
+
 #[path = "tests/r4c_private_support.rs"]
 mod r4c_private_support;
 
@@ -73,6 +76,38 @@ fn hook_execution_fixture_key(hook: &DefraSessionHook, request_id: &str) -> Stri
     format!("{:p}:{request_id}", Arc::as_ptr(&hook.node))
 }
 
+async fn hook_managed_identity(hook: &DefraSessionHook, request_id: &str) -> Arc<dyn NodeIdentity> {
+    let fixtures = hook_execution_fixtures().lock().await;
+    let fixture = fixtures
+        .get(&hook_execution_fixture_key(hook, request_id))
+        .expect("owned hook fixture");
+    Arc::new(
+        fixture
+            .lifecycle
+            .managed_agent_signer()
+            .expect("fixture retains managed Agent signer"),
+    )
+}
+
+async fn bind_managed_hook_request(
+    hook: &mut DefraSessionHook,
+    request_id: &str,
+    root: &dyn NodeIdentity,
+    deadline: chrono::DateTime<chrono::Utc>,
+) {
+    let session = hook.session_id().await.expect("hook session");
+    let lifecycle = crate::tools::call::lifecycle::admission_fixture::claimed_signed_request(
+        &hook.node, request_id, &session, root, None,
+    )
+    .await;
+    let signer = lifecycle
+        .managed_agent_signer()
+        .expect("fixture retains managed Agent signer");
+    hook.actor = Some(identity::Did::new(signer.did()).unwrap());
+    hook.agent_signer = Some(signer);
+    bind_claimed_hook_request(hook, lifecycle, deadline).await;
+}
+
 #[tokio::test]
 async fn client_output_snapshot_reads_full_retained_window_without_widening_model_budget() {
     let dir = tempfile::tempdir().unwrap();
@@ -85,15 +120,14 @@ async fn client_output_snapshot_reads_full_retained_window_without_widening_mode
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let registry = BackgroundExecutionRegistry::default();
-    let hook =
-        DefraSessionHook::with_identity(node.clone(), "did:test:owner", FailurePolicy::default())
-            .with_background_execution_registry(registry.clone());
-    let session_id = hook.session_id().await.unwrap();
-    crate::session::create_session_with_agent_id(&node, &session_id, "did:test:owner", "general")
+    let hook = signed_hook(&node, FailurePolicy::default())
         .await
-        .unwrap();
+        .with_background_execution_registry(registry.clone());
+    let session_id = hook.session_id().await.unwrap();
+    let access = hook.actor_access().unwrap();
+    let node_did = hook.node_did.clone();
+    let requester = hook.actor.clone().unwrap().to_string();
     bind_interruptible_request(
-        &node,
         &hook,
         "request",
         &session_id,
@@ -106,7 +140,7 @@ async fn client_output_snapshot_reads_full_retained_window_without_widening_mode
         "bash",
         "{}",
         Utc::now() + chrono::Duration::minutes(5),
-        crate::tools::call::lifecycle::AwaitMode::Background,
+        gents_protocol::tool_call::AwaitMode::Background,
     )
     .await;
     lifecycle.start_running().await.unwrap();
@@ -122,7 +156,13 @@ async fn client_output_snapshot_reads_full_retained_window_without_widening_mode
         )
         .await;
     let snapshot = registry
-        .read_process_output_snapshot(&node, &session_id, "did:test:owner", None, "large-output")
+        .read_process_output_snapshot(
+            &access,
+            &session_id,
+            &node_did,
+            Some(&requester),
+            "large-output",
+        )
         .await
         .unwrap()
         .unwrap();
@@ -131,9 +171,9 @@ async fn client_output_snapshot_reads_full_retained_window_without_widening_mode
     assert_eq!(snapshot["has_more"], false);
     assert!(registry
         .read_process_output_snapshot(
-            &node,
+            &access,
             &session_id,
-            "did:test:owner",
+            &node_did,
             Some("foreign"),
             "large-output"
         )
@@ -142,10 +182,10 @@ async fn client_output_snapshot_reads_full_retained_window_without_widening_mode
         .is_none());
     assert!(registry
         .read_process_output_snapshot(
-            &node,
+            &access,
             "wrong-session",
-            "did:test:owner",
-            None,
+            &node_did,
+            Some(&requester),
             "large-output"
         )
         .await
@@ -154,11 +194,11 @@ async fn client_output_snapshot_reads_full_retained_window_without_widening_mode
     let scope = crate::tools::background::status::ProcessControlScope {
         request_id: "next".into(),
         session_id: session_id.clone(),
-        node_did: "did:test:owner".into(),
-        requester_did: None,
+        node_did: node_did.clone(),
+        requester_did: Some(requester.clone()),
     };
-    let page = crate::tools::background::status::handle_read_tool_output(
-        &node,
+    let page = crate::tools::background::status::handle_read_tool_output_with_access(
+        &access,
         &scope,
         &registry.live_outputs.registry,
         crate::tools::background::status::r4c_args::ReadToolOutputArgs {
@@ -182,7 +222,13 @@ async fn client_output_snapshot_reads_full_retained_window_without_widening_mode
         )
         .await;
     let snapshot = registry
-        .read_process_output_snapshot(&node, &session_id, "did:test:owner", None, "large-output")
+        .read_process_output_snapshot(
+            &access,
+            &session_id,
+            &node_did,
+            Some(&requester),
+            "large-output",
+        )
         .await
         .unwrap()
         .unwrap();
@@ -196,7 +242,7 @@ async fn client_output_snapshot_reads_full_retained_window_without_widening_mode
 
 #[tokio::test]
 async fn goal_tool_interception_defaults_deny_and_create_depends_on_base_capability() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
     let denied =
         DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     let denied_update = denied
@@ -239,12 +285,13 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
     let node = Arc::new(
         crate::test_support::node_builder()
             .data_path(&data_path)
+            .with_node_identity_did(identity.did())
             .build()
             .await
             .unwrap(),
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let hook =
+    let mut hook =
         DefraSessionHook::with_identity(node.clone(), identity.did(), FailurePolicy::default())
             .with_goal_tool_authority(true, true);
     assert!(matches!(
@@ -253,8 +300,14 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
         HookAction::Continue
     ));
     let session_id = hook.session_id().await.unwrap();
-    goal_context::bind_signed_request(&node, &hook, &identity, "goal-request", &session_id, None)
-        .await;
+    bind_managed_hook_request(
+        &mut hook,
+        "goal-request",
+        &identity,
+        Utc::now() + chrono::Duration::minutes(5),
+    )
+    .await;
+    let access = hook.actor_access().unwrap();
 
     accept_hook_tool_call(
         &hook,
@@ -276,12 +329,17 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
         matches!(forged, ToolCallHookAction::Skip { .. }),
         "unexpected forged create action: {forged:?}"
     );
-    assert!(
-        crate::goal::load_canonical_goal(&node, identity.did(), &session_id)
-            .await
-            .unwrap()
-            .is_none()
-    );
+    assert!(access
+        .transact_readonly("test.hook_goal", |txn| {
+            Box::pin(crate::goal::load_canonical_goal_in_txn(
+                txn,
+                identity.did(),
+                &session_id,
+            ))
+        })
+        .await
+        .unwrap()
+        .is_none());
 
     accept_hook_tool_call(
         &hook,
@@ -300,7 +358,14 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
         )
         .await;
     assert!(matches!(created, ToolCallHookAction::Skip { .. }));
-    let goal = crate::goal::load_canonical_goal(&node, identity.did(), &session_id)
+    let goal = access
+        .transact_readonly("test.hook_goal", |txn| {
+            Box::pin(crate::goal::load_canonical_goal_in_txn(
+                txn,
+                identity.did(),
+                &session_id,
+            ))
+        })
         .await
         .unwrap()
         .unwrap();
@@ -327,7 +392,14 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
         .await;
     assert!(matches!(forged_update, ToolCallHookAction::Skip { .. }));
     assert_eq!(
-        crate::goal::load_canonical_goal(&node, identity.did(), &session_id)
+        access
+            .transact_readonly("test.hook_goal", |txn| {
+                Box::pin(crate::goal::load_canonical_goal_in_txn(
+                    txn,
+                    identity.did(),
+                    &session_id,
+                ))
+            })
             .await
             .unwrap()
             .unwrap()
@@ -360,7 +432,14 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
                 .await,
             ToolCallHookAction::Skip { .. }
         ));
-        let updated = crate::goal::load_canonical_goal(&node, identity.did(), &session_id)
+        let updated = access
+            .transact_readonly("test.hook_goal", |txn| {
+                Box::pin(crate::goal::load_canonical_goal_in_txn(
+                    txn,
+                    identity.did(),
+                    &session_id,
+                ))
+            })
             .await
             .unwrap()
             .unwrap();
@@ -411,7 +490,14 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
         ToolCallHookAction::Skip { .. }
     ));
     assert_eq!(
-        crate::goal::load_canonical_goal(&node, identity.did(), &session_id)
+        access
+            .transact_readonly("test.hook_goal", |txn| {
+                Box::pin(crate::goal::load_canonical_goal_in_txn(
+                    txn,
+                    identity.did(),
+                    &session_id,
+                ))
+            })
             .await
             .unwrap()
             .unwrap()
@@ -419,7 +505,7 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
         Some(crate::goal::GoalStatus::Complete)
     );
 
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(data_path);
 }
 use crate::ensure_runtime_schemas;
@@ -478,13 +564,13 @@ async fn request_lineage_preserves_previous_binding_when_request_is_missing() {
         Some("did:test:coordinator")
     );
     drop(state);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
 async fn active_request_binding_rejects_a_half_bound_pair() {
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .build()
             .await
             .expect("embedded node"),
@@ -504,7 +590,7 @@ async fn active_request_binding_rejects_a_half_bound_pair() {
     assert_eq!(state.current_request_doc_id, None);
     assert_eq!(state.current_requester_did, None);
     drop(state);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -516,8 +602,7 @@ async fn request_lineage_keeps_exact_doc_id_through_prompt_and_tool_paths() {
             .expect("embedded node"),
     );
     ensure_runtime_schemas(&node).await.unwrap();
-    let hook =
-        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
+    let hook = signed_hook(&node, FailurePolicy::default()).await;
     assert!(matches!(
         hook.on_completion_call(&user_text_message("Run"), &[])
             .await,
@@ -525,7 +610,6 @@ async fn request_lineage_keeps_exact_doc_id_through_prompt_and_tool_paths() {
     ));
     let session_id = hook.session_id().await.expect("session id");
     bind_interruptible_request(
-        node.as_ref(),
         &hook,
         "request-lineage",
         &session_id,
@@ -547,13 +631,13 @@ async fn request_lineage_keeps_exact_doc_id_through_prompt_and_tool_paths() {
         ToolCallHookAction::Continue
     ));
 
-    let row = fetch_tool_call_row(&node, &session_id, "lineage-reload").await;
+    let row = fetch_tool_call_row(&hook, &session_id, "lineage-reload").await;
     assert_eq!(
         row.get("request_doc_id")
             .and_then(serde_json::Value::as_str),
         Some(expected_doc_id.as_str())
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 fn failure_policy_from_contract(policy: &str) -> FailurePolicy {
@@ -573,27 +657,33 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
         .filter(|case| case.inputs.iter().all(|input| input.policy_allows))
     {
         for policy in [FailurePolicy::FailOpen, FailurePolicy::FailClosed] {
-            let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+            let home = tempfile::tempdir().unwrap();
+            let root = KeyIdentity::load_or_create(home.path().join("node.key"), None).unwrap();
+            let node = Arc::new(
+                EmbeddedNode::builder()
+                    .with_node_identity_did(root.did())
+                    .build()
+                    .await
+                    .unwrap(),
+            );
             ensure_runtime_schemas(&node).await.unwrap();
-            let hook =
-                DefraSessionHook::with_identity(node.clone(), "did:test:dispatch-receipt", policy);
+            let mut hook = DefraSessionHook::with_identity(node.clone(), root.did(), policy);
             assert!(matches!(
                 hook.on_completion_call(&user_text_message("Run a tool"), &[])
                     .await,
                 HookAction::Continue
             ));
             let session_id = hook.session_id().await.unwrap();
-            bind_interruptible_request(
-                &node,
-                &hook,
+            bind_managed_hook_request(
+                &mut hook,
                 "request-receipt",
-                &session_id,
+                &root,
                 chrono::Utc::now() + chrono::Duration::minutes(5),
             )
             .await;
             accept_hook_tool_call(&hook, "receipt-call", "read", "{}", None).await;
             let accepted = hook.accepted_tool_calls.lock().await["receipt-call"].clone();
-            let admitted = fetch_tool_call_row(&node, &session_id, "receipt-call").await;
+            let admitted = fetch_tool_call_row(&hook, &session_id, "receipt-call").await;
             assert_eq!(case.inputs.len(), case.expected.len());
             for (input, expected) in case.inputs.iter().zip(&case.expected) {
                 if expected.observation == "replay" {
@@ -626,7 +716,7 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
                         "{action:?}"
                     );
                 }
-                let row = fetch_tool_call_row(&node, &session_id, "receipt-call").await;
+                let row = fetch_tool_call_row(&hook, &session_id, "receipt-call").await;
                 assert_eq!(
                     row["lifecycle_state"].as_str() == Some("running"),
                     expected.running,
@@ -661,7 +751,7 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
             let request_query = format!(
                 "{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{document}\" }} }}) {{ _docID lifecycle_state execution_generation terminal_output }} }}"
             );
-            let access = crate::ConfigAccess::local(node.clone());
+            let access = hook.actor_access().unwrap();
             let before_probe = access.execute(&request_query).await.unwrap();
             let before_request = before_probe["data"]["AgentRequest"].as_array().unwrap();
             assert_eq!(before_request.len(), 1);
@@ -699,7 +789,7 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
             );
             let document =
                 crate::store::graphql::escape_graphql_string(&fixture.lifecycle.request().doc_id);
-            let observed = crate::ConfigAccess::local(node.clone()).execute(&format!(
+            let observed = access.execute(&format!(
                 "{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: \"{document}\" }} }}) {{ _docID lifecycle_state stuck_since }} AgentMessage(filter: {{ request_doc_id: {{ _eq: \"{document}\" }} }}) {{ _docID }} }}"
             )).await.unwrap();
             let data = &observed["data"];
@@ -725,7 +815,7 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
                 .as_ref()
                 .expect("a handed-off running call has a modeled recovery");
             let report = crate::tools::call::lifecycle::ToolCallLifecycle::
-                reconcile_terminal_parent_owned_tools(&node, "did:test:dispatch-receipt")
+                reconcile_terminal_parent_owned_tools(&node, root.did(), &[Arc::new(fixture.lifecycle.managed_agent_signer().unwrap())])
                 .await
                 .unwrap();
             assert_eq!(
@@ -733,7 +823,7 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
                 "{}",
                 case.name
             );
-            let recovered = fetch_tool_call_row(&node, &session_id, "receipt-call").await;
+            let recovered = fetch_tool_call_row(&hook, &session_id, "receipt-call").await;
             assert_eq!(recovered["_docID"], admitted["_docID"]);
             assert_eq!(
                 recovered["lifecycle_state"].as_str(),
@@ -751,12 +841,12 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
                 "{}: a settled call is never re-elected: {replay:?}",
                 case.name
             );
-            let after_replay = fetch_tool_call_row(&node, &session_id, "receipt-call").await;
+            let after_replay = fetch_tool_call_row(&hook, &session_id, "receipt-call").await;
             assert_eq!(
                 after_replay["lifecycle_state"],
                 recovered["lifecycle_state"]
             );
-            node.shutdown().await;
+            node.shutdown().await.expect("shut down test node");
         }
     }
 }
@@ -778,9 +868,15 @@ async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
     for policy in [FailurePolicy::FailOpen, FailurePolicy::FailClosed] {
         let mut completion_mutation = None;
         for inject in [false, true] {
-            let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+            let node = Arc::new(
+                crate::test_support::node_builder()
+                    .with_node_identity_did(identity.did())
+                    .build()
+                    .await
+                    .unwrap(),
+            );
             ensure_runtime_schemas(&node).await.unwrap();
-            let hook = DefraSessionHook::with_identity(node.clone(), identity.did(), policy)
+            let mut hook = DefraSessionHook::with_identity(node.clone(), identity.did(), policy)
                 .with_goal_tool_authority(goal_case.goal_tools, goal_case.goal_create);
             assert!(matches!(
                 hook.on_completion_call(&user_text_message("Create a goal"), &[])
@@ -788,23 +884,30 @@ async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
                 HookAction::Continue
             ));
             let session = hook.session_id().await.unwrap();
-            goal_context::bind_signed_request(
-                &node,
-                &hook,
-                &identity,
+            bind_managed_hook_request(
+                &mut hook,
                 "control-receipt",
-                &session,
-                None,
+                &identity,
+                Utc::now() + chrono::Duration::minutes(5),
             )
             .await;
+            let access = hook.actor_access().unwrap();
             accept_hook_tool_call(&hook, "control-call", "create_goal", &args, None).await;
-            let (action, mutations) =
-                crate::store::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
+            let (action, trace) =
+                crate::store::config_client::ConfigApplyTxn::with_successful_mutation_failure_and_trace(
                     completion_mutation,
                     hook.on_tool_call("create_goal", None, "control-call", &args),
                 )
                 .await;
-            let goal = crate::goal::load_canonical_goal(&node, identity.did(), &session)
+            let mutations = trace.len();
+            let goal = access
+                .transact_readonly("test.hook_control_goal", |txn| {
+                    Box::pin(crate::goal::load_canonical_goal_in_txn(
+                        txn,
+                        identity.did(),
+                        &session,
+                    ))
+                })
                 .await
                 .unwrap()
                 .expect("the control effect committed before completion");
@@ -815,10 +918,11 @@ async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
                     matches!(action, ToolCallHookAction::Terminate { .. }),
                     "{action:?}"
                 );
-                let row = fetch_tool_call_row(&node, &session, "control-call").await;
+                let row = fetch_tool_call_row(&hook, &session, "control-call").await;
                 assert_eq!(
                     row["lifecycle_state"].as_str() == Some("running"),
-                    replay.expected[0].running
+                    replay.expected[0].running,
+                    "{row}"
                 );
                 let again = hook
                     .on_tool_call("create_goal", None, "control-call", &args)
@@ -827,7 +931,14 @@ async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
                     matches!(again, ToolCallHookAction::Continue),
                     replay.expected[1].may_invoke
                 );
-                let after = crate::goal::load_canonical_goal(&node, identity.did(), &session)
+                let after = access
+                    .transact_readonly("test.hook_control_goal", |txn| {
+                        Box::pin(crate::goal::load_canonical_goal_in_txn(
+                            txn,
+                            identity.did(),
+                            &session,
+                        ))
+                    })
                     .await
                     .unwrap()
                     .unwrap();
@@ -841,14 +952,28 @@ async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
                     matches!(action, ToolCallHookAction::Skip { .. }),
                     "{action:?}"
                 );
-                assert!(mutations > 0);
-                completion_mutation = Some(mutations);
+                // The completion is the last mutation before the post-commit
+                // publication of the created Goal's session relationships.
+                let completion = trace
+                    .iter()
+                    .rposition(|operation| {
+                        *operation != Some("session.publish_child_relationships")
+                    })
+                    .expect("the control call commits its completion")
+                    + 1;
+                assert!(
+                    trace[..completion]
+                        .iter()
+                        .all(|operation| *operation != Some("session.publish_child_relationships")),
+                    "{trace:?}"
+                );
+                completion_mutation = Some(completion);
             }
             hook_execution_fixtures()
                 .lock()
                 .await
                 .remove(&hook_execution_fixture_key(&hook, "control-receipt"));
-            node.shutdown().await;
+            node.shutdown().await.expect("shut down test node");
         }
     }
 }
@@ -911,7 +1036,7 @@ fn generated_persistence_failure_policy_cases_match_hook_decisions() {
 async fn generated_storage_observation_cases_match_hook_runtime_classification() {
     let cases = lean_storage_observation_runtime_cases();
     assert_eq!(cases.len(), 8);
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
 
     for case in cases {
         if case.mutation_result == "notApplicable" {
@@ -962,65 +1087,118 @@ async fn generated_storage_observation_cases_match_hook_runtime_classification()
     }
 }
 
-async fn create_interruptible_request_with_fields(
-    node: &defra_node::EmbeddedNode,
-    request_id: &str,
+/// Reloads a tool-call row as the hook's selected Agent, bound to the same
+/// managed signer so the reloaded lifecycle writes as the row's owner.
+async fn reload_tool_call_as_hook(
+    hook: &DefraSessionHook,
+    doc_id: &str,
     session_id: &str,
-    node_did: &str,
-    extra_fields: &str,
-) -> String {
-    let request_id = crate::store::graphql::escape_graphql_string(request_id);
-    let session_id = crate::store::graphql::escape_graphql_string(session_id);
-    let node_did = crate::store::graphql::escape_graphql_string(node_did);
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentRequest(input: {{
-                request_id: "{request_id}",
-                purpose: "normal",
-                node_did: "{node_did}",
-                agent_id: "general",
-                session_id: "{session_id}",
-                retry_parent_request: "",
-                retry_root_request: "{request_id}",
-                superseded_by_request: "",
-                content: "child request",
-                lifecycle_state: "processing",
-                backend_id: "",
-                execution_origin: "interactive",
-                request_hop: 0,
-                {extra_fields}
-                created_at: "{created_at}",
-                retry_count: 0,
-                max_retries: {max_retries}
-            }}) {{ _docID }}
-        }}"#,
-        max_retries = crate::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
-    );
-    let resp = node.execute(&mutation).await;
-    assert!(
-        !resp.has_errors(),
-        "create interruptible request failed: {:?}",
-        resp.errors
-    );
-    let lookup = node
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{ _docID }} }}"#
-        ))
-        .await;
-    assert!(
-        !lookup.has_errors(),
-        "load interruptible request failed: {:?}",
-        lookup.errors
-    );
-    lookup.data.as_ref().unwrap()["AgentRequest"][0]["_docID"]
-        .as_str()
-        .expect("interruptible request _docID")
-        .to_owned()
+) -> crate::tools::call::lifecycle::ToolCallLifecycle {
+    let mut lifecycle = crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id_as(
+        hook.node.clone(),
+        hook.actor.clone().expect("a signed hook selects an Agent"),
+        doc_id,
+        &hook.node_did,
+        session_id,
+        hook.active_requester_did().await.as_deref(),
+    )
+    .await
+    .unwrap()
+    .expect("the hook's Agent sees its tool call");
+    lifecycle
+        .bind_agent_signer(hook.agent_signer.clone())
+        .unwrap();
+    lifecycle
 }
 
+/// Runs a read as the hook's selected Agent and returns its `data` object.
+async fn hook_query(hook: &DefraSessionHook, query: &str) -> serde_json::Value {
+    let response = hook
+        .actor_access()
+        .expect("a signed hook reads as its selected Agent")
+        .execute(query)
+        .await
+        .expect("query as the hook's Agent");
+    response["data"].clone()
+}
+
+/// Loads the hook's transcript as its selected Agent, which owns the session.
+async fn hook_history(hook: &DefraSessionHook, session_id: &str) -> anyhow::Result<Vec<Message>> {
+    crate::session::load_history_with_access(
+        &hook.actor_access()?,
+        session_id,
+        &hook.node_did,
+        hook.actor.as_ref().map(identity::Did::as_str),
+    )
+    .await
+}
+
+/// A hook whose session belongs to an Agent derived from `node`'s held
+/// runtime root, bound to that Agent's managed signer the way the daemon binds
+/// one before it claims work.
+async fn signed_hook(node: &Arc<EmbeddedNode>, failure_policy: FailurePolicy) -> DefraSessionHook {
+    let node_did = node
+        .node_identity_did()
+        .expect("fixture node has a runtime identity")
+        .to_owned();
+    signed_hook_as(node, &node_did, failure_policy).await
+}
+
+async fn signed_hook_as(
+    node: &Arc<EmbeddedNode>,
+    node_did: &str,
+    failure_policy: FailurePolicy,
+) -> DefraSessionHook {
+    let root = crate::test_support::held_runtime_identity(node_did);
+    let mut hook = DefraSessionHook::with_identity(node.clone(), root.did(), failure_policy);
+    let session_id = hook.session_id().await.expect("hook session");
+    let agent = crate::tools::call::lifecycle::admission_fixture::ensure_managed_fixture_session(
+        node,
+        &session_id,
+        &root,
+        Some(root.did()),
+        &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+    )
+    .await;
+    hook.actor = Some(identity::Did::new(agent.did()).unwrap());
+    hook.with_managed_identity(agent.as_ref())
+        .expect("bind the hook to its Agent's managed signer")
+}
+
+/// Creates and claims `request_id` as the hook's selected Agent. The request
+/// is a local-self request: the Agent is its own requester.
+async fn claimed_hook_request(
+    hook: &DefraSessionHook,
+    request_id: &str,
+    session_id: &str,
+) -> crate::request::lifecycle::RequestLifecycle {
+    let root = crate::test_support::held_runtime_identity(&hook.node_did);
+    let create = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        request_id,
+        root.did(),
+        root.did(),
+        root.did(),
+        session_id,
+        "child request",
+        "interactive",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(root.did()),
+    );
+    let signer = hook
+        .agent_signer
+        .clone()
+        .expect("a signed hook holds its Agent's managed signer");
+    crate::tools::call::lifecycle::admission_fixture::claimed_signed_request_create_as_agent(
+        &hook.node, &root, &signer, create,
+    )
+    .await
+}
+
+/// Writes a child request the hook's Agent caused through `tool_call_doc_id`,
+/// signed and owned by that Agent and left unclaimed in the parent's session.
 async fn create_corroborated_child_request(
-    node: &defra_node::EmbeddedNode,
+    hook: &DefraSessionHook,
     child_request_id: &str,
     session_id: &str,
     parent_request_id: &str,
@@ -1028,121 +1206,47 @@ async fn create_corroborated_child_request(
     tool_call_id: &str,
     tool_call_doc_id: &str,
 ) {
-    let extra_fields = format!(
-        r#"caused_by_parent_request_id: "{}",
-            caused_by_parent_request_doc_id: "{}",
-            caused_by_parent_tool_call_id: "{}",
-            caused_by_parent_tool_call_doc_id: "{}","#,
-        crate::store::graphql::escape_graphql_string(parent_request_id),
-        crate::store::graphql::escape_graphql_string(parent_request_doc_id),
-        crate::store::graphql::escape_graphql_string(tool_call_id),
-        crate::store::graphql::escape_graphql_string(tool_call_doc_id),
-    );
-    create_interruptible_request_with_fields(
-        node,
+    let signer = hook
+        .agent_signer
+        .clone()
+        .expect("a signed hook holds its Agent's managed signer");
+    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
         child_request_id,
+        &hook.node_did,
+        signer.did(),
+        signer.did(),
         session_id,
-        "did:test:general",
-        &extra_fields,
-    )
-    .await;
+        "child request",
+        "interactive",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(signer.did()),
+    );
+    create.caused_by_parent_request_id = Some(parent_request_id.to_owned());
+    create.caused_by_parent_request_doc_id = Some(parent_request_doc_id.to_owned());
+    create.caused_by_parent_tool_call_id = Some(tool_call_id.to_owned());
+    create.caused_by_parent_tool_call_doc_id = Some(tool_call_doc_id.to_owned());
+    create.request_hop = 1;
+    crate::sign_agent_request_create(&signer, &mut create)
+        .await
+        .expect("sign the child request as the hook's Agent");
+    hook.actor_access()
+        .unwrap()
+        .write(
+            "test.hook.corroborated_child",
+            &create.graphql_mutation().unwrap(),
+        )
+        .await
+        .expect("create the child request as the hook's Agent");
 }
 
 async fn bind_interruptible_request(
-    node: &defra_node::EmbeddedNode,
     hook: &DefraSessionHook,
     request_id: &str,
     session_id: &str,
     deadline_at: chrono::DateTime<chrono::Utc>,
 ) {
-    bind_interruptible_request_with_requester(
-        node,
-        hook,
-        request_id,
-        session_id,
-        deadline_at,
-        None,
-    )
-    .await;
-}
-
-async fn bind_interruptible_request_with_requester(
-    node: &defra_node::EmbeddedNode,
-    hook: &DefraSessionHook,
-    request_id: &str,
-    session_id: &str,
-    deadline_at: chrono::DateTime<chrono::Utc>,
-    requester_did: Option<&str>,
-) {
-    let requester_field = requester_did
-        .map(|did| {
-            format!(
-                "requester_did: \"{}\",",
-                crate::store::graphql::escape_graphql_string(did)
-            )
-        })
-        .unwrap_or_default();
-    let doc_id = create_interruptible_request_with_fields(
-        node,
-        request_id,
-        session_id,
-        &hook.node_did,
-        &requester_field,
-    )
-    .await;
-    let reset = node
-        .execute(&format!(
-            r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "pending" }}) {{ _docID }} }}"#,
-            crate::store::graphql::escape_graphql_string(&doc_id)
-        ))
-        .await;
-    assert!(
-        !reset.has_errors(),
-        "reset test request: {:?}",
-        reset.errors
-    );
-    let loaded = node
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} }} }}"#,
-            crate::store::graphql::escape_graphql_string(&doc_id),
-            crate::request::watcher::AGENT_REQUEST_FIELDS
-        ))
-        .await;
-    let row: gents_protocol::row::AgentRequestRow =
-        crate::store::graphql::first_row(&loaded, "AgentRequest")
-            .unwrap()
-            .unwrap();
-    let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
-        hook.node.clone(),
-        "general",
-        &hook.node_did,
-        row.try_into().unwrap(),
-        60,
-    );
-    assert_eq!(
-        lifecycle.claim().await.unwrap(),
-        crate::request::lifecycle::ClaimOutcome::Claimed
-    );
-    bind_claimed_hook_request(hook, lifecycle, deadline_at).await;
-}
-
-async fn bind_signed_hook_request(
-    hook: &DefraSessionHook,
-    request_id: &str,
-    deadline_at: chrono::DateTime<chrono::Utc>,
-) {
-    let identity =
-        crate::store::identity::RegisteredIdentity::from_registered_did(&hook.node_did, None)
-            .expect("the hook fixture has a registered signing identity");
-    let session_id = hook.session_id().await.expect("hook session");
-    let lifecycle = crate::tools::call::lifecycle::admission_fixture::claimed_signed_request(
-        &hook.node,
-        request_id,
-        &session_id,
-        &identity,
-        None,
-    )
-    .await;
+    let lifecycle = claimed_hook_request(hook, request_id, session_id).await;
     bind_claimed_hook_request(hook, lifecycle, deadline_at).await;
 }
 
@@ -1152,16 +1256,40 @@ async fn bind_claimed_hook_request(
     deadline_at: chrono::DateTime<chrono::Utc>,
 ) {
     let request_id = lifecycle.request().request_id.clone();
+    let request_doc_id = lifecycle.request().doc_id.clone();
     let requester_did = lifecycle.request().requester_did.clone();
-    let writer = crate::request::streaming::DefraStreamWriter::new(
-        hook.node.clone(),
-        &hook.node_did,
-        std::time::Duration::ZERO,
+    assert!(
+        !request_doc_id.is_empty(),
+        "claimed request has a physical identity"
     );
-    lifecycle.begin_owned_execution(&writer).await.unwrap();
-    hook.set_active_request_lineage(Some(request_id.clone()), requester_did)
+    if let Some(actor) = &hook.actor {
+        assert_eq!(actor.as_str(), lifecycle.request().agent_did);
+        let access = hook.actor_access().expect("hook's selected Agent access");
+        let observed = crate::request::binding::load_agent_request_by_doc_id_with_access(
+            &access,
+            &request_doc_id,
+        )
         .await
-        .expect("bind persisted request lineage");
+        .expect("read claimed request as selected Agent")
+        .expect("selected Agent must see its claimed request");
+        assert_eq!(observed.request_id, request_id);
+        assert_eq!(observed.session_id, lifecycle.request().session_id);
+        assert_eq!(observed.agent_did, lifecycle.request().agent_did);
+        assert_eq!(observed.requester_did, requester_did);
+    }
+    let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
+        hook.node.clone(),
+        &lifecycle,
+        std::time::Duration::ZERO,
+    )
+    .unwrap();
+    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    hook.set_active_request_binding(
+        Some(request_id.clone()),
+        Some(request_doc_id),
+        requester_did,
+    )
+    .await;
     hook.set_request_deadline_at(Some(deadline_at)).await;
     hook_execution_fixtures().lock().await.insert(
         hook_execution_fixture_key(hook, &request_id),
@@ -1240,7 +1368,7 @@ async fn accepted_hook_tool_lifecycle(
     tool_name: &str,
     arguments: &str,
     deadline_at: chrono::DateTime<chrono::Utc>,
-    await_mode: crate::tools::call::lifecycle::AwaitMode,
+    await_mode: gents_protocol::tool_call::AwaitMode,
 ) -> crate::tools::call::lifecycle::ToolCallLifecycle {
     accept_hook_tool_call(hook, internal_call_id, tool_name, arguments, None).await;
     let state = hook.state.lock().await;
@@ -1279,7 +1407,7 @@ async fn accepted_session_message_lifecycle(
         crate::tools::native::AGENT_NEW_TOOL_NAME,
         &arguments,
         deadline_at,
-        crate::tools::call::lifecycle::AwaitMode::Background,
+        gents_protocol::tool_call::AwaitMode::Background,
     )
     .await
 }
@@ -1371,14 +1499,26 @@ async fn publish_claimed_provider_turn(
         .expect("publish claimed provider turn");
 }
 
+/// Reads one tool-call row as the hook's selected Agent, which owns it.
 async fn fetch_tool_call_row(
-    node: &defra_node::EmbeddedNode,
+    hook: &DefraSessionHook,
+    session_id: &str,
+    tool_call_id: &str,
+) -> serde_json::Value {
+    let access = hook
+        .actor_access()
+        .expect("a signed hook reads as its selected Agent");
+    fetch_tool_call_row_as(&access, session_id, tool_call_id).await
+}
+
+async fn fetch_tool_call_row_as(
+    access: &crate::ConfigAccess,
     session_id: &str,
     tool_call_id: &str,
 ) -> serde_json::Value {
     let session_id = crate::store::graphql::escape_graphql_string(session_id);
     let tool_call_id = crate::store::graphql::escape_graphql_string(tool_call_id);
-    let resp = node
+    let resp = access
         .execute(&format!(
             r#"{{
                 AgentToolCall(
@@ -1407,22 +1547,14 @@ async fn fetch_tool_call_row(
                 }}
             }}"#
         ))
-        .await;
-    assert!(
-        !resp.has_errors(),
-        "query tool call failed: {:?}",
-        resp.errors
-    );
+        .await
+        .expect("query tool call as its Agent");
     let mut row = resp
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentToolCall"))
-        .and_then(|value| value.as_array())
-        .and_then(|rows| rows.first())
+        .pointer("/data/AgentToolCall/0")
         .cloned()
         .expect("tool call row");
-    let output = crate::tools::background::status::canonical_tool_output(
-        node,
+    let output = crate::tools::background::status::observe_canonical_tool_output_with_access(
+        access,
         row["_docID"].as_str().unwrap(),
         row["request_doc_id"].as_str().unwrap(),
         row["session_id"].as_str().unwrap(),
@@ -1430,7 +1562,8 @@ async fn fetch_tool_call_row(
         row["requester_did"].as_str(),
     )
     .await
-    .ok();
+    .ok()
+    .map(crate::tools::background::status::CanonicalToolOutputObservation::into_text);
     row["result"] = output.map_or(serde_json::Value::Null, serde_json::Value::String);
     row
 }
@@ -1446,16 +1579,11 @@ async fn list_processes_skip_publishes_canonical_tool_result() {
             .unwrap(),
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "did:test:control-result",
-        FailurePolicy::default(),
-    );
+    let hook = signed_hook(&node, FailurePolicy::default()).await;
     hook.on_completion_call(&user_text_message("list processes"), &[])
         .await;
     let session_id = hook.session_id().await.unwrap();
     bind_interruptible_request(
-        node.as_ref(),
         &hook,
         "request-control-result",
         &session_id,
@@ -1471,7 +1599,7 @@ async fn list_processes_skip_publishes_canonical_tool_result() {
     ));
 
     let timeline = crate::observe::run_timeline_fetch::load_run_timeline_rows(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
+        &hook.actor_access().unwrap(),
         "request-control-result",
     )
     .await
@@ -1503,16 +1631,11 @@ async fn wait_and_cancel_process_skip_publish_canonical_tool_results() {
             .unwrap(),
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "did:test:control-results",
-        FailurePolicy::default(),
-    );
+    let hook = signed_hook(&node, FailurePolicy::default()).await;
     hook.on_completion_call(&user_text_message("control processes"), &[])
         .await;
     let session_id = hook.session_id().await.unwrap();
     bind_interruptible_request(
-        node.as_ref(),
         &hook,
         "request-control-results",
         &session_id,
@@ -1555,7 +1678,7 @@ async fn wait_and_cancel_process_skip_publish_canonical_tool_results() {
     }
 
     let timeline = crate::observe::run_timeline_fetch::load_run_timeline_rows(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
+        &hook.actor_access().unwrap(),
         "request-control-results",
     )
     .await
@@ -1587,7 +1710,7 @@ async fn wait_and_cancel_process_skip_publish_canonical_tool_results() {
             "provider replay must be exact"
         );
     }
-    let long_row = fetch_tool_call_row(node.as_ref(), &session_id, "wait-long-call").await;
+    let long_row = fetch_tool_call_row(&hook, &session_id, "wait-long-call").await;
     let full = long_row["result"].as_str().expect("full raw long result");
     let bounded = skipped
         .iter()
@@ -1600,7 +1723,7 @@ async fn wait_and_cancel_process_skip_publish_canonical_tool_results() {
         "full raw output must be retained"
     );
     assert!(bounded.contains("[Showing lines"));
-    let long_spawn_row = fetch_tool_call_row(node.as_ref(), &session_id, "spawn-long-call").await;
+    let long_spawn_row = fetch_tool_call_row(&hook, &session_id, "spawn-long-call").await;
     let full_spawn = long_spawn_row["result"]
         .as_str()
         .expect("full raw spawn failure");
@@ -1621,16 +1744,11 @@ async fn wait_and_cancel_process_skip_publish_canonical_tool_results() {
 async fn control_tool_lost_terminal_compare_replays_the_durable_winner() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "did:test:control-race",
-        FailurePolicy::default(),
-    );
+    let hook = signed_hook(&node, FailurePolicy::default()).await;
     hook.on_completion_call(&user_text_message("race control completion"), &[])
         .await;
     let session_id = hook.session_id().await.unwrap();
     bind_interruptible_request(
-        node.as_ref(),
         &hook,
         "request-control-race",
         &session_id,
@@ -1643,21 +1761,12 @@ async fn control_tool_lost_terminal_compare_replays_the_durable_winner() {
         "wait_process",
         r#"{"tool_call_id":"missing"}"#,
         chrono::Utc::now() + chrono::Duration::minutes(5),
-        crate::tools::call::lifecycle::AwaitMode::Foreground,
+        gents_protocol::tool_call::AwaitMode::Foreground,
     )
     .await;
     loser.start_running().await.unwrap();
     let tool_doc_id = loser.doc_id().unwrap().to_owned();
-    let mut winner = crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id(
-        node.clone(),
-        &tool_doc_id,
-        "did:test:control-race",
-        &session_id,
-        None,
-    )
-    .await
-    .unwrap()
-    .unwrap();
+    let mut winner = reload_tool_call_as_hook(&hook, &tool_doc_id, &session_id).await;
     assert!(winner
         .cancel_during_run(crate::tools::call::lifecycle::CancelCause::Interrupted)
         .await
@@ -1681,21 +1790,12 @@ async fn control_tool_lost_terminal_compare_replays_the_durable_winner() {
         "wait_process",
         r#"{"tool_call_id":"missing"}"#,
         chrono::Utc::now() + chrono::Duration::minutes(5),
-        crate::tools::call::lifecycle::AwaitMode::Foreground,
+        gents_protocol::tool_call::AwaitMode::Foreground,
     )
     .await;
     conflicting.start_running().await.unwrap();
     let conflict_doc_id = conflicting.doc_id().unwrap().to_owned();
-    let mut completed = crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id(
-        node.clone(),
-        &conflict_doc_id,
-        "did:test:control-race",
-        &session_id,
-        None,
-    )
-    .await
-    .unwrap()
-    .unwrap();
+    let mut completed = reload_tool_call_as_hook(&hook, &conflict_doc_id, &session_id).await;
     assert!(completed
         .complete_owned("durable winner", None)
         .await
@@ -1711,11 +1811,11 @@ async fn control_tool_lost_terminal_compare_replays_the_durable_winner() {
         "a different same-state closure is a modeled conflict, not a lost CAS"
     );
     let durable = crate::tools::call::lifecycle::query::load_tool_call_result(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
+        &hook.actor_access().unwrap(),
         &conflict_doc_id,
-        "did:test:control-race",
+        &hook.node_did,
         &session_id,
-        None,
+        hook.active_requester_did().await.as_deref(),
     )
     .await
     .unwrap();
@@ -1724,11 +1824,11 @@ async fn control_tool_lost_terminal_compare_replays_the_durable_winner() {
         "durable winner"
     );
     let presentation = crate::tools::call::lifecycle::load_tool_call_presentation(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
+        &hook.actor_access().unwrap(),
         &conflict_doc_id,
-        "did:test:control-race",
+        &hook.node_did,
         &session_id,
-        None,
+        hook.active_requester_did().await.as_deref(),
     )
     .await
     .unwrap();
@@ -1740,32 +1840,50 @@ async fn control_tool_lost_terminal_compare_replays_the_durable_winner() {
 async fn call_tool_persists_concrete_dispatch_identity_without_rewriting_alias() {
     use crate::documents::{RemoteServiceTools, RemoteToolStyle, RemoteTools};
 
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(&node).await.unwrap();
-    let hook =
-        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default())
-            .with_remote_tools(Some(RemoteTools {
-                services: vec![RemoteServiceTools {
-                    mcp_service_id: "metrics-prod".into(),
-                    tool_names: vec!["query_metrics".into()],
-                    style: RemoteToolStyle::Discovery,
-                    ..Default::default()
-                }],
-            }));
+    let fixture = background_budget::budget_hook_fixture(
+        "selected-tool-dispatch",
+        BackgroundToolRegistry::default(),
+        BackgroundExecutionRegistry::default(),
+    )
+    .await;
+    let node = fixture.db.node.clone();
+    let session_id = fixture.session_id.clone();
+    let hook = fixture.hook.with_remote_tools(Some(RemoteTools {
+        services: vec![RemoteServiceTools {
+            mcp_service_id: "metrics-prod".into(),
+            tool_names: vec!["query_metrics".into()],
+            style: RemoteToolStyle::Discovery,
+            ..Default::default()
+        }],
+    }));
     assert!(matches!(
         hook.on_completion_call(&user_text_message("Query metrics"), &[])
             .await,
         HookAction::Continue
     ));
-    let session_id = hook.session_id().await.expect("session id");
-    bind_interruptible_request(
-        node.as_ref(),
-        &hook,
-        "request-selected-tool",
-        &session_id,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
+
+    async fn selected_row(
+        access: &crate::ConfigAccess,
+        session_id: &str,
+        tool_call_id: &str,
+    ) -> serde_json::Value {
+        let session = crate::store::graphql::escape_graphql_string(session_id);
+        let call = crate::store::graphql::escape_graphql_string(tool_call_id);
+        let response = access
+            .execute(&format!(
+                r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session}" }}, tool_call_id: {{ _eq: "{call}" }} }}) {{ selected_service_id selected_tool_name }} }}"#
+            ))
+            .await
+            .expect("selected agent can read its tool call");
+        let rows = response["data"]["AgentToolCall"]
+            .as_array()
+            .expect("tool call rows");
+        let [row] = rows.as_slice() else {
+            panic!("expected one tool call, found {}", rows.len());
+        };
+        row.clone()
+    }
+    let access = hook.actor_access().expect("hook has a selected agent");
 
     let args =
         r#"{"service_id":"metrics-prod","tool_name":"query_metrics","arguments":{"window":"5m"}}"#;
@@ -1775,7 +1893,7 @@ async fn call_tool_persists_concrete_dispatch_identity_without_rewriting_alias()
             .await,
         ToolCallHookAction::Continue
     ));
-    let selected = fetch_tool_call_row(&node, &session_id, "call-selected").await;
+    let selected = selected_row(&access, &session_id, "call-selected").await;
     assert_eq!(
         selected
             .get("selected_service_id")
@@ -1795,7 +1913,7 @@ async fn call_tool_persists_concrete_dispatch_identity_without_rewriting_alias()
             .await,
         ToolCallHookAction::Continue
     ));
-    let native = fetch_tool_call_row(&node, &session_id, "call-native").await;
+    let native = selected_row(&access, &session_id, "call-native").await;
     assert!(native
         .get("selected_service_id")
         .is_none_or(serde_json::Value::is_null));
@@ -1803,7 +1921,7 @@ async fn call_tool_persists_concrete_dispatch_identity_without_rewriting_alias()
         .get("selected_tool_name")
         .is_none_or(serde_json::Value::is_null));
 
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -1819,8 +1937,7 @@ async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook =
-        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
+    let hook = signed_hook(&node, FailurePolicy::default()).await;
     let user_prompt = user_text_message("Run a tool");
     assert!(matches!(
         hook.on_completion_call(&user_prompt, &[]).await,
@@ -1828,7 +1945,7 @@ async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
     ));
     let session_id = hook.session_id().await.expect("session id");
     let deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
-    bind_interruptible_request(node.as_ref(), &hook, "req-deadline", &session_id, deadline).await;
+    bind_interruptible_request(&hook, "req-deadline", &session_id, deadline).await;
 
     accept_hook_tool_call(&hook, "internal-deadline", "read", "{}", None).await;
     assert!(matches!(
@@ -1837,7 +1954,7 @@ async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
         ToolCallHookAction::Continue
     ));
 
-    let row = fetch_tool_call_row(&node, &session_id, "internal-deadline").await;
+    let row = fetch_tool_call_row(&hook, &session_id, "internal-deadline").await;
     assert_eq!(
         row.get("request_id").and_then(|value| value.as_str()),
         Some("req-deadline")
@@ -1869,13 +1986,14 @@ async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
     let node = Arc::new(
         crate::test_support::node_builder()
             .data_path(&data_path)
+            .with_node_identity_did(identity.did())
             .build()
             .await
             .expect("embedded node"),
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook =
+    let mut hook =
         DefraSessionHook::with_identity(node.clone(), identity.did(), FailurePolicy::default())
             .with_goal_tool_authority(true, false);
     assert!(matches!(
@@ -1884,35 +2002,51 @@ async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
         HookAction::Continue
     ));
     let session_id = hook.session_id().await.expect("session id");
-    crate::goal::set_goal(
-        &node,
+    bind_managed_hook_request(
+        &mut hook,
+        "goal-wrapup-request",
+        &identity,
+        Utc::now() + chrono::Duration::minutes(5),
+    )
+    .await;
+    let access = hook.actor_access().unwrap();
+    crate::goal::set_goal_from_access(
+        &access,
         identity.did(),
         &session_id,
         Some("Do not resurrect after budget exhaustion"),
         Some(crate::goal::GoalStatus::Active),
         Some(Some(1)),
+        None,
     )
     .await
     .expect("create active goal");
-    crate::goal::set_goal(
-        &node,
+    crate::goal::set_goal_from_access(
+        &access,
         identity.did(),
         &session_id,
         None,
         Some(crate::goal::GoalStatus::BudgetLimited),
         None,
+        None,
     )
     .await
     .expect("latch budget-limited goal");
-    goal_context::bind_signed_request(
-        &node,
-        &hook,
-        &identity,
-        "goal-wrapup-request",
-        &session_id,
-        None,
-    )
-    .await;
+    let request_doc = hook.active_request_doc_id().await.unwrap();
+    access
+        .transact_write("test.bind_goal_wrapup", |txn| {
+            let request_doc = &request_doc;
+            let session_id = &session_id;
+            let owner = identity.did();
+            Box::pin(async move {
+                let goal = crate::goal::load_canonical_goal_in_txn(txn, owner, session_id)
+                    .await?
+                    .expect("Goal exists");
+                crate::goal::bind_goal_first_request_in_txn(txn, &goal, request_doc, None).await
+            })
+        })
+        .await
+        .unwrap();
 
     accept_hook_tool_call(
         &hook,
@@ -1931,7 +2065,14 @@ async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
         )
         .await;
     assert!(matches!(action, ToolCallHookAction::Skip { .. }));
-    let goal = crate::goal::load_canonical_goal(node.as_ref(), identity.did(), &session_id)
+    let goal = access
+        .transact_readonly("test.goal_wrapup", |txn| {
+            Box::pin(crate::goal::load_canonical_goal_in_txn(
+                txn,
+                identity.did(),
+                &session_id,
+            ))
+        })
         .await
         .expect("load goal")
         .expect("goal exists");
@@ -1943,8 +2084,62 @@ async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
     assert_eq!(goal.wrapup_requested, Some(true));
     assert_eq!(goal.wrapup_completed, Some(false));
 
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(&data_path);
+}
+
+/// Publishes an unsigned hook's session as the runtime it runs as. That hook
+/// never writes its session, and an unsigned reader cannot resolve one.
+pub(super) async fn ensure_runtime_session(
+    node: &Arc<EmbeddedNode>,
+    owner: &KeyIdentity,
+    session_id: &str,
+) -> anyhow::Result<crate::ConfigAccess> {
+    let access = crate::ConfigAccess::local_as(node.clone(), identity::Did::new(owner.did())?);
+    let session = crate::store::graphql::escape_graphql_string(session_id);
+    let did = crate::store::graphql::escape_graphql_string(owner.did());
+    let existing = access
+        .execute(&format!(
+            r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{did}" }}, session_id: {{ _eq: "{session}" }} }}) {{ _docID }} }}"#
+        ))
+        .await?;
+    if existing["data"]["AgentSession"]
+        .as_array()
+        .is_some_and(Vec::is_empty)
+    {
+        access
+            .write(
+                "test.hook.runtime_session",
+                &format!(
+                    r#"mutation {{ create_AgentSession(input: {{ session_id: "{session}", node_did: "{did}", requester_did: "{did}", agent_did: "{did}", created_at: "{}" }}) {{ _docID }} }}"#,
+                    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+                ),
+            )
+            .await?;
+    }
+    Ok(access)
+}
+
+/// Writes the session's Goal as the runtime that signs the session.
+async fn set_goal_as_session_owner(
+    node: &Arc<EmbeddedNode>,
+    owner: &KeyIdentity,
+    session_id: &str,
+    objective: Option<&str>,
+    status: Option<crate::goal::GoalStatus>,
+    token_budget: Option<Option<i64>>,
+) -> anyhow::Result<crate::goal::GoalDocument> {
+    let access = ensure_runtime_session(node, owner, session_id).await?;
+    crate::goal::set_goal_from_access(
+        &access,
+        owner.did(),
+        session_id,
+        objective,
+        status,
+        token_budget,
+        None,
+    )
+    .await
 }
 
 #[tokio::test]
@@ -1954,17 +2149,21 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
         KeyIdentity::load_or_create(identity_dir.path().join("owner.key"), None).unwrap();
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-goal-update-{}", uuid::Uuid::new_v4()));
+    // The hook's session is signed by the runtime it runs as.
     let node = Arc::new(
-        crate::test_support::node_builder()
+        EmbeddedNode::builder()
+            .with_node_identity_did(identity.did())
             .data_path(&data_path)
             .build()
             .await
             .expect("embedded node"),
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let hook =
+    let mut hook =
         DefraSessionHook::with_identity(node.clone(), identity.did(), FailurePolicy::default())
             .with_goal_tool_authority(true, false);
+    // The hook acts as the runtime that signs its session and requests.
+    hook.actor = Some(identity::Did::new(identity.did()).unwrap());
     assert!(matches!(
         hook.on_completion_call(&user_text_message("start goal"), &[])
             .await,
@@ -1977,9 +2176,9 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
     // (edited_fields_match_operator_updates_without_changing_goal_identity),
     // which cover active-edit success and CAS/identity rejection at the edit layer.
     {
-        crate::goal::set_goal(
+        set_goal_as_session_owner(
             &node,
-            identity.did(),
+            &identity,
             &session_id,
             Some("blocked-edit semantics"),
             Some(crate::goal::GoalStatus::Active),
@@ -2025,23 +2224,27 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
             .expect("load goal")
             .expect("goal exists");
         assert_eq!(goal.objective, "revised while active");
-        crate::goal::delete_goals_for_session(&node, identity.did(), &session_id)
-            .await
-            .expect("clear goal");
+        crate::goal::delete_goals_for_session_from_access(
+            &hook.actor_access().unwrap(),
+            identity.did(),
+            &session_id,
+        )
+        .await
+        .expect("clear goal");
     }
 
     for (status, expected_hint) in [
         (
             crate::goal::GoalStatus::Blocked,
-            "gents goal resume-request --session SESSION --from REQUEST_ID` (REQUEST_ID is the terminal latest predecessor request)",
+            "gents automation goal resume-request --session SESSION --from REQUEST_ID` (REQUEST_ID is the terminal latest predecessor request)",
         ),
         (
             crate::goal::GoalStatus::Paused,
-            "gents goal resume-request --session SESSION --from REQUEST_ID` (REQUEST_ID is the terminal latest predecessor request)",
+            "gents automation goal resume-request --session SESSION --from REQUEST_ID` (REQUEST_ID is the terminal latest predecessor request)",
         ),
         (
             crate::goal::GoalStatus::UsageLimited,
-            "gents goal resume-request --session SESSION --from REQUEST_ID` (REQUEST_ID is the terminal latest predecessor request)",
+            "gents automation goal resume-request --session SESSION --from REQUEST_ID` (REQUEST_ID is the terminal latest predecessor request)",
         ),
         (
             crate::goal::GoalStatus::Complete,
@@ -2052,9 +2255,9 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
             "a budget_limited goal cannot be reactivated and has no resume path",
         ),
     ] {
-        crate::goal::set_goal(
+        set_goal_as_session_owner(
             &node,
-            identity.did(),
+            &identity,
             &session_id,
             Some("blocked-edit semantics"),
             Some(crate::goal::GoalStatus::Active),
@@ -2063,9 +2266,9 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
         .await
         .expect("create active goal");
         goal_context::bind_signed_request(&node, &hook, &identity, &format!("goal-update-{}", uuid::Uuid::new_v4()), &session_id, None).await;
-        crate::goal::set_goal(
+        set_goal_as_session_owner(
             &node,
-            identity.did(),
+            &identity,
             &session_id,
             None,
             Some(status),
@@ -2143,12 +2346,12 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
         }
         // Rebuild from a fresh active goal for the next case; complete and
         // budget_limited cannot be reset to active via set_goal.
-        crate::goal::delete_goals_for_session(&node, identity.did(), &session_id)
+        crate::goal::delete_goals_for_session_from_access(&hook.actor_access().unwrap(), identity.did(), &session_id)
             .await
             .expect("clear goal for next case");
     }
 
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
@@ -2165,22 +2368,12 @@ async fn claimed_authored_input_persists_context_once_before_prompt() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook =
-        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
+    let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session_id = hook.session_id().await.expect("session id");
-    crate::session::create_session_with_agent_id(&node, &session_id, "did:test:general", "general")
-        .await
-        .unwrap();
     let context = user_text_message("<context>\nnow=2026-06-15T00:00:00Z\n</context>");
     let first_prompt = user_text_message("First request");
-    assert!(
-        crate::session::load_history(&node, &session_id, &hook.node_did, None)
-            .await
-            .unwrap()
-            .is_empty()
-    );
+    assert!(hook_history(&hook, &session_id).await.unwrap().is_empty());
     bind_interruptible_request(
-        node.as_ref(),
         &hook,
         "context-request",
         &session_id,
@@ -2196,9 +2389,7 @@ async fn claimed_authored_input_persists_context_once_before_prompt() {
     .await;
     publish_claimed_authored_input(&hook, "context-request", Some(context), first_prompt).await;
 
-    let history = crate::session::load_history(&node, &session_id, &hook.node_did, None)
-        .await
-        .unwrap();
+    let history = hook_history(&hook, &session_id).await.unwrap();
     assert_eq!(history.len(), 2);
     assert!(matches!(
         &history[0],
@@ -2228,14 +2419,9 @@ async fn context_and_prompt_deduped_across_retry_attempts() {
     let context = user_text_message("<context>\nnow=2026-06-15T00:00:00Z\n</context>");
     let prompt = user_text_message("Do the thing");
 
-    let hook1 =
-        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
+    let hook1 = signed_hook(&node, FailurePolicy::default()).await;
     let session_id = hook1.session_id().await.expect("session id");
-    crate::session::create_session_with_agent_id(&node, &session_id, "did:test:general", "general")
-        .await
-        .unwrap();
     bind_interruptible_request(
-        node.as_ref(),
         &hook1,
         "req-retry",
         &session_id,
@@ -2245,27 +2431,30 @@ async fn context_and_prompt_deduped_across_retry_attempts() {
     let request_doc_id = hook1.active_request_doc_id().await.unwrap();
     publish_claimed_authored_input(&hook1, "req-retry", Some(context.clone()), prompt.clone())
         .await;
-    let hook2 = DefraSessionHook::resume_with_identity_policy(
+    let agent = hook1.actor.clone().expect("hook1 selects an Agent");
+    let signer = hook1.agent_signer.clone().expect("hook1 holds its signer");
+    let hook2 = DefraSessionHook::resume_with_actor_policy(
         node.clone(),
         &session_id,
-        "did:test:general",
-        None,
+        &hook1.node_did,
+        Some(agent.as_str()),
+        agent.clone(),
         FailurePolicy::default(),
     )
     .await
+    .unwrap()
+    .with_managed_identity(&signer)
     .unwrap();
     hook2
         .set_active_request_binding(
             Some("req-retry".to_string()),
             Some(request_doc_id.clone()),
-            None,
+            Some(agent.to_string()),
         )
         .await;
     publish_claimed_authored_input(&hook2, "req-retry", Some(context), prompt).await;
 
-    let history = crate::session::load_history(&node, &session_id, &hook2.node_did, None)
-        .await
-        .unwrap();
+    let history = hook_history(&hook2, &session_id).await.unwrap();
     let context_count = history
         .iter()
         .filter(|message| {
@@ -2282,18 +2471,14 @@ async fn context_and_prompt_deduped_across_retry_attempts() {
         2,
         "retry must not duplicate turn-1 messages; expected [context, prompt], got {history:?}"
     );
-    let response = node
-        .execute(&format!(
+    let data = hook_query(
+        &hook2,
+        &format!(
             r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ request_doc_id }} }}"#,
             crate::store::graphql::escape_graphql_string(&session_id)
-        ))
-        .await;
-    assert!(
-        !response.has_errors(),
-        "query failed: {:?}",
-        response.errors
-    );
-    let data = response.data.unwrap();
+        ),
+    )
+    .await;
     let rows = data["AgentMessage"].as_array().expect("message rows");
     assert!(rows
         .iter()
@@ -2316,21 +2501,11 @@ async fn steering_input_is_published_once_when_claimed_owner_runs() {
             .unwrap(),
     );
     ensure_runtime_schemas(&node).await.unwrap();
-    let hook =
-        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
+    let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session_id = hook.session_id().await.expect("session id");
-    crate::session::create_session_with_agent_id(&node, &session_id, "did:test:general", "general")
-        .await
-        .unwrap();
     let prompt = user_text_message("also check the staging config");
-    assert!(
-        crate::session::load_history(&node, &session_id, &hook.node_did, None)
-            .await
-            .unwrap()
-            .is_empty()
-    );
+    assert!(hook_history(&hook, &session_id).await.unwrap().is_empty());
     bind_interruptible_request(
-        node.as_ref(),
         &hook,
         "req-steering",
         &session_id,
@@ -2340,20 +2515,19 @@ async fn steering_input_is_published_once_when_claimed_owner_runs() {
     publish_claimed_authored_input(&hook, "req-steering", None, prompt.clone()).await;
     publish_claimed_authored_input(&hook, "req-steering", None, prompt.clone()).await;
 
-    let response = node
-        .execute(&format!(
+    let data = hook_query(
+        &hook,
+        &format!(
             r#"{{
                 AgentMessage(filter: {{
                     session_id: {{ _eq: "{}" }}
                 }}) {{ message_key request_doc_id }}
             }}"#,
             crate::store::graphql::escape_graphql_string(&session_id)
-        ))
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let rows = response
-        .data
-        .as_ref()
+        ),
+    )
+    .await;
+    let rows = Some(&data)
         .and_then(|data| data.get("AgentMessage"))
         .and_then(serde_json::Value::as_array)
         .expect("message rows");
@@ -2368,9 +2542,7 @@ async fn steering_input_is_published_once_when_claimed_owner_runs() {
         format!("authored:{request_doc_id}:prompt")
     );
     assert_eq!(rows[0]["request_doc_id"], request_doc_id);
-    let history = crate::session::load_history(&node, &session_id, &hook.node_did, None)
-        .await
-        .unwrap();
+    let history = hook_history(&hook, &session_id).await.unwrap();
     assert_eq!(history, vec![prompt]);
 
     let _ = std::fs::remove_dir_all(&data_path);
@@ -2389,8 +2561,7 @@ async fn hook_maps_managed_timeout_result_to_timed_out_lifecycle() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook =
-        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
+    let hook = signed_hook(&node, FailurePolicy::default()).await;
     assert!(matches!(
         hook.on_completion_call(&user_text_message("Run"), &[])
             .await,
@@ -2398,7 +2569,7 @@ async fn hook_maps_managed_timeout_result_to_timed_out_lifecycle() {
     ));
     let session_id = hook.session_id().await.expect("session id");
     let deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
-    bind_interruptible_request(node.as_ref(), &hook, "req-timeout", &session_id, deadline).await;
+    bind_interruptible_request(&hook, "req-timeout", &session_id, deadline).await;
 
     accept_hook_tool_call(&hook, "internal-timeout", "never", "{}", None).await;
     assert!(matches!(
@@ -2419,7 +2590,7 @@ async fn hook_maps_managed_timeout_result_to_timed_out_lifecycle() {
         .await;
     assert!(matches!(action, HookAction::Terminate { .. }));
 
-    let row = fetch_tool_call_row(&node, &session_id, "internal-timeout").await;
+    let row = fetch_tool_call_row(&hook, &session_id, "internal-timeout").await;
     assert_eq!(
         row.get("lifecycle_state").and_then(|value| value.as_str()),
         Some("timedOut")
@@ -2450,8 +2621,7 @@ async fn hook_maps_unknown_tool_dispatch_to_failed_lifecycle() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook =
-        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
+    let hook = signed_hook(&node, FailurePolicy::default()).await;
     assert!(matches!(
         hook.on_completion_call(&user_text_message("Run"), &[])
             .await,
@@ -2459,7 +2629,6 @@ async fn hook_maps_unknown_tool_dispatch_to_failed_lifecycle() {
     ));
     let session_id = hook.session_id().await.expect("session id");
     bind_interruptible_request(
-        node.as_ref(),
         &hook,
         "req-unknown-tool",
         &session_id,
@@ -2487,7 +2656,7 @@ async fn hook_maps_unknown_tool_dispatch_to_failed_lifecycle() {
         .on_tool_result("ghost_tool", None, "internal-unknown", "{}", &dispatched)
         .await;
 
-    let row = fetch_tool_call_row(&node, &session_id, "internal-unknown").await;
+    let row = fetch_tool_call_row(&hook, &session_id, "internal-unknown").await;
     assert_eq!(
         row.get("lifecycle_state").and_then(|value| value.as_str()),
         Some("failed"),
@@ -2523,8 +2692,7 @@ async fn hook_persists_exact_canonical_output_stream_without_legacy_spill_rows()
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook =
-        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
+    let hook = signed_hook(&node, FailurePolicy::default()).await;
     assert!(matches!(
         hook.on_completion_call(&user_text_message("Run an oversized tool"), &[],)
             .await,
@@ -2532,7 +2700,6 @@ async fn hook_persists_exact_canonical_output_stream_without_legacy_spill_rows()
     ));
     let session_id = hook.session_id().await.expect("session id");
     bind_interruptible_request(
-        node.as_ref(),
         &hook,
         "req-oversized",
         &session_id,
@@ -2564,7 +2731,7 @@ async fn hook_persists_exact_canonical_output_stream_without_legacy_spill_rows()
         HookAction::Continue
     ));
 
-    let tool_call = fetch_tool_call_row(&node, &session_id, "internal-oversized").await;
+    let tool_call = fetch_tool_call_row(&hook, &session_id, "internal-oversized").await;
     let persisted_result = tool_call
         .get("result")
         .and_then(|value| value.as_str())
@@ -2587,10 +2754,8 @@ async fn cancelling_one_hook_does_not_cancel_unrelated_live_tool_call() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook_a =
-        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
-    let hook_b =
-        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
+    let hook_a = signed_hook(&node, FailurePolicy::default()).await;
+    let hook_b = signed_hook(&node, FailurePolicy::default()).await;
     assert!(matches!(
         hook_a
             .on_completion_call(&user_text_message("A"), &[])
@@ -2606,8 +2771,8 @@ async fn cancelling_one_hook_does_not_cancel_unrelated_live_tool_call() {
     let session_a = hook_a.session_id().await.expect("session a");
     let session_b = hook_b.session_id().await.expect("session b");
     let deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
-    bind_interruptible_request(node.as_ref(), &hook_a, "req-a", &session_a, deadline).await;
-    bind_interruptible_request(node.as_ref(), &hook_b, "req-b", &session_b, deadline).await;
+    bind_interruptible_request(&hook_a, "req-a", &session_a, deadline).await;
+    bind_interruptible_request(&hook_b, "req-b", &session_b, deadline).await;
 
     accept_hook_tool_call(&hook_a, "internal-a", "slow", "{}", None).await;
     accept_hook_tool_call(&hook_b, "internal-b", "slow", "{}", None).await;
@@ -2622,14 +2787,14 @@ async fn cancelling_one_hook_does_not_cancel_unrelated_live_tool_call() {
 
     assert_eq!(hook_a.cancel_in_flight_tool_calls().await.unwrap(), 1);
 
-    let row_a = fetch_tool_call_row(&node, &session_a, "internal-a").await;
+    let row_a = fetch_tool_call_row(&hook_a, &session_a, "internal-a").await;
     assert_eq!(
         row_a
             .get("lifecycle_state")
             .and_then(|value| value.as_str()),
         Some("cancelled")
     );
-    let row_b = fetch_tool_call_row(&node, &session_b, "internal-b").await;
+    let row_b = fetch_tool_call_row(&hook_b, &session_b, "internal-b").await;
     assert_eq!(
         row_b
             .get("lifecycle_state")
@@ -2653,13 +2818,12 @@ async fn interruption_leaves_background_workers_running() {
             .unwrap(),
     );
     ensure_runtime_schemas(&node).await.unwrap();
-    let hook =
-        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
+    let hook = signed_hook(&node, FailurePolicy::default()).await;
     hook.on_completion_call(&user_text_message("background work"), &[])
         .await;
     let session_id = hook.session_id().await.unwrap();
     let deadline = Utc::now() + chrono::Duration::minutes(5);
-    bind_interruptible_request(&node, &hook, "parent", &session_id, deadline).await;
+    bind_interruptible_request(&hook, "parent", &session_id, deadline).await;
     let mut reservations = Vec::new();
     let mut tokens = Vec::new();
     for (id, detached) in [("owned", false), ("detached", true)] {
@@ -2669,7 +2833,7 @@ async fn interruption_leaves_background_workers_running() {
             "bash",
             "{}",
             deadline,
-            crate::tools::call::lifecycle::AwaitMode::Background,
+            gents_protocol::tool_call::AwaitMode::Background,
         )
         .await;
         lifecycle.start_running().await.unwrap();
@@ -2693,11 +2857,9 @@ async fn interruption_leaves_background_workers_running() {
         }
         tokens.push(token);
     }
-    let unrelated_hook =
-        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
+    let unrelated_hook = signed_hook(&node, FailurePolicy::default()).await;
     let unrelated_session_id = unrelated_hook.session_id().await.unwrap();
     bind_interruptible_request(
-        &node,
         &unrelated_hook,
         "unrelated-parent",
         &unrelated_session_id,
@@ -2710,7 +2872,7 @@ async fn interruption_leaves_background_workers_running() {
         "bash",
         "{}",
         deadline,
-        crate::tools::call::lifecycle::AwaitMode::Background,
+        gents_protocol::tool_call::AwaitMode::Background,
     )
     .await;
     unrelated.start_running().await.unwrap();
@@ -2759,12 +2921,13 @@ async fn interruption_leaves_background_workers_running() {
         .iter()
         .any(|p| p.tool_name.as_deref() == Some(process_name.as_str())));
     for id in ["owned", "detached"] {
-        let row = fetch_tool_call_row(&node, &session_id, id).await;
+        let row = fetch_tool_call_row(&hook, &session_id, id).await;
         assert_eq!(row["lifecycle_state"], "running", "{id}");
         assert!(row["cancel_cause"].is_null(), "{id}");
     }
     assert_eq!(
-        fetch_tool_call_row(&node, &unrelated_session_id, "unrelated").await["lifecycle_state"],
+        fetch_tool_call_row(&unrelated_hook, &unrelated_session_id, "unrelated").await
+            ["lifecycle_state"],
         "running"
     );
     tokens[0].cancel();
@@ -2779,7 +2942,8 @@ async fn interruption_leaves_background_workers_running() {
 
 #[tokio::test]
 async fn generated_interrupt_dispositions_drive_in_flight_interrupt() {
-    use crate::tools::call::lifecycle::{AwaitMode, InterruptDisposition, ToolCallState};
+    use crate::tools::call::lifecycle::{InterruptDisposition, ToolCallState};
+    use gents_protocol::tool_call::AwaitMode;
     let cases = crate::lean_vocab_test::lean_interrupt_disposition_cases();
     assert!(!cases.is_empty());
     let dir = tempfile::tempdir().unwrap();
@@ -2805,16 +2969,12 @@ async fn generated_interrupt_dispositions_drive_in_flight_interrupt() {
         if state != ToolCallState::Running {
             continue;
         }
-        let hook = DefraSessionHook::with_identity(
-            node.clone(),
-            "did:test:general",
-            FailurePolicy::default(),
-        );
+        let hook = signed_hook(&node, FailurePolicy::default()).await;
         hook.on_completion_call(&user_text_message(&case.name), &[])
             .await;
         let session_id = hook.session_id().await.unwrap();
         let parent_id = format!("parent-{}", case.name);
-        bind_interruptible_request(&node, &hook, &parent_id, &session_id, deadline).await;
+        bind_interruptible_request(&hook, &parent_id, &session_id, deadline).await;
         let mut lifecycle = accepted_hook_tool_lifecycle(
             &hook,
             &case.name,
@@ -2837,7 +2997,7 @@ async fn generated_interrupt_dispositions_drive_in_flight_interrupt() {
             "{}",
             case.name
         );
-        let row = fetch_tool_call_row(&node, &session_id, &case.name).await;
+        let row = fetch_tool_call_row(&hook, &session_id, &case.name).await;
         assert_eq!(
             row["lifecycle_state"],
             case.post_state.as_str(),
@@ -2871,12 +3031,11 @@ async fn interrupt_cancels_native_tools_and_keeps_children_running() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook =
-        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
+    let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session_id = hook.session_id().await.unwrap();
     let child_request_id = "child-mixed-tools";
     let deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
-    bind_interruptible_request(&node, &hook, "parent-mixed-tools", &session_id, deadline).await;
+    bind_interruptible_request(&hook, "parent-mixed-tools", &session_id, deadline).await;
     let parent_doc_id = hook.active_request_doc_id().await.unwrap();
 
     let mut outer = accepted_hook_tool_lifecycle(
@@ -2885,7 +3044,7 @@ async fn interrupt_cancels_native_tools_and_keeps_children_running() {
         "slow_tool",
         "{}",
         deadline,
-        crate::tools::call::lifecycle::AwaitMode::Foreground,
+        gents_protocol::tool_call::AwaitMode::Foreground,
     )
     .await;
     outer.start_running().await.unwrap();
@@ -2901,7 +3060,7 @@ async fn interrupt_cancels_native_tools_and_keeps_children_running() {
         .await
         .unwrap());
     create_corroborated_child_request(
-        &node,
+        &hook,
         child_request_id,
         &session_id,
         "parent-mixed-tools",
@@ -2918,7 +3077,7 @@ async fn interrupt_cancels_native_tools_and_keeps_children_running() {
     assert_eq!(hook.cancel_in_flight_tool_calls().await.unwrap(), 1);
     assert_eq!(hook.cancel_in_flight_tool_calls().await.unwrap(), 0);
 
-    let outer_row = fetch_tool_call_row(&node, &session_id, "native-tool").await;
+    let outer_row = fetch_tool_call_row(&hook, &session_id, "native-tool").await;
     assert_eq!(
         outer_row
             .get("lifecycle_state")
@@ -2936,26 +3095,33 @@ async fn interrupt_cancels_native_tools_and_keeps_children_running() {
         Some("foreground")
     );
 
-    let bridge_row = fetch_tool_call_row(&node, &session_id, "child-bridge").await;
+    let bridge_row = fetch_tool_call_row(&hook, &session_id, "child-bridge").await;
     assert_eq!(bridge_row["lifecycle_state"], "running");
     assert_eq!(bridge_row["await_mode"], "background");
     assert!(bridge_row["cancel_cause"].is_null());
+    let child = hook_query(
+        &hook,
+        &format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{child_request_id}" }} }}) {{ _docID }} }}"#
+        ),
+    )
+    .await;
+    let child_doc_id = child["AgentRequest"][0]["_docID"]
+        .as_str()
+        .expect("the hook's Agent sees its child request");
     assert!(
-        crate::request::interrupt::fetch_interrupt_requested_at(&node, child_request_id)
-            .await
-            .unwrap()
-            .is_none(),
+        crate::request::interrupt::fetch_interrupt_requested_at_by_doc_id_with_access(
+            &hook.actor_access().unwrap(),
+            child_doc_id,
+        )
+        .await
+        .unwrap()
+        .is_none(),
         "interrupting the parent must not reach the child"
     );
 
-    let mut reloaded = crate::tools::call::lifecycle::ToolCallLifecycle::load(
-        node.clone(),
-        &session_id,
-        "native-tool",
-    )
-    .await
-    .unwrap()
-    .expect("outer row");
+    let outer_doc_id = outer_row["_docID"].as_str().expect("outer row document");
+    let mut reloaded = reload_tool_call_as_hook(&hook, outer_doc_id, &session_id).await;
     reloaded.set_state(crate::tools::call::lifecycle::ToolCallState::Running);
     reloaded.set_started_at(Some(chrono::Utc::now() - chrono::Duration::seconds(1)));
     let late_completion = reloaded.complete("late success").await;
@@ -2967,7 +3133,7 @@ async fn interrupt_cancels_native_tools_and_keeps_children_running() {
             .contains("terminal raw tool result is not an exact extension of persisted raw output"),
         "unexpected late-completion failure: {late_error:#}"
     );
-    let outer_after = fetch_tool_call_row(&node, &session_id, "native-tool").await;
+    let outer_after = fetch_tool_call_row(&hook, &session_id, "native-tool").await;
     assert_eq!(
         outer_after, outer_row,
         "late completion changed the terminal row"
@@ -3000,8 +3166,7 @@ async fn hook_can_fail_live_tool_call_without_conflating_timeout_or_cancel() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook =
-        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
+    let hook = signed_hook(&node, FailurePolicy::default()).await;
     assert!(matches!(
         hook.on_completion_call(&user_text_message("fail"), &[])
             .await,
@@ -3009,7 +3174,6 @@ async fn hook_can_fail_live_tool_call_without_conflating_timeout_or_cancel() {
     ));
     let session_id = hook.session_id().await.expect("session id");
     bind_interruptible_request(
-        node.as_ref(),
         &hook,
         "req-fail",
         &session_id,
@@ -3032,7 +3196,7 @@ async fn hook_can_fail_live_tool_call_without_conflating_timeout_or_cancel() {
         1
     );
 
-    let row = fetch_tool_call_row(&node, &session_id, "internal-fail").await;
+    let row = fetch_tool_call_row(&hook, &session_id, "internal-fail").await;
     assert_eq!(
         row.get("lifecycle_state").and_then(|value| value.as_str()),
         Some("failed")
@@ -3057,15 +3221,10 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook =
-        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
+    let hook = signed_hook(&node, FailurePolicy::default()).await;
     let user_prompt = user_text_message("Inspect /tmp/main.rs");
     let session_id = hook.session_id().await.expect("session id");
-    crate::session::create_session_with_agent_id(&node, &session_id, "did:test:general", "general")
-        .await
-        .unwrap();
     bind_interruptible_request(
-        node.as_ref(),
         &hook,
         "request-streaming-turn",
         &session_id,
@@ -3131,9 +3290,7 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
     .await;
 
     let session_id = hook.session_id().await.expect("session id");
-    let history = crate::session::load_history(&node, &session_id, &hook.node_did, None)
-        .await
-        .unwrap();
+    let history = hook_history(&hook, &session_id).await.unwrap();
     assert_eq!(history.len(), 4);
 
     assert!(matches!(
@@ -3162,7 +3319,7 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
             if matches!(first_content(content), AssistantContent::Text(Text { text }) if text == "The file looks healthy.")
     ));
 
-    let row = fetch_tool_call_row(&node, &session_id, "call-1").await;
+    let row = fetch_tool_call_row(&hook, &session_id, "call-1").await;
 
     assert_eq!(
         row.get("message_sequence").and_then(|value| value.as_u64()),
@@ -3195,15 +3352,10 @@ async fn assistant_turn_materializes_durable_reasoning_into_agent_message() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook =
-        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
+    let hook = signed_hook(&node, FailurePolicy::default()).await;
     let user_prompt = user_text_message("Explain the plan");
     let session_id = hook.session_id().await.expect("session id");
-    crate::session::create_session_with_agent_id(&node, &session_id, "did:test:general", "general")
-        .await
-        .unwrap();
     bind_interruptible_request(
-        node.as_ref(),
         &hook,
         "request-durable-reasoning",
         &session_id,
@@ -3230,9 +3382,7 @@ async fn assistant_turn_materializes_durable_reasoning_into_agent_message() {
     )
     .await;
 
-    let history = crate::session::load_history(&node, &session_id, &hook.node_did, None)
-        .await
-        .unwrap();
+    let history = hook_history(&hook, &session_id).await.unwrap();
     let assistant = history
         .iter()
         .find_map(|message| match message {
@@ -3266,14 +3416,9 @@ async fn read_file_result_persists_raw_output() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook =
-        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
+    let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session_id = hook.session_id().await.expect("session id");
-    crate::session::create_session_with_agent_id(&node, &session_id, "did:test:general", "general")
-        .await
-        .unwrap();
     bind_interruptible_request(
-        node.as_ref(),
         &hook,
         "request-read-file-observation",
         &session_id,
@@ -3325,9 +3470,7 @@ async fn read_file_result_persists_raw_output() {
     ));
 
     let session_id = hook.session_id().await.expect("session id");
-    let history = crate::session::load_history(&node, &session_id, &hook.node_did, None)
-        .await
-        .unwrap();
+    let history = hook_history(&hook, &session_id).await.unwrap();
     assert_eq!(history.len(), 3);
 
     let Message::User { content } = &history[2] else {
@@ -3341,7 +3484,7 @@ async fn read_file_result_persists_raw_output() {
         panic!("expected text tool result content");
     };
     assert_eq!(text, raw_read_output);
-    let row = fetch_tool_call_row(&node, &session_id, "call-read").await;
+    let row = fetch_tool_call_row(&hook, &session_id, "call-read").await;
     assert_eq!(
         row.get("result").and_then(|value| value.as_str()),
         Some(raw_read_output)
@@ -3365,14 +3508,9 @@ async fn owned_tool_result_materializes_one_transcript_row() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook =
-        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
+    let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session_id = hook.session_id().await.expect("session id");
-    crate::session::create_session_with_agent_id(&node, &session_id, "did:test:general", "general")
-        .await
-        .unwrap();
     bind_interruptible_request(
-        node.as_ref(),
         &hook,
         "request-tool-result-dedupe",
         &session_id,
@@ -3428,9 +3566,7 @@ async fn owned_tool_result_materializes_one_transcript_row() {
         .await
         .expect("first tool-result sequence");
 
-    let history = crate::session::load_history(&node, &session_id, &hook.node_did, None)
-        .await
-        .unwrap();
+    let history = hook_history(&hook, &session_id).await.unwrap();
     assert_eq!(
         history.len(),
         3,
@@ -3459,24 +3595,19 @@ async fn owned_tool_result_materializes_one_transcript_row() {
         ToolResultContent::Text(Text { text }) if text == tool_result_text
     ));
 
-    let resp = node
-        .execute(&format!(
+    let data = hook_query(
+        &hook,
+        &format!(
             r#"{{
                 AgentToolCall(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{
                     tool_call_key
                     tool_call_id
                 }}
             }}"#
-        ))
-        .await;
-    assert!(
-        !resp.has_errors(),
-        "query tool calls failed: {:?}",
-        resp.errors
-    );
-    let tool_call_rows = resp
-        .data
-        .as_ref()
+        ),
+    )
+    .await;
+    let tool_call_rows = Some(&data)
         .and_then(|data| data.get("AgentToolCall"))
         .and_then(|value| value.as_array())
         .cloned()
@@ -3500,13 +3631,7 @@ async fn owned_tool_result_materializes_one_transcript_row() {
             .unwrap(),
         result_sequence
     );
-    assert_eq!(
-        crate::session::load_history(&node, &session_id, &hook.node_did, None)
-            .await
-            .unwrap()
-            .len(),
-        3
-    );
+    assert_eq!(hook_history(&hook, &session_id).await.unwrap().len(), 3);
 
     let _ = std::fs::remove_dir_all(&data_path);
 }
@@ -3526,14 +3651,9 @@ async fn tool_result_message_dedupe_preserves_distinct_result_ids() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook =
-        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
+    let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session_id = hook.session_id().await.expect("session id");
-    crate::session::create_session_with_agent_id(&node, &session_id, "did:test:general", "general")
-        .await
-        .unwrap();
     bind_interruptible_request(
-        node.as_ref(),
         &hook,
         "request-distinct-results",
         &session_id,
@@ -3567,9 +3687,7 @@ async fn tool_result_message_dedupe_preserves_distinct_result_ids() {
         ));
     }
 
-    let history = crate::session::load_history(&node, &session_id, &hook.node_did, None)
-        .await
-        .unwrap();
+    let history = hook_history(&hook, &session_id).await.unwrap();
     let tool_results = history
         .iter()
         .filter_map(|message| match message {
@@ -3599,15 +3717,10 @@ async fn accepted_tool_turns_keep_results_bound_to_their_assistant_headers() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook =
-        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
+    let hook = signed_hook(&node, FailurePolicy::default()).await;
     let user_prompt = user_text_message("Inspect mini-1");
     let session_id = hook.session_id().await.expect("session id");
-    crate::session::create_session_with_agent_id(&node, &session_id, "did:test:general", "general")
-        .await
-        .unwrap();
     bind_interruptible_request(
-        node.as_ref(),
         &hook,
         "request-tool-turn",
         &session_id,
@@ -3639,11 +3752,9 @@ async fn accepted_tool_turns_keep_results_bound_to_their_assistant_headers() {
     ));
 
     let session_id = hook.session_id().await.expect("session id");
-    let history = crate::session::load_history(&node, &session_id, &hook.node_did, None)
-        .await
-        .unwrap();
+    let history = hook_history(&hook, &session_id).await.unwrap();
     assert_eq!(history.len(), 4);
-    let row = fetch_tool_call_row(&node, &session_id, "call-2").await;
+    let row = fetch_tool_call_row(&hook, &session_id, "call-2").await;
     assert_eq!(
         row.get("message_sequence").and_then(|value| value.as_u64()),
         Some(3)
@@ -3686,26 +3797,23 @@ async fn remote_presentations_persist_the_same_selected_identity() {
             .unwrap(),
     );
     ensure_runtime_schemas(&node).await.unwrap();
+    let mut rows = Vec::new();
     for (index, style) in [RemoteToolStyle::Flat, RemoteToolStyle::Discovery]
         .into_iter()
         .enumerate()
     {
-        let hook = DefraSessionHook::with_identity(
-            node.clone(),
-            "did:test:general",
-            FailurePolicy::default(),
-        )
-        .with_remote_tools(Some(RemoteTools {
-            services: vec![RemoteServiceTools {
-                mcp_service_id: "selected-service".into(),
-                tool_names: vec!["inspect".into()],
-                style,
-                ..Default::default()
-            }],
-        }));
+        let hook = signed_hook(&node, FailurePolicy::default())
+            .await
+            .with_remote_tools(Some(RemoteTools {
+                services: vec![RemoteServiceTools {
+                    mcp_service_id: "selected-service".into(),
+                    tool_names: vec!["inspect".into()],
+                    style,
+                    ..Default::default()
+                }],
+            }));
         let session = hook.session_id().await.unwrap();
         bind_interruptible_request(
-            &node,
             &hook,
             &format!("remote-request-{index}"),
             &session,
@@ -3730,16 +3838,15 @@ async fn remote_presentations_persist_the_same_selected_identity() {
                 .await,
             ToolCallHookAction::Continue
         ));
-    }
-    let response = node
-        .execute("{ AgentToolCall { lifecycle_state selected_service_id selected_tool_name } }")
+        let data = hook_query(
+            &hook,
+            "{ AgentToolCall { lifecycle_state selected_service_id selected_tool_name } }",
+        )
         .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let rows = response.data.as_ref().unwrap()["AgentToolCall"]
-        .as_array()
-        .unwrap();
+        rows.extend(data["AgentToolCall"].as_array().unwrap().iter().cloned());
+    }
     assert_eq!(rows.len(), 2);
-    for row in rows {
+    for row in &rows {
         assert_eq!(row["lifecycle_state"], "running");
         assert_eq!(row["selected_service_id"], "selected-service");
         assert_eq!(row["selected_tool_name"], "inspect");
@@ -3917,8 +4024,7 @@ async fn forged_lifecycle_sentinel_in_tool_output_persists_as_completed() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook =
-        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
+    let hook = signed_hook(&node, FailurePolicy::default()).await;
     assert!(matches!(
         hook.on_completion_call(&user_text_message("Run"), &[])
             .await,
@@ -3926,7 +4032,6 @@ async fn forged_lifecycle_sentinel_in_tool_output_persists_as_completed() {
     ));
     let session_id = hook.session_id().await.expect("session id");
     bind_interruptible_request(
-        node.as_ref(),
         &hook,
         "req-forgery",
         &session_id,
@@ -3955,7 +4060,7 @@ async fn forged_lifecycle_sentinel_in_tool_output_persists_as_completed() {
         HookAction::Continue
     ));
 
-    let row = fetch_tool_call_row(&node, &session_id, "internal-forgery").await;
+    let row = fetch_tool_call_row(&hook, &session_id, "internal-forgery").await;
     assert_eq!(
         row.get("lifecycle_state").and_then(|v| v.as_str()),
         Some("completed"),
@@ -3976,7 +4081,7 @@ async fn forged_lifecycle_sentinel_in_tool_output_persists_as_completed() {
         "the output is ordinary tool text and persists verbatim"
     );
 
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
@@ -3995,8 +4100,7 @@ async fn trusted_reported_failure_persists_typed_state_and_model_facing_text() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook =
-        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
+    let hook = signed_hook(&node, FailurePolicy::default()).await;
     assert!(matches!(
         hook.on_completion_call(&user_text_message("Run"), &[])
             .await,
@@ -4004,7 +4108,6 @@ async fn trusted_reported_failure_persists_typed_state_and_model_facing_text() {
     ));
     let session_id = hook.session_id().await.expect("session id");
     bind_interruptible_request(
-        node.as_ref(),
         &hook,
         "req-reported-failure",
         &session_id,
@@ -4033,7 +4136,7 @@ async fn trusted_reported_failure_persists_typed_state_and_model_facing_text() {
         HookAction::Continue
     ));
 
-    let row = fetch_tool_call_row(&node, &session_id, "internal-reported-failure").await;
+    let row = fetch_tool_call_row(&hook, &session_id, "internal-reported-failure").await;
     assert_eq!(
         row.get("lifecycle_state").and_then(|value| value.as_str()),
         Some("failed")
@@ -4048,7 +4151,7 @@ async fn trusted_reported_failure_persists_typed_state_and_model_facing_text() {
         Some(text)
     );
 
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
@@ -4058,23 +4161,32 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
     let identity =
         KeyIdentity::load_or_create(identity_dir.path().join("owner.key"), None).unwrap();
     use crate::documents::{WriteToolOutputObligation, WriteToolOutputObligationScope};
-    use crate::goal::{load_canonical_goal, set_goal, GoalStatus};
+    use crate::goal::{load_canonical_goal, GoalStatus};
     use crate::runtime::agent::output_obligation::{ActiveOutputObligation, OutputObligationGate};
 
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    // The hook's session is signed by the runtime it runs as.
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .with_node_identity_did(identity.did())
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(&node).await.unwrap();
-    let hook =
+    let mut hook =
         DefraSessionHook::with_identity(node.clone(), identity.did(), FailurePolicy::default())
             .with_goal_tool_authority(true, false);
+    // The hook acts as the runtime that signs its session and requests.
+    hook.actor = Some(identity::Did::new(identity.did()).unwrap());
     assert!(matches!(
         hook.on_completion_call(&user_text_message("publish required review output"), &[])
             .await,
         HookAction::Continue
     ));
     let session = hook.session_id().await.unwrap();
-    set_goal(
+    set_goal_as_session_owner(
         &node,
-        identity.did(),
+        &identity,
         &session,
         Some("publish review output"),
         Some(GoalStatus::Active),
@@ -4094,6 +4206,7 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
     let request_doc = hook.active_request_doc_id().await.unwrap();
     let gate = OutputObligationGate::new(
         node.clone(),
+        identity::Did::new(identity.did()).unwrap(),
         request_doc.clone(),
         vec![ActiveOutputObligation {
             tool_name: "write_scan_result".into(),
@@ -4129,7 +4242,7 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
             .await,
         ToolCallHookAction::Skip { .. }
     ));
-    let denied = fetch_tool_call_row(&node, &session, "premature-goal-complete").await;
+    let denied = fetch_tool_call_row(&hook, &session, "premature-goal-complete").await;
     assert_eq!(denied["lifecycle_state"], "completed");
     let result: serde_json::Value =
         serde_json::from_str(denied["result"].as_str().unwrap()).unwrap();
@@ -4191,7 +4304,7 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
             .await,
         ToolCallHookAction::Skip { .. }
     ));
-    let accepted = fetch_tool_call_row(&node, &session, "acknowledged-goal-complete").await;
+    let accepted = fetch_tool_call_row(&hook, &session, "acknowledged-goal-complete").await;
     assert_eq!(accepted["lifecycle_state"], "completed");
     let result: serde_json::Value =
         serde_json::from_str(accepted["result"].as_str().unwrap()).unwrap();
@@ -4202,9 +4315,9 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
         .unwrap();
     assert_eq!(complete.parsed_status(), Some(GoalStatus::Complete));
 
-    set_goal(
+    set_goal_as_session_owner(
         &node,
-        identity.did(),
+        &identity,
         "operator-output-session",
         Some("operator decision"),
         Some(GoalStatus::Active),
@@ -4214,6 +4327,7 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
     .unwrap();
     let empty_gate = OutputObligationGate::new(
         node.clone(),
+        identity::Did::new(identity.did()).unwrap(),
         "operator-unwritten-request",
         vec![ActiveOutputObligation {
             tool_name: "write_scan_result".into(),
@@ -4225,9 +4339,9 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
         }],
     );
     assert_eq!(empty_gate.unmet().await.unwrap().len(), 1);
-    set_goal(
+    set_goal_as_session_owner(
         &node,
-        identity.did(),
+        &identity,
         "operator-output-session",
         None,
         Some(GoalStatus::Complete),
@@ -4243,7 +4357,7 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
     assert_eq!(empty_gate.unmet().await.unwrap().len(), 1);
     drop(persistence_hook);
     drop(hook);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -4259,8 +4373,7 @@ async fn cancelled_tool_result_persists_cancelled_lifecycle_with_interrupt_cause
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook =
-        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
+    let hook = signed_hook(&node, FailurePolicy::default()).await;
     assert!(matches!(
         hook.on_completion_call(&user_text_message("Run"), &[])
             .await,
@@ -4268,7 +4381,6 @@ async fn cancelled_tool_result_persists_cancelled_lifecycle_with_interrupt_cause
     ));
     let session_id = hook.session_id().await.expect("session id");
     bind_interruptible_request(
-        node.as_ref(),
         &hook,
         "req-cancelled-outcome",
         &session_id,
@@ -4297,7 +4409,7 @@ async fn cancelled_tool_result_persists_cancelled_lifecycle_with_interrupt_cause
         "a cancelled outcome must terminate the turn, got {action:?}"
     );
 
-    let row = fetch_tool_call_row(&node, &session_id, "internal-cancelled").await;
+    let row = fetch_tool_call_row(&hook, &session_id, "internal-cancelled").await;
     assert_eq!(
         row.get("lifecycle_state").and_then(|value| value.as_str()),
         Some("cancelled"),
@@ -4316,7 +4428,7 @@ async fn cancelled_tool_result_persists_cancelled_lifecycle_with_interrupt_cause
         row.get("tool_failure_class")
     );
 
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
@@ -4333,8 +4445,7 @@ async fn real_bash_policy_denial_persists_typed_class_and_payload() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook =
-        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
+    let hook = signed_hook(&node, FailurePolicy::default()).await;
     assert!(matches!(
         hook.on_completion_call(&user_text_message("Run"), &[])
             .await,
@@ -4342,7 +4453,6 @@ async fn real_bash_policy_denial_persists_typed_class_and_payload() {
     ));
     let session_id = hook.session_id().await.expect("session id");
     bind_interruptible_request(
-        node.as_ref(),
         &hook,
         "req-real-denial",
         &session_id,
@@ -4392,7 +4502,7 @@ async fn real_bash_policy_denial_persists_typed_class_and_payload() {
         "a reported failure persists and continues the turn, got {action:?}"
     );
 
-    let row = fetch_tool_call_row(&node, &session_id, "internal-real-denial").await;
+    let row = fetch_tool_call_row(&hook, &session_id, "internal-real-denial").await;
     assert_eq!(
         row.get("lifecycle_state").and_then(|value| value.as_str()),
         Some("failed"),
@@ -4410,7 +4520,7 @@ async fn real_bash_policy_denial_persists_typed_class_and_payload() {
             .is_some_and(|result| result.contains("readOnlySubcommandNotAllowlisted")),
         "the denial payload must persist as the model-facing result"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
@@ -4428,16 +4538,11 @@ async fn plugin_child_requires_durable_completion_even_when_hook_is_fail_open() 
             .unwrap(),
     );
     ensure_runtime_schemas(&node).await.unwrap();
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "did:test:plugin-owner",
-        FailurePolicy::FailOpen,
-    );
+    let hook = signed_hook(&node, FailurePolicy::FailOpen).await;
     hook.on_completion_call(&user_text_message("compose tools"), &[])
         .await;
     let session_id = hook.session_id().await.unwrap();
     bind_interruptible_request(
-        node.as_ref(),
         &hook,
         "plugin-child-request",
         &session_id,
@@ -4505,16 +4610,11 @@ async fn plugin_child_timeout_is_child_terminal_and_parent_completes() {
             .unwrap(),
     );
     ensure_runtime_schemas(&node).await.unwrap();
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "did:test:plugin-owner",
-        FailurePolicy::FailClosed,
-    );
+    let hook = signed_hook(&node, FailurePolicy::FailClosed).await;
     hook.on_completion_call(&user_text_message("compose tools"), &[])
         .await;
     let session_id = hook.session_id().await.unwrap();
     bind_interruptible_request(
-        node.as_ref(),
         &hook,
         "plugin-child-timeout-request",
         &session_id,
@@ -4568,10 +4668,12 @@ async fn plugin_child_timeout_is_child_terminal_and_parent_completes() {
         .await,
         HookAction::Continue
     ));
-    let rows = node
-        .execute("query { AgentToolCall { tool_name lifecycle_state } }")
-        .await;
-    let rows = rows.data.unwrap()["AgentToolCall"].clone();
+    let rows = hook_query(
+        &hook,
+        "query { AgentToolCall { tool_name lifecycle_state } }",
+    )
+    .await["AgentToolCall"]
+        .clone();
     for (name, state) in [("plugin", "completed"), ("query", "timedOut")] {
         assert!(
             rows.as_array()
@@ -4581,7 +4683,7 @@ async fn plugin_child_timeout_is_child_terminal_and_parent_completes() {
             "{name} {state}: {rows}"
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(data_path);
 }
 
@@ -4610,20 +4712,16 @@ async fn plugin_child_naming_a_job_tool_is_refused_and_persisted_as_policy_denie
         },
         settings: None,
     };
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "did:test:plugin-owner",
-        FailurePolicy::FailClosed,
-    )
-    .with_job_tools(RapidHashMap::from_iter([(
-        "workflow_run".to_owned(),
-        binding,
-    )]));
+    let hook = signed_hook(&node, FailurePolicy::FailClosed)
+        .await
+        .with_job_tools(RapidHashMap::from_iter([(
+            "workflow_run".to_owned(),
+            binding,
+        )]));
     hook.on_completion_call(&user_text_message("compose tools"), &[])
         .await;
     let session_id = hook.session_id().await.unwrap();
     bind_interruptible_request(
-        node.as_ref(),
         &hook,
         "plugin-child-job-tool-request",
         &session_id,
@@ -4653,17 +4751,19 @@ async fn plugin_child_naming_a_job_tool_is_refused_and_persisted_as_policy_denie
         "{error}"
     );
     assert!(hook.effect_tool_calls.lock().await.is_empty());
-    let rows = node
-        .execute("query { AgentToolCall { tool_name lifecycle_state } }")
-        .await;
-    let rows = rows.data.unwrap()["AgentToolCall"].clone();
+    let rows = hook_query(
+        &hook,
+        "query { AgentToolCall { tool_name lifecycle_state } }",
+    )
+    .await["AgentToolCall"]
+        .clone();
     assert!(
         rows.as_array().unwrap().iter().any(|row| {
             row["tool_name"] == "workflow_run" && row["lifecycle_state"] == "failed"
         }),
         "{rows}"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(data_path);
 }
 

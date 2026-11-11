@@ -3,7 +3,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use super::authority::describe_plugin_authority;
+use super::authority::{describe_plugin_authority, GrantError};
 use super::model_calls::ModelBinding;
 use super::store::{self, InstalledPlugin};
 use super::{Manifold, PluginRunner};
@@ -36,8 +36,10 @@ pub fn install_from_pack(
         instructions,
         data_unique_keys,
         data_collection_fields,
+        BTreeMap::new(),
         consent,
     )
+    .map_err(Into::into)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -53,8 +55,9 @@ fn install_from_pack_locked(
     instructions: Option<String>,
     data_unique_keys: BTreeMap<String, Vec<Vec<String>>>,
     data_collection_fields: BTreeMap<String, Vec<String>>,
+    data_collection_schemas: BTreeMap<String, String>,
     consent: bool,
-) -> Result<InstalledPlugin> {
+) -> Result<InstalledPlugin, GrantError> {
     // The pack lifecycle already holds this lock across its transaction window; flock does not re-enter.
     lock.for_home(home)?;
     store::check_plugin_ownership(home, pack_namespace, &plugin.name, pack_coordinate)?;
@@ -100,6 +103,7 @@ fn install_from_pack_locked(
         model_binding,
         data_unique_keys,
         data_collection_fields,
+        data_collection_schemas,
     };
     store::write_record(home, &record)?;
     Ok(record)
@@ -172,7 +176,7 @@ fn install_pack_plugins_locked<'a>(
     pack_digest: &str,
     asset: impl Fn(&str) -> Result<&'a [u8]>,
     consent: bool,
-) -> Result<Vec<InstalledPlugin>> {
+) -> Result<Vec<InstalledPlugin>, GrantError> {
     lock.for_home(home)?;
     let pack_coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
     manifest
@@ -185,7 +189,7 @@ fn install_pack_plugins_locked<'a>(
                 .as_deref()
                 .map(|path| crate::pack::tool_instructions(&plugin.name, asset(path)?))
                 .transpose()?;
-            let (data_unique_keys, data_collection_fields) =
+            let (data_unique_keys, data_collection_fields, data_collection_schemas) =
                 crate::pack::plugin_data_unique_keys(manifest, plugin, &asset)?;
             install_from_pack_locked(
                 lock,
@@ -199,13 +203,15 @@ fn install_pack_plugins_locked<'a>(
                 instructions,
                 data_unique_keys,
                 data_collection_fields,
+                data_collection_schemas,
                 consent,
             )
         })
         .collect()
 }
 
-pub fn bind_plugin_slots(
+#[cfg(test)]
+pub(crate) fn bind_plugin_slots(
     home: &Path,
     manifest: &PackManifest,
     owner: &str,
@@ -338,13 +344,30 @@ struct StagedPluginRecords {
     previous: Vec<(String, String, Option<InstalledPlugin>)>,
 }
 
+/// Holds the plugin store lock from staging through the node's configuration
+/// commit, where installed pins are rechecked (`plugin_replacement_conflict_in_txn`),
+/// so a concurrent publisher cannot change a pinned artifact between that check
+/// and the configuration write.
 pub(crate) struct StagedPluginInstall {
     records: Option<StagedPluginRecords>,
-    cleanup: crate::runtime::drop_cleanup::DropCleanup,
+    cleanup: crate::drop_cleanup::DropCleanup,
     pub(crate) installed: Vec<InstalledPlugin>,
 }
 
 impl StagedPluginInstall {
+    pub(crate) fn previous_plugins(&self) -> Vec<InstalledPlugin> {
+        self.records
+            .as_ref()
+            .map(|records| {
+                records
+                    .previous
+                    .iter()
+                    .filter_map(|(_, _, record)| record.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub(crate) async fn finish(mut self, committed: bool) -> Result<()> {
         let records = self.records.take();
         tokio::task::spawn_blocking(move || {
@@ -398,12 +421,11 @@ pub(crate) async fn stage_pack_graph(
     inputs: Vec<PluginStageInput>,
     consent: bool,
     owner: &str,
-) -> Result<StagedPluginInstall> {
-    anyhow::ensure!(
-        !owner.is_empty() || inputs.iter().all(|input| input.bindings.is_empty()),
-        "plugin slot bindings require an owner"
-    );
-    let cleanup = crate::runtime::drop_cleanup::DropCleanup::current();
+) -> Result<StagedPluginInstall, GrantError> {
+    if owner.is_empty() && inputs.iter().any(|input| !input.bindings.is_empty()) {
+        return Err(anyhow::anyhow!("plugin slot bindings require an owner").into());
+    }
+    let cleanup = crate::drop_cleanup::DropCleanup::current();
     let home = home.to_owned();
     let owner = owner.to_owned();
     tokio::task::spawn_blocking(move || {
@@ -413,12 +435,14 @@ pub(crate) async fn stage_pack_graph(
         let mut seen = std::collections::BTreeSet::new();
         for input in &inputs {
             for record in snapshot_pack_plugin_records(&home, &input.manifest)? {
-                anyhow::ensure!(
-                    seen.insert((record.0.clone(), record.1.clone())),
-                    "pack graph names plugin {}/{} more than once",
-                    record.0,
-                    record.1
-                );
+                if !seen.insert((record.0.clone(), record.1.clone())) {
+                    return Err(anyhow::anyhow!(
+                        "pack graph names plugin {}/{} more than once",
+                        record.0,
+                        record.1
+                    )
+                    .into());
+                }
                 previous.push(record);
             }
         }
@@ -469,5 +493,6 @@ pub(crate) async fn stage_pack_graph(
             }
         }
     })
-    .await?
+    .await
+    .map_err(anyhow::Error::from)?
 }

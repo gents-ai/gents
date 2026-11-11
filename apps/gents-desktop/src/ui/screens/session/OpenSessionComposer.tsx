@@ -3,7 +3,10 @@ import { MorphProvider, useMorphCard } from "@/lib/morph";
 import { COMPOSER_FIELD } from "./composerField";
 import { AskedChip } from "./AskedChip";
 import { useUnansweredQuestions } from "../../hooks/useSessionQuestions";
-import { useSelectedSessionFields } from "../../hooks/useSelectedSession";
+import {
+  useSelectedSessionFields,
+  useSelectedSessionGoal,
+} from "../../hooks/useSelectedSession";
 import { AttachmentTray, SentAttachments, useAttachmentDraft } from "./attachments";
 import {
   useCallback,
@@ -16,7 +19,6 @@ import {
 } from "react";
 import { useStore } from "zustand";
 import { ArrowDown, Check, Pencil, X } from "lucide-react";
-import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import { ComposerReasonBox, composerReason } from "./ComposerReason";
 import { RichComposer } from "@gents/ui/conversation";
@@ -30,7 +32,8 @@ import { SelectedChatFolder } from "../ChatFolderPicker";
 import { LoadingStatus } from "../LoadingStatus";
 import { SelectedPendingTray, useSessionQueue } from "../PendingTray";
 import { ReplyingTo } from "../ReplyingTo";
-import { Goal } from "../SessionHeader";
+import { Goal, GoalUnavailable } from "../SessionHeader";
+import { goalShown } from "../../../hooks/goalState";
 import { useMentionMenu } from "../useMentionMenu";
 import { useSlashMenu } from "../useSlashMenu";
 import {
@@ -58,17 +61,17 @@ export function OpenSessionComposer({
   toBottom,
   stop,
   stopping,
-  goal,
-  agentId,
+  agentDid,
 }: {
   roomRef: RefCallback<HTMLDivElement>;
   atBottom: boolean;
   toBottom: () => void;
   stop: () => void;
   stopping: boolean;
-  goal: DesktopSessionSnapshot["goal"];
-  agentId: string | null;
+  agentDid: string | null;
 }) {
+  const shown = goalShown(useSelectedSessionGoal());
+  const current = shown.kind === "goal" && shown.current ? shown.goal : null;
   const { drafts, stores, actions } = useApp();
   const activityStatus = useView((view) => view.shellProjection.activityStatus);
   const sendStatus = useView((view) => view.shellProjection.nonEmptyContentSendStatus);
@@ -76,11 +79,17 @@ export function OpenSessionComposer({
   const sending = stores.chat.use.sending();
   const inFlight = useInterruptVisible();
   const deployment = useSelectedNode();
-  const { draft, setDraft, send, setGoal, error: sendError } = useComposerSend(agentId);
+  const {
+    draft,
+    setDraft,
+    send,
+    setGoal,
+    error: sendError,
+  } = useComposerSend(agentDid);
   const textarea = useRef<HTMLDivElement | null>(null);
   const attachmentRoot = useRef<HTMLDivElement | null>(null);
   const { queue, onEdit } = useSessionQueue();
-  const agent = agentOf(deployment, agentId);
+  const agent = agentOf(deployment, agentDid);
   const editSlash = useSlashMenu(
     deployment?.skills ?? [],
     deployment?.contexts.find((c) => c.context_id === agent?.contextId),
@@ -114,10 +123,10 @@ export function OpenSessionComposer({
   const slash = useSlashMenu(
     deployment?.skills ?? [],
     deployment?.contexts.find((c) => c.context_id === agent?.contextId),
-    [goalCommand(goal, inFlight)],
+    [goalCommand(shown, inFlight)],
     () =>
-      goal && goalIsEditable(goal)
-        ? goalMode.edit(goal.objective ?? "")
+      current && goalIsEditable(current)
+        ? goalMode.edit(current.objective)
         : goalMode.create(),
   );
   const mention = useMentionMenu(deployment?.nodeDid ?? null, sessionId);
@@ -152,7 +161,7 @@ export function OpenSessionComposer({
   const covered = blocked && loadingStatus !== null;
   /* what nothing typed could get past stands in the input's place */
   const reason =
-    blocked && !covered ? composerReason(deployment, agentId, sendStatus) : null;
+    blocked && !covered ? composerReason(deployment, agentDid, sendStatus) : null;
   /* an open question takes the composer's place until it is answered, or
      until the person chooses to write instead; a new question asks again */
   const questionScope = useSelectedSessionFields((session) =>
@@ -278,11 +287,15 @@ export function OpenSessionComposer({
 
   return (
     <div ref={roomRef} className="sticky bottom-0 z-20 mt-auto bg-background pt-6 pb-6">
-      {goal && (
+      {shown.kind === "unavailable" && (
+        <GoalUnavailable label={shown.label} text={shown.text} />
+      )}
+      {shown.kind === "goal" && !shown.current && <Goal goal={shown.goal} stale />}
+      {current && (
         <Goal
-          goal={goal}
+          goal={current}
           onEdit={() => {
-            goalMode.edit(goal.objective ?? "");
+            goalMode.edit(current.objective);
             textarea.current?.focus();
           }}
           onControl={
@@ -497,9 +510,9 @@ export function OpenSessionComposer({
                   ? "Send as a new message"
                   : "Save"
                 : goalMode.mode === "edit"
-                  ? "Save goal"
+                  ? "Save Goal"
                   : goalMode.mode
-                    ? "Set goal"
+                    ? "Set Goal"
                     : "Send"
             }
             submitIcon={editing && !editing.reached ? <Check /> : undefined}
@@ -509,7 +522,7 @@ export function OpenSessionComposer({
               editing
                 ? "Edit the message"
                 : goalMode.mode
-                  ? "Describe the goal"
+                  ? "Describe the Goal"
                   : inFlight
                     ? "Ask anything"
                     : readOnly

@@ -1,9 +1,6 @@
-use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 
-use defra_node::EmbeddedNode;
 use gents_protocol::job::{
     JobChildRow, JobChildState, JobControlKind, JobFailure, JobOutcome, JobPin, JobPinSummary,
     JobPolicy, JobReadError, JobScope, JobState, JobSuspend, JobSuspendKind, JobUsage, JobView,
@@ -17,15 +14,15 @@ use crate::tools::background::job::admit::Refusal;
 use crate::tools::background::job::driver::tests::{pinned_job_row, settle_row, start_running};
 use crate::tools::background::job::driver::{load_lifecycle, settle_plugin_job, Settlement};
 use crate::tools::background::job::input::tests::{
-    insert, live_settings, new_job, node_did, request, Job,
+    agent_did, live_settings, new_job, node_did, request_as, Job,
 };
 use crate::tools::background::job::keys::{job_session_id, job_spawn_key};
 use crate::tools::background::job::records::{read_pin, read_progress, write_pin_in_txn};
 use crate::tools::background::status::ProcessControlScope;
 use crate::tools::call::lifecycle::admission_fixture::{
-    claimed_request, fixture_job_pin, publish_accepted_on_claimed_request,
+    fixture_job_pin, published_admission, PublishedAdmissionOptions,
 };
-use crate::tools::call::lifecycle::AwaitMode;
+use gents_protocol::tool_call::AwaitMode;
 
 async fn new() -> Job {
     new_job(Some(&live_settings(JobPolicy::default())), None).await
@@ -60,9 +57,10 @@ fn await_user() -> Settlement {
     })
 }
 
+/// A child of `row`, created by the job's Agent as a spawn is.
 async fn child(job: &Job, row: &str, request_id: &str, slot: &str, attempt: u32, title: &str) {
-    request(
-        &job.node,
+    request_as(
+        &job.access,
         row,
         request_id,
         &job_session_id(row, slot, attempt),
@@ -82,12 +80,13 @@ async fn write_job_pin_json(job: &Job, row: &str, value: Value) {
         crate::store::graphql::escape_graphql_string(row),
     );
     let variables = json!({ "job_pin": value });
-    ConfigAccess::transact_local_write(&job.node, None, "test.view.job_pin", |txn| {
-        let (mutation, variables) = (&mutation, &variables);
-        Box::pin(async move { txn.execute_with_variables(mutation, variables).await })
-    })
-    .await
-    .unwrap();
+    job.access
+        .transact_write("test.view.job_pin", |txn| {
+            let (mutation, variables) = (&mutation, &variables);
+            Box::pin(async move { txn.execute_with_variables(mutation, variables).await })
+        })
+        .await
+        .unwrap();
 }
 
 async fn started_at_ms(job: &Job, row: &str) -> u64 {
@@ -147,7 +146,7 @@ async fn running_job_view_has_address_state_pin_summary_progress_and_children() 
             session_id: "session-1".into(),
             request_id: "request-1".into(),
             node_did: node_did().into(),
-            requester_did: None,
+            requester_did: Some(agent_did().into()),
         }
     );
     assert_eq!(loaded.handle, pin.handle);
@@ -175,7 +174,7 @@ async fn running_job_view_has_address_state_pin_summary_progress_and_children() 
             live("slot-b", 0, "child-b0", "Beta"),
         ]
     );
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -190,7 +189,7 @@ async fn settled_job_view_carries_outcome_for_a_host_code() {
     let outcome = loaded.outcome.unwrap();
     assert_eq!(outcome.code, "plugin_job_timed_out");
     assert!(!outcome.message.is_empty());
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -209,7 +208,7 @@ async fn settled_job_view_carries_outcome_for_a_guest_fail_code() {
             message: "boom".into(),
         })
     );
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -227,7 +226,7 @@ async fn job_view_outcome_is_none_without_a_code() {
         let loaded = view(&job, &row).await.unwrap();
         assert_eq!(loaded.outcome, None, "case {}", index + 1);
     }
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -259,7 +258,7 @@ async fn job_view_state_follows_the_row_lifecycle_first() {
         let loaded = view(&job, &row).await.unwrap();
         assert_eq!(loaded.state, expected, "case {}", index + 1);
     }
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -286,7 +285,7 @@ async fn job_view_times_are_epoch_ms_from_the_row_and_pin() {
         view(&job, &unstarted).await,
         Err(JobReadError::Malformed { .. })
     ));
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -343,7 +342,7 @@ async fn job_read_errors_are_returned_per_class_and_classified_by_is_transient()
         session_id: "session-1".into(),
         tool_call_id: "call-2".into(),
     };
-    for reader in [None, Some(scope("session-1", None))] {
+    for reader in [None, Some(scope("session-1", Some(agent_did())))] {
         let loaded = read(reader.clone(), JobKey::RowDocId(pinned.clone()))
             .await
             .unwrap();
@@ -368,6 +367,7 @@ async fn job_read_errors_are_returned_per_class_and_classified_by_is_transient()
     let classes = [
         (JobReadError::NotAJob, false),
         (JobReadError::NotAuthorized, false),
+        (JobReadError::PermissionDenied, false),
         (JobReadError::NotYetObservable, true),
         (
             JobReadError::Unavailable {
@@ -385,7 +385,18 @@ async fn job_read_errors_are_returned_per_class_and_classified_by_is_transient()
     for (error, transient) in classes {
         assert_eq!(error.is_transient(), transient, "{error}");
     }
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("shut down test node");
+}
+
+#[test]
+fn explicit_database_denial_is_not_an_unavailable_or_missing_job() {
+    let error = crate::store::config_client::ConfigClientError::Database(
+        gents_protocol::database_error::GraphqlFailure::new(
+            "job read",
+            json!([{"message":"opaque", "extensions":{"code":"PERMISSION_DENIED"}}]),
+        ),
+    );
+    assert_eq!(super::unavailable(error), JobReadError::PermissionDenied);
 }
 
 const EVERY_STATE: [JobState; 7] = [
@@ -401,7 +412,6 @@ const EVERY_STATE: [JobState; 7] = [
 fn every_job() -> JobFilter {
     JobFilter {
         session_id: None,
-        requester: None,
         state: StateFilter::States(EVERY_STATE.to_vec()),
         plugin: None,
     }
@@ -427,12 +437,13 @@ async fn update_row(job: &Job, row: &str, field: &str, value: &str) {
         escape_graphql_string(row),
         escape_graphql_string(value),
     );
-    ConfigAccess::transact_local_write(&job.node, None, "test.view.update_row", |txn| {
-        let mutation = &mutation;
-        Box::pin(async move { txn.execute(mutation).await })
-    })
-    .await
-    .unwrap();
+    job.access
+        .transact_write("test.view.update_row", |txn| {
+            let mutation = &mutation;
+            Box::pin(async move { txn.execute(mutation).await })
+        })
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -461,7 +472,7 @@ async fn list_jobs_returns_two_session_jobs_newest_first() {
     };
 
     assert_eq!(listed(&job, &filter).await, vec![newer, older]);
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -496,7 +507,7 @@ async fn repeated_script_runs_keep_their_children_and_controls_separate() {
         assert_eq!(view(&job, other).await.unwrap(), before);
         assert_eq!(list_jobs(&job.access, &every_job()).await.unwrap().len(), 2);
     }
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -507,7 +518,7 @@ async fn list_jobs_excludes_non_job_rows() {
     let pinned = pinned_job_row(&mut job, "call-2").await;
 
     assert_eq!(listed(&job, &every_job()).await, vec![pinned]);
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -537,7 +548,7 @@ async fn list_jobs_query_count_is_independent_of_job_count() {
 
     assert!(one > 0);
     assert_eq!(three, one);
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -550,44 +561,7 @@ async fn list_jobs_skips_an_undecodable_row_with_a_warning() {
     let good = pinned_job_row(&mut job, "call-2").await;
 
     assert_eq!(listed(&job, &every_job()).await, vec![good]);
-    job.node.shutdown().await;
-}
-
-/// A running job row of `requester`, inserted directly because
-/// `requester_did` is immutable.
-async fn requester_job_row(job: &Job, requester: &str, call_id: &str) -> String {
-    insert(
-        &job.node,
-        "AgentToolCall",
-        json!({
-            "request_id": "request-1",
-            "request_doc_id": "request-doc",
-            "node_did": node_did(),
-            "requester_did": requester,
-            "session_id": "session-1",
-            "tool_call_id": call_id,
-            "tool_name": "workflow",
-            "lifecycle_state": "running",
-            "started_at": "2026-01-01T00:00:00Z",
-            "job_pin": job.pin(call_id, None),
-        }),
-    )
-    .await
-}
-
-#[tokio::test]
-async fn list_jobs_keeps_only_the_requesters_rows() {
-    let job = new().await;
-    let a = requester_job_row(&job, "a", "call-1").await;
-    let b = requester_job_row(&job, "b", "call-2").await;
-    let only = |requester| JobFilter {
-        requester,
-        ..every_job()
-    };
-
-    assert_eq!(listed(&job, &only(Some("a".into()))).await, vec![a.clone()]);
-    assert_eq!(sorted(listed(&job, &only(None)).await), sorted(vec![a, b]));
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -613,7 +587,7 @@ async fn list_jobs_without_a_session_lists_job_rows_of_every_session() {
         sorted(listed(&job, &only(None)).await),
         sorted(vec![s1, s2])
     );
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -653,34 +627,7 @@ async fn list_jobs_states_keeps_only_the_listed_states() {
         sorted(listed(&job, &only(EVERY_STATE.to_vec())).await),
         sorted(vec![running, paused, awaiting, completed])
     );
-    job.node.shutdown().await;
-}
-
-#[tokio::test]
-async fn list_jobs_not_terminal_or_undelivered_keeps_running_and_undelivered_rows() {
-    let mut job = new().await;
-    let running = pinned_job_row(&mut job, "call-1").await;
-    let delivered = pinned_job_row(&mut job, "call-2").await;
-    settle_row(&job, &delivered, Settlement::Result(json!("done"))).await;
-    let undelivered = pinned_job_row(&mut job, "call-3").await;
-    settle_row(
-        &job,
-        &undelivered,
-        Settlement::Control(JobControlKind::Pause),
-    )
-    .await;
-    let filter = JobFilter {
-        state: StateFilter::NotTerminalOrUndelivered {
-            delivered: BTreeSet::from([delivered]),
-        },
-        ..every_job()
-    };
-
-    assert_eq!(
-        sorted(listed(&job, &filter).await),
-        sorted(vec![running, undelivered])
-    );
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -713,65 +660,35 @@ async fn list_jobs_keeps_only_the_named_plugins_rows() {
         sorted(listed(&job, &every_job()).await),
         sorted(vec![engine, other])
     );
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
 async fn job_view_reads_over_a_served_graphql_endpoint() {
-    let address = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap();
-    let dir = tempfile::tempdir().unwrap();
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .with_node_identity_did(node_did())
-            .data_path(dir.path().join("db"))
-            .with_http(defra_node::HttpConfig::with_addr(address))
-            .build()
-            .await
-            .unwrap(),
-    );
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    let served = ConfigAccess::graphql(format!("http://{address}/api/v0/graphql"));
-    tokio::time::timeout(Duration::from_secs(10), async {
-        while served
-            .execute("query { AgentRequest { _docID } }")
-            .await
-            .is_err()
-        {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
+    let fixture = published_admission(PublishedAdmissionOptions {
+        name: "job-view-http".into(),
+        tool_name: Some("workflow".into()),
+        await_mode: AwaitMode::Foreground,
+        ..Default::default()
     })
     .await
-    .expect("the embedded HTTP GraphQL endpoint must become ready");
-
-    let mut request = claimed_request(&node, "request-1", "session-1", node_did()).await;
-    let call = publish_accepted_on_claimed_request(
-        node.clone(),
-        &mut request,
-        node_did(),
-        0,
-        "workflow",
-        "call-1",
-        json!({"argv": ["run"]}),
-        AwaitMode::Foreground,
-        true,
-    )
-    .await
     .unwrap();
+    let node = fixture.node;
+    let call = fixture.tool;
+    let served = fixture.client;
+    let local = call.access().unwrap();
     let row = call.doc_id().unwrap().to_owned();
     let pin = JobPin {
         chain_root_doc_id: row.clone(),
         ..fixture_job_pin()
     };
-    ConfigAccess::transact_local_write(&node, None, "test.view.served_pin", |txn| {
-        let (row, pin) = (&row, &pin);
-        Box::pin(async move { write_pin_in_txn(txn, row, pin).await })
-    })
-    .await
-    .unwrap();
-    let local = ConfigAccess::local(node.clone());
+    local
+        .transact_write("test.view.served_pin", |txn| {
+            let (row, pin) = (&row, &pin);
+            Box::pin(async move { write_pin_in_txn(txn, row, pin).await })
+        })
+        .await
+        .unwrap();
     assert!(read_pin(&local, &row).await.unwrap().is_some());
     let mut lifecycle = load_lifecycle(&local, &row).await.unwrap();
     settle_plugin_job(&mut lifecycle, fail("engine_boom"))
@@ -794,5 +711,6 @@ async fn job_view_reads_over_a_served_graphql_endpoint() {
         Some("engine_boom")
     );
     assert_eq!(over_http, over_local);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
+    tokio::fs::remove_dir_all(fixture.path).await.unwrap();
 }

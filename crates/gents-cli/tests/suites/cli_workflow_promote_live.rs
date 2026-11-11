@@ -81,12 +81,13 @@ async fn promote_a_dynamic_run(artifacts: &mut FailureArtifacts) -> Result<()> {
             .with_context(|| format!("init receipt is missing {pointer}: {init}"))
     };
     let profile_id = field("/inference_profile_id")?;
-    let agent_id = field("/init/default_agent_id")?;
+    let agent_did = field("/init/default_agent_did")?;
     let tools_id = field("/init/tools_id")?;
 
     let install = run_cli_json(
         &home_dir,
         &[
+            "config",
             "pack",
             "install",
             &pack_dir,
@@ -119,11 +120,12 @@ async fn promote_a_dynamic_run(artifacts: &mut FailureArtifacts) -> Result<()> {
     let wire = run_cli_text(
         &home_dir,
         &[
+            "config",
             "pack",
             "wire",
             "gents/workflow",
             "--agent",
-            &agent_id,
+            &agent_did,
             "--targets-from",
             "gents/dynamic_workflows",
             "--home",
@@ -161,6 +163,7 @@ async fn promote_a_dynamic_run(artifacts: &mut FailureArtifacts) -> Result<()> {
     let promote = run_cli_json(
         &home_dir,
         &[
+            "automation",
             "job",
             "promote",
             &dynamic.address,
@@ -275,17 +278,21 @@ fn chat(home_dir: &Path, session_id: &str, prompt: &str) -> Result<Value> {
     run_cli_json(
         home_dir,
         &[
-            "chat",
+            "utils",
+            "debug",
+            "request",
+            "submit",
             "--home",
             home,
             "--session-id",
             session_id,
-            "--output",
-            "json",
+            "--valid-until",
+            "none",
             "--timeout-secs",
             "300",
             "--poll-secs",
             "1",
+            "--content",
             prompt,
         ],
     )
@@ -310,6 +317,7 @@ async fn finished_job(
     let jobs = run_cli_json(
         home_dir,
         &[
+            "automation",
             "job",
             "list",
             "--session",
@@ -338,6 +346,7 @@ async fn finished_job(
     let terminal = run_cli_text(
         home_dir,
         &[
+            "automation",
             "job",
             "watch",
             &address,
@@ -352,6 +361,7 @@ async fn finished_job(
     let view = run_cli_json(
         home_dir,
         &[
+            "automation",
             "job",
             "show",
             &address,

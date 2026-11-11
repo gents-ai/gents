@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::anyhow;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use events::Bus;
 use tokio_util::sync::CancellationToken;
 
@@ -22,7 +23,6 @@ use crate::runtime::agent::p2p_reconcile::{
 };
 
 mod desired_state;
-use desired_state::desired_row;
 
 include!("tests/support.rs");
 include!("tests/admin.rs");
@@ -33,4 +33,4 @@ include!("tests/reconnect.rs");
 include!("tests/topology.rs");
 include!("tests/applied_state.rs");
 include!("tests/convergence.rs");
-include!("tests/delivery.rs");
+include!("tests/overlay_acp.rs");

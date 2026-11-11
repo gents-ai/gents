@@ -9,34 +9,29 @@ pub(crate) struct AgentToolCallDateTimeRow {
 }
 
 pub(super) async fn agent_tool_call_datetime_update_fragment(
-    node: &EmbeddedNode,
+    access: &crate::ConfigAccess,
     doc_id: &str,
     omit: &[&str],
 ) -> Result<String> {
-    let escaped = escape_graphql_string(doc_id);
-    let query = format!(
-        r#"{{
-            AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 1) {{
-                started_at
-                deadline_at
-                completed_at
-                stuck_since
-            }}
-        }}"#
-    );
-    let response = crate::store::graphql::graphql_with_transaction_retry(
-        node,
-        &query,
-        "agent_tool_call_datetime_update_fragment",
+    use gents_protocol::document_query::{
+        fields::agent_tool_call as fields, Filter, Query, Selection,
+    };
+    let query = Query::select(
+        Selection::new()
+            .field(fields::STARTED_AT)
+            .field(fields::DEADLINE_AT)
+            .field(fields::COMPLETED_AT)
+            .field(fields::STUCK_SINCE),
     )
-    .await?;
-    let row = response
-        .data
-        .as_ref()
-        .and_then(|d| d.get("AgentToolCall"))
-        .and_then(|v| serde_json::from_value::<Vec<AgentToolCallDateTimeRow>>(v.clone()).ok())
-        .and_then(|mut rows| rows.pop())
-        .unwrap_or_default();
+    .filter(Filter::eq(fields::DOC_ID, doc_id))
+    .limit(1)
+    .render();
+    let response = access.read(&query).await?;
+    let mut rows: Vec<AgentToolCallDateTimeRow> =
+        serde_json::from_value(response["data"]["AgentToolCall"].clone())?;
+    let row = rows
+        .pop()
+        .context("background completion tool row not found")?;
 
     let mut fields = Vec::new();
     push_datetime_field(&mut fields, omit, "started_at", row.started_at.as_deref());

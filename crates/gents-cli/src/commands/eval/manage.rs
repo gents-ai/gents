@@ -3,10 +3,10 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use gents::eval::report::load_runs;
-use gents::eval::runner::{request_cancel, run_dir, run_finished, running_elsewhere, slots_owed};
 use gents::eval::{invalidate_run, load_run, load_trials};
 use gents::ConfigAccess;
+use gents_eval::report::load_runs;
+use gents_eval::runner::{request_cancel, run_dir, run_finished, running_elsewhere, slots_owed};
 
 use super::render::human_bytes;
 use super::EvalContext;
@@ -33,7 +33,7 @@ where
             {
                 writeln!(
                     out,
-                    "this run belongs to job {job_id}; the job stops at this run, and `gents optimization run … --job-id {job_id}` resumes it"
+                    "this run belongs to job {job_id}; the job stops at this run, and `gents utils optimization run … --job-id {job_id}` resumes it"
                 )?;
             }
         }
@@ -57,13 +57,13 @@ pub(crate) fn write_marker(runs_dir: &Path, run_id: &str, out: &mut dyn Write) -
     if marker.parent().is_some_and(running_elsewhere) {
         writeln!(
             out,
-            "wrote {}; the process hosting run {run_id} stops launching at its next check, and `gents eval resume {run_id}` continues it",
+            "wrote {}; the process hosting run {run_id} stops launching at its next check, and `gents utils eval resume {run_id}` continues it",
             marker.display()
         )?;
     } else {
         writeln!(
             out,
-            "wrote {}; no process is running run {run_id} now, and the next `gents eval run --run-id {run_id}` or `gents eval resume {run_id}` clears the marker",
+            "wrote {}; no process is running run {run_id} now, and the next `gents utils eval run --run-id {run_id}` or `gents utils eval resume {run_id}` clears the marker",
             marker.display()
         )?;
     }
@@ -125,7 +125,7 @@ pub(super) async fn rm(ctx: &EvalContext, args: &EvalRmArgs, out: &mut dyn Write
     );
     let live = || {
         anyhow::anyhow!(
-            "run {} is being run by a live process right now (see `gents eval watch {}`); pass --force to delete its directory anyway",
+            "run {} is being run by a live process right now (see `gents utils eval watch {}`); pass --force to delete its directory anyway",
             args.run_id,
             args.run_id
         )
@@ -138,14 +138,14 @@ pub(super) async fn rm(ctx: &EvalContext, args: &EvalRmArgs, out: &mut dyn Write
         let owed = slots_owed(&record, &trials);
         anyhow::ensure!(
             owed == 0,
-            "run {} is unfinished: it still owes {owed} slots; `gents eval resume {}` finishes it, or pass --force to delete its directory anyway",
+            "run {} is unfinished: it still owes {owed} slots; `gents utils eval resume {}` finishes it, or pass --force to delete its directory anyway",
             args.run_id,
             args.run_id
         );
         if running_elsewhere(&dir) {
             return Err(live());
         }
-        if let Some((job_id, state)) = gents::eval::optimization::held_runs(&ctx.access, &ctx.owner)
+        if let Some((job_id, state)) = gents_eval::optimization::held_runs(&ctx.access, &ctx.owner)
             .await?
             .get(&args.run_id)
         {
@@ -176,7 +176,7 @@ pub(super) async fn gc(ctx: &EvalContext, args: &EvalGcArgs, out: &mut dyn Write
         .and_then(|age| chrono::Utc::now().checked_sub_signed(age))
         .context("--older-than reaches before the earliest representable time")?;
     let records = load_runs(&ctx.access, &ctx.owner).await?;
-    let referenced = gents::eval::optimization::referenced_run_ids(&ctx.access, &ctx.owner).await?;
+    let referenced = gents_eval::optimization::referenced_run_ids(&ctx.access, &ctx.owner).await?;
     let mut runs: Vec<Doomed> = Vec::new();
     for record in &records {
         if args
@@ -346,9 +346,9 @@ async fn gc_jobs(
     out: &mut dyn Write,
 ) -> Result<Vec<Doomed>> {
     let mut doomed = Vec::new();
-    for job_id in gents::eval::optimization::job_ids(&ctx.access, &ctx.owner).await? {
+    for job_id in gents_eval::optimization::job_ids(&ctx.access, &ctx.owner).await? {
         let Some(job) =
-            gents::eval::optimization::load_job(&ctx.access, &ctx.owner, &job_id).await?
+            gents_eval::optimization::load_job(&ctx.access, &ctx.owner, &job_id).await?
         else {
             continue;
         };
@@ -359,7 +359,7 @@ async fn gc_jobs(
         {
             continue;
         }
-        if gents::eval::optimization::validate_job_id(&job.job_id).is_err() {
+        if gents_eval::optimization::validate_job_id(&job.job_id).is_err() {
             writeln!(
                 out,
                 "kept job {:?}: its id is not one ordinary path component",
@@ -367,7 +367,7 @@ async fn gc_jobs(
             )?;
             continue;
         }
-        if !gents::eval::optimization::job_dir(&job.origin.jobs_dir, &job.job_id).is_dir() {
+        if !gents_eval::optimization::job_dir(&job.origin.jobs_dir, &job.job_id).is_dir() {
             continue;
         }
         let dir = match job_dir_in_this_home(ctx, &job) {
@@ -393,8 +393,8 @@ async fn gc_jobs(
         if modified > cutoff {
             continue;
         }
-        let state = gents::eval::optimization::derive_state(&job.journal);
-        if !gents::eval::optimization::removable(&state) {
+        let state = gents_eval::optimization::derive_state(&job.journal);
+        if !gents_eval::optimization::removable(&state) {
             writeln!(out, "kept job {}: {}", job.job_id, state.label())?;
             continue;
         }
@@ -432,7 +432,7 @@ async fn gc_jobs(
 /// compared before anything under it is deleted.
 pub(crate) fn job_dir_in_this_home(
     ctx: &EvalContext,
-    job: &gents::eval::optimization::JobRecord,
+    job: &gents_eval::optimization::JobRecord,
 ) -> Result<PathBuf> {
     let home_jobs = std::fs::canonicalize(ctx.jobs_dir()).ok();
     anyhow::ensure!(
@@ -440,7 +440,7 @@ pub(crate) fn job_dir_in_this_home(
         "job {}: its directory is not under this home",
         job.job_id
     );
-    Ok(gents::eval::optimization::job_dir(
+    Ok(gents_eval::optimization::job_dir(
         &job.origin.jobs_dir,
         &job.job_id,
     ))

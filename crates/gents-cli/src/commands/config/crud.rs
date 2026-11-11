@@ -12,9 +12,9 @@ use crate::request_helpers::resolve_dual_id;
 use crate::{graphql_rows, print_json, resolve_config_access};
 
 #[derive(Clone, Copy)]
-pub(super) struct ConfigDocumentSpec {
+pub(crate) struct ConfigDocumentSpec {
     pub(super) noun: &'static str,
-    pub(super) collection: Collection,
+    pub(crate) collection: Collection,
 }
 
 pub(super) const BACKEND_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
@@ -27,7 +27,7 @@ pub(super) const AGENT_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
     collection: Collection::Agent,
 };
 
-pub(super) const TOOLS_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
+pub(crate) const TOOLS_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
     noun: "tools",
     collection: Collection::Tools,
 };
@@ -37,19 +37,39 @@ pub(super) const PROFILE_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
     collection: Collection::InferenceProfile,
 };
 
-pub(super) const TRIGGER_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
+pub(crate) const TRIGGER_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
     noun: "trigger",
     collection: Collection::Trigger,
 };
 
-pub(super) const SCHEDULE_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
+pub(crate) const SCHEDULE_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
     noun: "schedule",
     collection: Collection::Schedule,
 };
 
-pub(super) const MCP_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
+pub(crate) const MCP_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
     noun: "mcp",
     collection: Collection::ToolServiceRegistry,
+};
+
+pub(crate) const SKILL_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
+    noun: "skill",
+    collection: Collection::Skill,
+};
+
+pub(crate) const EVENT_SOURCE_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
+    noun: "event source",
+    collection: Collection::EventSource,
+};
+
+pub(crate) const CONTEXT_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
+    noun: "context",
+    collection: Collection::AgentContext,
+};
+
+pub(crate) const NODE_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
+    noun: "node",
+    collection: Collection::Node,
 };
 
 pub(super) async fn config_list(spec: ConfigDocumentSpec, args: ConfigListArgs) -> Result<()> {
@@ -64,8 +84,7 @@ pub(super) async fn config_list(spec: ConfigDocumentSpec, args: ConfigListArgs) 
         Some(&access),
     )
     .await?;
-    let mut rows = query_collection(&access, spec, &node_did, None).await?;
-    sort_rows(&mut rows, spec.collection.unique_field());
+    let rows = query_collection_sorted(&access, spec, &node_did).await?;
 
     match args.output.ensure_supported(
         &format!("config {} list", spec.noun),
@@ -203,7 +222,7 @@ async fn live_manifest_for_delete(
     desired_state::manifest_from_export_bundle(&bundle)
 }
 
-pub(super) async fn query_collection(
+pub(crate) async fn query_collection(
     access: &ConfigAccess,
     spec: ConfigDocumentSpec,
     node_did: &str,
@@ -220,14 +239,56 @@ pub(super) async fn query_collection(
             escape_graphql_string(id)
         ));
     }
-    let fields = gents::store::config_client::config_projection(spec.collection, None)?
-        .0
-        .join(" ");
-    let query = format!(
-        "{{ {}(filter: {{ {filter} }}) {{ _docID {fields} }} }}",
-        spec.collection.graphql_type()
-    );
-    let rows = graphql_rows(access, spec.collection.graphql_type(), &query).await?;
+    let rows = if spec.collection == Collection::InferenceBackend {
+        access
+            .transact_readonly("cli.config.backend.read", |txn| {
+                Box::pin(async move {
+                    if let Some(id) = id {
+                        let record = gents::store::config_client::read_desired_state_record_in_txn(
+                            txn,
+                            Collection::InferenceBackend,
+                            node_did,
+                            id,
+                        )
+                        .await?;
+                        return record
+                            .into_iter()
+                            .map(|(doc_id, mut row)| {
+                                row.as_object_mut()
+                                    .context("backend must be an object")?
+                                    .insert("_docID".into(), Value::String(doc_id));
+                                Ok(row)
+                            })
+                            .collect::<Result<Vec<_>>>();
+                    }
+                    gents::store::config_client::list_inference_backends_in_txn(txn, node_did)
+                        .await?
+                        .into_iter()
+                        .map(|backend| {
+                            let doc_id = backend
+                                .physical_doc_id
+                                .clone()
+                                .context("backend has no physical ID")?;
+                            let mut row = serde_json::to_value(backend)?;
+                            row.as_object_mut()
+                                .context("backend must be an object")?
+                                .insert("_docID".into(), Value::String(doc_id));
+                            Ok(row)
+                        })
+                        .collect::<Result<Vec<_>>>()
+                })
+            })
+            .await?
+    } else {
+        let fields = gents::store::config_client::config_projection(spec.collection, None)?
+            .0
+            .join(" ");
+        let query = format!(
+            "{{ {}(filter: {{ {filter} }}) {{ _docID {fields} }} }}",
+            spec.collection.graphql_type()
+        );
+        graphql_rows(access, spec.collection.graphql_type(), &query).await?
+    };
     let mut ids = std::collections::BTreeSet::new();
     for row in &rows {
         anyhow::ensure!(
@@ -253,7 +314,18 @@ pub(super) async fn query_collection(
     Ok(rows)
 }
 
-pub(super) async fn load_one(
+/// The node's `spec` documents in id order.
+pub(crate) async fn query_collection_sorted(
+    access: &ConfigAccess,
+    spec: ConfigDocumentSpec,
+    node_did: &str,
+) -> Result<Vec<Value>> {
+    let mut rows = query_collection(access, spec, node_did, None).await?;
+    sort_rows(&mut rows, spec.collection.unique_field());
+    Ok(rows)
+}
+
+pub(crate) async fn load_one(
     access: &ConfigAccess,
     spec: ConfigDocumentSpec,
     node_did: &str,
@@ -374,15 +446,44 @@ fn print_table_row(cells: &[&str; 3], widths: &[usize; 3]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::store::config_client::{apply_desired_state_plan, DesiredStateApplyPlan};
+    use gents::documents::apply_desired_state_plan;
+    use gents::store::config_client::DesiredStateApplyPlan;
     use std::sync::Arc;
 
     #[tokio::test]
-    async fn canonical_reads_keep_shared_labels_in_the_selected_owner() -> Result<()> {
+    async fn backend_reads_use_metadata_for_list_and_exact_show() -> Result<()> {
         let node = Arc::new(crate::shared::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         let access = ConfigAccess::local(node.clone());
         for owner in ["owner-a", "owner-b"] {
+            access.write("test.backend.metadata", &format!(
+                r#"mutation {{ create_InferenceBackendMetadata(input: {{node_did: "{owner}", backend_id: "same", name: "{owner}", provider_kind: "OpenAiCompatible", endpoint: "http://127.0.0.1:9/v1", auth_kind: "credential", credential_id: "private-ref", credential_version: "version"}}) {{_docID}} }}"#
+            )).await?;
+        }
+        let rows = query_collection(&access, BACKEND_SPEC, "owner-a", None).await?;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["name"], "owner-a");
+        assert_eq!(rows[0]["auth"]["kind"], "credential");
+        assert!(rows[0]["_docID"].as_str().is_some());
+        assert!(!rows[0].to_string().contains("secret"));
+        let exact = load_one(&access, BACKEND_SPEC, "owner-b", "same").await?;
+        assert_eq!(exact["name"], "owner-b");
+        assert!(load_one(&access, BACKEND_SPEC, "owner-a", "missing")
+            .await
+            .is_err());
+        node.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn canonical_reads_keep_shared_labels_in_the_selected_owner() -> Result<()> {
+        let client = crate::shared::test_support::ClientHome::new().await;
+        let peer_dir = tempfile::tempdir()?;
+        let peer = gents::KeyIdentity::load_or_create(peer_dir.path().join("peer.key"), None)?;
+        let owner_a = client.node_did().to_owned();
+        let owner_b = gents::NodeIdentity::did(&peer).to_owned();
+        let access = client.access.clone();
+        for owner in [owner_a.as_str(), owner_b.as_str()] {
             let config = serde_json::from_value(json!({
                 "node":{"node_did":owner},
                 "tools":[{"node_did":owner,"tools_id":"same","display_name":owner,
@@ -396,18 +497,17 @@ mod tests {
                 })
                 .await?;
         }
-        let rows = query_collection(&access, TOOLS_SPEC, "owner-a", None).await?;
+        let rows = query_collection(&access, TOOLS_SPEC, &owner_a, None).await?;
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["display_name"], "owner-a");
+        assert_eq!(rows[0]["display_name"], owner_a.as_str());
         assert_eq!(rows[0]["host"]["bash"]["allowed_argv_prefixes"], json!([]));
         assert_eq!(
-            load_one(&access, TOOLS_SPEC, "owner-b", "same").await?["display_name"],
-            "owner-b"
+            load_one(&access, TOOLS_SPEC, &owner_b, "same").await?["display_name"],
+            owner_b.as_str()
         );
         assert!(load_one(&access, TOOLS_SPEC, "absent", "same")
             .await
             .is_err());
-        node.shutdown().await;
         Ok(())
     }
 }

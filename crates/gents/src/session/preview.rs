@@ -49,7 +49,7 @@ pub(crate) fn visible_reply_preview(message: &gents_protocol::message::Message) 
 
 pub(crate) async fn request_preview_in_txn<'a>(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
-    request: &'a crate::AgentRequest,
+    request: &'a gents_protocol::row::AgentRequest,
 ) -> Result<&'a str> {
     let Some(parent_id) = request.caused_by_parent_request_doc_id.as_deref() else {
         return Ok(&request.content);
@@ -76,13 +76,22 @@ pub(crate) async fn request_preview_in_txn<'a>(
     ) {
         return Ok(&request.content);
     }
-    let query = format!(
-        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{
-        _docID request_id node_did agent_id session_id
-    }} }}"#,
-        crate::store::graphql::escape_graphql_string(parent_id)
-    );
-    let response = txn.execute_local_response(&query).await?;
+    let query = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        Query::select(
+            Selection::doc_id()
+                .field(fields::REQUEST_ID)
+                .field(fields::NODE_DID)
+                .field(fields::AGENT_DID)
+                .field(fields::SESSION_ID),
+        )
+        .filter(Filter::eq(fields::DOC_ID, parent_id))
+        .limit(2)
+        .render()
+    };
+    let response = txn.run_local_response(&query).await?;
     let parents = crate::store::graphql::rows::<gents_protocol::row::AgentRequestRow>(
         &response,
         "AgentRequest",
@@ -179,7 +188,7 @@ mod tests {
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let response = ConfigAccess::write_local(&node, "test.session.preview.parent", r#"mutation {
             create_AgentRequest(input: { request_id: "parent", purpose: "normal", node_did: "did:test:sender",
-                agent_id: "did:test:sender:engineer", session_id: "source", content: "Parent request",
+                agent_did: "did:test:sender:engineer", session_id: "source", content: "Parent request",
                 created_at: "2030-01-01T00:00:00Z", lifecycle_state: "completed" }) { _docID }
         }"#).await.unwrap();
         let parent = crate::store::graphql::mutation_documents(&response, "create_AgentRequest")
@@ -189,24 +198,25 @@ mod tests {
             .unwrap()
             .to_owned();
         let content = "[message agent:engineer session:source node:did:test:sender · at:2030-01-01T00:00:01Z · cause:parent]\n\nInspect the layout.\nKeep the draft.";
-        let request = crate::AgentRequest::try_from(gents_protocol::row::AgentRequestRow {
-            doc_id: Some("child".into()),
-            request_id: "received".into(),
-            purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
-            node_did: Some("did:test:receiver".into()),
-            agent_id: Some("engineer".into()),
-            session_id: Some("target".into()),
-            requester_did: Some("did:test:sender".into()),
-            content: Some(content.into()),
-            created_at: Some("2030-01-01T00:00:01Z".into()),
-            caused_by_parent_request_doc_id: Some(parent),
-            caused_by_parent_request_id: Some("parent".into()),
-            caused_by_parent_tool_call_doc_id: Some("tool-doc".into()),
-            caused_by_parent_tool_call_id: Some("tool".into()),
-            request_hop: Some(1),
-            ..Default::default()
-        })
-        .unwrap();
+        let request =
+            gents_protocol::row::AgentRequest::try_from(gents_protocol::row::AgentRequestRow {
+                doc_id: Some("child".into()),
+                request_id: "received".into(),
+                purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
+                node_did: Some("did:test:receiver".into()),
+                agent_did: Some("engineer".into()),
+                session_id: Some("target".into()),
+                requester_did: Some("did:test:sender".into()),
+                content: Some(content.into()),
+                created_at: Some("2030-01-01T00:00:01Z".into()),
+                caused_by_parent_request_doc_id: Some(parent),
+                caused_by_parent_request_id: Some("parent".into()),
+                caused_by_parent_tool_call_doc_id: Some("tool-doc".into()),
+                caused_by_parent_tool_call_id: Some("tool".into()),
+                request_hop: Some(1),
+                ..Default::default()
+            })
+            .unwrap();
         let observed =
             ConfigAccess::transact_local_readonly(&node, None, "test.session.preview", |txn| {
                 let request = request.clone();
@@ -234,6 +244,6 @@ mod tests {
             })
             .await;
         observed.unwrap();
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 }

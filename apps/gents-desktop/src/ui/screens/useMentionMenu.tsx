@@ -57,7 +57,7 @@ function SessionCard({
   return (
     <ChipCard
       title={chip.label}
-      subtitle={session ? `Session · ${agentName(session.agentId, node)}` : "Session"}
+      subtitle={session ? `Session · ${agentName(session.agentDid, node)}` : "Session"}
     >
       {session?.previewText ?? undefined}
     </ChipCard>
@@ -85,7 +85,7 @@ export function useMentionMenu(nodeDid: string | null, sessionId: string | null)
         .map((session) => ({
           session,
           hay: titleOf(session).toLowerCase(),
-          agent: agentName(session.agentId, node),
+          agent: agentName(session.agentDid, node),
         })),
     [sessions, node, nodeDid, sessionId],
   );

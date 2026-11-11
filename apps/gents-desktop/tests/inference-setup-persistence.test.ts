@@ -125,7 +125,7 @@ describe("inference setup persistence", () => {
         sampling_id: null,
       });
       expect(
-        plan.document.agents?.find((row) => row.agent_id === plan.defaultAgentId)
+        plan.document.agents?.find((row) => row.agent_did === plan.defaultAgentDid)
           ?.inference_profile_id,
       ).toBe(profile.profile_id);
       expect(plan.document.inference_sampling).toBeUndefined();
@@ -296,7 +296,7 @@ describe("inference setup persistence", () => {
     ]);
     expect(plan.document.agents).toEqual([
       expect.objectContaining({
-        agent_id: "default",
+        agent_did: "default",
         context_id: "context-a",
         inference_profile_id: plan.profileId,
       }),
@@ -309,7 +309,7 @@ it("binds the chosen model to the default agent without changing other agents", 
   deployment.inferenceBackends[0]!.apiKeyConfigured = true;
   deployment.agentConfigs.push({
     ...deployment.agentConfigs[0]!,
-    agent_id: "unconfigured-other",
+    agent_did: "unconfigured-other",
     inference_profile_id: "",
   });
   const original = structuredClone(deployment);
@@ -333,15 +333,15 @@ it("binds the chosen model to the default agent without changing other agents", 
   });
   expect(
     plan.document.agents?.find(
-      (agent) => agent.agent_id === deployment.node.defaultAgentId,
+      (agent) => agent.agent_did === deployment.node.defaultAgentDid,
     )?.inference_profile_id,
   ).toBe(plan.profileId);
   const others = deployment.agentConfigs.filter(
-    (agent) => agent.agent_id !== deployment.node.defaultAgentId,
+    (agent) => agent.agent_did !== deployment.node.defaultAgentDid,
   );
   for (const other of others)
     expect(
-      plan.document.agents?.some((agent) => agent.agent_id === other.agent_id),
+      plan.document.agents?.some((agent) => agent.agent_did === other.agent_did),
     ).toBe(false);
   expect(deployment).toEqual(original);
 });

@@ -175,6 +175,7 @@ impl InferenceTarget {
 
     pub fn backend(&self, node_did: &str) -> InferenceBackend {
         InferenceBackend {
+            physical_doc_id: None,
             node_did: node_did.to_owned(),
             ..self.backend.clone()
         }

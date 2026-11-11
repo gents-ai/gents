@@ -75,9 +75,11 @@ pub(crate) enum BackgroundSlot {
 /// with `request_fields`. DefraDB transactions do not conflict on predicate
 /// reads, so every admission bumps the request's
 /// `background_admission_sequence`: concurrent admissions to one request then
-/// conflict at commit and recount. Conflicts are per value key and head sets
-/// merge, so lease renewal and lifecycle writes, which neither read nor write
-/// this field, never conflict with it.
+/// conflict at commit and recount. Writers of one document conflict whichever
+/// of its fields they change, so the bump also aborts an open lease renewal,
+/// and a renewal committing first aborts this admission
+/// (`tla/BackgroundAdmissionContention`). The renewal owner re-drives a poll
+/// the bumps exhaust; the admission's sibling budget absorbs the renewal.
 pub(crate) async fn reserve_background_slot_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     request_doc_id: &str,
@@ -113,10 +115,15 @@ pub(crate) async fn reserve_background_slot_in_txn(
     );
     let row = rows.remove(0);
     let next = row["background_admission_sequence"].as_u64().unwrap_or(0) + 1;
-    txn.execute(&format!(
-        r#"mutation {{ update_AgentRequest(docID: "{escaped}", input: {{ background_admission_sequence: {next} }}) {{ _docID }} }}"#
-    ))
-    .await?;
+    {
+        use gents_protocol::document_query::{fields::agent_request as fields, Input, Update};
+        let rendered = Update::doc(
+            request_doc_id,
+            Input::new().set(fields::BACKGROUND_ADMISSION_SEQUENCE, next),
+        )
+        .render();
+        txn.run(&rendered).await?;
+    }
     Ok(row)
 }
 

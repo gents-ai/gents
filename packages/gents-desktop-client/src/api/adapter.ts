@@ -1,6 +1,7 @@
 import type { DesktopTransport } from "../transport.js";
 import { createHostAccessCommands } from "./hostAccess.js";
 import { createDesktopInvoker } from "./invoke.js";
+import { createJoinRequestCommands } from "./joinRequests.js";
 import { createManagedServerCommands } from "./managedServer.js";
 import { createPackCommands } from "./packs.js";
 import { createUxPluginCommands } from "./uxPlugins.js";
@@ -44,6 +45,7 @@ export function createDesktopApiAdapter(
     startDesktopClient: () => invokeDesktop("desktop_client_start"),
     shutdownDesktopClient: () => invokeDesktop("desktop_client_shutdown"),
     ...createManagedServerCommands(invokeDesktop),
+    ...createJoinRequestCommands(invokeDesktop),
     quitDesktop: () => invokeDesktop("desktop_app_quit"),
     openDbExplorer: () => invokeDesktop("desktop_open_db_explorer"),
     openExternalUrl: (url) =>
@@ -56,22 +58,27 @@ export function createDesktopApiAdapter(
         peerId,
         label,
       }),
+    dismissEndedAccess: (nodeDid) =>
+      invokeDesktop("desktop_ended_access_dismiss", { nodeDid }),
     fetchPeerStatus: (peerId) =>
       invokeDesktop("desktop_peer_status_fetch", {
         request: { peerId },
       }),
-    requestStatusEnrollment: (serverAddress) => {
+    requestStatusEnrollment: (serverAddress, candidateName) => {
       const value = serverAddress.trim();
       if (
         value.startsWith("gents://invite/") ||
         /^[1-9A-HJ-NP-Za-km-z]{100,}$/.test(value)
       ) {
         return invokeDesktop("desktop_peer_enroll_invite", {
-          request: { invite: value },
+          request: { invite: value, candidateName: candidateName ?? null },
         });
       }
       return invokeDesktop("desktop_peer_enroll_status", {
-        request: { serverAddress: value },
+        request: {
+          serverAddress: value,
+          ...(candidateName ? { candidateName } : {}),
+        },
       });
     },
     listWorkspace: (subpath) =>
@@ -83,9 +90,6 @@ export function createDesktopApiAdapter(
         nodeDid,
         requestId,
       }),
-    explainToolSurface: (nodeDid, agentId) =>
-      invokeDesktop("desktop_tool_surface_explain", { nodeDid, agentId }),
-    fetchNetworkStatus: () => invokeDesktop("desktop_network_status"),
     fetchSessionContextDetails: (request) =>
       invokeDesktop("desktop_session_context_details", { request }),
     fetchSessionSnapshot: (sessionId, nodeDid, requestId, timelinePage) =>
@@ -94,10 +98,9 @@ export function createDesktopApiAdapter(
         nodeDid,
         requestId,
         timelineLimit: timelinePage?.limit,
-        timelineBeforeItemKey: timelinePage?.beforeItemKey ?? null,
       }),
-    retrySessionHydration: (sessionId, nodeDid) =>
-      invokeDesktop("desktop_session_hydration_retry", {
+    reloadSession: (sessionId, nodeDid) =>
+      invokeDesktop("desktop_session_reload", {
         sessionId,
         nodeDid: nodeDid ?? null,
       }),
@@ -128,17 +131,12 @@ export function createDesktopApiAdapter(
       }),
     sendChatMessage: (request) =>
       invokeDesktop("desktop_chat_send", { request }),
-    recoverChatSubmission: (query) =>
-      invokeDesktop("desktop_chat_submission_recover", { query }),
-    acknowledgeChatSubmission: (receipt) =>
-      invokeDesktop("desktop_chat_submission_acknowledge", { receipt }),
     steerPendingMessage: (request) =>
       invokeDesktop("desktop_pending_message_steer", { request }),
     editPendingQueue: (request) =>
       invokeDesktop("desktop_pending_queue_edit", {
         request,
       }),
-    listMailbox: () => invokeDesktop("desktop_mailbox_list"),
     observeMailboxItem: (request) =>
       invokeDesktop("desktop_mailbox_observe", { request }),
     startMailboxRequest: (itemId) =>
@@ -153,15 +151,8 @@ export function createDesktopApiAdapter(
       invokeDesktop("desktop_session_fork_before_message", { request }),
     setSessionArchived: (request) =>
       invokeDesktop("desktop_session_archive", { request }),
-    sessionHistory: (request) =>
-      invokeDesktop("desktop_session_history", { request }),
     renameSession: (request) =>
       invokeDesktop("desktop_session_rename", { request }),
-    resendRequest: (requestId, nodeDid) =>
-      invokeDesktop("desktop_request_resend", {
-        requestId,
-        nodeDid,
-      }),
     retryRequest: (requestId, nodeDid) =>
       invokeDesktop("desktop_request_retry", {
         requestId,
@@ -183,6 +174,8 @@ export function createDesktopApiAdapter(
       invokeDesktop("desktop_default_agent_set", {
         request,
       }),
+    provisionAgentIdentity: (nodeDid) =>
+      invokeDesktop("desktop_agent_identity_provision", { nodeDid }),
     saveAgentConfig: (request) =>
       invokeDesktop("desktop_agent_save", {
         request,

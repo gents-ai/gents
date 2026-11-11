@@ -16,7 +16,7 @@ pub(crate) trait Turn {
 pub(crate) struct LiveTurn {
     pub(crate) graphql: gents::store::config_client::GraphqlEndpoint,
     pub(crate) node_did: String,
-    pub(crate) agent_id: String,
+    pub(crate) agent_did: String,
     pub(crate) session_id: String,
     pub(crate) timeout_secs: u64,
     pub(crate) poll_secs: u64,
@@ -31,11 +31,11 @@ impl Turn for LiveTurn {
             &self.node_did,
             content,
             Some(&self.session_id),
-            Some(&self.agent_id),
+            Some(&self.agent_did),
             RequestSubmitOptions::default(),
         )
         .await
-        .with_context(|| format!("submitting the {} turn", self.agent_id))?;
+        .with_context(|| format!("submitting the {} turn", self.agent_did))?;
         let response = if self.quiet {
             wait_for_terminal_response(
                 &self.graphql,
@@ -53,7 +53,6 @@ impl Turn for LiveTurn {
                 self.timeout_secs,
                 self.poll_secs,
                 false,
-                crate::commands::chat::ApprovalHandling::None,
                 true,
             )
             .await?
@@ -61,8 +60,8 @@ impl Turn for LiveTurn {
         let text = chat_turn_text_content(&response);
         anyhow::ensure!(
             !text.trim().is_empty(),
-            "the {} turn ended without a reply; `gents response show {}` shows why",
-            self.agent_id,
+            "the {} turn ended without a reply; `gents utils debug response show {}` shows why",
+            self.agent_did,
             submitted.request_id
         );
         Ok(text.to_owned())

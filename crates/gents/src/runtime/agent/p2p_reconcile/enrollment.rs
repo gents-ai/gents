@@ -4,11 +4,6 @@
 
 use std::collections::BTreeSet;
 
-use super::session_hydration::{
-    decide_hydration, AppliedPairingRoute, HydrationCatalog, HydrationRequest, HydrationVerdict,
-    SessionOwner, VerifiedActiveMembership,
-};
-
 pub use gents_protocol::enrollment::{
     canonical_enrollment_digest, canonical_enrollment_payload, frame_enrollment_field,
     ENROLLMENT_DIGEST_DOMAIN, ENROLLMENT_DIGEST_PREFIX,
@@ -47,6 +42,7 @@ pub struct EnrollmentRequest {
     pub server_peer: String,
     pub candidate_did: String,
     pub candidate_peer: String,
+    pub candidate_name: Option<String>,
     pub observed_candidate_peer: String,
     pub resolved_candidate_did: String,
     pub candidate_ticket_peer: String,
@@ -60,8 +56,8 @@ pub struct EnrollmentRequest {
 }
 
 impl EnrollmentRequest {
-    pub fn canonical_text_fields(&self) -> [&str; 13] {
-        [
+    pub fn canonical_text_fields(&self) -> Vec<&str> {
+        let mut fields: Vec<&str> = vec![
             &self.request_id,
             &self.offer_id,
             &self.challenge,
@@ -75,7 +71,11 @@ impl EnrollmentRequest {
             &self.client_nonce,
             &self.issued_at,
             &self.expires_at,
-        ]
+        ];
+        fields.extend(gents_protocol::enrollment::candidate_name_fields(
+            self.candidate_name.as_deref(),
+        ));
+        fields
     }
 }
 
@@ -592,66 +592,6 @@ impl EnrollmentState {
         })
     }
 
-    pub fn hydration_admits(
-        &self,
-        request: &EnrollmentRequest,
-        direction: EnrollmentRouteDirection,
-    ) -> bool {
-        let peer_id = match direction {
-            EnrollmentRouteDirection::ClientToServer => request.candidate_peer.clone(),
-            EnrollmentRouteDirection::ServerToClient => request.server_peer.clone(),
-        };
-        let hydration = HydrationRequest {
-            request_key: request.request_id.clone(),
-            peer_id,
-            requester_did: request.candidate_did.clone(),
-            node_did: request.owner_node.clone(),
-            session_id: "session-1".to_string(),
-        };
-        let mut catalog = HydrationCatalog {
-            selected_network_id: request.network_id.clone(),
-            sessions: BTreeSet::from([SessionOwner {
-                session_doc_id: None,
-                session_id: hydration.session_id.clone(),
-                requester_did: hydration.requester_did.clone(),
-                node_did: hydration.node_did.clone(),
-            }]),
-            ..HydrationCatalog::default()
-        };
-        for membership in &self.memberships {
-            if membership.network_id == request.network_id
-                && membership.active
-                && membership.admin_signed
-                && membership.fresh
-                && self.membership_currently_authorized(membership)
-            {
-                catalog
-                    .verified_active_memberships
-                    .insert(VerifiedActiveMembership {
-                        network_id: membership.network_id.clone(),
-                        member_did: membership.member_did.clone(),
-                    });
-            }
-        }
-        for route in &self.applied_routes {
-            if route.network_id == request.network_id
-                && route.direction == direction
-                && route.live
-                && self.route_currently_authorized(direction, route)
-            {
-                catalog.applied_pairing_routes.insert(AppliedPairingRoute {
-                    peer_id: route.peer.clone(),
-                    requester_did: route.requester.clone(),
-                    node_did: route.agent.clone(),
-                });
-            }
-        }
-        matches!(
-            decide_hydration(&hydration, &catalog),
-            HydrationVerdict::Admit(_)
-        )
-    }
-
     fn admin_pin_for(offer: &EnrollmentOffer) -> NetworkAdminPin {
         NetworkAdminPin {
             network_id: offer.network_id.clone(),
@@ -821,31 +761,6 @@ impl EnrollmentState {
 
     fn route_owned_by(request: &EnrollmentRequest, route: &EnrollmentAppliedRoute) -> bool {
         route.network_id == request.network_id && route.requester == request.candidate_did
-    }
-
-    fn membership_currently_authorized(&self, membership: &EnrollmentMembership) -> bool {
-        self.accepted_requests.iter().any(|request| {
-            self.decisions.iter().any(|decision| {
-                self.current_approval(request, decision)
-                    && membership == &Self::membership_for(request, decision)
-            })
-        })
-    }
-
-    fn route_currently_authorized(
-        &self,
-        direction: EnrollmentRouteDirection,
-        route: &EnrollmentAppliedRoute,
-    ) -> bool {
-        self.accepted_requests.iter().any(|request| {
-            self.decisions.iter().any(|decision| {
-                self.current_approval(request, decision)
-                    && self
-                        .memberships
-                        .contains(&Self::membership_for(request, decision))
-                    && route == &Self::route_for(request, decision, direction)
-            })
-        })
     }
 
     fn route_for(

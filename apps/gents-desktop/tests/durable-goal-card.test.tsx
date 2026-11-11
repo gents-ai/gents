@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { ChatTranscriptPanel } from "@source-inc/gents-desktop-chat";
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
+import { goalControl, observedGoal } from "./goal-state-fixture";
 import { sessionContext } from "./timeline-fixture";
 
 describe("durable goal transcript card", () => {
@@ -10,7 +11,7 @@ describe("durable goal transcript card", () => {
     const session: DesktopSessionSnapshot = {
       sessionId: "session-goal",
       nodeDid: "did:test:goal-node",
-      agentId: "default",
+      agentDid: "default",
       title: "goal session",
       previewText: "",
       status: "active",
@@ -23,21 +24,16 @@ describe("durable goal transcript card", () => {
       foldedInputs: [],
       context: sessionContext(),
       timelineItems: [],
-      goal: {
-        goalId: "goal-1",
-        objective: "Ship the durable controller",
-        status: "active",
-        tokenBudget: 50_000,
-        tokensUsed: 1_200,
-        activeTimeSeconds: 42,
-        consecutiveBlockedAudits: 0,
-        continuationSequence: 2,
-        wrapupRequested: false,
-        wrapupCompleted: false,
-        lastBlockedReason: null,
-        lastFailure: null,
-        completionEvidence: null,
-      },
+      goal: observedGoal(
+        goalControl("active", {
+          goalId: "goal-1",
+          objective: "Ship the durable controller",
+          tokenBudget: "50000",
+          tokensUsed: "1200",
+          activeTimeSeconds: "42",
+          continuationSequence: "2",
+        }),
+      ),
     };
 
     render(
@@ -55,7 +51,7 @@ describe("durable goal transcript card", () => {
     const session: DesktopSessionSnapshot = {
       sessionId: "session-goal-partial",
       nodeDid: "did:test:goal-node",
-      agentId: "default",
+      agentDid: "default",
       title: "goal session",
       previewText: "",
       status: "active",
@@ -66,21 +62,9 @@ describe("durable goal transcript card", () => {
       queuedTurns: [],
       foldedInputs: [],
       timelineItems: [],
-      goal: {
-        goalId: "goal-partial",
-        objective: null,
-        status: null,
-        tokenBudget: null,
-        tokensUsed: 37,
-        activeTimeSeconds: 0,
-        consecutiveBlockedAudits: 0,
-        continuationSequence: 0,
-        wrapupRequested: false,
-        wrapupCompleted: false,
-        lastBlockedReason: null,
-        lastFailure: null,
-        completionEvidence: null,
-      },
+      goal: observedGoal(
+        goalControl("", { goalId: "goal-partial", objective: "", tokensUsed: "37" }),
+      ),
       retryEligibility: { eligible: false, denialReason: null },
       context: {
         estimatedDurableTokens: 0,
@@ -109,5 +93,35 @@ describe("durable goal transcript card", () => {
     expect(card).toHaveTextContent("37 charged tokens");
     expect(card).toHaveTextContent("0s active");
     expect(card.textContent).not.toContain("/");
+  });
+
+  it("shows no card for a Goal state that is not a verified Goal", () => {
+    for (const goal of [
+      observedGoal(null),
+      { kind: "no_readable_session", next: "send" },
+      {
+        kind: "unknown",
+        cause: "projection_unverified",
+        next: "await_publication",
+        reason: "unverified",
+      },
+      null,
+    ] as const) {
+      const { unmount } = render(
+        <ChatTranscriptPanel
+          selectedSessionId="session-goal"
+          session={
+            {
+              sessionId: "session-goal",
+              nodeDid: "did:test:node",
+              timelineItems: [],
+              goal,
+            } as unknown as DesktopSessionSnapshot
+          }
+        />,
+      );
+      expect(screen.queryByTestId("durable-goal-card")).toBeNull();
+      unmount();
+    }
   });
 });

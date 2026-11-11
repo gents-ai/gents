@@ -2,7 +2,7 @@ use std::time::Duration;
 
 #[doc(hidden)]
 pub trait StartupBuildFailureObserver: Send + Sync {
-    fn on_build_failure(&self, agent_id: &str, failure_number: u32, budget: u32, error: &str);
+    fn on_build_failure(&self, agent_did: &str, failure_number: u32, budget: u32, error: &str);
 }
 
 #[derive(Debug, Clone)]

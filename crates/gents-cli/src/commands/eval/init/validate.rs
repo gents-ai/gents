@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use gents::documents::{EvalCapture, EvalCase, EvalDefinition, EvalSplit};
-use gents::eval::checks::CheckRegistry;
+use gents_eval::checks::CheckRegistry;
 use serde_json::{json, Value};
 
 use super::dossier::{runtime_collections, Dossier};
@@ -282,7 +282,7 @@ pub(crate) mod tests {
             pack_name: "eval_canary".into(),
             pack_version: "1.0.0".into(),
             pack_digest: "sha256:canary".into(),
-            agent_id: "canary".into(),
+            agent_slot: "canary".into(),
             slot: SLOT.into(),
             collections: BTreeMap::from([(
                 "CanaryItem".to_owned(),

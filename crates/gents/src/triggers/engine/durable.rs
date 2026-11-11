@@ -6,15 +6,18 @@ use crate::store::graphql::escape_graphql_string;
 use anyhow::{ensure, Context, Result};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::trigger_delivery::{FireIdentity, TriggerFire};
+#[cfg(test)]
 pub(crate) use recovery::recover_outcomes;
 #[cfg(test)]
 pub(crate) use recovery::recover_outcomes_in_txn;
+pub(crate) use recovery::recover_outcomes_with_access;
 
 #[derive(Clone)]
 pub(crate) struct PreparedFire {
     pub receipt: TriggerFire,
     pub target_existing: bool,
     pub replace_prior: bool,
+    pub event_source_generation: Option<serde_json::Value>,
 }
 
 pub(crate) fn fire_key(identity: &FireIdentity) -> String {
@@ -102,11 +105,19 @@ async fn observe_goal_outcome_binding(
     {
         return Ok(current_binding);
     }
-    let response = txn.execute(&format!(
-        r#"{{AgentRequest(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, request_id: {{_eq: "{}"}}}}) {{_docID}}}}"#,
-        escape_graphql_string(&fire.identity.owner_did), escape_graphql_string(&fire.session_id),
-        escape_graphql_string(&fire.request_id)
-    )).await?;
+    let response = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        txn.run(
+            &Query::select(Selection::doc_id())
+                .filter(Filter::eq(fields::NODE_DID, &fire.identity.owner_did))
+                .filter(Filter::eq(fields::SESSION_ID, &fire.session_id))
+                .filter(Filter::eq(fields::REQUEST_ID, &fire.request_id))
+                .render(),
+        )
+        .await?
+    };
     let requests = response["data"]["AgentRequest"]
         .as_array()
         .context("Task assignment request query omitted rows")?;
@@ -202,16 +213,15 @@ pub(crate) async fn stage_fire_request(
     Ok(true)
 }
 
-pub(crate) fn outcome_source_allowed(source_collection: &str, emit_outcome: bool) -> bool {
-    source_collection != "FireOutcome" || !emit_outcome
-}
-
 pub(crate) async fn stage_fire_receipt(
     txn: &ConfigApplyTxn<'_>,
     fire: &TriggerFire,
 ) -> Result<bool> {
     ensure!(
-        outcome_source_allowed(&fire.identity.source_collection, fire.emit_outcome),
+        crate::documents::event_trigger::outcome_source_allowed(
+            &fire.identity.source_collection,
+            fire.emit_outcome,
+        ),
         "a Task sourced from FireOutcome cannot emit another FireOutcome"
     );
     ensure!(
@@ -222,20 +232,53 @@ pub(crate) async fn stage_fire_receipt(
         fire.request_id == fire.identity.request_id(),
         "noncanonical fire request ID"
     );
-    let prior = txn
-        .execute(&format!(
-            "{{ TriggerFire(filter: {{fire_key: {{_eq: \"{}\"}}}}) {{ request_id }} }}",
-            escape_graphql_string(&fire.fire_key)
-        ))
-        .await?;
+    let prior = {
+        use gents_protocol::document_query::{
+            fields::trigger_fire as fields, Filter, Query, Selection,
+        };
+        txn.run(
+            &Query::select(Selection::new().field(fields::REQUEST_ID))
+                .filter(Filter::eq(fields::FIRE_KEY, &fire.fire_key))
+                .render(),
+        )
+        .await?
+    };
     if prior["data"]["TriggerFire"]
         .as_array()
         .is_some_and(|rows| !rows.is_empty())
     {
         return Ok(false);
     }
-    txn.execute_with_variables("mutation($input: TriggerFireMutationInputArg!) { create_TriggerFire(input: $input) { _docID } }", &serde_json::json!({"input":fire})).await?;
+    txn.execute_client_signed_create(
+        "mutation($input: TriggerFireMutationInputArg!) { create_TriggerFire(input: $input) { _docID } }",
+        &serde_json::json!({"input":fire}),
+        gents_protocol::schemas::TRIGGER_FIRE,
+    )
+    .await?;
     Ok(true)
+}
+
+pub(crate) async fn stage_session_child_relationships(
+    txn: &ConfigApplyTxn<'_>,
+    collection: &str,
+    doc_id: &str,
+    session_doc_id: &str,
+    agent_did: &str,
+) -> Result<()> {
+    ensure!(
+        matches!(collection, "TriggerFire" | "FireOutcome"),
+        "unsupported Task receipt collection"
+    );
+    txn.add_resource_relationship(collection, doc_id, "parent", "sessions", session_doc_id)
+        .await?;
+    txn.add_actor_relationship(
+        collection,
+        doc_id,
+        "working_agent",
+        &identity::Did::new(agent_did)?,
+    )
+    .await?;
+    Ok(())
 }
 
 /// Called in the terminal owner's transaction; an acknowledgement lost after
@@ -304,19 +347,90 @@ pub(crate) async fn stage_outcome(
         attempt: fire.attempt,
         created_at: now.into(),
     };
-    txn.execute_with_variables("mutation($input: FireOutcomeMutationInputArg!) { create_FireOutcome(input: $input) { _docID } }", &serde_json::json!({"input":outcome})).await?;
+    let response = txn.execute_client_signed_create(
+        "mutation($input: FireOutcomeMutationInputArg!) { create_FireOutcome(input: $input) { _docID } }",
+        &serde_json::json!({"input":outcome}),
+        gents_protocol::schemas::FIRE_OUTCOME,
+    ).await?;
+    let doc_id = crate::store::graphql::created_doc_id(&response, "FireOutcome")?;
+    let session = crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+        txn,
+        &fire.identity.owner_did,
+        &fire.session_id,
+    )
+    .await?
+    .context("Task outcome session is unavailable")?;
+    stage_session_child_relationships(
+        txn,
+        "FireOutcome",
+        &doc_id,
+        &session.doc_id,
+        &session.session.agent_did,
+    )
+    .await?;
+    for reader in declared_outcome_readers(txn, &fire.identity.owner_did, &fire.task_id).await? {
+        stage_outcome_reader(txn, &doc_id, &reader).await?;
+    }
     Ok(true)
+}
+
+/// The stage Task's declared `outcome_readers`, read in the publication
+/// transaction. An unavailable Task declares nothing, so nothing is granted.
+async fn declared_outcome_readers(
+    txn: &ConfigApplyTxn<'_>,
+    owner: &str,
+    task_id: &str,
+) -> Result<Vec<String>> {
+    let Some((_, task)) = crate::store::config_client::read_desired_state_record_in_txn(
+        txn,
+        crate::Collection::Task,
+        owner,
+        task_id,
+    )
+    .await?
+    else {
+        return Ok(Vec::new());
+    };
+    let task: crate::documents::Task =
+        serde_json::from_value(task).context("decoding the outcome's Task")?;
+    Ok(task
+        .outcome_readers
+        .into_iter()
+        .map(|reader| reader.agent_did)
+        .collect())
+}
+
+/// Lean `Identity.Automation.publishOutcome`: applies one declared `reader`
+/// tuple on this FireOutcome, staged in the transaction that creates it.
+pub(crate) async fn stage_outcome_reader(
+    txn: &ConfigApplyTxn<'_>,
+    outcome_doc_id: &str,
+    reader_did: &str,
+) -> Result<()> {
+    txn.add_actor_relationship(
+        "FireOutcome",
+        outcome_doc_id,
+        "reader",
+        &identity::Did::new(reader_did)?,
+    )
+    .await?;
+    Ok(())
 }
 
 const FIRE_FIELDS: &str = "fire_key owner_did trigger_id source_collection source_doc_id task_id request_id session_id goal_id goal_objective goal_token_budget goal_assignment_applied emit_outcome queued_serial source_handoff_id reply_session_id shard_id attempt created_at";
 
 async fn outcome_published(txn: &ConfigApplyTxn<'_>, fire: &TriggerFire) -> Result<bool> {
-    let response = txn
-        .execute(&format!(
-            "{{ FireOutcome(filter: {{handoff_id: {{_eq: \"{}\"}}}}) {{ handoff_id }} }}",
-            escape_graphql_string(&fire.identity.outcome_id())
-        ))
-        .await?;
+    let response = {
+        use gents_protocol::document_query::{
+            fields::fire_outcome as fields, Filter, Query, Selection,
+        };
+        txn.run(
+            &Query::select(Selection::new().field(fields::HANDOFF_ID))
+                .filter(Filter::eq(fields::HANDOFF_ID, fire.identity.outcome_id()))
+                .render(),
+        )
+        .await?
+    };
     Ok(!response["data"]["FireOutcome"]
         .as_array()
         .context("Task outcome query omitted rows")?
@@ -331,7 +445,18 @@ pub(crate) async fn publish_request_outcome(
     reason: &str,
     now: &str,
 ) -> Result<()> {
-    let response = txn.execute(&format!("{{ TriggerFire(filter: {{owner_did: {{_eq: \"{}\"}}, request_id: {{_eq: \"{}\"}}}}) {{ {FIRE_FIELDS} }} }}", escape_graphql_string(owner), escape_graphql_string(request_id))).await?;
+    let response = {
+        use gents_protocol::document_query::{
+            fields::trigger_fire as fields, Filter, Query, Selection,
+        };
+        txn.run(
+            &Query::select(Selection::owned(FIRE_FIELDS))
+                .filter(Filter::eq(fields::OWNER_DID, owner))
+                .filter(Filter::eq(fields::REQUEST_ID, request_id))
+                .render(),
+        )
+        .await?
+    };
     let rows: Vec<TriggerFire> = serde_json::from_value(response["data"]["TriggerFire"].clone())?;
     for fire in rows {
         let stage = OutcomeStage {
@@ -353,7 +478,18 @@ pub(crate) async fn publish_goal_outcomes(
     reason: &str,
     now: &str,
 ) -> Result<()> {
-    let response = txn.execute(&format!("{{ TriggerFire(filter: {{owner_did: {{_eq: \"{}\"}}, goal_id: {{_eq: \"{}\"}}}}) {{ {FIRE_FIELDS} }} }}", escape_graphql_string(owner), escape_graphql_string(goal_id))).await?;
+    let response = {
+        use gents_protocol::document_query::{
+            fields::trigger_fire as fields, Filter, Query, Selection,
+        };
+        txn.run(
+            &Query::select(Selection::owned(FIRE_FIELDS))
+                .filter(Filter::eq(fields::OWNER_DID, owner))
+                .filter(Filter::eq(fields::GOAL_ID, goal_id))
+                .render(),
+        )
+        .await?
+    };
     let rows: Vec<TriggerFire> = serde_json::from_value(response["data"]["TriggerFire"].clone())?;
     for fire in rows {
         if outcome_published(txn, &fire).await? {
@@ -382,6 +518,19 @@ pub async fn request_arrival_order(
     txn: &ConfigApplyTxn<'_>,
     doc_ids: &[String],
 ) -> Result<Vec<String>> {
+    Ok(request_arrival_positions(txn, doc_ids)
+        .await?
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect())
+}
+
+/// The native collection-wide cursor lets independently authorized request
+/// scans preserve the same arrival order without broadening their actors.
+pub(crate) async fn request_arrival_positions(
+    txn: &ConfigApplyTxn<'_>,
+    doc_ids: &[String],
+) -> Result<Vec<(String, u64)>> {
     if doc_ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -436,18 +585,19 @@ pub async fn request_arrival_order(
         }
     }
     ordered.sort_unstable_by_key(|(cursor, _)| *cursor);
-    let ordered = ordered.into_iter().map(|(_, id)| id).collect::<Vec<_>>();
     let positions = ordered
         .iter()
-        .enumerate()
-        .map(|(index, id)| (id.as_str(), index))
+        .map(|(cursor, id)| (id.as_str(), *cursor))
         .collect::<rapidhash::RapidHashMap<_, _>>();
     let mut slots = slots
         .into_iter()
         .filter(|(_, slot)| positions.contains_key(slot.as_str()))
         .collect::<Vec<_>>();
     slots.sort_by_key(|(_, slot)| positions[slot.as_str()]);
-    Ok(slots.into_iter().map(|(id, _)| id).collect())
+    Ok(slots
+        .into_iter()
+        .map(|(id, slot)| (id, positions[slot.as_str()]))
+        .collect())
 }
 
 #[derive(Clone, serde::Deserialize)]

@@ -158,7 +158,8 @@ private def outcomeJson : CanonicalOutput.Outcome → String
 
 private def payloadKindJson : CanonicalOutput.PayloadKind → String
   | .text => "text" | .reasoning => "reasoning" | .summary => "summary"
-  | .signature => "signature" | .encrypted => "encrypted" | .redacted => "redacted"
+  | .signature => "signature" | .reasoningStop => "reasoning_stop"
+  | .encrypted => "encrypted" | .redacted => "redacted"
   | .arguments => "arguments" | .toolOutput => "tool_output"
   | .media => "media"
 
@@ -545,6 +546,7 @@ def recoverySweepCaseJson (witness : RecoverySweepCase) : String :=
     ++ "\"parent_live\":" ++ jsonOptionalBool witness.parentLive ++ ","
     ++ "\"parent_interrupted\":" ++ jsonOptionalBool witness.parentInterrupted ++ ","
     ++ "\"parent_terminal\":" ++ jsonOptionalBool witness.parentTerminal ++ ","
+    ++ "\"task_hook_observation\":" ++ jsonOptionalString witness.taskHookObservation ++ ","
     ++ "\"execution_registered\":"
       ++ jsonOptionalBool witness.executionRegistered ++ ","
     ++ "\"process_outcome\":" ++ jsonOptionalString witness.processOutcome ++ ","

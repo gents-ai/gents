@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
+use gents::pack::PackChangeError;
 use gents::ConfigAccess;
 use serde_json::Value;
 
@@ -48,6 +49,22 @@ pub async fn installed(home: PathBuf, registry: Option<String>) -> Result<Value>
     Ok(serde_json::json!({ "packs": packs }))
 }
 
+/// Lists a home's installations using the calling operator's authenticated access.
+pub async fn installed_with_access(
+    home: PathBuf,
+    registry: Option<String>,
+    access: ConfigAccess,
+    node_did: String,
+) -> Result<Value> {
+    let packs = command::update::outdated_packs_on(
+        Some(&home),
+        Some((&access, &node_did)),
+        registry.as_deref(),
+    )
+    .await?;
+    Ok(serde_json::json!({ "packs": packs }))
+}
+
 pub async fn search(registry: Option<String>, query: String, page: u32) -> Result<Value> {
     capture_report(command::registry::search(PackSearchArgs {
         query: Some(query),
@@ -61,6 +78,9 @@ pub async fn info(registry: Option<String>, package: String) -> Result<Value> {
     capture_report(command::account::info(PackInfoArgs { package, registry })).await
 }
 
+/// Installs `package`, or with `preview` reports what the install would
+/// write. With `expect_digest`, a pack whose content digest differs (the one
+/// a preview reported, or a link named) is refused before any write.
 #[allow(clippy::too_many_arguments)]
 pub async fn install(
     home: PathBuf,
@@ -70,10 +90,12 @@ pub async fn install(
     edited: EditedDocuments,
     grant_authority: bool,
     preview: bool,
-) -> Result<Value> {
+    expect_digest: Option<String>,
+) -> Result<Value, PackChangeError> {
     capture_report(command::install(PackInstallArgs {
         package,
         inference_slots,
+        dependency_variables: Vec::new(),
         preview,
         scope: scope(home),
         output: OutputFormat::Json,
@@ -82,7 +104,7 @@ pub async fn install(
         drift: drift(edited),
         grant_authority,
         wire: Vec::new(),
-        expect_digest: None,
+        expect_digest,
         explicit: true,
     }))
     .await
@@ -139,7 +161,6 @@ pub async fn dynamic_workflows(home: PathBuf) -> Result<Value> {
         &access,
         &JobFilter {
             session_id: None,
-            requester: None,
             state: StateFilter::States(vec![JobState::Completed]),
             plugin: None,
         },
@@ -160,25 +181,25 @@ pub async fn dynamic_workflows(home: PathBuf) -> Result<Value> {
             .iter()
             .max_by_key(|view| view.created_at)
             .expect("a group has a run");
-        let agent_id = gents::session::origin::load_session(
+        let agent_did = gents::session::origin::load_session(
             &access,
             &latest.session_id,
             latest.scope.requester_did.as_deref(),
         )
         .await?
-        .map(|session| session.agent_id);
+        .map(|session| session.agent_did);
         workflows.push(serde_json::json!({
             "script_id": script_id,
             "handle": latest.handle,
             "runs": runs.len(),
             "last_run_at": latest.created_at,
-            "agent_id": agent_id,
+            "agent_did": agent_did,
             "latest_address": latest.address,
             "promoted_as": promoted_as(&promotions, script_id),
         }));
     }
     workflows.sort_by_key(|workflow| std::cmp::Reverse(workflow["last_run_at"].as_u64()));
-    // Installed workflows are the home's job plugins, as Grok's `/workflows` lists them.
+    // Installed workflows are the home's job plugins.
     let installed: Vec<Value> = gents::plugin::store::list_records(&home)?
         .into_iter()
         .filter(|record| record.declaration.job.0)
@@ -299,7 +320,7 @@ pub async fn update(
     package: Option<String>,
     registry: Option<String>,
     edited: EditedDocuments,
-) -> Result<Value> {
+) -> Result<Value, PackChangeError> {
     capture_report(command::update::update(PackUpdateArgs {
         package,
         inference_slots: Vec::new(),
@@ -310,7 +331,11 @@ pub async fn update(
     .await
 }
 
-pub async fn remove(home: PathBuf, package: String, edited: EditedDocuments) -> Result<Value> {
+pub async fn remove(
+    home: PathBuf,
+    package: String,
+    edited: EditedDocuments,
+) -> Result<Value, PackChangeError> {
     capture_report(command::remove(PackRemoveArgs {
         package,
         scope: scope(home),
@@ -529,6 +554,8 @@ mod tests {
                 }],
                 dependency_assets: Vec::new(),
                 installed_via: None,
+                source: None,
+                source_history: Vec::new(),
                 installed_at: "2026-01-01T00:00:00Z".into(),
                 ux: vec![PackUxPlugin {
                     name: "board".into(),

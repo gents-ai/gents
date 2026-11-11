@@ -7,14 +7,14 @@ use crate::session::TxnCanonicalReader;
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::store::graphql::escape_graphql_string;
 
-const FIELDS: &str = crate::session::AGENT_SESSION_FIELDS;
+const FIELDS: &str = gents_protocol::session::AGENT_SESSION_FIELDS;
 const HELP: &str = "Read canonical sessions visible to your authenticated DID through DefraDB ACP. Actions: list, count, search, get, transcript, output. Use {\"action\":\"help\",\"topic\":\"search\"} for an action's syntax. Copied IDs grant no access; ACP determines visibility across nodes and requesters.";
 
 fn action_help(topic: Option<&str>) -> Result<&'static str> {
     Ok(match topic {
         None => HELP,
         Some("list") => {
-            r#"{"action":"list","filter":{"status":"closed","tag":"release"},"limit":10}. Filters: agent_id, status (open/closed), tag, created_after (inclusive), created_before (exclusive), text (title or ID substring). Order: created_at descending, then ID descending. Pass next_cursor as cursor with the same filter. Limit: 1–100."#
+            r#"{"action":"list","filter":{"status":"closed","tag":"release"},"limit":10}. Filters: agent_did, status (open/closed), tag, created_after (inclusive), created_before (exclusive), text (title or ID substring). Order: created_at descending, then ID descending. Pass next_cursor as cursor with the same filter. Limit: 1–100."#
         }
         Some("count") => {
             r#"{"action":"count","filter":{"status":"closed"}}. Exact count of authorized sessions, independent of request volume or list limits. Filters are the same as list; no cursor. Use help topic=list for filters."#
@@ -61,7 +61,7 @@ fn missing_search_query(args: &SessionHistoryParams) -> anyhow::Error {
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionFilter {
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     pub status: Option<String>,
     pub tag: Option<String>,
     pub created_after: Option<String>,
@@ -92,8 +92,8 @@ fn scope(agent: &str, requester: Option<&str>) -> String {
 
 fn filter_query(filter: &SessionFilter, cursor: Option<&Cursor>) -> Result<String> {
     let mut parts = Vec::new();
-    if let Some(behavior) = &filter.agent_id {
-        parts.push(format!("{{ agent_id: {{_eq: {}}} }}", quoted(behavior)));
+    if let Some(behavior) = &filter.agent_did {
+        parts.push(format!("{{ agent_did: {{_eq: {}}} }}", quoted(behavior)));
     }
     if let Some(tag) = &filter.tag {
         parts.push(format!("{{ tags: {{_any: {{_eq: {}}}}} }}", quoted(tag)));
@@ -156,14 +156,14 @@ fn rows(response: Value, collection: &str) -> Result<Vec<Value>> {
         .with_context(|| format!("sessions response omitted {collection}"))?;
     if collection == "AgentSession" {
         for row in &rows {
-            crate::session::decode_session_row(row)?;
+            gents_protocol::session::decode_session_row(row)?;
         }
     }
     Ok(rows)
 }
 
 fn compact(row: &Value, current_session: Option<&str>, agent: &str) -> Value {
-    json!({"session_id":row["session_id"],"title":row["title"]["text"],"created_at":row["created_at"],"closed_at":row["closed_at"],"agent_id":row["agent_id"],"tags":row["tags"],"node_did":row["node_did"],"requester_did":row["requester_did"],"is_current":current_session.is_some_and(|id|super::is_current_session(agent,id,row["node_did"].as_str().unwrap_or_default(),row["session_id"].as_str().unwrap_or_default())),"session_doc_id":row["_docID"]})
+    json!({"session_id":row["session_id"],"title":row["title"]["text"],"created_at":row["created_at"],"closed_at":row["closed_at"],"agent_did":row["agent_did"],"tags":row["tags"],"node_did":row["node_did"],"requester_did":row["requester_did"],"is_current":current_session.is_some_and(|id|super::is_current_session(agent,id,row["node_did"].as_str().unwrap_or_default(),row["session_id"].as_str().unwrap_or_default())),"session_doc_id":row["_docID"]})
 }
 
 const OUTPUT_PAGE_BYTES: usize = 16_000;
@@ -207,7 +207,7 @@ impl Serialize for AnswerFirst<'_> {
                     "excerpt",
                     "closed_at",
                     "created_at",
-                    "agent_id",
+                    "agent_did",
                     "tags",
                     "message_doc_id",
                     "session_doc_id",
@@ -261,9 +261,7 @@ pub(super) async fn run(
         .and_then(|context| context.requester_did.clone());
     let current_session = current.and_then(|context| context.session_id);
     let agent = tool.node_did.clone();
-    let identity = agent
-        .parse()
-        .context("sessions requires a valid running DID")?;
+    let identity = tool.actor.clone();
     let args = args.clone();
     let action = action.to_owned();
     ConfigAccess::transact_local_readonly(
@@ -477,11 +475,16 @@ async fn execute(
 }
 
 async fn authorized_session(txn: &ConfigApplyTxn<'_>, id: &str) -> Result<Value> {
+    use gents_protocol::document_query::{
+        fields::agent_session as session_fields, Filter, Query, Selection,
+    };
     let mut session = rows(
-        txn.execute(&format!(
-            "{{AgentSession(filter: {{session_id: {{_eq: {}}}}}, limit: 2) {{{FIELDS}}}}}",
-            quoted(id)
-        ))
+        txn.run(
+            &Query::select(Selection::owned(FIELDS))
+                .filter(Filter::eq(session_fields::SESSION_ID, id))
+                .limit(2)
+                .render(),
+        )
         .await?,
         "AgentSession",
     )?;
@@ -525,14 +528,14 @@ async fn tool_output(
                     "{{AgentMessage(filter: {{{},session_id: {{_eq: {}}}}},order: {{sequence: ASC}}) {{{}}}}}",
                     scope(agent, requester),
                     quoted(&session_id),
-                    crate::session::canonical_rows::AGENT_MESSAGE_FIELDS
+                    gents_protocol::output::rows::AGENT_MESSAGE_FIELDS
                 ))
                 .await?,
                 "AgentMessage",
             )?;
             let mut docs = std::collections::BTreeSet::new();
             for row in &headers {
-                let header = crate::session::canonical_rows::decode_transcript_message_row(row)?;
+                let header = gents_protocol::output::rows::decode_transcript_message_row(row)?;
                 for block in &header.message.blocks {
                     use gents_protocol::output::MessageBlock;
                     let (MessageBlock::ToolCall {
@@ -669,12 +672,12 @@ async fn transcript(
         })
         .unwrap_or_default();
     let page_limit = limit.min(6);
-    let headers = rows(txn.execute(&format!("{{AgentMessage(filter: {{{},session_id: {{_eq: {}}}{bounds}}},order: {{sequence: ASC}},limit: {}) {{{}}}}}",scope(agent,requester),quoted(id),page_limit+1,crate::session::canonical_rows::AGENT_MESSAGE_FIELDS)).await?,"AgentMessage")?;
+    let headers = rows(txn.execute(&format!("{{AgentMessage(filter: {{{},session_id: {{_eq: {}}}{bounds}}},order: {{sequence: ASC}},limit: {}) {{{}}}}}",scope(agent,requester),quoted(id),page_limit+1,gents_protocol::output::rows::AGENT_MESSAGE_FIELDS)).await?,"AgentMessage")?;
     let mut reader = TxnCanonicalReader::new(txn, agent, requester);
     let observed = headers
         .iter()
-        .map(crate::session::canonical_rows::decode_transcript_message_row)
-        .collect::<Result<Vec<_>>>()?;
+        .map(gents_protocol::output::rows::decode_transcript_message_row)
+        .collect::<Result<Vec<_>, _>>()?;
     reader.observe_headers(&observed);
     let mut messages = Vec::new();
     let mut next = None;
@@ -743,11 +746,11 @@ async fn search_session(
         let bound = after
             .map(|sequence| format!(",sequence: {{_gt: {sequence}}}"))
             .unwrap_or_default();
-        let headers = rows(txn.execute(&format!("{{AgentMessage(filter: {{{},session_id: {{_eq: {}}}{bound}}},order: {{sequence: ASC}},limit: {SEARCH_MESSAGE_PAGE}) {{{}}}}}",scope(agent,requester),quoted(id),crate::session::canonical_rows::AGENT_MESSAGE_FIELDS)).await?,"AgentMessage")?;
+        let headers = rows(txn.execute(&format!("{{AgentMessage(filter: {{{},session_id: {{_eq: {}}}{bound}}},order: {{sequence: ASC}},limit: {SEARCH_MESSAGE_PAGE}) {{{}}}}}",scope(agent,requester),quoted(id),gents_protocol::output::rows::AGENT_MESSAGE_FIELDS)).await?,"AgentMessage")?;
         let observed = headers
             .iter()
-            .map(crate::session::canonical_rows::decode_transcript_message_row)
-            .collect::<Result<Vec<_>>>()?;
+            .map(gents_protocol::output::rows::decode_transcript_message_row)
+            .collect::<Result<Vec<_>, _>>()?;
         reader.observe_headers(&observed);
         let exhausted = headers.len() < SEARCH_MESSAGE_PAGE;
         for row in headers {

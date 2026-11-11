@@ -1,5 +1,5 @@
 import Proofs.Conformance.Contracts.Json.Helpers
-import Proofs.Conformance.Contracts.Json.SessionHydration
+import Proofs.Conformance.Contracts.Json.FileInventoryClosure
 import Proofs.Conformance.ContractCases.PromptAssembly
 import Proofs.Compaction.Executable
 import Proofs.PromptAssembly.ClaudeWire
@@ -686,6 +686,7 @@ def promptAssemblyClaudeReplayCasesJson : String :=
 private def claudeReplayOriginJson : PromptAssembly.ClaudeMap.ReplayOrigin → String
   | .claudeSubscription => jsonString "claudeSubscription"
   | .acceptedProvider => jsonString "acceptedProvider"
+  | .recoveredProvider => jsonString "recoveredProvider"
   | .foreign => jsonString "foreign"
   | .missing => jsonString "missing"
   | .ambiguous => jsonString "ambiguous"

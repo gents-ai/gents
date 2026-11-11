@@ -1,10 +1,10 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
-use gents::eval::checks::CheckRegistry;
-use gents::eval::runner::embedded::EmbeddedExecutor;
-use gents::eval::runner::{RunOptions, TrialExecutor};
+use anyhow::{Context, Result};
+use gents_eval::checks::CheckRegistry;
+use gents_eval::runner::embedded::EmbeddedExecutor;
+use gents_eval::runner::{RunOptions, TrialExecutor};
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
@@ -15,6 +15,8 @@ pub(crate) struct EvalContext {
     pub(crate) home_dir: PathBuf,
     pub(crate) owner: String,
     pub(crate) runtime: tokio::runtime::Handle,
+    pub(crate) evaluator: std::sync::Arc<dyn gents::NodeIdentity>,
+    pub(crate) client_signing: gents::store::config_client::ClientSigningCapability,
 }
 
 impl EvalContext {
@@ -25,12 +27,54 @@ impl EvalContext {
         let (access, home_dir) =
             crate::resolve_config_access(scope.home.as_deref(), scope.graphql.as_deref()).await?;
         let owner = crate::resolve_node_did(Some(&home_dir), None)?;
+        let evaluator = std::sync::Arc::new(crate::load_client_identity().await?);
+        let client_signing =
+            gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+                evaluator.private_key_bytes(),
+            )?;
         Ok(Self {
             access,
             home_dir,
             owner,
             runtime,
+            evaluator,
+            client_signing,
         })
+    }
+
+    pub(crate) async fn default_inference_profile(&self) -> Result<String> {
+        self.access
+            .transact_readonly("eval.default_inference_profile", |txn| {
+                Box::pin(async move {
+                    let (_, node) = gents::store::config_client::read_desired_state_record_in_txn(
+                        txn,
+                        gents::Collection::Node,
+                        &self.owner,
+                        &self.owner,
+                    )
+                    .await?
+                    .context("node configuration is missing; select --profile explicitly")?;
+                    let node: gents::documents::Node = serde_json::from_value(node)?;
+                    let did = node
+                        .default_agent_did
+                        .context("node has no default agent; select --profile explicitly")?;
+                    let (_, agent) = gents::store::config_client::read_desired_state_record_in_txn(
+                        txn,
+                        gents::Collection::Agent,
+                        &self.owner,
+                        &did,
+                    )
+                    .await?
+                    .context("default agent is unavailable; select --profile explicitly")?;
+                    let agent: gents::AgentDocument = serde_json::from_value(agent)?;
+                    anyhow::ensure!(
+                        agent.enabled,
+                        "default agent is disabled; select --profile explicitly"
+                    );
+                    Ok(agent.inference_profile_id)
+                })
+            })
+            .await
     }
 
     pub(crate) fn runs_dir(&self) -> PathBuf {
@@ -94,7 +138,8 @@ pub(crate) async fn dispatch(command: EvalCommand, runtime: tokio::runtime::Hand
         gents::DocumentRuntimeOptions::default(),
         ctx.runs_dir(),
         ctx.runtime.clone(),
-    );
+    )
+    .with_evaluator_identity(ctx.evaluator.clone(), ctx.client_signing.clone());
     let registry = CheckRegistry::builtin();
     let cancel = if matches!(
         command,
@@ -153,7 +198,7 @@ pub(crate) async fn execute(
     result.map_err(surface_refusal)
 }
 
-/// `gents eval cancel` from argv alone: the marker is written before the
+/// `gents utils eval cancel` from argv alone: the marker is written before the
 /// home's access is opened, since the process hosting the run may hold the
 /// home's embedded node.
 async fn cancel_without_context(
@@ -170,7 +215,7 @@ async fn cancel_without_context(
     manage::cancel(&runs_dir(&home_dir), &args.run_id, purpose, &mut out).await
 }
 
-/// `gents eval watch` from argv. The process hosting the run may hold the
+/// `gents utils eval watch` from argv. The process hosting the run may hold the
 /// home's embedded node; then the watch reads the files the runner leaves
 /// and tries the node again only once no live process holds the run.
 async fn watch_while_held(
@@ -298,11 +343,11 @@ pub(crate) async fn follow_progress<T>(
 }
 
 pub(crate) fn surface_refusal(error: anyhow::Error) -> anyhow::Error {
-    let verbatim = gents::eval::report::report_refused(&error)
+    let verbatim = gents_eval::report::report_refused(&error)
         .map(ToString::to_string)
-        .or_else(|| gents::eval::runner::freeze_refused(&error).map(ToString::to_string))
+        .or_else(|| gents_eval::runner::freeze_refused(&error).map(ToString::to_string))
         .or_else(|| gents::eval::already_invalidated(&error).map(ToString::to_string))
-        .or_else(|| gents::eval::runner::provider_down(&error).map(ToString::to_string));
+        .or_else(|| gents_eval::runner::provider_down(&error).map(ToString::to_string));
     match verbatim {
         Some(text) => anyhow::anyhow!(text),
         None => error,
@@ -342,10 +387,10 @@ pub(crate) const UNCALIBRATED_BANNER: &str =
 
 pub(crate) fn load_policy(
     arg: &crate::cli::PolicyArg,
-) -> Result<gents::eval::optimization::PolicyV2> {
+) -> Result<gents_eval::optimization::PolicyV2> {
     use anyhow::Context;
     match arg {
-        crate::cli::PolicyArg::Defaults => Ok(gents::eval::optimization::PolicyV2::uncalibrated()),
+        crate::cli::PolicyArg::Defaults => Ok(gents_eval::optimization::PolicyV2::uncalibrated()),
         crate::cli::PolicyArg::File(path) => {
             let bytes = std::fs::read(path)
                 .with_context(|| format!("reading policy {}", path.display()))?;
@@ -359,6 +404,7 @@ mod batch;
 mod checks;
 mod compare;
 mod frame;
+pub(crate) use frame::terminal_size;
 pub(crate) mod init;
 mod inspect;
 pub(crate) mod manage;

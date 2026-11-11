@@ -37,6 +37,52 @@ pub struct ReconstructedStream {
     pub text: String,
 }
 
+#[derive(Default)]
+pub(crate) struct StreamDeclarations {
+    positions: BTreeSet<(u32, u32, u8)>,
+    reasoning: BTreeSet<u32>,
+    stopped: BTreeSet<u32>,
+}
+
+impl StreamDeclarations {
+    pub(crate) fn admit(&mut self, declaration: &StreamDeclaration, bytes: u32) -> bool {
+        let block = declaration.block_index;
+        if self.stopped.contains(&block) {
+            return false;
+        }
+        let field = match declaration.payload {
+            StreamPayload::ReasoningSignature => 1,
+            StreamPayload::ReasoningStop => {
+                if bytes != 0 || declaration.part_index != 0 || !self.reasoning.contains(&block) {
+                    return false;
+                }
+                2
+            }
+            _ => 0,
+        };
+        if !self
+            .positions
+            .insert((block, declaration.part_index, field))
+        {
+            return false;
+        }
+        match declaration.payload {
+            StreamPayload::Reasoning | StreamPayload::ReasoningRedacted => {
+                self.reasoning.insert(block);
+            }
+            StreamPayload::ReasoningStop => {
+                self.stopped.insert(block);
+            }
+            _ => {}
+        }
+        true
+    }
+
+    pub(crate) fn allows_continuation(&self, declaration: &StreamDeclaration) -> bool {
+        !self.stopped.contains(&declaration.block_index)
+    }
+}
+
 /// Require one exact fact. Duplicate arrival is harmless; distinct physical
 /// identities or contents conflict. No winner is selected from twins.
 fn unique<'a>(
@@ -257,7 +303,7 @@ fn extent_streams_from_closing(
         return Err(malformed());
     }
     let mut streams: Vec<ReconstructedStream> = Vec::new();
-    let mut positions = BTreeSet::new();
+    let mut declarations = StreamDeclarations::default();
     for ordinal in 0..*count {
         let missing = ReconstructionError::MissingSegment {
             close_doc_id: reference.close_doc_id.clone(),
@@ -294,11 +340,7 @@ fn extent_streams_from_closing(
                 .ok_or_else(malformed)?;
             if let Some(declaration) = &run.declaration {
                 if run.stream as usize != streams.len()
-                    || !positions.insert((
-                        declaration.block_index,
-                        declaration.part_index,
-                        matches!(declaration.payload, StreamPayload::ReasoningSignature),
-                    ))
+                    || !declarations.admit(declaration, run.bytes)
                 {
                     return Err(malformed());
                 }
@@ -307,11 +349,11 @@ fn extent_streams_from_closing(
                     text: part.to_owned(),
                 });
             } else {
-                streams
-                    .get_mut(run.stream as usize)
-                    .ok_or_else(malformed)?
-                    .text
-                    .push_str(part);
+                let stream = streams.get_mut(run.stream as usize).ok_or_else(malformed)?;
+                if !declarations.allows_continuation(&stream.declaration) {
+                    return Err(malformed());
+                }
+                stream.text.push_str(part);
             }
             offset = end;
         }
@@ -372,6 +414,58 @@ pub fn reconstruct_stream(
         .ok_or_else(|| ReconstructionError::InvalidReference {
             reference: reference.clone(),
         })
+}
+
+/// Whether `segment` is a fork copy of the logical closing record `logical`
+/// within `message`'s own session scope. Fork publication writes each record
+/// of a referenced closure into the destination session with `request_doc_id`
+/// naming that logical closing record instead of a request.
+pub fn is_fork_copy_for(
+    message: &TranscriptMessage,
+    segment: &OutputSegment,
+    logical: &str,
+) -> bool {
+    segment.session_id == message.session_id
+        && segment.node_did == message.node_did
+        && segment.requester_did == message.requester_did
+        && segment.request_doc_id == logical
+}
+
+/// The observations a fork header resolves, refining `SessionFork.resolveIn`:
+/// resolution never leaves the header's own session, so a reader granted only
+/// that session reads the fork without its origin. Each copied closing record
+/// is presented under the logical identity the immutable header names; other
+/// copied records keep their physical identity. `None` for a non-fork header
+/// and for a fork published before destination-owned copies, which observes
+/// no copy for any of its references.
+pub fn fork_copy_observations<'a>(
+    message: &TranscriptMessage,
+    records: &[ObservedSegment<'a>],
+) -> Option<Vec<ObservedSegment<'a>>> {
+    if !matches!(message.publication, super::MessagePublication::Fork { .. }) {
+        return None;
+    }
+    let logicals = message
+        .payload_references()
+        .into_iter()
+        .map(|reference| reference.close_doc_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let copies = records
+        .iter()
+        .filter(|record| {
+            logicals.contains(record.segment.request_doc_id.as_str())
+                && is_fork_copy_for(message, record.segment, &record.segment.request_doc_id)
+        })
+        .map(|record| ObservedSegment {
+            doc_id: if record.segment.close.is_some() {
+                record.segment.request_doc_id.as_str()
+            } else {
+                record.doc_id
+            },
+            segment: record.segment,
+        })
+        .collect::<Vec<_>>();
+    (logicals.is_empty() || !copies.is_empty()).then_some(copies)
 }
 
 /// Reconstruct one complete canonical transcript header into its native message.

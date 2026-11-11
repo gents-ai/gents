@@ -2,7 +2,7 @@
    the client package. */
 import { invoke } from "@tauri-apps/api/core";
 import { homeDir } from "@tauri-apps/api/path";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow, Window } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { ZoomAction } from "../ui/lib/zoom";
@@ -11,6 +11,29 @@ export const inNativeShell = () =>
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 export const windowLabel = () => getCurrentWindow().label;
+
+/** The label of a plugin's own window, spelled as the shell spells it
+    (`label_for` in `bridge/plugin_window.rs`): the id's UTF-8 bytes in hex,
+    so every label matches the plugin windows' capability glob. */
+export const pluginWindowLabel = (pluginId: string) =>
+  `gents-plugin-${Array.from(new TextEncoder().encode(pluginId), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("")}`;
+
+/** whether a window with this label is open */
+export async function windowOpen(label: string): Promise<boolean> {
+  return (await Window.getByLabel(label)) !== null;
+}
+
+/** Closes plugin `pluginId`'s own window, when one is open. */
+export async function closePluginWindow(pluginId: string) {
+  await (await Window.getByLabel(pluginWindowLabel(pluginId)))?.close();
+}
+
+/** Sent to the main view when a plugin's own window opens or closes
+    (`PLUGIN_WINDOW_EVENT` in `bridge/plugin_window.rs`). */
+export const PLUGIN_WINDOW_EVENT = "desktop://plugin-window";
+export type PluginWindowChange = { pluginId: string; open: boolean };
 
 export function sendAppOpened() {
   if (inNativeShell() && windowLabel() === "main") {
@@ -158,6 +181,19 @@ export async function postNotification(options: { title: string; body?: string }
   await invoke("plugin:notification|notify", { options });
 }
 
+/** Tells a view its notification was clicked, with the id it posted it under. */
+export const NOTIFICATION_CLICKED_EVENT = "desktop://notification-clicked";
+
+/** Posts a notification whose click this view hears about, on macOS:
+    `reportsClick` says whether it will. */
+export function postClickableNotification(options: {
+  title: string;
+  body?: string;
+  id: string;
+}): Promise<{ reportsClick: boolean }> {
+  return invoke("desktop_post_notification", options);
+}
+
 export async function homeFolder(): Promise<string | null> {
   if (!inNativeShell()) return null;
   return homeDir();
@@ -202,6 +238,19 @@ export async function pickFiles(): Promise<string[]> {
   return typeof selected === "string" ? [selected] : (selected ?? []);
 }
 
+/** A `.pack` file the person picks to install, or null when they cancel. */
+export async function pickPackFile(): Promise<string | null> {
+  if (!inNativeShell()) return null;
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const picked = await open({
+    multiple: false,
+    directory: false,
+    title: "Install from file",
+    filters: [{ name: "Pack", extensions: ["pack"] }],
+  });
+  return typeof picked === "string" ? picked : null;
+}
+
 export async function listenFileDrop(
   handler: (event: { type: string; paths?: string[]; x: number; y: number }) => void,
 ): Promise<() => void> {
@@ -228,4 +277,57 @@ export async function listenFileDrop(
         if (observed === sequence) handler({ type: "leave", x: 0, y: 0 });
       });
   });
+}
+
+/* ---- the browser panel's pages, native views beneath the app's webview
+   (bridge/browser.rs). A command that changes what shows carries the
+   window's increasing `seq`, so one arriving late is dropped. ---- */
+
+export type BrowserRect = { x: number; y: number; width: number; height: number };
+export type BrowserPlacement = {
+  bounds: BrowserRect;
+  open: BrowserRect;
+  solids: BrowserRect[];
+  radius: number;
+};
+
+/** Loads an address, a search result or a local file into a tab, making
+    the tab if it's new; rejects with why it can't, such as a missing file. */
+export function browserOpen(tab: string, url: string): Promise<void> {
+  return invoke("browser_open", { tab, url });
+}
+
+export function browserSelect(tab: string | null, seq: number): Promise<void> {
+  return invoke("browser_select", { tab, seq });
+}
+
+export function browserPlace(placement: BrowserPlacement, seq: number): Promise<void> {
+  return invoke("browser_place", { placement, seq });
+}
+
+export function browserHide(seq: number): Promise<void> {
+  return invoke("browser_hide", { seq });
+}
+
+export function browserGo(
+  tab: string,
+  action: "back" | "forward" | "reload" | "stop",
+): Promise<void> {
+  return invoke("browser_go", { tab, action });
+}
+
+export function browserCloseTab(tab: string, seq: number): Promise<void> {
+  return invoke("browser_close_tab", { tab, seq });
+}
+
+export function browserClose(seq: number): Promise<void> {
+  return invoke("browser_close", { seq });
+}
+
+/** One file to open, picked in the system's dialog. */
+export async function pickFile(title: string): Promise<string | null> {
+  if (!inNativeShell()) return null;
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const picked = await open({ multiple: false, directory: false, title });
+  return typeof picked === "string" ? picked : null;
 }

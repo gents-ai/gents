@@ -16,8 +16,7 @@ import { BackgroundToolButton } from "./BackgroundToolButton";
 import { ToolIcon } from "./tool-icon";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { Spinner } from "@gents/ui/components/spinner";
-import { agentName } from "./behavior";
-import { AgentInitials } from "./parts";
+import { AgentMark } from "./parts";
 import { Markdown } from "./Markdown";
 import { FiledQuestion, filedQuestion } from "./FiledQuestion";
 import { ToolBody } from "./tool-views";
@@ -51,11 +50,18 @@ function Step({
   /* just opened from elsewhere, such as the Background pane */
   shown?: boolean;
 }) {
-  if (isWorkerStep(tool)) return <WorkerStep tool={tool} workers={workers} />;
-  const summary = toolSummary(tool);
+  if (isWorkerStep(tool) && tool.reconstruction.state === "ready")
+    return <WorkerStep tool={tool} workers={workers} />;
+  const summary =
+    tool.reconstruction.state === "ready"
+      ? toolSummary(tool)
+      : { kind: "", primary: tool.toolName, secondary: null };
   const open = tool.statusKind !== "running";
   const p = tool.presentation;
-  const tally = p.kind === "fileEdit" ? diffTally(p.diff) : null;
+  const tally =
+    tool.reconstruction.state === "ready" && p.kind === "fileEdit"
+      ? diffTally(p.diff)
+      : null;
   const status = stepStatus(tool);
   const asked = filedQuestion(tool);
   const outcome =
@@ -148,14 +154,15 @@ function WorkerRunStep({
   const failed = tools.some(
     (t) => t.statusKind === "error" || t.statusKind === "failed",
   );
-  const agentId = reached?.summary?.agentId ?? null;
+  const agentDid = reached?.summary?.agentDid ?? null;
   return (
     <ToolStep
       label={name}
       icon={
-        agentId ? (
-          <AgentInitials
-            name={agentName(agentId, deployment)}
+        agentDid ? (
+          <AgentMark
+            agentDid={agentDid}
+            deployment={deployment}
             className="size-4 text-[8px]"
           />
         ) : (
@@ -205,10 +212,13 @@ export function ActivityGroup({
   const state = useContext(GroupStateContext)!;
   const single = entry.members.length === 1 && entry.members[0]!.kind === "tool";
   const chosen = state.folded[entry.key];
-  const openStep = state.openStep[entry.key] ?? null;
-
   const failed = groupFailures(entry.members) > 0;
-  const folded = !single && (chosen ?? !openStep);
+  const firstFailed = entry.members.find(
+    (member) => member.kind === "tool" && stepStatus(member.tool) === "failed",
+  );
+  const chosenStep = state.openStep[entry.key];
+  const openStep = chosenStep === undefined ? (firstFailed?.key ?? null) : chosenStep;
+  const folded = !single && (chosen ?? (!failed && !openStep));
 
   const live = (!entry.settled && liveGroupLabel(entry.members)) || null;
   const last = entry.members[entry.members.length - 1];

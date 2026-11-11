@@ -2,9 +2,12 @@ use std::process::Command;
 
 #[test]
 fn packaged_host_exposes_the_owned_runtime_cli_without_changing_host_flags() {
+    let directory = tempfile::tempdir().unwrap();
+    let homes = support::homes::ProcessHomes::under(directory.path());
     for command in ["init", "server", "prepare-runtime"] {
         let output = Command::new(env!("CARGO_BIN_EXE_gents-client-host"))
             .args([command, "--help"])
+            .envs(homes.env())
             .output()
             .unwrap();
         assert!(
@@ -17,6 +20,7 @@ fn packaged_host_exposes_the_owned_runtime_cli_without_changing_host_flags() {
     }
     let output = Command::new(env!("CARGO_BIN_EXE_gents-client-host"))
         .arg("--describe")
+        .envs(homes.env())
         .output()
         .unwrap();
     assert!(output.status.success());
@@ -37,18 +41,19 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
         RuntimePreparationResult,
     };
     use std::process::Stdio;
-    use std::sync::Arc;
     use std::time::Duration;
 
     use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
     use serde_json::json;
 
     let root = tempfile::tempdir().unwrap();
+    let homes = support::homes::ProcessHomes::under(root.path());
     let home = root.path().join("runtime");
     let initial_root = root.path().join("initial-workspace");
     std::fs::create_dir(&initial_root).unwrap();
     let executable = env!("CARGO_BIN_EXE_gents-client-host");
     let init = Command::new(executable)
+        .envs(homes.env())
         .args(["init", "--store-key-custody", "file", "--home"])
         .arg(&home)
         .args([
@@ -73,6 +78,7 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
     let failed = tokio::time::timeout(
         Duration::from_secs(30),
         tokio::process::Command::new(executable)
+            .envs(homes.env())
             .args(["prepare-runtime", "--home"])
             .arg(&home)
             .arg("--change-tool-root")
@@ -107,6 +113,7 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
     let log = std::fs::File::create(&log_path).unwrap();
     let spawn_preparer = || {
         tokio::process::Command::new(executable)
+            .envs(homes.env())
             .args(["prepare-runtime", "--home"])
             .arg(&home)
             .args([
@@ -118,7 +125,6 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
                 "0",
                 "--p2p-bind-addr",
                 "127.0.0.1",
-                "--no-codex-shim",
                 "--no-keychain-prompts",
             ])
             .stdin(Stdio::null())
@@ -168,8 +174,65 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
             assert!(child.try_wait().unwrap().is_none());
         }
     }
+    // An unpublished folder is refused against the running runtime before it is retired:
+    // the runtime keeps serving, and neither its saved configuration nor its route changes.
+    let unpublished = root.path().join("unpublished-workspace");
+    std::fs::create_dir(&unpublished).unwrap();
+    let saved_config = std::fs::read(home.join("init.json")).unwrap();
+    let saved_route = std::fs::read(home.join("runtime.json")).unwrap();
+    let unpublished_change = tokio::time::timeout(
+        Duration::from_secs(60),
+        tokio::process::Command::new(executable)
+            .envs(homes.env())
+            .args(["prepare-runtime", "--home"])
+            .arg(&home)
+            .arg("--change-tool-root")
+            .arg(&unpublished)
+            .args(["--no-keychain-prompts"])
+            .stdin(Stdio::null())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(!unpublished_change.status.success());
+    let refused: RuntimePreparationReport = serde_json::from_slice(&unpublished_change.stdout)
+        .unwrap_or_else(|error| {
+            panic!(
+                "{error}: {}",
+                String::from_utf8_lossy(&unpublished_change.stderr)
+            )
+        });
+    let RuntimePreparationResult::Refused {
+        reason: RuntimePreparationRefusal::Failed,
+        message,
+    } = &refused.result
+    else {
+        panic!("{refused:?}");
+    };
+    assert!(
+        message.contains("is not published as a WorkspaceRoot")
+            && message.contains("gents config workspace-root set"),
+        "{message}"
+    );
+    assert_eq!(std::fs::read(home.join("init.json")).unwrap(), saved_config);
+    assert_eq!(
+        std::fs::read(home.join("runtime.json")).unwrap(),
+        saved_route
+    );
+    let started = if outcomes[0] == RuntimePreparationOutcome::Started {
+        &mut service
+    } else {
+        &mut contender
+    };
+    assert!(started.try_wait().unwrap().is_none());
     let changed_root = root.path().canonicalize().unwrap();
+    // Serve admits a configured host tool root only once a WorkspaceRoot published for the
+    // Node covers it, so the operator publishes the new folder before retargeting the runtime.
+    let operator = publish_workspace_root(&home, &homes, port, &changed_root).await;
     let mut changed = tokio::process::Command::new(executable)
+        .envs(homes.env())
         .args(["prepare-runtime", "--home"])
         .arg(&home)
         .arg("--change-tool-root")
@@ -209,11 +272,8 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
         gents::KeyIdentity::load_or_create(before["key_path"].as_str().unwrap(), None).unwrap();
     use gents::NodeIdentity as _;
     assert_eq!(identity.did(), changed_did);
-    let endpoint = gents::store::config_client::GraphqlEndpoint::as_principal(
-        format!("http://127.0.0.1:{port}/api/v0/graphql"),
-        identity.did(),
-    );
-    let status: serde_json::Value = endpoint
+    // Bearer authorization requires a held signing key; the home's operator reads status.
+    let status: serde_json::Value = operator
         .authorize(reqwest::Client::new().get(format!("http://127.0.0.1:{port}/status")))
         .unwrap()
         .send()
@@ -227,7 +287,7 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
     assert_eq!(status["tool_root"], changed_root.to_str().unwrap());
     assert_eq!(status["tool_ceiling"], "readwrite");
     let paths = DesktopPaths::from_root(root.path().join("client"));
-    let core = Arc::new(
+    let core = std::sync::Arc::new(
         ClientCore::start_with_paths_and_options(
             paths.clone(),
             ClientCoreOptions {
@@ -246,14 +306,38 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
         gents::store::local::store_key::StoreKeyCustody::File
     );
     assert!(paths.store_key_path().is_file());
-    let listener = gents_desktop_bridge::host::local::LocalListener::bind(&paths)
-        .await
+    core.shutdown().await.unwrap();
+    drop(core);
+    // Enrollment signs as the CLI User `init` created, which only a host process given
+    // the throwaway desktop home can resolve.
+    let mut installation = tokio::process::Command::new(executable)
+        .envs(homes.env())
+        .args(["--serve", "--home"])
+        .arg(paths.root())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(log.try_clone().unwrap()))
+        .kill_on_drop(true)
+        .spawn()
         .unwrap();
-    let installation =
-        gents_desktop_bridge::host::ClientHostService::start(Arc::clone(&core), listener);
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while gents_desktop_bridge::host::local::connect(&paths)
+            .await
+            .is_err()
+        {
+            assert!(
+                installation.try_wait().unwrap().is_none(),
+                "{}",
+                std::fs::read_to_string(&log_path).unwrap()
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
     let mut client = support::Attachment::start(&paths).await;
     client
-        .call(1, "client_connect_local", json!({"nodeHome": home}))
+        .call(1, "client_enroll_local", json!({"nodeHome": home}))
         .await;
     let snapshot = client.snapshot(2).await;
     let deployments = snapshot["client"]["deployments"].as_array().unwrap();
@@ -276,14 +360,69 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
     let snapshot = reopened.snapshot(5).await;
     assert_eq!(snapshot["client"]["deployments"][0]["nodeDid"], node);
     reopened.close().await;
-    installation.shutdown().await.unwrap();
-    core.shutdown().await.unwrap();
-    for child in [&mut service, &mut contender, &mut changed] {
+    for child in [
+        &mut installation,
+        &mut service,
+        &mut contender,
+        &mut changed,
+    ] {
         if child.try_wait().unwrap().is_none() {
             child.kill().await.unwrap();
         }
         child.wait().await.unwrap();
     }
+}
+
+/// Publishes `root` for the home's Node, read by its default Agent, as the CLI client
+/// principal that initialized the home, exactly as `gents config workspace-root set` does,
+/// and returns that principal's signed endpoint.
+async fn publish_workspace_root(
+    home: &std::path::Path,
+    homes: &support::homes::ProcessHomes,
+    port: u16,
+    root: &std::path::Path,
+) -> gents::store::config_client::GraphqlEndpoint {
+    let config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(home.join("init.json")).unwrap()).unwrap();
+    let node_did = config["node_did"].as_str().unwrap();
+    let user = gents_desktop_core::client::PrincipalIdentity::load_existing(&homes.cli_identity())
+        .unwrap();
+    let capability = gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+        user.private_key_bytes(),
+    )
+    .unwrap();
+    let endpoint = gents::store::config_client::GraphqlEndpoint::as_principal(
+        format!("http://127.0.0.1:{port}/api/v0/graphql"),
+        user.did(),
+    )
+    .with_client_signing_capability(capability)
+    .unwrap()
+    .with_client_signed_agent_creates();
+    let access = gents::ConfigAccess::Graphql(endpoint.clone());
+    let nodes = access
+        .execute(&format!(
+            r#"{{ Node(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ default_agent_did }} }}"#,
+            gents::store::graphql::escape_graphql_string(node_did)
+        ))
+        .await
+        .unwrap();
+    let agent = nodes
+        .pointer("/Node/0/default_agent_did")
+        .or_else(|| nodes.pointer("/data/Node/0/default_agent_did"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_else(|| panic!("the Node names its default Agent: {nodes}"))
+        .to_owned();
+    gents::tools::surface::set_workspace_root_with_readers(
+        &access,
+        node_did,
+        root.to_str().unwrap(),
+        None,
+        true,
+        &[agent],
+    )
+    .await
+    .unwrap();
+    endpoint
 }
 
 async fn preparation_receipt(

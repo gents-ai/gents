@@ -1,4 +1,5 @@
 use anyhow::Result;
+use gents::pack::PackChangeError;
 use serde_json::{json, Value};
 
 use super::registry::{resolve_registry_url, RegistryClient};
@@ -17,12 +18,21 @@ pub(crate) async fn outdated_packs(
     } else {
         None
     };
-    let installed = gents::pack::installed_packs(
+    outdated_packs_on(
         scope.graphql.is_none().then_some(home.as_path()),
         node.as_ref()
             .map(|(access, owner)| (access, owner.as_str())),
+        registry,
     )
-    .await?;
+    .await
+}
+
+pub(crate) async fn outdated_packs_on(
+    home: Option<&std::path::Path>,
+    node: Option<(&gents::ConfigAccess, &str)>,
+    registry: Option<&str>,
+) -> Result<Vec<Value>> {
+    let installed = gents::pack::installed_packs(home, node).await?;
     let client = RegistryClient::new(resolve_registry_url(registry));
     let mut report = Vec::new();
     for pack in installed {
@@ -51,6 +61,7 @@ pub(crate) async fn outdated_packs(
         report.push(json!({
             "pack": pack.coordinate,
             "installed": pack.version,
+            "digest": pack.digest,
             "latest": latest,
             "outdated": outdated,
             "error": error,
@@ -92,9 +103,13 @@ pub(crate) async fn outdated(args: PackOutdatedArgs) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn update(args: PackUpdateArgs) -> Result<()> {
+pub(crate) async fn update(args: PackUpdateArgs) -> Result<(), PackChangeError> {
     let packs = outdated_packs(&args.scope, args.registry.as_deref()).await?;
     let selected = select_packs(&packs, args.package.as_deref())?;
+    // A caller of one named pack, such as the shell or the desktop, drops the report, so its
+    // failure is returned itself, after the report a person at the command line reads.
+    let named = args.package.is_some();
+    let mut own_failure = None;
 
     let mut updated = Vec::new();
     let mut failed = Vec::new();
@@ -102,6 +117,9 @@ pub(crate) async fn update(args: PackUpdateArgs) -> Result<()> {
     for pack in selected {
         let coordinate = pack["pack"].as_str().unwrap_or_default().to_owned();
         if let Some(error) = pack["error"].as_str() {
+            if named {
+                own_failure = Some(anyhow::Error::msg(error.to_owned()).into());
+            }
             failed.push(json!({ "pack": coordinate, "error": error }));
             continue;
         }
@@ -114,13 +132,14 @@ pub(crate) async fn update(args: PackUpdateArgs) -> Result<()> {
         let Some(latest) = pack["latest"].as_str() else {
             failed.push(json!({
                 "pack": coordinate,
-                "error": "the registry reported no latest version for this pack; run gents pack outdated and retry",
+                "error": "the registry reported no latest version for this pack; run gents config pack outdated and retry",
             }));
             continue;
         };
         let install_args = PackInstallArgs {
             package: format!("{coordinate}@{latest}"),
             inference_slots: args.inference_slots.clone(),
+            dependency_variables: Vec::new(),
             preview: false,
             scope: args.scope.clone(),
             output: OutputFormat::Json,
@@ -134,16 +153,26 @@ pub(crate) async fn update(args: PackUpdateArgs) -> Result<()> {
         };
         match crate::request_helpers::capture_report(super::install(install_args)).await {
             Ok(_) => updated.push(coordinate),
-            Err(error) => failed.push(json!({ "pack": coordinate, "error": format!("{error:#}") })),
+            Err(error) => {
+                failed.push(json!({ "pack": coordinate, "error": format!("{error:#}") }));
+                if named {
+                    own_failure = Some(error);
+                }
+            }
         }
     }
 
     let any_failed = !failed.is_empty();
     crate::print_json(&json!({ "updated": updated, "failed": failed, "current": current }))?;
-    anyhow::ensure!(
-        !any_failed,
-        "updating failed for at least one pack; see \"failed\" in the report above"
-    );
+    if let Some(error) = own_failure {
+        return Err(error);
+    }
+    if any_failed {
+        return Err(anyhow::anyhow!(
+            "updating failed for at least one pack; see \"failed\" in the report above"
+        )
+        .into());
+    }
     Ok(())
 }
 
@@ -210,7 +239,7 @@ mod tests {
             home_path.to_str().unwrap(),
         ])
         .unwrap();
-        let crate::cli::Command::Init(init_args) = cli.command else {
+        let Some(crate::cli::Command::Init(init_args)) = cli.command else {
             panic!("expected init")
         };
         crate::commands::init::init(init_args)
@@ -233,6 +262,7 @@ mod tests {
         crate::request_helpers::capture_report(super::super::install(PackInstallArgs {
             package: "demo_pack".to_owned(),
             inference_slots: Vec::new(),
+            dependency_variables: Vec::new(),
             preview: false,
             scope: scope.clone(),
             output: OutputFormat::Json,
@@ -291,16 +321,66 @@ mod tests {
             home.path().to_str().unwrap(),
         ])
         .unwrap();
-        let crate::cli::Command::Init(init_args) = cli.command else {
+        let Some(crate::cli::Command::Init(init_args)) = cli.command else {
             panic!("expected init")
         };
         crate::commands::init::init(init_args)
             .await
             .expect("identity-only init");
-        let slot = format!(
-            "worker={}:default-profile",
-            crate::home_state::resolve_node_did(Some(home.path()), None).unwrap()
-        );
+        let node_did = crate::home_state::resolve_node_did(Some(home.path()), None).unwrap();
+        let profile_id = format!("{node_did}:default-profile");
+        // An identity-only init publishes no inference profile; the home's
+        // client configures the one the worker slot names.
+        {
+            use gents::documents::apply_desired_state_plan;
+            use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+            let (access, _) = crate::resolve_config_access(Some(home.path()), None)
+                .await
+                .unwrap();
+            let backend_id = format!("{node_did}:default-backend");
+            let documents = [
+                (
+                    gents::Collection::InferenceBackend,
+                    serde_json::json!({
+                        "node_did": node_did, "backend_id": backend_id, "name": "Test inference",
+                        "provider_kind": "OpenAiCompatible", "endpoint": "http://127.0.0.1:1/v1",
+                        "auth": {"kind": "unauthenticated"},
+                    }),
+                ),
+                (
+                    gents::Collection::InferenceProfile,
+                    serde_json::json!({
+                        "node_did": node_did, "profile_id": profile_id,
+                        "backend_id": backend_id, "model_name": "test-model",
+                    }),
+                ),
+            ];
+            let plan = DesiredStateApplyPlan::new(
+                documents
+                    .into_iter()
+                    .map(|(collection, value)| DesiredStateApplyDocument {
+                        collection,
+                        add: value.clone(),
+                        update: value,
+                    })
+                    .collect(),
+            )
+            .unwrap();
+            access
+                .transact_write("test.pack_update.profile", |txn| {
+                    let plan = &plan;
+                    Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+                })
+                .await
+                .unwrap();
+            access
+                .local_node()
+                .unwrap()
+                .shutdown()
+                .await
+                .expect("node shutdown");
+        }
+        let slot = format!("worker={profile_id}");
         let _ = super::super::test_support::fixture_pack_source("dependee_fixture", home.path());
         let install = |fixture: &str, explicit: bool| {
             let package = super::super::test_support::fixture_dir(fixture)
@@ -310,6 +390,7 @@ mod tests {
             crate::request_helpers::capture_report(super::super::install(PackInstallArgs {
                 package,
                 inference_slots: vec![slot.clone()],
+                dependency_variables: Vec::new(),
                 preview: false,
                 scope: scope.clone(),
                 output: OutputFormat::Json,
@@ -343,6 +424,59 @@ mod tests {
         assert_eq!(released, [&json!("fixture/dependee_fixture")], "{removed}");
     }
 
+    /// A caller of one named pack's update, such as the shell or the desktop, drops the report, so
+    /// its failure is the error itself rather than a pointer to "failed".
+    #[tokio::test]
+    async fn a_named_update_tells_its_own_failure() {
+        let home = tempfile::tempdir().unwrap();
+        let scope = crate::cli::ScopeArgs {
+            home: Some(home.path().to_path_buf()),
+            graphql: None,
+            node_did: None,
+        };
+        let fixture = super::super::test_support::fixture_dir("assets_fixture");
+        crate::request_helpers::capture_report(super::super::install(PackInstallArgs {
+            package: fixture.to_str().unwrap().to_owned(),
+            dependency_variables: Vec::new(),
+            inference_slots: Vec::new(),
+            preview: false,
+            scope: scope.clone(),
+            output: OutputFormat::Json,
+            force_rebind_concrete_did: false,
+            registry: None,
+            drift: crate::cli::PackDriftArgs::default(),
+            grant_authority: false,
+            wire: Vec::new(),
+            expect_digest: None,
+            explicit: true,
+        }))
+        .await
+        .expect("installing an assets pack needs no node");
+        let serve = |name: &'static str| {
+            let digest = "0".repeat(64);
+            let broken = b"not a pack".to_vec();
+            crate::commands::pack::registry::tests::serve_fake_pack(name, "1.1.0", broken, digest)
+        };
+        let (broken, _broken) = serve("assets_fixture").await;
+        let (elsewhere, _elsewhere) = serve("another_pack").await;
+        let update_from = |registry| {
+            let failed = crate::request_helpers::capture_report(update(PackUpdateArgs {
+                package: Some("fixture/assets_fixture".to_owned()),
+                inference_slots: Vec::new(),
+                scope: scope.clone(),
+                registry: Some(registry),
+                drift: crate::cli::PackDriftArgs::default(),
+            }));
+            async move { format!("{:#}", failed.await.expect_err("the update fails")) }
+        };
+
+        let install = update_from(broken).await;
+        let lookup = update_from(elsewhere).await;
+
+        assert!(install.contains("refusing to install"), "{install}");
+        assert!(lookup.contains("the registry has nothing at"), "{lookup}");
+    }
+
     #[tokio::test]
     async fn outdated_lists_home_recorded_installs_without_opening_a_node() {
         let home = tempfile::tempdir().unwrap();
@@ -355,6 +489,7 @@ mod tests {
         crate::request_helpers::capture_report(super::super::install(PackInstallArgs {
             package: fixture.to_str().unwrap().to_owned(),
             inference_slots: Vec::new(),
+            dependency_variables: Vec::new(),
             preview: false,
             scope: scope.clone(),
             output: OutputFormat::Json,

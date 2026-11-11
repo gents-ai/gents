@@ -1,4 +1,5 @@
 use crate::client::source_matches_node;
+use gents::documents::inference_backend::observation_binding;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -7,7 +8,7 @@ use serde::{Deserialize, Serialize};
 pub struct NodeView {
     pub node_did: String,
     pub display_name: Option<String>,
-    pub default_agent_id: Option<String>,
+    pub default_agent_did: Option<String>,
     pub enabled: Option<bool>,
     pub created_at: Option<String>,
     pub created_by: Option<String>,
@@ -17,7 +18,8 @@ pub struct NodeView {
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct AgentView {
-    pub agent_id: String,
+    pub creation_nonce: String,
+    pub agent_did: String,
     pub node_did: String,
     pub display_name: String,
     pub description: Option<String>,
@@ -77,6 +79,7 @@ pub fn backend_config_view(
     let (auth_kind, api_key_configured, api_key_env_var) = match &row.auth {
         BackendAuth::Unauthenticated => ("unauthenticated", false, None),
         BackendAuth::ApiKey { .. } => ("api_key", true, None),
+        BackendAuth::Credential { .. } => ("credential", true, None),
         BackendAuth::Environment { variable } => ("environment", false, Some(variable.clone())),
         BackendAuth::NodeOAuth { .. } => ("node_oauth", false, None),
         BackendAuth::NodeOAuthPool { .. } => ("node_oauth_pool", false, None),
@@ -127,7 +130,7 @@ impl InferenceSetupState {
             .map(|row| NodeView {
                 node_did: row.node_did.clone(),
                 display_name: normalize_optional(row.display_name.as_deref()),
-                default_agent_id: normalize_optional(row.default_agent_id.as_deref()),
+                default_agent_did: normalize_optional(row.default_agent_did.as_deref()),
                 enabled: Some(row.enabled),
                 created_at: normalize_optional(row.created_at.as_deref()),
                 created_by: normalize_optional(row.created_by.as_deref()),
@@ -135,7 +138,7 @@ impl InferenceSetupState {
             .unwrap_or_else(|| NodeView {
                 node_did: node_did.to_owned(),
                 display_name: None,
-                default_agent_id: None,
+                default_agent_did: None,
                 enabled: None,
                 created_at: None,
                 created_by: None,
@@ -146,21 +149,24 @@ impl InferenceSetupState {
             .filter(|row| row.node_did == node_did)
             .cloned()
             .collect::<Vec<_>>();
-        agent_configs.sort_by(|left, right| left.agent_id.cmp(&right.agent_id));
-        let default_agent_id = store.default_agent_id_for_node(node_did).map(str::to_owned);
+        agent_configs.sort_by(|left, right| left.agent_did.cmp(&right.agent_did));
+        let default_agent_did = store
+            .default_agent_did_for_node(node_did)
+            .map(str::to_owned);
         let mut agents = store
             .agent_rows(node_did)
             .into_iter()
             .map(|row| AgentView {
-                agent_id: row.agent_id.clone(),
+                creation_nonce: row.creation_nonce.clone(),
+                agent_did: row.agent_did.clone(),
                 node_did: row.node_did.clone(),
                 display_name: normalize_optional(row.display_name.as_deref())
-                    .unwrap_or_else(|| row.agent_id.clone()),
+                    .unwrap_or_else(|| row.agent_did.clone()),
                 description: row.description.clone(),
                 context_id: row.context_id.clone(),
                 inference_profile_id: Some(row.inference_profile_id.clone()),
                 enabled: row.enabled,
-                is_default: default_agent_id.as_deref() == Some(row.agent_id.as_str()),
+                is_default: default_agent_did.as_deref() == Some(row.agent_did.as_str()),
                 tags: row.tags.clone(),
                 created_at: row.created_at.clone(),
             })
@@ -176,20 +182,30 @@ impl InferenceSetupState {
             .iter()
             .filter(|row| row.node_did == node_did)
             .map(|row| {
-                let observation = store
-                    .backend_observations
-                    .iter()
-                    .enumerate()
-                    .find(|(index, observation)| {
-                        observation.backend_id == row.backend_id
-                            && source_matches_node(
-                                &store.backend_observation_source_node_dids,
-                                *index,
-                                &row.node_did,
-                                true,
-                            )
-                    })
-                    .map(|(_, observation)| observation);
+                let observation = row.physical_doc_id.as_deref().and_then(|metadata_doc| {
+                    observation_binding::bind(
+                        &row.node_did,
+                        &row.backend_id,
+                        metadata_doc,
+                        store.backend_observations.iter().enumerate().map(
+                            |(index, observation)| {
+                                (
+                                    observation_binding::ObservationKey {
+                                        node_did: store
+                                            .backend_observation_source_node_dids
+                                            .get(index)
+                                            .and_then(Option::as_deref),
+                                        backend_id: &observation.backend_id,
+                                        metadata_doc_id: observation.metadata_doc_id.as_deref(),
+                                    },
+                                    observation,
+                                )
+                            },
+                        ),
+                    )
+                    .ok()
+                    .flatten()
+                });
                 backend_config_view(row, observation)
             })
             .collect::<Vec<_>>();
@@ -233,6 +249,199 @@ pub fn fast_mode_backend_ids(backends: &[InferenceBackendView]) -> Vec<String> {
                 .then(|| backend.backend_id.clone())
         })
         .collect()
+}
+
+/// A failed model discovery's kind, whether the provider answered, and whether the user may
+/// type a model id it did not advertise.
+fn classify_discovery_failure(error: &anyhow::Error) -> (&'static str, bool, bool) {
+    let http_error = error.chain().find_map(|cause| {
+        cause.downcast_ref::<gents::inference::backends::provider::ModelDiscoveryHttpError>()
+    });
+    let is_decode = error
+        .chain()
+        .any(|cause| cause.downcast_ref::<serde_json::Error>().is_some());
+    if let Some(error) = http_error {
+        if error.is_auth() {
+            ("authentication", true, false)
+        } else {
+            ("http", true, true)
+        }
+    } else if is_decode {
+        ("decode", true, true)
+    } else {
+        ("connection", false, false)
+    }
+}
+
+const DISCOVERY_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Why a model discovery has no answer to show.
+#[derive(Debug, thiserror::Error)]
+pub enum ModelDiscoveryError {
+    #[error(transparent)]
+    Connection(anyhow::Error),
+    #[error("API key is required")]
+    KeyRequired,
+    /// A sign-in needs the node's configuration, which the caller could not reach.
+    #[error("node configuration is not reachable")]
+    NoAccess,
+    /// Reading the node's provider accounts failed.
+    #[error(transparent)]
+    Accounts(anyhow::Error),
+    #[error("the selected provider account is not connected")]
+    NotConnected,
+    #[error(transparent)]
+    Client(reqwest::Error),
+    #[error(transparent)]
+    Model(anyhow::Error),
+}
+
+/// What the provider answered: the connection asked, its models, or why there are none.
+pub struct ModelDiscovery {
+    pub spec: gents::inference::backends::setup::InferenceConnectionSpec,
+    pub reachable: bool,
+    pub models: Vec<gents::inference::backends::setup::InferenceModelOption>,
+    /// The failure's kind and text, which may carry what the provider echoed.
+    pub failure: Option<(&'static str, String)>,
+    pub manual_entry_allowed: bool,
+}
+
+/// The connection test of inference setup: lists the provider's models with the key or the
+/// node's stored sign-in, and records them on that connection's backends. Without `access` a
+/// sign-in cannot be read and nothing is recorded.
+pub async fn discover_models(
+    access: Option<&gents::ConfigAccess>,
+    node_did: &str,
+    provider: gents::inference::backends::setup::InferenceProviderId,
+    method: gents::inference::backends::setup::InferenceAuthMethod,
+    endpoint: &str,
+    api_key: Option<&str>,
+    account_ref: Option<&str>,
+) -> Result<ModelDiscovery, ModelDiscoveryError> {
+    use gents::inference::backends::setup::{connection_spec, model_option};
+    let spec =
+        connection_spec(provider, method, endpoint).map_err(ModelDiscoveryError::Connection)?;
+    let api_key = api_key.map(str::trim).filter(|key| !key.is_empty());
+    if spec.api_key_required && api_key.is_none() {
+        return Err(ModelDiscoveryError::KeyRequired);
+    }
+    let (credential, oauth_auth) = match spec.oauth_provider {
+        Some(oauth) => {
+            let access = access.ok_or(ModelDiscoveryError::NoAccess)?;
+            let (credential, auth) = discovery_account(access, node_did, oauth, account_ref)
+                .await
+                .map_err(ModelDiscoveryError::Accounts)?;
+            let credential = credential.ok_or(ModelDiscoveryError::NotConnected)?;
+            (Some(credential), Some(auth))
+        }
+        None => (None, None),
+    };
+    let client = reqwest::Client::builder()
+        .connect_timeout(DISCOVERY_WAIT)
+        .timeout(DISCOVERY_WAIT)
+        .build()
+        .map_err(ModelDiscoveryError::Client)?;
+    let found = gents::discover_backend_models(
+        &client,
+        spec.provider_kind,
+        &spec.endpoint,
+        api_key,
+        credential.as_ref(),
+    )
+    .await;
+    let models = match found {
+        Ok(models) => models,
+        Err(error) => {
+            let (kind, reachable, manual_entry_allowed) = classify_discovery_failure(&error);
+            return Ok(ModelDiscovery {
+                spec,
+                reachable,
+                models: Vec::new(),
+                failure: Some((kind, format!("{error:#}"))),
+                manual_entry_allowed,
+            });
+        }
+    };
+    if let Some(access) = access {
+        use gents::documents::BackendAuth;
+        let auth = match (oauth_auth, api_key) {
+            (Some(auth), _) => auth,
+            (None, Some(key)) => BackendAuth::ApiKey {
+                key: key.to_string(),
+            },
+            (None, None) => BackendAuth::Unauthenticated,
+        };
+        let recorded = gents::inference::backends::registry::record_connection_catalog_on(
+            access,
+            node_did,
+            spec.provider_kind,
+            &spec.endpoint,
+            &auth,
+            models.clone(),
+        )
+        .await;
+        if let Err(error) = recorded {
+            let mut error = format!("{error:#}");
+            // A store refusal may echo the backend's key.
+            if let Some(key) = api_key {
+                error = error.replace(key, "…");
+            }
+            tracing::warn!(
+                node_did,
+                %error,
+                "recording the discovered model catalog failed; the previous catalog is kept"
+            );
+        }
+    }
+    if models.is_empty() {
+        return Ok(ModelDiscovery {
+            spec,
+            reachable: true,
+            models: Vec::new(),
+            failure: Some((
+                "empty_catalog",
+                "The connection succeeded, but the provider advertised no models.".into(),
+            )),
+            manual_entry_allowed: true,
+        });
+    }
+    let models = models
+        .into_iter()
+        .map(|model| model_option(provider, method, model))
+        .collect::<anyhow::Result<_>>()
+        .map_err(ModelDiscoveryError::Model)?;
+    Ok(ModelDiscovery {
+        spec,
+        reachable: true,
+        models,
+        failure: None,
+        manual_entry_allowed: false,
+    })
+}
+
+/// The stored sign-in a discovery on `account_ref` uses, and the auth its backends record.
+pub async fn discovery_account(
+    access: &gents::ConfigAccess,
+    node_did: &str,
+    provider: &str,
+    account_ref: Option<&str>,
+) -> anyhow::Result<(
+    Option<gents::inference::auth::credential::OAuthCredential>,
+    gents::documents::BackendAuth,
+)> {
+    let credential = gents::inference::auth::credential::resolve_oauth_credential(
+        access,
+        node_did,
+        provider,
+        gents::inference::auth::credential::AccountPick::Reference(account_ref),
+    )
+    .await?;
+    Ok((
+        credential,
+        gents::documents::BackendAuth::NodeOAuth {
+            account_ref: account_ref.map(str::to_owned),
+        },
+    ))
 }
 
 pub async fn load_inference_setup_state(
@@ -311,7 +520,7 @@ impl crate::client::ClientCore {
             .graphql
             .as_deref()
             .context("runtime has no HTTP endpoint")?;
-        read_inference_setup_state_from(graphql, node_did, self.node_identity().did()).await
+        read_inference_setup_state_from(graphql, node_did, self.node_identity()).await
     }
 }
 
@@ -320,7 +529,7 @@ impl crate::client::ClientCore {
 async fn read_inference_setup_state_from(
     graphql: &str,
     node_did: &str,
-    client_did: &str,
+    client_identity: &crate::client::PrincipalIdentity,
 ) -> anyhow::Result<InferenceSetupState> {
     use anyhow::Context;
     use gents::store::config_client::GraphqlEndpoint;
@@ -343,7 +552,11 @@ async fn read_inference_setup_state_from(
         .redirect(reqwest::redirect::Policy::none())
         .timeout(std::time::Duration::from_secs(10))
         .build()?;
-    let endpoint = GraphqlEndpoint::as_principal(graphql, client_did);
+    let capability = gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+        client_identity.private_key_bytes(),
+    )?;
+    let endpoint = GraphqlEndpoint::as_principal(graphql, client_identity.did())
+        .with_client_signing_capability(capability)?;
     let mut response = endpoint
         .authorize(client.get(url))?
         .send()
@@ -430,7 +643,7 @@ mod tests {
         let state = read_inference_setup_state_from(
             &format!("{}/api/v0/graphql", server.uri()),
             node,
-            identity.did(),
+            &identity,
         )
         .await
         .unwrap();
@@ -472,7 +685,7 @@ mod tests {
             assert!(read_inference_setup_state_from(
                 &format!("{}/api/v0/graphql", server.uri()),
                 "did:runtime",
-                identity.did()
+                &identity
             )
             .await
             .is_err());
@@ -496,7 +709,7 @@ mod tests {
             let error = read_inference_setup_state_from(
                 &format!("{}/api/v0/graphql", server.uri()),
                 "did:runtime",
-                identity.did(),
+                &identity,
             )
             .await
             .unwrap_err();
@@ -520,7 +733,7 @@ mod tests {
         let error = read_inference_setup_state_from(
             &format!("{}/api/v0/graphql", server.uri()),
             "did:runtime",
-            identity.did(),
+            &identity,
         )
         .await
         .unwrap_err();
@@ -530,7 +743,10 @@ mod tests {
     #[tokio::test]
     async fn inference_metadata_requires_complete_scoped_configuration() {
         let node = "did:runtime";
-        let data = json!({ "nodes": [{"node_did": node}], "agents": [], "inference_profiles": [], "inference_backends": [] });
+        let data = json!({
+            "nodes": [{"node_did": node}], "agents": [], "inference_profiles": [],
+            "inference_backends": [], "backend_observations": []
+        });
         for (name, payload, accepted) in [
             ("complete", data.clone(), true),
             (
@@ -555,7 +771,7 @@ mod tests {
                 "malformed agent",
                 {
                     let mut data = data.clone();
-                    data["agents"] = json!([{"agent_id":"incomplete"}]);
+                    data["agents"] = json!([{"agent_did":"incomplete"}]);
                     data
                 },
                 false,

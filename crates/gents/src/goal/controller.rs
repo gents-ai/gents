@@ -1,7 +1,8 @@
 use super::*;
+use gents_protocol::goal::GoalClaimFence;
 
-pub async fn update_goal_fields_if_status(
-    node: &std::sync::Arc<EmbeddedNode>,
+pub async fn update_goal_fields_if_status_from_access(
+    access: &crate::ConfigAccess,
     goal: &GoalDocument,
     expected_status: GoalStatus,
     fields: &str,
@@ -23,11 +24,8 @@ pub async fn update_goal_fields_if_status(
             ) {{ _docID }}
         }}"#
     );
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        None,
-        "goal.update_controller_fields",
-        |txn| {
+    access
+        .transact_write("goal.update_controller_fields", |txn| {
             Box::pin(async {
                 let current =
                     load_canonical_goal_in_txn(txn, &goal.node_did, &goal.session_id).await?;
@@ -59,48 +57,36 @@ pub async fn update_goal_fields_if_status(
                 }
                 Ok(won)
             })
-        },
-    )
-    .await
+        })
+        .await
 }
 
-pub async fn claim_continuation(
-    node: &std::sync::Arc<EmbeddedNode>,
+pub async fn claim_continuation_from_access(
+    access: &crate::ConfigAccess,
     goal: &GoalDocument,
     parent_request_id: &str,
 ) -> Result<bool> {
-    let doc_id = escape_graphql_string(&goal.doc_id);
-    let node_did = escape_graphql_string(&goal.node_did);
-    let parent_request_id = escape_graphql_string(parent_request_id);
+    use gents_protocol::document_query::{fields::goal as fields, Filter, Input, Update};
     let expected_sequence = goal.continuation_sequence();
     let next_sequence = expected_sequence
         .checked_add(1)
         .context("goal continuation sequence exhausted")?;
-    let expected_status = escape_graphql_string(&goal.status);
-    let now = escape_graphql_string(&Utc::now().to_rfc3339());
-    let mutation = format!(
-        r#"mutation {{
-            update_Goal(
-                filter: {{
-                    _docID: {{ _eq: "{doc_id}" }},
-                    node_did: {{ _eq: "{node_did}" }},
-                    status: {{ _eq: "{expected_status}" }},
-                    continuation_sequence: {{ _eq: {expected_sequence} }}
-                }},
-                input: {{
-                    last_continued_from_request_id: "{parent_request_id}",
-                    continuation_sequence: {next_sequence},
-                    updated_at: "{now}"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = crate::store::config_client::ConfigAccess::write_local_response(
-        node,
-        "goal.claim_continuation",
-        &mutation,
+    let now = Utc::now().to_rfc3339();
+    let rendered = Update::matching(
+        Filter::eq(fields::DOC_ID, &goal.doc_id)
+            .and(Filter::eq(fields::NODE_DID, &goal.node_did))
+            .and(Filter::eq(fields::STATUS, &goal.status))
+            .and(Filter::eq(fields::CONTINUATION_SEQUENCE, expected_sequence)),
+        Input::new()
+            .set(fields::LAST_CONTINUED_FROM_REQUEST_ID, parent_request_id)
+            .set(fields::CONTINUATION_SEQUENCE, next_sequence)
+            .set(fields::UPDATED_AT, now),
     )
-    .await?;
+    .render();
+    let response = access
+        .write_rendered("goal.claim_continuation", &rendered)
+        .await?;
+    let response: defra_node::QueryResponse = serde_json::from_value(response)?;
     Ok(response
         .data
         .as_ref()
@@ -108,48 +94,36 @@ pub async fn claim_continuation(
         .is_some_and(mutation_returned_rows))
 }
 
-pub async fn claim_retry_continuation(
-    node: &std::sync::Arc<EmbeddedNode>,
+pub async fn claim_retry_continuation_from_access(
+    access: &crate::ConfigAccess,
     goal: &GoalDocument,
     parent_request_id: &str,
     retry_count: i64,
     failure: &str,
 ) -> Result<bool> {
-    let doc_id = escape_graphql_string(&goal.doc_id);
-    let node_did = escape_graphql_string(&goal.node_did);
-    let parent_request_id = escape_graphql_string(parent_request_id);
-    let failure = escape_graphql_string(failure);
+    use gents_protocol::document_query::{fields::goal as fields, Filter, Input, Update};
     let expected_sequence = goal.continuation_sequence();
     let next_sequence = expected_sequence
         .checked_add(1)
         .context("goal continuation sequence exhausted")?;
-    let expected_status = escape_graphql_string(&goal.status);
-    let now = escape_graphql_string(&Utc::now().to_rfc3339());
-    let mutation = format!(
-        r#"mutation {{
-            update_Goal(
-                filter: {{
-                    _docID: {{ _eq: "{doc_id}" }},
-                    node_did: {{ _eq: "{node_did}" }},
-                    status: {{ _eq: "{expected_status}" }},
-                    continuation_sequence: {{ _eq: {expected_sequence} }}
-                }},
-                input: {{
-                    last_continued_from_request_id: "{parent_request_id}",
-                    continuation_sequence: {next_sequence},
-                    infrastructure_retry_count: {retry_count},
-                    last_failure: "{failure}",
-                    updated_at: "{now}"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = crate::store::config_client::ConfigAccess::write_local_response(
-        node,
-        "goal.claim_retry_continuation",
-        &mutation,
+    let now = Utc::now().to_rfc3339();
+    let rendered = Update::matching(
+        Filter::eq(fields::DOC_ID, &goal.doc_id)
+            .and(Filter::eq(fields::NODE_DID, &goal.node_did))
+            .and(Filter::eq(fields::STATUS, &goal.status))
+            .and(Filter::eq(fields::CONTINUATION_SEQUENCE, expected_sequence)),
+        Input::new()
+            .set(fields::LAST_CONTINUED_FROM_REQUEST_ID, parent_request_id)
+            .set(fields::CONTINUATION_SEQUENCE, next_sequence)
+            .set(fields::INFRASTRUCTURE_RETRY_COUNT, retry_count)
+            .set(fields::LAST_FAILURE, failure)
+            .set(fields::UPDATED_AT, now),
     )
-    .await?;
+    .render();
+    let response = access
+        .write_rendered("goal.claim_retry_continuation", &rendered)
+        .await?;
+    let response: defra_node::QueryResponse = serde_json::from_value(response)?;
     Ok(response
         .data
         .as_ref()
@@ -157,24 +131,139 @@ pub async fn claim_retry_continuation(
         .is_some_and(mutation_returned_rows))
 }
 
+fn client_goal_claim_binding(
+    goal: Option<&GoalDocument>,
+    goal_id: Option<&str>,
+    opening_verified: bool,
+    opening_agent_matches: bool,
+) -> bool {
+    goal.is_some_and(|goal| {
+        opening_verified
+            && opening_agent_matches
+            && goal_id == Some(goal.goal_id.as_str())
+            && goal
+                .assignment_root_request_doc_id
+                .as_deref()
+                .is_some_and(|doc| !doc.is_empty())
+    })
+}
+
+async fn client_goal_opening_verified_in_txn(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    goal: Option<&GoalDocument>,
+    agent_did: &str,
+) -> Result<(bool, bool)> {
+    let Some(goal) = goal else {
+        return Ok((false, false));
+    };
+    let Some(root) = goal
+        .assignment_root_request_doc_id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+    else {
+        return Ok((false, false));
+    };
+    use gents_protocol::document_query::{
+        fields::agent_request as request, Filter, Query, Selection,
+    };
+    let rendered = Query::select(Selection::owned(
+        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
+    ))
+    .filter(Filter::eq(request::DOC_ID, root))
+    .filter(Filter::eq(request::NODE_DID, &goal.node_did))
+    .filter(Filter::eq(request::SESSION_ID, &goal.session_id))
+    .limit(2)
+    .render();
+    let response = txn.run(&rendered).await?;
+    let rows: Vec<gents_protocol::row::AgentRequestRow> = serde_json::from_value(
+        response
+            .pointer("/data/AgentRequest")
+            .cloned()
+            .context("Goal opening query omitted rows")?,
+    )?;
+    let [row] = rows.as_slice() else {
+        return Ok((false, false));
+    };
+    Ok((
+        row.doc_id.as_deref() == Some(root)
+            && super::request_assignment::request_belongs_to_goal(goal, row),
+        row.agent_did.as_deref() == Some(agent_did),
+    ))
+}
+
 pub(crate) async fn fence_goal_continuation_claim_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
-    request: &crate::request::watcher::AgentRequest,
+    request: &gents_protocol::row::AgentRequest,
     now: &str,
-) -> Result<bool> {
+    client_goal: bool,
+) -> Result<GoalClaimFence> {
     if request.caused_by_trigger_kind.as_deref() != Some(GOAL_TRIGGER_KIND) {
-        return Ok(true);
+        return Ok(if client_goal {
+            GoalClaimFence::Rejected
+        } else {
+            GoalClaimFence::Allowed
+        });
     }
-    let Some(goal) =
-        load_canonical_goal_in_txn(txn, &request.node_did, &request.session_id).await?
-    else {
-        return Ok(true);
+    let goal = load_canonical_goal_in_txn(txn, &request.node_did, &request.session_id).await?;
+    if client_goal {
+        let (opening_verified, opening_agent_matches) =
+            client_goal_opening_verified_in_txn(txn, goal.as_ref(), &request.agent_did).await?;
+        if !client_goal_claim_binding(
+            goal.as_ref(),
+            request.caused_by_trigger_id.as_deref(),
+            opening_verified,
+            opening_agent_matches,
+        ) {
+            return Ok(GoalClaimFence::Rejected);
+        }
+    }
+    let Some(goal) = goal else {
+        return Ok(GoalClaimFence::Allowed);
     };
-    request_head::retire_stale_assignment_continuations_in_txn(
+    let allowed = request_head::retire_stale_assignment_continuations_in_txn(
         txn,
         &goal,
         Some(&request.doc_id),
         now,
     )
-    .await
+    .await?;
+    Ok(if allowed {
+        GoalClaimFence::Allowed
+    } else {
+        GoalClaimFence::Retired
+    })
+}
+
+#[cfg(test)]
+mod client_goal_binding_tests {
+    use super::*;
+
+    #[test]
+    fn generated_client_goal_claim_requires_the_physical_assignment() {
+        let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
+        let cases = snapshot.request_input_cases[0]["client_goal_claim_binding_cases"]
+            .as_array()
+            .unwrap();
+        assert_eq!(cases.len(), 16);
+        for case in cases {
+            let visible = case["visible"].as_bool().unwrap();
+            let matches = case["matches"].as_bool().unwrap();
+            let root = case["root"].as_bool().unwrap();
+            let agent = case["agent"].as_bool().unwrap();
+            let goal: GoalDocument = serde_json::from_value(serde_json::json!({
+                "_docID": "physical-goal",
+                "goal_id": if matches { "goal" } else { "other-goal" },
+                "session_id": "session",
+                "node_did": "node",
+                "status": "active",
+                "assignment_root_request_doc_id": root.then_some("physical-root"),
+            }))
+            .unwrap();
+            assert_eq!(
+                client_goal_claim_binding(visible.then_some(&goal), Some("goal"), root, agent),
+                case["expected"].as_bool().unwrap(),
+                "{case}"
+            );
+        }
+    }
 }

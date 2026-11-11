@@ -6,7 +6,9 @@ use serde_json::json;
 use crate::store::config_client::ConfigApplyTxn;
 use crate::store::graphql::escape_graphql_string;
 
-use super::{read_record, remove_record_in_txn, DriftPolicy, RemoveReport, RECORD};
+use super::{
+    read_record, remove_record_in_txn, DriftPolicy, PackChangeError, RemoveReport, RECORD,
+};
 
 async fn update_required_by(
     txn: &ConfigApplyTxn<'_>,
@@ -19,12 +21,13 @@ async fn update_required_by(
         json!(required_by.iter().collect::<Vec<_>>())
     };
     let response = txn
-        .execute_with_variables(
+        .execute_client_signed_update(
             &format!(
                 r#"mutation($input: {RECORD}MutationInputArg!) {{ update_{RECORD}(docID: "{}", input: $input) {{ _docID }} }}"#,
                 escape_graphql_string(doc_id)
             ),
             &json!({ "input": { "required_by": value } }),
+            gents_protocol::schemas::PACK_INSTALLATION,
         )
         .await?;
     anyhow::ensure!(
@@ -43,7 +46,7 @@ pub(super) async fn claim_in_txn(
     dependent: &str,
     dependencies: &[String],
     policy: DriftPolicy,
-) -> Result<()> {
+) -> Result<(), PackChangeError> {
     for coordinate in dependencies {
         let record = read_record(txn, owner, coordinate).await?;
         let doc_id = record
@@ -54,12 +57,20 @@ pub(super) async fn claim_in_txn(
             update_required_by(txn, &doc_id, &required_by).await?;
         }
     }
-    let response = txn
-        .execute(&format!(
-            r#"{{ {RECORD}(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ _docID coordinate required_by explicit }} }}"#,
-            escape_graphql_string(owner)
-        ))
-        .await?;
+    let response = {
+        use gents_protocol::document_query::{
+            fields::pack_installation as fields, Filter, Query, Selection,
+        };
+        let query = Query::select(
+            Selection::doc_id()
+                .field(fields::COORDINATE)
+                .field(fields::REQUIRED_BY)
+                .field(fields::EXPLICIT),
+        )
+        .filter(Filter::eq(fields::NODE_DID, owner))
+        .render();
+        txn.run(&query).await?
+    };
     for row in response["data"][RECORD]
         .as_array()
         .context("reading the pack installation records")?
@@ -86,7 +97,15 @@ pub(super) async fn claim_in_txn(
             .unwrap_or(true);
         if required_by.is_empty() && !explicit {
             let record = read_record(txn, owner, &coordinate).await?;
-            remove_record_in_txn(txn, owner, &coordinate, &record, policy).await?;
+            let removed = remove_record_in_txn(txn, owner, &coordinate, &record, policy).await?;
+            let (namespace, _) = crate::pack::registry::split_pack_coordinate(&coordinate);
+            let plugins = removed
+                .documents
+                .plugins
+                .iter()
+                .map(|plugin| format!("{namespace}/{}", plugin.name))
+                .collect();
+            super::ensure_plugins_unreferenced(txn, owner, &plugins).await?;
         } else {
             let doc_id = row["_docID"].as_str().context("record missing _docID")?;
             update_required_by(txn, doc_id, &required_by).await?;
@@ -100,13 +119,21 @@ pub(super) async fn release_in_txn(
     owner: &str,
     dependent: &str,
     policy: DriftPolicy,
-) -> Result<Vec<RemoveReport>> {
-    let response = txn
-        .execute(&format!(
-            r#"{{ {RECORD}(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ _docID coordinate required_by explicit }} }}"#,
-            escape_graphql_string(owner)
-        ))
-        .await?;
+) -> Result<Vec<RemoveReport>, PackChangeError> {
+    let response = {
+        use gents_protocol::document_query::{
+            fields::pack_installation as fields, Filter, Query, Selection,
+        };
+        let query = Query::select(
+            Selection::doc_id()
+                .field(fields::COORDINATE)
+                .field(fields::REQUIRED_BY)
+                .field(fields::EXPLICIT),
+        )
+        .filter(Filter::eq(fields::NODE_DID, owner))
+        .render();
+        txn.run(&query).await?
+    };
     let rows = response["data"][RECORD]
         .as_array()
         .context("reading the pack installation records")?

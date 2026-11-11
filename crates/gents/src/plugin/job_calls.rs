@@ -14,13 +14,13 @@ use gents_protocol::job::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use super::data::{Invocation, StampContext};
-use crate::defra_node::EmbeddedNode;
+use super::data::{Invocation, Stamp, StampContext};
+use crate::defra_node::Node as EmbeddedNode;
 use crate::store::config_client::ConfigAccess;
-use crate::store::graphql::{escape_graphql_string, graphql_string_list_literal};
+use crate::store::graphql::graphql_string_list_literal;
 use crate::tools::background::job::input::derive_children;
 use crate::tools::background::status::{
-    load_caused_request_terminals, read_tool_output_slice, LiveToolOutputRegistry,
+    load_caused_request_terminals, read_tool_output_slice_with_access, LiveToolOutputRegistry,
     ProcessControlScope, ReadToolOutputOutcome,
 };
 use crate::tools::call::lifecycle::{CausedRequestTerminal, ToolCallState};
@@ -33,6 +33,7 @@ pub struct JobCaller {
     node: Arc<EmbeddedNode>,
     scope: ProcessControlScope,
     stamp: StampContext,
+    agent_access: Option<ConfigAccess>,
     chain: Vec<String>,
     result_bytes: u64,
 }
@@ -44,9 +45,44 @@ impl JobCaller {
             node,
             scope,
             stamp,
+            agent_access: None,
             chain: Vec::new(),
             result_bytes: 0,
         }
+    }
+
+    /// The host supplies the actual managed Agent capability for this invocation.
+    pub fn with_agent_access(mut self, access: ConfigAccess) -> Self {
+        self.agent_access = Some(access);
+        self
+    }
+
+    fn caller_access(&self) -> Result<&ConfigAccess> {
+        anyhow::ensure!(
+            self.node.node_identity_did() == Some(self.scope.node_did.as_str()),
+            "job caller belongs to another runtime"
+        );
+        let caller = self
+            .stamp
+            .value(Stamp::CallerDid)
+            .context("job caller has no identity")?;
+        let access = self
+            .agent_access
+            .as_ref()
+            .context("job caller has no held agent access")?;
+        let signer = access
+            .managed_agent_signer()
+            .context("job caller has no managed agent signer")?;
+        anyhow::ensure!(
+            access
+                .local_node()
+                .is_some_and(|node| Arc::ptr_eq(node, &self.node))
+                && access.actor_did().as_deref() == Some(caller)
+                && signer.did() == caller
+                && signer.node_did() == self.scope.node_did,
+            "job caller access does not match its invocation"
+        );
+        Ok(access)
     }
 
     /// A job step's chain rows, whose caused requests are its children, and
@@ -219,9 +255,11 @@ async fn child_output_slots(
     caller: &JobCaller,
     request: &ChildOutputRequest,
 ) -> Result<ChildOutputResponse> {
-    let access = ConfigAccess::local(caller.node.clone());
+    let access = caller
+        .caller_access()
+        .map_err(|_| anyhow::anyhow!("child output is not in this call's scope"))?;
     let mut latest: BTreeMap<String, JobChildView> = BTreeMap::new();
-    for (child, view) in derive_children(&access, &caller.chain, caller.result_bytes).await? {
+    for (child, view) in derive_children(access, &caller.chain, caller.result_bytes).await? {
         if latest
             .get(&child.slot)
             .is_none_or(|kept| kept.attempt <= view.attempt)
@@ -253,7 +291,7 @@ async fn child_output_slots(
         .filter_map(|row| Some((row["request_id"].as_str()?, row["_docID"].as_str()?)))
         .collect();
     let terminals = load_caused_request_terminals(
-        &access,
+        access,
         &doc_ids
             .values()
             .map(|doc_id| (*doc_id).to_owned())
@@ -332,12 +370,23 @@ pub async fn result(
             "job row {row_doc_id} is not in this call's scope; read only the results of this session's jobs"
         )
     };
-    let response = ConfigAccess::local(caller.node.clone())
-        .execute(&format!(
-            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ tool_call_id session_id node_did requester_did lifecycle_state job_pin job_progress }} }}"#,
-            escape_graphql_string(row_doc_id)
-        ))
-        .await?;
+    let access = caller.caller_access().map_err(|_| outside())?;
+    use gents_protocol::document_query::{
+        fields::agent_tool_call as tool_call, Filter, Query, Selection,
+    };
+    let rendered = Query::select(
+        Selection::new()
+            .field(tool_call::TOOL_CALL_ID)
+            .field(tool_call::SESSION_ID)
+            .field(tool_call::NODE_DID)
+            .field(tool_call::REQUESTER_DID)
+            .field(tool_call::LIFECYCLE_STATE)
+            .field(tool_call::JOB_PIN)
+            .field(tool_call::JOB_PROGRESS),
+    )
+    .filter(Filter::eq(tool_call::DOC_ID, row_doc_id))
+    .render();
+    let response = access.read(&rendered).await?;
     let row = response
         .pointer("/data/AgentToolCall/0")
         .ok_or_else(outside)?
@@ -373,8 +422,8 @@ pub async fn result(
     let limit = usize::try_from(request.limit)
         .unwrap_or(usize::MAX)
         .min(max_bytes);
-    let ReadToolOutputOutcome::Found(page) = read_tool_output_slice(
-        &caller.node,
+    let ReadToolOutputOutcome::Found(page) = read_tool_output_slice_with_access(
+        access,
         &caller.scope,
         &LiveToolOutputRegistry::default(),
         &row.tool_call_id,
@@ -428,19 +477,21 @@ mod tests {
     fn result_offer_is_false_only_for_callbacks() {
         let node_did = "node".to_owned();
         assert!(result_offer(&StampContext::ToolOutput {
-            node_did: node_did.clone(),
+            caller_did: node_did.clone(),
             session_id: "s".to_owned(),
             request_doc_id: "r".to_owned(),
             tool_call_doc_id: "t".to_owned(),
         }));
         assert!(result_offer(&StampContext::JobStep {
-            node_did: node_did.clone(),
+            caller_did: node_did.clone(),
             session_id: "s".to_owned(),
             request_doc_id: "r".to_owned(),
             tool_call_doc_id: "t".to_owned(),
             job_row_doc_id: "j".to_owned(),
             chain_root_doc_id: "c".to_owned(),
         }));
-        assert!(!result_offer(&StampContext::Callback { node_did }));
+        assert!(!result_offer(&StampContext::Callback {
+            caller_did: node_did
+        }));
     }
 }

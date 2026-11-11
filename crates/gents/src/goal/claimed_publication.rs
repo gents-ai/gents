@@ -1,32 +1,33 @@
 mod wait_observation;
 
 use super::*;
-use crate::request::admission::{verify_runtime_local_control_receipt, SIGNED_REQUEST_FIELDS};
 use crate::request::lifecycle::materialize::{sign_request, RequestSigner};
 use crate::request::lifecycle::queue::{
     goal_continuation_agent, goal_continuation_identity, prepare_goal_continuation,
 };
 use crate::store::config_client::ConfigApplyTxn;
-use crate::store::identity::{NodeIdentity, RegisteredIdentity};
+use crate::store::identity::request_receipt::verify_runtime_local_control_receipt;
+use crate::store::identity::NodeIdentity;
+use gents_protocol::request_admission::SIGNED_REQUEST_FIELDS;
 use gents_protocol::row::AgentRequestRow;
 
-pub(crate) async fn publish_claimed_continuation(
+pub(crate) async fn publish_claimed_continuation_with_identity(
     node: &std::sync::Arc<EmbeddedNode>,
+    identity: &dyn NodeIdentity,
     observed: &GoalDocument,
     parent_request_id: &str,
     content: &str,
     wrapup: bool,
 ) -> Result<Option<GoalResumeReceipt>> {
-    let identity = RegisteredIdentity::from_registered_did(&observed.node_did, None)?;
-    let identity = &identity;
     let stopped = std::sync::Mutex::new(None);
     let stopped_ref = &stopped;
-    // Preserve the automatic queue writer's node actor; target identity signs
-    let receipt = crate::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        None,
-        "goal.publish_claimed_continuation",
-        move |txn| {
+    let access = crate::ConfigAccess::local_with_optional_agent_signer(
+        node.clone(),
+        identity::Did::new(identity.did())?,
+        identity.managed_agent_signer(),
+    )?;
+    let receipt = access
+        .transact_write("goal.publish_claimed_continuation", move |txn| {
             Box::pin(async move {
                 stage_claimed_continuation(
                     txn,
@@ -39,9 +40,8 @@ pub(crate) async fn publish_claimed_continuation(
                 )
                 .await
             })
-        },
-    )
-    .await?;
+        })
+        .await?;
     if let Some(reason) = stopped
         .into_inner()
         .unwrap_or_else(|poison| poison.into_inner())
@@ -52,17 +52,14 @@ pub(crate) async fn publish_claimed_continuation(
     Ok(receipt)
 }
 
-pub(crate) async fn stop_claimed_continuation_for_unavailable_agent(
-    node: &std::sync::Arc<EmbeddedNode>,
+pub(crate) async fn stop_claimed_continuation_for_unavailable_agent_from_access(
+    access: &crate::ConfigAccess,
     observed: &GoalDocument,
     parent_request_id: &str,
     reason: &str,
 ) -> Result<bool> {
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        None,
-        "goal.stop_unavailable_claimed_continuation",
-        |txn| {
+    access
+        .transact_write("goal.stop_unavailable_claimed_continuation", |txn| {
             Box::pin(async move {
                 let Some(goal) =
                     load_canonical_goal_in_txn(txn, &observed.node_did, &observed.session_id)
@@ -130,9 +127,8 @@ pub(crate) async fn stop_claimed_continuation_for_unavailable_agent(
                 .await?
                 .is_some())
             })
-        },
-    )
-    .await
+        })
+        .await
 }
 
 type StoppedReason = std::sync::Mutex<Option<String>>;
@@ -148,8 +144,8 @@ async fn stage_claimed_continuation(
 ) -> Result<Option<GoalResumeReceipt>> {
     *stopped.lock().unwrap_or_else(|poison| poison.into_inner()) = None;
     anyhow::ensure!(
-        identity.did() == observed.node_did,
-        "claimed publication requires the goal owner's signing identity"
+        txn.actor_did() == Some(identity.did()),
+        "claimed publication transaction must act as its signing agent"
     );
     let Some(goal) =
         load_canonical_goal_in_txn(txn, &observed.node_did, &observed.session_id).await?
@@ -184,14 +180,45 @@ async fn stage_claimed_continuation(
         "claimed predecessor must uniquely belong to the goal owner and session"
     );
     let parent_row = parents[0];
-    let parent = crate::request::watcher::AgentRequest::try_from(parent_row.clone())?;
+    let parent = gents_protocol::row::AgentRequest::try_from(parent_row.clone())?;
+    anyhow::ensure!(
+        identity.did() == parent.agent_did,
+        "claimed publication requires the selected agent's signing identity"
+    );
+    let session = crate::store::config_client::agent_session::load_agent_session_row_in_txn(
+        txn,
+        &goal.node_did,
+        &goal.session_id,
+        parent.requester_did.as_deref(),
+    )
+    .await?
+    .context("claimed publication session is unavailable")?;
+    anyhow::ensure!(
+        session.session.agent_did == identity.did(),
+        "claimed publication requires the session's selected agent"
+    );
+    let (agent_doc, _) = crate::store::config_client::read_desired_state_record_in_txn(
+        txn,
+        crate::Collection::Agent,
+        &goal.node_did,
+        identity.did(),
+    )
+    .await?
+    .context("claimed publication Agent is unavailable")?;
     let behavior = goal_continuation_agent(txn, &parent).await?;
     let sequence = observed.continuation_sequence();
     let now = Utc::now();
     let created_at = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let key = goal_continuation_identity(&goal.goal_id, parent_request_id, sequence)?.retry_key;
-    let key = escape_graphql_string(&key);
-    let response = txn.execute(&format!(r#"{{ AgentRequest(filter: {{ retry_key: {{ _eq: "{key}" }} }}) {{ {SIGNED_REQUEST_FIELDS} }} }}"#)).await?;
+    let response = {
+        use gents_protocol::document_query::{
+            fields::agent_request as request, Filter, Query, Selection,
+        };
+        let query = Query::select(Selection::owned(SIGNED_REQUEST_FIELDS))
+            .filter(Filter::eq(request::RETRY_KEY, &key))
+            .render();
+        txn.run(&query).await?
+    };
     let children: Vec<AgentRequestRow> = serde_json::from_value(
         response
             .pointer("/data/AgentRequest")
@@ -222,6 +249,8 @@ async fn stage_claimed_continuation(
         &created_at,
         session_hop,
     )?;
+    create.session_doc_id = Some(session.doc_id.clone());
+    create.agent_doc_id = Some(agent_doc.clone());
     create.input.goal_assignment = Some(continuation_assignment(
         &goal,
         &parent,
@@ -234,7 +263,7 @@ async fn stage_claimed_continuation(
             child,
             &goal.node_did,
             parent_request_id,
-            parent.requester_did.as_deref().unwrap_or(&goal.node_did),
+            parent.requester_did.as_deref().unwrap_or(&parent.agent_did),
         )?;
         let actual: GoalBackedRequestFingerprint =
             serde_json::from_value(serde_json::to_value(child)?)?;
@@ -306,42 +335,37 @@ async fn stage_claimed_continuation(
         }
     }
     sign_request(&mut create, RequestSigner::Identity(identity)).await?;
-    let doc_id = escape_graphql_string(&goal.doc_id);
-    let status = escape_graphql_string(&goal.status);
-    let parent_id = escape_graphql_string(parent_request_id);
-    let timestamp = escape_graphql_string(&now.to_rfc3339());
-    let response = txn
-        .execute(&format!(
-            r#"mutation {{ update_Goal(filter: {{
-        _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{did}" }},
-        status: {{ _eq: "{status}" }}, continuation_sequence: {{ _eq: {sequence} }},
-        last_continued_from_request_id: {{ _eq: "{parent_id}" }}
-    }}, input: {{ updated_at: "{timestamp}" }}) {{ _docID }} }}"#
-        ))
-        .await?;
+    let response = {
+        use gents_protocol::document_query::{fields::goal as goal_fields, Filter, Input, Update};
+        let filter = Filter::eq(goal_fields::DOC_ID, &goal.doc_id)
+            .and(Filter::eq(goal_fields::NODE_DID, &goal.node_did))
+            .and(Filter::eq(goal_fields::STATUS, &goal.status))
+            .and(Filter::eq(goal_fields::CONTINUATION_SEQUENCE, sequence))
+            .and(Filter::eq(
+                goal_fields::LAST_CONTINUED_FROM_REQUEST_ID,
+                parent_request_id,
+            ));
+        let input = Input::new().set(goal_fields::UPDATED_AT, now.to_rfc3339());
+        txn.run(&Update::matching(filter, input).render()).await?
+    };
     if !response
         .pointer("/data/update_Goal")
         .is_some_and(mutation_returned_rows)
     {
         return Ok(None);
     }
-    let response = txn
-        .execute(&create.graphql_mutation().map_err(anyhow::Error::msg)?)
-        .await?;
-    let child = response
-        .pointer("/data/create_AgentRequest")
-        .or_else(|| response.pointer("/data/add_AgentRequest"))
-        .context("claimed child create omitted result")?;
-    let child_doc = child
-        .get("_docID")
-        .or_else(|| child.get(0).and_then(|row| row.get("_docID")))
-        .and_then(serde_json::Value::as_str)
-        .context("claimed child create omitted document ID")?;
+    let child_doc = crate::request::lifecycle::stage_runtime_request_in_txn(
+        txn,
+        &create,
+        &session.doc_id,
+        &agent_doc,
+    )
+    .await?;
     if goal.assignment_root_request_doc_id.is_none() {
         bind_goal_first_request_in_txn(
             txn,
             &goal,
-            child_doc,
+            &child_doc,
             create.input.goal_assignment.as_ref(),
         )
         .await?;
@@ -350,7 +374,7 @@ async fn stage_claimed_continuation(
         goal_status: goal.parsed_status().context("goal has an unknown status")?,
         goal_id: goal.goal_id,
         request_id: create.request_id,
-        doc_id: child_doc.to_owned(),
+        doc_id: child_doc,
         created: true,
     }))
 }
@@ -365,12 +389,6 @@ async fn stop_claimed_continuation_in_txn(
     now: DateTime<Utc>,
 ) -> Result<Option<String>> {
     let state = goal.state().context("goal has an unknown status")?;
-    let failure_field = if record_failure {
-        format!(r#", last_failure: "{}""#, escape_graphql_string(reason))
-    } else {
-        String::new()
-    };
-    let updated_at = escape_graphql_string(&now.to_rfc3339());
     let action = if state.status == GoalStatus::Active {
         GoalAction::Pause
     } else {
@@ -379,28 +397,38 @@ async fn stop_claimed_continuation_in_txn(
     let Some(post) = state.step(action) else {
         return Ok(None);
     };
-    let fields = if action == GoalAction::Pause {
-        format!(
-            r#"status: "{}", active_time_seconds: {}, active_started_at: null{failure_field}, updated_at: "{updated_at}""#,
-            post.status.as_str(),
-            goal.current_active_time_seconds(now),
-        )
-    } else {
-        format!(r#"wrapup_completed: true{failure_field}, updated_at: "{updated_at}""#)
+    let input = {
+        use gents_protocol::document_query::{fields::goal as goal_fields, Input};
+        let input = if action == GoalAction::Pause {
+            Input::new()
+                .set(goal_fields::STATUS, post.status.as_str())
+                .set(
+                    goal_fields::ACTIVE_TIME_SECONDS,
+                    goal.current_active_time_seconds(now),
+                )
+                .set_null(goal_fields::ACTIVE_STARTED_AT)
+        } else {
+            Input::new().set(goal_fields::WRAPUP_COMPLETED, true)
+        };
+        let input = if record_failure {
+            input.set(goal_fields::LAST_FAILURE, reason)
+        } else {
+            input
+        };
+        input.set(goal_fields::UPDATED_AT, now.to_rfc3339())
     };
-    let doc_id = escape_graphql_string(&goal.doc_id);
-    let did = escape_graphql_string(&goal.node_did);
-    let status = escape_graphql_string(&goal.status);
-    let parent_id = escape_graphql_string(parent_request_id);
-    let response = txn
-        .execute(&format!(
-            r#"mutation {{ update_Goal(filter: {{
-        _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{did}" }},
-        status: {{ _eq: "{status}" }}, continuation_sequence: {{ _eq: {sequence} }},
-        last_continued_from_request_id: {{ _eq: "{parent_id}" }}
-    }}, input: {{ {fields} }}) {{ _docID }} }}"#
-        ))
-        .await?;
+    let response = {
+        use gents_protocol::document_query::{fields::goal as goal_fields, Filter, Update};
+        let filter = Filter::eq(goal_fields::DOC_ID, &goal.doc_id)
+            .and(Filter::eq(goal_fields::NODE_DID, &goal.node_did))
+            .and(Filter::eq(goal_fields::STATUS, &goal.status))
+            .and(Filter::eq(goal_fields::CONTINUATION_SEQUENCE, sequence))
+            .and(Filter::eq(
+                goal_fields::LAST_CONTINUED_FROM_REQUEST_ID,
+                parent_request_id,
+            ));
+        txn.run(&Update::matching(filter, input).render()).await?
+    };
     Ok(response
         .pointer("/data/update_Goal")
         .is_some_and(mutation_returned_rows)

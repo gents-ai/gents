@@ -1,4 +1,0 @@
----- MODULE MCReplicatedRequestConvergencePeerClaim ----
-EXTENDS ReplicatedRequestConvergence
-
-====

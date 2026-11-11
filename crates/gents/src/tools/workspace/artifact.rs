@@ -3,17 +3,17 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+#[cfg(test)]
+use defra_node::Node as EmbeddedNode;
 use serde_json::Value;
 
-use crate::request::watcher::AgentRequest;
-use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use gents_protocol::row::AgentRequest;
 
 #[derive(Clone)]
 pub struct ArtifactGrant(Arc<ArtifactOwner>);
 
 struct ArtifactOwner {
-    node: Arc<EmbeddedNode>,
+    access: crate::ConfigAccess,
     source_root: PathBuf,
     git_dir: PathBuf,
     root: PathBuf,
@@ -170,8 +170,28 @@ impl ArtifactGrant {
         &self.0.execution_generation
     }
 
+    #[cfg(test)]
     pub(super) async fn create(
         node: Arc<EmbeddedNode>,
+        request: &AgentRequest,
+        execution_generation: &str,
+        source_root: &Path,
+        owner_node_did: &str,
+        seal_hash: &str,
+    ) -> Result<Self> {
+        Self::create_with_access(
+            crate::ConfigAccess::local(node),
+            request,
+            execution_generation,
+            source_root,
+            owner_node_did,
+            seal_hash,
+        )
+        .await
+    }
+
+    pub(super) async fn create_with_access(
+        access: crate::ConfigAccess,
         request: &AgentRequest,
         execution_generation: &str,
         source_root: &Path,
@@ -227,7 +247,7 @@ impl ArtifactGrant {
         .map(|p| checked_directory(&p).map(|identity| (p, identity)))
         .collect::<Result<Vec<_>>>()?;
         let grant = Self(Arc::new(ArtifactOwner {
-            node,
+            access,
             source_root: source_root.to_path_buf(),
             git_dir,
             root,
@@ -263,37 +283,72 @@ impl ArtifactGrant {
         if super::adapter::working_tree_hash(&owner.source_root).await? != owner.seal_hash {
             bail!("artifact source no longer matches its seal");
         }
-        let doc = escape_graphql_string(&owner.request_doc_id);
-        let workspace = escape_graphql_string(&owner.workspace_id);
-        let principal = escape_graphql_string(&owner.owner_node_did);
-        let query = format!(
-            r#"{{
-          AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}) {{
-            _docID request_id lifecycle_state execution_generation execution_lease_expires_at
-            workspace_id workspace_owner_node_did workspace_authority node_did workspace_seal_hash
-          }}
-          WorkspaceBinding(filter: {{ request_doc_id: {{ _eq: "{doc}" }} }}) {{
-            workspace_id request_id request_doc_id authority owner_node_did seal_hash lifecycle_state
-          }}
-          IsolatedWorkspace(filter: {{ workspace_id: {{ _eq: "{workspace}" }}, owner_node_did: {{ _eq: "{principal}" }} }}) {{
-            workspace_id owner_node_did lifecycle_state seal_hash
-          }}
-          WorkspacePlacement(filter: {{ workspace_id: {{ _eq: "{workspace}" }}, owner_node_did: {{ _eq: "{principal}" }} }}) {{
-            workspace_id owner_node_did host_path observed_tree_hash
-          }}
-        }}"#
-        );
-        let value = graphql_with_transaction_retry(
-            &owner.node,
-            &query,
-            "validate artifact execution grant",
-        )
-        .await?;
+        let query = {
+            use gents_protocol::document_query::{
+                fields::{
+                    agent_request as request, isolated_workspace as isolated,
+                    workspace_binding as binding, workspace_placement as placement,
+                },
+                Filter, Query, QuerySet, Selection,
+            };
+            QuerySet::new()
+                .plain(
+                    &Query::select(
+                        Selection::doc_id()
+                            .field(request::REQUEST_ID)
+                            .field(request::LIFECYCLE_STATE)
+                            .field(request::EXECUTION_GENERATION)
+                            .field(request::EXECUTION_LEASE_EXPIRES_AT)
+                            .field(request::WORKSPACE_ID)
+                            .field(request::WORKSPACE_OWNER_NODE_DID)
+                            .field(request::WORKSPACE_AUTHORITY)
+                            .field(request::NODE_DID)
+                            .field(request::WORKSPACE_SEAL_HASH),
+                    )
+                    .filter(Filter::eq(request::DOC_ID, &owner.request_doc_id)),
+                )
+                .plain(
+                    &Query::select(
+                        Selection::new()
+                            .field(binding::WORKSPACE_ID)
+                            .field(binding::REQUEST_ID)
+                            .field(binding::REQUEST_DOC_ID)
+                            .field(binding::AUTHORITY)
+                            .field(binding::OWNER_NODE_DID)
+                            .field(binding::SEAL_HASH)
+                            .field(binding::LIFECYCLE_STATE),
+                    )
+                    .filter(Filter::eq(binding::REQUEST_DOC_ID, &owner.request_doc_id)),
+                )
+                .plain(
+                    &Query::select(
+                        Selection::new()
+                            .field(isolated::WORKSPACE_ID)
+                            .field(isolated::OWNER_NODE_DID)
+                            .field(isolated::LIFECYCLE_STATE)
+                            .field(isolated::SEAL_HASH),
+                    )
+                    .filter(Filter::eq(isolated::WORKSPACE_ID, &owner.workspace_id))
+                    .filter(Filter::eq(isolated::OWNER_NODE_DID, &owner.owner_node_did)),
+                )
+                .plain(
+                    &Query::select(
+                        Selection::new()
+                            .field(placement::WORKSPACE_ID)
+                            .field(placement::OWNER_NODE_DID)
+                            .field(placement::HOST_PATH)
+                            .field(placement::OBSERVED_TREE_HASH),
+                    )
+                    .filter(Filter::eq(placement::WORKSPACE_ID, &owner.workspace_id))
+                    .filter(Filter::eq(placement::OWNER_NODE_DID, &owner.owner_node_did)),
+                )
+                .render()
+        };
+        let value = owner.access.read(&query).await?;
         validate_launch_rows(
             owner,
             value
-                .data
-                .as_ref()
+                .get("data")
                 .ok_or_else(|| anyhow!("missing artifact query data"))?,
             Utc::now(),
         )?;

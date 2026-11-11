@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use super::WorkspaceReaderSelection;
+
 /// MCP connection configuration; discovered tools and health are observations.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -30,6 +32,11 @@ pub struct ToolServiceRegistry {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub mcp_path: Option<String>,
+    /// Full http(s) MCP URL. When set it is used verbatim and the address,
+    /// port and path fields are ignored; HTTPS cannot be expressed otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub endpoint_url: Option<String>,
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
@@ -73,6 +80,17 @@ pub struct RepositoryPlacement {
     #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
     #[schemars(transform = crate::documents::accepts_null)]
     pub enabled: bool,
+    /// Declared access policy (Lean `Identity.PackPlacementReaders`): the
+    /// Agents whose workspace effects read this placement. The publishing
+    /// actor grants exactly these readers, and nothing undeclared.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<WorkspaceReaderSelection>>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
+    pub readers: Vec<WorkspaceReaderSelection>,
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
@@ -92,7 +110,7 @@ pub struct ProjectionAcpBinding {
     pub node_did: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub projection_id: Option<String>,

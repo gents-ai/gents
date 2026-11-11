@@ -34,13 +34,13 @@ async fn config_apply_reconciles_canonical_event_source_and_trigger() -> Result<
     )?;
     let path = root.join("pack_config.json");
     let mut config = read_json_file(&path)?;
-    let agent_id = config["node"]["default_agent_id"]
+    let agent_did = config["node"]["default_agent_did"]
         .as_str()
         .context("default agent")?
         .to_string();
     config["tasks"] = json!([{
         "task_id": "event-task",
-        "agent_id": agent_id,
+        "agent_did": agent_did,
         "prompt_template": "Observe {{ doc.backend_id }}",
         "enabled": false
     }]);
@@ -91,7 +91,17 @@ async fn config_apply_round_trips_canonical_datastore_surface() -> Result<()> {
     let root = tempdir.path().join("config");
     fs::create_dir_all(&home)?;
     let exported = tempdir.path().join("exported");
-    let init = run_init_json(&home, &["--node-name", "surface-roundtrip"])?;
+    let init = run_init_json(
+        &home,
+        &[
+            "--node-name",
+            "surface-roundtrip",
+            "--inference-url",
+            "http://127.0.0.1:9/v1",
+            "--model-name",
+            "m",
+        ],
+    )?;
     let node_did = node_did_from_init(&init)?;
     let port = allocate_port()?;
     let graphql = graphql_url(port);

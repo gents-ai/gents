@@ -25,10 +25,24 @@ pub(super) async fn http_client() -> Result<&'static reqwest::Client> {
         .await
 }
 
-pub(super) async fn auto_commit(endpoint: &GraphqlEndpoint, mutation: &str) -> Result<Value> {
+pub(super) async fn auto_commit(
+    endpoint: &GraphqlEndpoint,
+    mutation: &str,
+    variables: Option<&Value>,
+) -> Result<Value> {
+    if !super::client_signed_agent::ordinary_mutation_allowed(
+        endpoint.client_signed_agent_creates,
+        true,
+    ) {
+        return Err(ConfigClientError::ClientUnsignedMutationUnsupported);
+    }
+    let body = match variables {
+        Some(variables) => serde_json::json!({"query": mutation, "variables": variables}),
+        None => serde_json::json!({"query": mutation}),
+    };
     let response = endpoint
         .authorize(http_client().await?.post(endpoint.url()))?
-        .json(&serde_json::json!({"query": mutation}))
+        .json(&body)
         .send()
         .await
         .map_err(|source| ConfigClientError::PostMutation {
@@ -61,11 +75,26 @@ pub(super) async fn auto_commit(endpoint: &GraphqlEndpoint, mutation: &str) -> R
 pub(super) async fn query_with_options(
     endpoint: &GraphqlEndpoint,
     query: &str,
+    variables: Option<&Value>,
     options: GraphqlRequestOptions,
 ) -> Result<Value> {
     ensure_query_document(query)?;
     let authorization = endpoint.authorization()?;
-    Ok(execute_graphql_async(endpoint.url(), authorization.as_deref(), query, options).await?)
+    Ok(match variables {
+        Some(variables) => {
+            gents_protocol::graphql::execute_graphql_with_variables_async(
+                endpoint.url(),
+                authorization.as_deref(),
+                query,
+                variables,
+                options,
+            )
+            .await?
+        }
+        None => {
+            execute_graphql_async(endpoint.url(), authorization.as_deref(), query, options).await?
+        }
+    })
 }
 
 pub(super) async fn txn_begin(
@@ -149,6 +178,10 @@ pub(super) async fn txn_execute(
                 endpoint: endpoint.to_string(),
                 source,
             })?;
+    validate_txn_response(value)
+}
+
+pub(super) fn validate_txn_response(value: Value) -> Result<Value> {
     if retry::graphql_value_is_transaction_conflict(&value) {
         return Err(retry::transaction_conflict(ConflictSource::StructuredCode));
     }
@@ -169,6 +202,8 @@ pub(super) enum TxnCommitError {
     /// DefraDB returned a commit response. Its pinned transaction registry
     /// consumes the handle before attempting the storage commit.
     TransactionConsumed(ConfigClientError),
+    /// DefraDB's commit-conflict response confirms no transaction writes committed.
+    ConfirmedConflict(ConfigClientError),
 }
 
 pub(super) async fn txn_commit(
@@ -206,6 +241,11 @@ pub(super) async fn txn_commit(
             },
         ));
     }
+    if status == reqwest::StatusCode::CONFLICT && is_confirmed_commit_conflict(&bytes) {
+        return Err(TxnCommitError::ConfirmedConflict(
+            retry::transaction_conflict(ConflictSource::HttpStatusTextFallback),
+        ));
+    }
     if status == reqwest::StatusCode::CONFLICT && retry::is_transaction_conflict_text(&body) {
         return Err(TxnCommitError::TransactionConsumed(
             retry::transaction_conflict(ConflictSource::HttpStatusTextFallback),
@@ -218,6 +258,19 @@ pub(super) async fn txn_commit(
             body: body.into_owned(),
         },
     ))
+}
+
+/// DefraDB emits this outcome at the commit endpoint only for the registry's
+/// typed conflict, which Regolith decides before writing a commit record.
+/// Older servers' text-classified 409 responses do not establish finality.
+fn is_confirmed_commit_conflict(bytes: &[u8]) -> bool {
+    serde_json::from_slice::<Value>(bytes).is_ok_and(|value| {
+        value.as_object().is_some_and(|body| {
+            body.get("error").and_then(Value::as_str) == Some(query::executor::TXN_CONFLICT_MESSAGE)
+                && body.get("outcome").and_then(Value::as_str)
+                    == Some("transaction_conflict_aborted")
+        })
+    })
 }
 
 pub(super) async fn txn_discard(
@@ -265,7 +318,7 @@ pub(super) fn affected_documents(response: &Value) -> u64 {
         .unwrap_or_default()
 }
 
-fn graphql_response_has_errors(response: &Value) -> bool {
+pub(super) fn graphql_response_has_errors(response: &Value) -> bool {
     match response.get("errors") {
         None => false,
         Some(Value::Array(errors)) => !errors.is_empty(),
@@ -300,6 +353,28 @@ fn storage_full_response(bytes: &[u8]) -> Option<gents_protocol::database_error:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn confirmed_commit_conflict_requires_the_pinned_error_body() {
+        assert!(is_confirmed_commit_conflict(
+            br#"{"error":"transaction conflict. Please retry","outcome":"transaction_conflict_aborted"}"#
+        ));
+        assert!(!is_confirmed_commit_conflict(
+            br#"{"error":"transaction conflict. Please retry"}"#
+        ));
+        assert!(!is_confirmed_commit_conflict(
+            br#"{"error":"unrelated transaction conflict; please retry"}"#
+        ));
+        assert!(!is_confirmed_commit_conflict(
+            b"transaction conflict. Please retry"
+        ));
+        assert!(!is_confirmed_commit_conflict(
+            br#"{"error":"transaction conflict. Please retry","outcome":"unknown"}"#
+        ));
+        assert!(!is_confirmed_commit_conflict(
+            br#"{"error":"transaction conflict. please retry"}"#
+        ));
+    }
 
     #[tokio::test]
     async fn transaction_http_preserves_variables_and_transaction_header() {
@@ -393,16 +468,21 @@ mod tests {
         )
         .unwrap();
         let did = crate::store::identity::NodeIdentity::did(&identity).to_string();
-        super::super::ConfigAccess::graphql_as(endpoint, &did)
-            .transact_write("test.per_request_bearer", |txn| {
-                Box::pin(async move {
-                    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
-                    txn.execute("mutation { create_X(input: {}) { _docID } }")
-                        .await
-                })
+        let capability = identity.client_signing_capability().unwrap();
+        super::super::ConfigAccess::Graphql(
+            super::super::GraphqlEndpoint::as_principal(endpoint, &did)
+                .with_client_signing_capability(capability)
+                .unwrap(),
+        )
+        .transact_write("test.per_request_bearer", |txn| {
+            Box::pin(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+                txn.execute("mutation { create_X(input: {}) { _docID } }")
+                    .await
             })
-            .await
-            .unwrap();
+        })
+        .await
+        .unwrap();
         server.abort();
 
         let issued_at = |bearer: &str| -> u64 {

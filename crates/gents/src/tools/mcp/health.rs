@@ -2,9 +2,9 @@ use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 use gents_protocol::tool_service_health::ToolServiceHealthProjection;
 
 use crate::store::graphql::escape_graphql_string;
-use crate::tools::mcp::pool::{resolve_mcp_url, McpPool};
+use crate::tools::mcp::pool::{auth_refusal_of, resolve_mcp_url, McpAuthRefusal, McpPool};
 
 /// Node-local service observation settings; these do not change an agent's
 /// remote-tool call deadlines.
@@ -73,9 +73,32 @@ impl From<ToolServiceHealthProjection> for HealthStatus {
     }
 }
 
+/// A registry entry that cannot become a connectable URL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum McpEndpointDefect {
+    #[error("registry entry has invalid endpoint_url")]
+    InvalidEndpointUrl,
+    #[error("registry entry missing mcp_port")]
+    MissingMcpPort,
+    #[error("registry entry missing address fields")]
+    MissingAddressFields,
+}
+
+/// Why the last probe failed, beyond its message.
+#[derive(Debug, Clone)]
+struct ProbeError {
+    message: String,
+    auth_refusal: Option<McpAuthRefusal>,
+    registry_defect: Option<McpEndpointDefect>,
+}
+
 #[derive(Debug, Clone)]
 struct ServiceHealthEntry {
     health: ServiceHealth,
+    /// Set when the last probe failed because the server refused authorization.
+    auth_refusal: Option<McpAuthRefusal>,
+    /// Set when the last probe failed because the registry entry has no usable endpoint.
+    registry_defect: Option<McpEndpointDefect>,
     model: ServiceModelInternal,
     endpoint: Option<String>,
     tool_count: Option<i64>,
@@ -89,6 +112,8 @@ impl ServiceHealthEntry {
         let last_probe_at = health.last_seen;
         Self {
             health,
+            auth_refusal: None,
+            registry_defect: None,
             model,
             endpoint: None,
             tool_count: None,
@@ -99,17 +124,27 @@ impl ServiceHealthEntry {
     fn from_model(
         model: ServiceModelInternal,
         last_seen: DateTime<Utc>,
-        last_error: Option<String>,
+        last_error: Option<ProbeError>,
         endpoint: Option<String>,
         tool_count: Option<i64>,
         last_probe_at: DateTime<Utc>,
     ) -> Self {
+        let (last_error, auth_refusal, registry_defect) = match last_error {
+            Some(error) => (
+                Some(error.message),
+                error.auth_refusal,
+                error.registry_defect,
+            ),
+            None => (None, None, None),
+        };
         Self {
             health: ServiceHealth {
                 status: model.state.project().into(),
                 last_seen,
                 last_error,
             },
+            auth_refusal,
+            registry_defect,
             model,
             endpoint,
             tool_count,
@@ -171,6 +206,10 @@ pub struct MCPServiceHealthSnapshot {
     pub last_probe_at: DateTime<Utc>,
     pub last_seen: DateTime<Utc>,
     pub last_error: Option<String>,
+    #[serde(skip)]
+    pub auth_refusal: Option<McpAuthRefusal>,
+    #[serde(skip)]
+    pub registry_defect: Option<McpEndpointDefect>,
 }
 
 #[derive(Clone)]
@@ -224,6 +263,8 @@ impl ServiceHealthMap {
                 last_probe_at: entry.last_probe_at,
                 last_seen: entry.health.last_seen,
                 last_error: entry.health.last_error.clone(),
+                auth_refusal: entry.auth_refusal.clone(),
+                registry_defect: entry.registry_defect,
             })
             .collect()
     }
@@ -263,13 +304,26 @@ pub struct HealthPersistenceContext<'a> {
     pub node_did: &'a str,
 }
 
+impl HealthPersistenceContext<'_> {
+    fn runtime_access(&self) -> Result<crate::store::config_client::ConfigAccess> {
+        anyhow::ensure!(
+            self.node.node_identity_did() == Some(self.node_did),
+            "health persistence requires the configured runtime identity"
+        );
+        Ok(crate::store::config_client::ConfigAccess::local_as(
+            self.node.clone(),
+            identity::Did::new(self.node_did)?,
+        ))
+    }
+}
+
 impl Default for ServiceHealthMap {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct McpHealthCheckService {
     pub service_id: String,
     #[serde(
@@ -295,10 +349,63 @@ pub struct McpHealthCheckService {
     pub mcp_path: String,
     #[serde(
         default,
+        deserialize_with = "crate::tools::mcp::registry::null_as_empty_string"
+    )]
+    pub endpoint_url: String,
+    #[serde(
+        default,
         deserialize_with = "crate::tools::mcp::registry::null_as_default"
     )]
     pub send_node_did: bool,
     pub updated_at: Option<String>,
+}
+
+impl From<crate::documents::ToolServiceRegistry> for McpHealthCheckService {
+    fn from(service: crate::documents::ToolServiceRegistry) -> Self {
+        Self {
+            service_id: service.service_id,
+            hostname: service.hostname.unwrap_or_default(),
+            tailscale_ip: service.tailscale_ip.unwrap_or_default(),
+            lan_ip: service.lan_ip.unwrap_or_default(),
+            mcp_port: service.mcp_port.and_then(|port| u16::try_from(port).ok()),
+            mcp_path: service.mcp_path.unwrap_or_default(),
+            endpoint_url: service.endpoint_url.unwrap_or_default(),
+            send_node_did: service.send_node_did,
+            updated_at: None,
+        }
+    }
+}
+
+impl McpHealthCheckService {
+    /// The one place a registry entry becomes a connectable URL. A configured
+    /// `endpoint_url` wins and is canonicalised; otherwise the address fields
+    /// select a plain-HTTP endpoint as before. Errors are registry defects.
+    pub fn endpoint(
+        &self,
+        local_hostname: &str,
+        local_subnet: Option<&str>,
+    ) -> std::result::Result<String, McpEndpointDefect> {
+        if !self.endpoint_url.trim().is_empty() {
+            return crate::documents::ToolServiceRegistry::parse_endpoint_url(&self.endpoint_url)
+                .map(String::from)
+                .map_err(|_| McpEndpointDefect::InvalidEndpointUrl);
+        }
+        let Some(mcp_port) = self.mcp_port.filter(|port| *port != 0) else {
+            return Err(McpEndpointDefect::MissingMcpPort);
+        };
+        if self.hostname.is_empty() && self.tailscale_ip.is_empty() && self.lan_ip.is_empty() {
+            return Err(McpEndpointDefect::MissingAddressFields);
+        }
+        Ok(resolve_mcp_url(
+            &self.hostname,
+            &self.tailscale_ip,
+            &self.lan_ip,
+            mcp_port,
+            &self.mcp_path,
+            local_hostname,
+            local_subnet,
+        ))
+    }
 }
 
 #[expect(
@@ -408,25 +515,21 @@ async fn run_health_check_with_cancel(
     if cancel.is_some_and(CancellationToken::is_cancelled) {
         return Ok(());
     }
-    let owner = persistence
+    let context = persistence
         .as_ref()
-        .map(|context| context.node_did)
         .ok_or_else(|| anyhow::anyhow!("registry health checks require a node scope"))?;
-    let services = crate::tools::mcp::registry::configured_mcp_services(node, owner)
-        .await?
-        .into_iter()
-        .filter(|service| service.enabled)
-        .map(|service| McpHealthCheckService {
-            service_id: service.service_id,
-            hostname: service.hostname.unwrap_or_default(),
-            tailscale_ip: service.tailscale_ip.unwrap_or_default(),
-            lan_ip: service.lan_ip.unwrap_or_default(),
-            mcp_port: service.mcp_port.and_then(|port| u16::try_from(port).ok()),
-            mcp_path: service.mcp_path.unwrap_or_default(),
-            send_node_did: service.send_node_did,
-            updated_at: None,
-        })
-        .collect();
+    anyhow::ensure!(
+        std::ptr::eq(context.node.as_ref(), node),
+        "health registry node does not match persistence"
+    );
+    let owner = context.node_did;
+    let services =
+        crate::tools::mcp::registry::configured_mcp_services_on(&context.runtime_access()?, owner)
+            .await?
+            .into_iter()
+            .filter(|service| service.enabled)
+            .map(McpHealthCheckService::from)
+            .collect();
     let mcp_pool = mcp_pool.for_agent(owner);
 
     run_health_check_cycle_with_cancel(
@@ -438,6 +541,7 @@ async fn run_health_check_with_cancel(
         local_subnet,
         options,
         persistence,
+        persistence.as_ref().map(|context| context.node_did),
         cancel,
     )
     .await
@@ -466,6 +570,39 @@ pub async fn run_health_check_cycle(
         local_subnet,
         options,
         persistence,
+        persistence.as_ref().map(|context| context.node_did),
+        None,
+    )
+    .await
+}
+
+/// A client probe sends its authenticated caller DID only when the service
+/// opts in; the client never substitutes a runtime's Node identity.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "client probe inputs are explicit"
+)]
+pub async fn run_health_check_cycle_for_actor(
+    services: Vec<McpHealthCheckService>,
+    now: DateTime<Utc>,
+    mcp_pool: &McpPool,
+    health_map: &ServiceHealthMap,
+    local_hostname: &str,
+    local_subnet: Option<&str>,
+    options: &HealthCheckerOptions,
+    actor: &str,
+) -> Result<()> {
+    identity::Did::new(actor)?;
+    run_health_check_cycle_with_cancel(
+        services,
+        now,
+        mcp_pool,
+        health_map,
+        local_hostname,
+        local_subnet,
+        options,
+        None,
+        Some(actor),
         None,
     )
     .await
@@ -486,6 +623,7 @@ async fn run_health_check_cycle_with_cancel(
     local_subnet: Option<&str>,
     options: &HealthCheckerOptions,
     persistence: Option<HealthPersistenceContext<'_>>,
+    outbound_actor: Option<&str>,
     cancel: Option<&CancellationToken>,
 ) -> Result<()> {
     let mut online_service_ids = RapidHashSet::new();
@@ -494,6 +632,20 @@ async fn run_health_check_cycle_with_cancel(
         if cancel.is_some_and(CancellationToken::is_cancelled) {
             return Ok(());
         }
+        let service = if let Some(context) = persistence.as_ref() {
+            let current = crate::tools::mcp::registry::configured_mcp_service_on(
+                &context.runtime_access()?,
+                context.node_did,
+                &service.service_id,
+            )
+            .await?;
+            match current.filter(|service| service.enabled) {
+                Some(service) => McpHealthCheckService::from(service),
+                None => continue,
+            }
+        } else {
+            service
+        };
         let service_id = service.service_id.clone();
         online_service_ids.insert(service_id.clone());
 
@@ -514,55 +666,29 @@ async fn run_health_check_cycle_with_cancel(
             continue;
         }
 
-        let Some(mcp_port) = service.mcp_port.filter(|port| *port != 0) else {
-            apply_probe_failure(
-                mcp_pool,
-                health_map,
-                ProbeFailure {
-                    service_id: &service_id,
-                    previous_model,
-                    previous_last_seen,
-                    endpoint: previous_endpoint,
-                    tool_count: previous_tool_count,
-                    error: "registry entry missing mcp_port".to_string(),
-                },
-                now,
-                options,
-            )
-            .await;
-            continue;
+        let endpoint = match service.endpoint(local_hostname, local_subnet) {
+            Ok(endpoint) => endpoint,
+            Err(error) => {
+                apply_probe_failure(
+                    mcp_pool,
+                    health_map,
+                    ProbeFailure {
+                        service_id: &service_id,
+                        previous_model,
+                        previous_last_seen,
+                        endpoint: previous_endpoint,
+                        tool_count: previous_tool_count,
+                        error: error.to_string(),
+                        auth_refusal: None,
+                        registry_defect: Some(error),
+                    },
+                    now,
+                    options,
+                )
+                .await;
+                continue;
+            }
         };
-
-        if service.hostname.is_empty()
-            && service.tailscale_ip.is_empty()
-            && service.lan_ip.is_empty()
-        {
-            apply_probe_failure(
-                mcp_pool,
-                health_map,
-                ProbeFailure {
-                    service_id: &service_id,
-                    previous_model,
-                    previous_last_seen,
-                    endpoint: previous_endpoint,
-                    tool_count: previous_tool_count,
-                    error: "registry entry missing address fields".to_string(),
-                },
-                now,
-                options,
-            )
-            .await;
-            continue;
-        }
-        let endpoint = resolve_mcp_url(
-            &service.hostname,
-            &service.tailscale_ip,
-            &service.lan_ip,
-            mcp_port,
-            &service.mcp_path,
-            local_hostname,
-            local_subnet,
-        );
 
         let is_stale = now
             .signed_duration_since(heartbeat_seen_at)
@@ -570,18 +696,36 @@ async fn run_health_check_cycle_with_cancel(
             .map(|age| age > options.staleness_threshold)
             .unwrap_or(false);
 
+        if let Some(context) = persistence.as_ref() {
+            let current = crate::tools::mcp::registry::configured_mcp_service_on(
+                &context.runtime_access()?,
+                context.node_did,
+                &service_id,
+            )
+            .await?;
+            let Some(current) = current.filter(|service| service.enabled) else {
+                online_service_ids.remove(&service_id);
+                continue;
+            };
+            anyhow::ensure!(
+                McpHealthCheckService::from(current) == service,
+                "MCP service route changed before health observation"
+            );
+        }
+
+        let outbound_actor = if service.send_node_did {
+            Some(
+                outbound_actor
+                    .context("identity-aware MCP probe requires its authenticated actor")?,
+            )
+        } else {
+            None
+        };
         let cancellation = cancel.cloned().unwrap_or_default();
         let Some(probe_result) = cancellation
             .run_until_cancelled(tokio::time::timeout(
                 options.probe_timeout,
-                mcp_pool.list_tools_with_node_did(
-                    &service_id,
-                    &endpoint,
-                    persistence
-                        .as_ref()
-                        .filter(|_| service.send_node_did)
-                        .map(|p| p.node_did),
-                ),
+                mcp_pool.list_tools_with_node_did(&service_id, &endpoint, outbound_actor),
             ))
             .await
         else {
@@ -631,6 +775,8 @@ async fn run_health_check_cycle_with_cancel(
                         endpoint: Some(endpoint.clone()),
                         tool_count: previous_tool_count,
                         error: error.to_string(),
+                        auth_refusal: auth_refusal_of(&error),
+                        registry_defect: None,
                     },
                     now,
                     options,
@@ -653,6 +799,8 @@ async fn run_health_check_cycle_with_cancel(
                         endpoint: Some(endpoint.clone()),
                         tool_count: previous_tool_count,
                         error: "probe timed out".to_string(),
+                        auth_refusal: None,
+                        registry_defect: None,
                     },
                     now,
                     options,
@@ -705,6 +853,8 @@ struct ProbeFailure<'a> {
     endpoint: Option<String>,
     tool_count: Option<i64>,
     error: String,
+    auth_refusal: Option<McpAuthRefusal>,
+    registry_defect: Option<McpEndpointDefect>,
 }
 
 async fn apply_probe_failure(
@@ -721,6 +871,8 @@ async fn apply_probe_failure(
         endpoint,
         tool_count,
         error,
+        auth_refusal,
+        registry_defect,
     } = failure;
     let next_model = step_service(previous_model, ProbeEvent::ProbeFail, now, options)
         .expect("probeFail must preserve the service model");
@@ -733,7 +885,11 @@ async fn apply_probe_failure(
             ServiceHealthEntry::from_model(
                 next_model,
                 previous_last_seen,
-                Some(error),
+                Some(ProbeError {
+                    message: error,
+                    auth_refusal,
+                    registry_defect,
+                }),
                 endpoint,
                 tool_count,
                 now,
@@ -837,8 +993,6 @@ fn classify_last_error(error: &str) -> &'static str {
         "connection_refused"
     } else if lower.contains("no route") || lower.contains("unreachable") {
         "network_unreachable"
-    } else if lower.contains("missing mcp_port") || lower.contains("missing address") {
-        "registry_invalid"
     } else if lower.contains("stream closed") || lower.contains("eof") {
         "stream_closed"
     } else {
@@ -892,7 +1046,12 @@ fn persisted_health_fields(
         "backoff_until": entry.backoff_until,
         "last_probe_at": entry.last_probe_at,
         "last_seen": entry.last_seen,
-        "last_error_class": entry.last_error.as_deref().map(classify_last_error),
+        "last_error_class": entry
+            .auth_refusal
+            .as_ref()
+            .map(McpAuthRefusal::class)
+            .or_else(|| entry.registry_defect.map(|_| "registry_invalid"))
+            .or_else(|| entry.last_error.as_deref().map(classify_last_error)),
         "last_error_message": entry.last_error,
     })
     .as_object()
@@ -906,6 +1065,7 @@ async fn upsert_persisted_health_state(
     entry: &MCPServiceHealthSnapshot,
     now: DateTime<Utc>,
 ) -> Result<()> {
+    let actor = identity::Did::new(persistence.node_did)?;
     let service_id = escape_graphql_string(&entry.service_id);
     let node_did = escape_graphql_string(persistence.node_did);
     let mut fields = persisted_health_fields(entry);
@@ -929,13 +1089,34 @@ async fn upsert_persisted_health_state(
             ) {{ _docID }}
         }}"#,
     );
-    crate::store::config_client::ConfigAccess::write_local_response(
-        persistence.node,
-        "health_checker.upsert_service_state",
-        &mutation,
-    )
-    .await?;
-    Ok(())
+    let access = persistence.runtime_access()?;
+    access.transact_write("health_checker.upsert_service_state", |txn| {
+        let mutation = &mutation;
+        let service_id = &service_id;
+        let node_did = &node_did;
+        let actor = &actor;
+        Box::pin(async move {
+            let response = txn.execute(&format!(
+                r#"{{ ToolServiceHealthState(filter: {{service_id: {{_eq: "{service_id}"}}, node_did: {{_eq: "{node_did}"}}}}, limit: 2) {{_docID}} }}"#
+            )).await?;
+            let rows = gents_protocol::graphql::graphql_rows_from_response(&response, "ToolServiceHealthState");
+            anyhow::ensure!(rows.len() <= 1, "ToolServiceHealthState is ambiguous");
+            if let Some(row) = rows.first() {
+                let doc = row["_docID"].as_str().context("ToolServiceHealthState has no document ID")?.to_owned();
+                let owners = txn.document_owners("ToolServiceHealthState", &[doc]).await?;
+                anyhow::ensure!(owners.len() == 1 && owners[0].visible && owners[0].owner.as_ref() == Some(actor),
+                    "ToolServiceHealthState has no matching native runtime owner");
+            }
+            let response = txn.execute(mutation).await?;
+            let doc = gents_protocol::graphql::extract_mutation_doc_id(&response, "ToolServiceHealthState")?;
+            if rows.is_empty() {
+                crate::store::config_client::publish_node_child_in_txn(
+                    txn, "ToolServiceHealthState", &doc, actor.as_str(),
+                ).await?;
+            }
+            Ok::<_, anyhow::Error>(())
+        })
+    }).await
 }
 
 /// The schema cannot make (service_id, node_did) unique, and an upsert fails
@@ -954,16 +1135,16 @@ async fn collapse_health_state_twins(
             order: [{{ updated_at: DESC }}, {{ _docID: ASC }}]
         ) {{ _docID }} }}"#
     );
-    let twins = match crate::store::graphql::graphql_with_transaction_retry(
-        persistence.node,
-        &query,
-        "load_service_health_twins",
-    )
-    .await
-    {
+    let access = match persistence.runtime_access() {
+        Ok(access) => access,
+        Err(error) => {
+            tracing::warn!(service_id, error = %error, "failed to select health runtime actor");
+            return false;
+        }
+    };
+    let twins = match access.execute(&query).await {
         Ok(response) => response
-            .data
-            .as_ref()
+            .get("data")
             .and_then(|data| data.get("ToolServiceHealthState"))
             .and_then(|rows| rows.as_array())
             .into_iter()
@@ -984,12 +1165,9 @@ async fn collapse_health_state_twins(
         r#"mutation {{ delete_ToolServiceHealthState(filter: {{ _docID: {{ _in: [{}] }} }}) {{ _docID }} }}"#,
         twins.join(", ")
     );
-    match crate::store::config_client::ConfigAccess::write_local_response(
-        persistence.node,
-        "health_checker.collapse_service_state_twins",
-        &mutation,
-    )
-    .await
+    match access
+        .write("health_checker.collapse_service_state_twins", &mutation)
+        .await
     {
         Ok(_) => true,
         Err(error) => {
@@ -1015,12 +1193,13 @@ async fn delete_persisted_health_state(
             ) {{ _docID }}
         }}"#
     );
-    let resp = crate::store::config_client::ConfigAccess::write_local_response(
-        persistence.node,
-        "health_checker.delete_stale_service_state",
-        &mutation,
-    )
-    .await;
+    let resp = match persistence.runtime_access() {
+        Ok(access) => access
+            .write("health_checker.delete_stale_service_state", &mutation)
+            .await
+            .map_err(anyhow::Error::from),
+        Err(error) => Err(error),
+    };
     if let Err(error) = resp {
         tracing::warn!(
             service_id = %service_id,
@@ -1043,15 +1222,9 @@ async fn load_persisted_service_ids(
             }}
         }}"#
     );
-    let resp = crate::store::graphql::graphql_with_transaction_retry(
-        persistence.node,
-        &query,
-        "load_persisted_service_ids",
-    )
-    .await?;
+    let resp = persistence.runtime_access()?.execute(&query).await?;
     let raw = resp
-        .data
-        .as_ref()
+        .get("data")
         .and_then(|data| data.get("ToolServiceHealthState"))
         .and_then(|value| value.as_array())
         .cloned()
@@ -1121,7 +1294,7 @@ mod registry_parsing_tests {
 #[cfg(test)]
 mod tests {
     use chrono::Duration as ChronoDuration;
-    use defra_node::EmbeddedNode;
+    use defra_node::Node as EmbeddedNode;
     use rmcp::model::ListToolsResult;
     use serde_json::Value;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -1129,32 +1302,249 @@ mod tests {
 
     use super::{
         backoff_duration, run_health_check, run_health_check_cycle, step_service,
-        HealthCheckerOptions, HealthPersistenceContext, HealthStateInternal, McpHealthCheckService,
-        ProbeEvent, ServiceHealth, ServiceHealthMap, ServiceModelInternal,
+        HealthCheckerOptions, HealthPersistenceContext, HealthStateInternal, McpAuthRefusal,
+        McpHealthCheckService, ProbeEvent, ServiceHealth, ServiceHealthMap, ServiceModelInternal,
     };
     use crate::lean_vocab_test::{lean_mcp_health_cases, LeanMcpHealthCase};
+    use crate::store::config_client::ConfigAccess;
+    use crate::store::identity::NodeIdentity;
     use crate::tools::mcp::pool::McpPool;
 
     #[tokio::test]
+    async fn service_health_publication_preserves_native_ownership_and_revocation(
+    ) -> anyhow::Result<()> {
+        use crate::lean_vocab_test::{lean_identity_household_cases, LeanIdentityAction};
+        use crate::store::config_client::{GraphqlEndpoint, NodePermission};
+        use crate::NodeIdentity;
+        use anyhow::Context;
+
+        let model = lean_identity_household_cases()
+            .iter()
+            .find(|case| case.name == "operations-parent-publication")
+            .context("missing operations model")?;
+        let expected: Vec<_> = model
+            .actions
+            .iter()
+            .filter_map(|action| match action {
+                LeanIdentityAction::Check { expected, .. } => Some(*expected),
+                _ => None,
+            })
+            .collect();
+        let dir = tempfile::tempdir()?;
+        let user = crate::KeyIdentity::load_or_create(dir.path().join("user"), None)?;
+        let runtime = crate::KeyIdentity::load_or_create(dir.path().join("runtime"), None)?;
+        let agent = crate::KeyIdentity::load_or_create(dir.path().join("agent"), None)?;
+        let sibling = crate::KeyIdentity::load_or_create(dir.path().join("sibling"), None)?;
+        let outsider = crate::KeyIdentity::load_or_create(dir.path().join("outsider"), None)?;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .with_node_identity_did(runtime.did())
+                .with_node_acp_enabled()
+                .with_http(defra_node::HttpConfig::with_listener(listener)?)
+                .with_storage_backend(defra_node::StorageBackend::Regolith)
+                .data_path(dir.path().join("node"))
+                .build()
+                .await?,
+        );
+        node.add_dac_policy_with_counter_as(
+            &defra_core::RequestContext::default().with_identity(Some(runtime.did().to_owned())),
+            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
+            0,
+        )
+        .await?;
+        node.add_collection(gents_protocol::schemas::NODE).await?;
+        node.add_collection(gents_protocol::schemas::TOOL_SERVICE_HEALTH_STATE)
+            .await?;
+        let access = |actor: &crate::KeyIdentity| -> anyhow::Result<ConfigAccess> {
+            Ok(ConfigAccess::Graphql(
+                GraphqlEndpoint::as_principal(
+                    format!("http://{address}/api/v0/graphql"),
+                    actor.did(),
+                )
+                .with_client_signing_capability(actor.client_signing_capability()?)?,
+            ))
+        };
+        let user_access = access(&user)?;
+        let runtime_access =
+            ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
+        for actor in [&user, &agent, &sibling, &outsider] {
+            for permission in [
+                NodePermission::DocumentRead,
+                NodePermission::DocumentUpdate,
+                NodePermission::DacRelationAdd,
+            ] {
+                runtime_access
+                    .grant_node_permission(&identity::Did::new(actor.did())?, permission)
+                    .await?;
+            }
+        }
+        let parent = user_access
+            .write(
+                "test.health.node",
+                &format!(
+                    r#"mutation {{ create_Node(input: {{node_did: "{}"}}) {{_docID}} }}"#,
+                    crate::store::graphql::escape_graphql_string(runtime.did()),
+                ),
+            )
+            .await?;
+        let parent = gents_protocol::graphql::extract_mutation_doc_id(&parent, "Node")?;
+        user_access
+            .add_actor_relationship(
+                "Node",
+                &parent,
+                "runtime_reader",
+                &identity::Did::new(runtime.did())?,
+            )
+            .await?;
+        let context = HealthPersistenceContext {
+            node: &node,
+            node_did: runtime.did(),
+        };
+        let now = chrono::Utc::now();
+        let entry = super::MCPServiceHealthSnapshot {
+            service_id: "service".into(),
+            endpoint: Some("http://localhost/mcp".into()),
+            status: "healthy".into(),
+            tool_count: Some(2),
+            failure_count: 0,
+            k_max: 3,
+            backoff_until: None,
+            last_probe_at: now,
+            last_seen: now,
+            last_error: None,
+            auth_refusal: None,
+            registry_defect: None,
+        };
+        super::upsert_persisted_health_state(&context, None, &entry, now).await?;
+        let visible = |response: &serde_json::Value| {
+            !gents_protocol::graphql::graphql_rows_from_response(response, "ToolServiceHealthState")
+                .is_empty()
+        };
+        let query = "{ ToolServiceHealthState { _docID status } }";
+        let user_view = user_access.execute(query).await?;
+        let doc = user_view["data"]["ToolServiceHealthState"][0]["_docID"]
+            .as_str()
+            .context("health not visible to Node owner")?;
+        let update = format!(
+            r#"mutation {{ update_ToolServiceHealthState(docID: "{}", input: {{status: "unreachable"}}) {{_docID}} }}"#,
+            crate::store::graphql::escape_graphql_string(doc)
+        );
+        let affected = |result: anyhow::Result<serde_json::Value>| {
+            result.is_ok_and(|response| {
+                gents_protocol::graphql::extract_mutation_doc_id(
+                    &response,
+                    "ToolServiceHealthState",
+                )
+                .is_ok()
+            })
+        };
+        let actual = [
+            visible(&user_view),
+            affected(
+                user_access
+                    .write("test.health.denied", &update)
+                    .await
+                    .map_err(Into::into),
+            ),
+            affected(
+                runtime_access
+                    .write("test.health.update", &update)
+                    .await
+                    .map_err(Into::into),
+            ),
+            visible(&access(&agent)?.execute(query).await?),
+            visible(&access(&sibling)?.execute(query).await?),
+            affected(
+                access(&outsider)?
+                    .write("test.health.outsider", &update)
+                    .await
+                    .map_err(Into::into),
+            ),
+        ];
+        assert_eq!(
+            actual,
+            [
+                expected[2],
+                expected[4],
+                expected[5],
+                expected[6],
+                expected[7],
+                expected[8]
+            ]
+        );
+        runtime_access
+            .delete_resource_relationship("ToolServiceHealthState", doc, "parent", "nodes", &parent)
+            .await?;
+        let republished = super::upsert_persisted_health_state(&context, None, &entry, now).await;
+        assert_eq!(republished.is_ok(), expected[10]);
+        republished?;
+        assert_eq!(visible(&user_access.execute(query).await?), expected[9]);
+        assert!(super::load_persisted_service_ids(&context)
+            .await?
+            .contains("service"));
+        drop(user_access);
+        drop(runtime_access);
+        node.shutdown().await?;
+        drop(node);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        let restarted = Arc::new(
+            EmbeddedNode::builder()
+                .with_node_identity_did(runtime.did())
+                .with_node_acp_enabled()
+                .with_http(defra_node::HttpConfig::with_listener(listener)?)
+                .with_storage_backend(defra_node::StorageBackend::Regolith)
+                .data_path(dir.path().join("node"))
+                .build()
+                .await?,
+        );
+        let user_access = ConfigAccess::Graphql(
+            GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), user.did())
+                .with_client_signing_capability(user.client_signing_capability()?)?,
+        );
+        let context = HealthPersistenceContext {
+            node: &restarted,
+            node_did: runtime.did(),
+        };
+        assert!(super::load_persisted_service_ids(&context)
+            .await?
+            .contains("service"));
+        super::upsert_persisted_health_state(&context, None, &entry, now).await?;
+        assert!(!visible(&user_access.execute(query).await?));
+        restarted.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn health_persistence_skips_unchanged_rows_and_only_commits_changed_fields() {
-        async fn field_commits(node: &EmbeddedNode) -> std::collections::BTreeMap<String, usize> {
-            let rows = node.execute("{ ToolServiceHealthState { _docID } }").await;
-            assert!(!rows.has_errors(), "{:?}", rows.errors);
-            let doc_id = rows.data.as_ref().unwrap()["ToolServiceHealthState"][0]["_docID"]
+        fn runtime_reader(node: &Arc<EmbeddedNode>) -> ConfigAccess {
+            ConfigAccess::local_as(
+                node.clone(),
+                identity::Did::new(node.node_identity_did().unwrap()).unwrap(),
+            )
+        }
+        async fn field_commits(
+            node: &Arc<EmbeddedNode>,
+        ) -> std::collections::BTreeMap<String, usize> {
+            let access = runtime_reader(node);
+            let rows = access
+                .execute("{ ToolServiceHealthState { _docID } }")
+                .await
+                .unwrap();
+            let doc_id = rows["data"]["ToolServiceHealthState"][0]["_docID"]
                 .as_str()
                 .unwrap();
             let doc_id = crate::store::graphql::escape_graphql_string(doc_id);
-            let response = node
+            let response = access
                 .execute(&format!(
                     r#"{{ _commits(docID: "{doc_id}") {{ fieldName }} }}"#
                 ))
-                .await;
-            assert!(!response.has_errors(), "{:?}", response.errors);
+                .await
+                .unwrap();
             let mut counts = std::collections::BTreeMap::new();
-            for commit in response.data.as_ref().unwrap()["_commits"]
-                .as_array()
-                .unwrap()
-            {
+            for commit in response["data"]["_commits"].as_array().unwrap() {
                 if let Some(field) = commit["fieldName"].as_str() {
                     *counts.entry(field.to_owned()).or_default() += 1;
                 }
@@ -1162,11 +1552,11 @@ mod tests {
             counts
         }
 
-        let node = crate::inference::auth::credential::test_support::test_node().await;
+        let (node, runtime) = crate::tools::mcp::meta::tests::test_node().await;
         let map = ServiceHealthMap::new();
         let context = HealthPersistenceContext {
             node: &node,
-            node_did: "did:key:health-owner",
+            node_did: runtime.did(),
         };
         let now = chrono::Utc::now();
         let mut entry = super::MCPServiceHealthSnapshot {
@@ -1180,6 +1570,8 @@ mod tests {
             last_probe_at: now,
             last_seen: now,
             last_error: None,
+            auth_refusal: None,
+            registry_defect: None,
         };
         super::persist_health_snapshot(&context, &map, &[entry.clone()], now).await;
         let initial = field_commits(&node).await;
@@ -1221,7 +1613,7 @@ mod tests {
         entry.last_error = Some("connection refused".into());
         super::persist_health_snapshot(&failed_context, &map, &[entry.clone()], later).await;
         assert!(map.persisted.lock().await.is_empty());
-        unavailable.shutdown().await;
+        unavailable.shutdown().await.expect("shut down test node");
         crate::store::config_client::ConfigAccess::write_local(
             &node,
             "test.health_repair",
@@ -1237,22 +1629,20 @@ mod tests {
             unconfirmed["endpoint"] + 1,
             "unconfirmed publish must repair every field"
         );
-        let row = node
+        let row = runtime_reader(&node)
             .execute("{ ToolServiceHealthState { endpoint status last_error_class } }")
-            .await;
+            .await
+            .unwrap();
         assert_eq!(
-            row.data.as_ref().unwrap()["ToolServiceHealthState"][0]["endpoint"],
+            row["data"]["ToolServiceHealthState"][0]["endpoint"],
             "http://localhost/mcp"
         );
+        assert_eq!(row["data"]["ToolServiceHealthState"][0]["status"], "stale");
         assert_eq!(
-            row.data.as_ref().unwrap()["ToolServiceHealthState"][0]["status"],
-            "stale"
-        );
-        assert_eq!(
-            row.data.as_ref().unwrap()["ToolServiceHealthState"][0]["last_error_class"],
+            row["data"]["ToolServiceHealthState"][0]["last_error_class"],
             "connection_refused"
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 
     fn health_state_from_lean(case: &LeanMcpHealthCase, state: &str) -> HealthStateInternal {
@@ -1293,6 +1683,7 @@ mod tests {
             lan_ip: String::new(),
             mcp_port: Some(9201),
             mcp_path: "/mcp".to_string(),
+            endpoint_url: String::new(),
             send_node_did: false,
             updated_at: Some(updated_at.to_rfc3339()),
         }
@@ -1519,142 +1910,235 @@ mod tests {
 
     #[tokio::test]
     async fn persisted_health_rows_are_node_scoped_and_stale_rows_sweep_within_the_agent() {
-        let node = crate::inference::auth::credential::test_support::test_node().await;
-        let did_a = "did:key:zHealthA";
-        let did_b = "did:key:zHealthB";
-        for did in [did_a, did_b] {
-            let did = crate::store::graphql::escape_graphql_string(did);
-            let response = node
-                .execute(&format!(
-                    r#"mutation {{ create_ToolServiceRegistry(input: {{
-                node_did: "{did}", service_id: "observability-mcp", hostname: "local-host",
-                tailscale_ip: "100.64.0.1", mcp_port: 9213, mcp_path: "/mcp", enabled: true
-            }}) {{ _docID }} }}"#
-                ))
-                .await;
-            assert!(!response.has_errors(), "{:?}", response.errors);
+        let (node_a, _root_a) = crate::tools::mcp::meta::tests::test_node().await;
+        let (node_b, _root_b) = crate::tools::mcp::meta::tests::test_node().await;
+        for node in [&node_a, &node_b] {
+            crate::tools::mcp::meta::tests::seed_registry_service(
+                node,
+                "observability-mcp",
+                "local-host",
+                9213,
+            )
+            .await;
         }
-        let probes = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let capture = probes.clone();
-        let pool = McpPool::new_with_list_tools_handler(move |service, endpoint| {
-            let capture = capture.clone();
-            async move {
-                capture
-                    .lock()
-                    .unwrap()
-                    .push((service.to_string(), endpoint.to_string()));
-                Ok(ListToolsResult::default())
-            }
-        });
-        async fn rows(node: &EmbeddedNode) -> Vec<Value> {
-            let response = node
-                .execute(
-                    r#"{ ToolServiceHealthState {
-                _docID service_id node_did status tool_count failure_count k_max
-                endpoint last_error_class last_error_message
-            } }"#,
-                )
-                .await;
-            assert!(!response.has_errors(), "{:?}", response.errors);
-            response
-                .data
-                .as_ref()
-                .and_then(|data| data.get("ToolServiceHealthState"))
-                .and_then(Value::as_array)
-                .expect("selected health rows")
-                .clone()
+        let pool =
+            McpPool::new_with_list_tools_handler(|_, _| async { Ok(ListToolsResult::default()) });
+        async fn rows(node: &Arc<EmbeddedNode>) -> Vec<Value> {
+            let actor = identity::Did::new(node.node_identity_did().unwrap()).unwrap();
+            let access = crate::ConfigAccess::local_as(node.clone(), actor);
+            access.execute("{ ToolServiceHealthState { _docID service_id node_did status tool_count failure_count k_max endpoint last_error_class last_error_message } }")
+                .await.unwrap()["data"]["ToolServiceHealthState"].as_array().unwrap().clone()
         }
-        let mut original_ids = Vec::new();
-        for (index, did) in [did_a, did_b, did_a].into_iter().enumerate() {
+        let mut original_a = None;
+        for node in [&node_a, &node_b, &node_a] {
+            let did = node.node_identity_did().unwrap();
             run_health_check(
-                &node,
+                node,
                 &pool,
                 &ServiceHealthMap::new(),
                 "local-host",
                 None,
                 &HealthCheckerOptions::default(),
                 Some(HealthPersistenceContext {
-                    node: &node,
+                    node,
                     node_did: did,
                 }),
             )
             .await
             .unwrap();
-            let persisted = rows(&node).await;
-            assert_eq!(persisted.len(), if index == 0 { 1 } else { 2 });
-            for node_did in [did_a, did_b]
-                .into_iter()
-                .take(if index == 0 { 1 } else { 2 })
-            {
-                let row = persisted
-                    .iter()
-                    .find(|row| row["node_did"] == node_did)
-                    .expect("node's health row");
-                assert_eq!(row["service_id"], "observability-mcp");
-                assert_eq!(row["status"], "healthy");
-                assert_eq!(row["tool_count"], 0);
-                assert_eq!(row["failure_count"], 0);
-                assert_eq!(
-                    row["k_max"],
-                    HealthCheckerOptions::default().failure_threshold_k
-                );
-                assert_eq!(row.get("last_error_class"), Some(&Value::Null));
-                assert_eq!(row.get("last_error_message"), Some(&Value::Null));
-                let probed = probes
-                    .lock()
-                    .unwrap()
-                    .first()
-                    .cloned()
-                    .expect("probe observation");
-                assert_eq!(row["service_id"], probed.0);
-                assert_eq!(row["endpoint"], probed.1);
-            }
-            let mut ids: Vec<_> = persisted
-                .iter()
-                .map(|row| row["_docID"].as_str().expect("document id").to_string())
-                .collect();
-            ids.sort();
-            if index == 1 {
-                original_ids = ids;
-            } else if index == 2 {
-                assert_eq!(ids, original_ids, "upsert must preserve document identity");
+            let current = rows(node).await;
+            assert_eq!(current.len(), 1);
+            assert_eq!(current[0]["node_did"], did);
+            assert_eq!(current[0]["service_id"], "observability-mcp");
+            assert_eq!(current[0]["status"], "healthy");
+            assert_eq!(current[0]["tool_count"], 0);
+            assert_eq!(current[0]["failure_count"], 0);
+            assert_eq!(
+                current[0]["k_max"],
+                HealthCheckerOptions::default().failure_threshold_k
+            );
+            assert_eq!(current[0]["last_error_class"], Value::Null);
+            assert_eq!(current[0]["last_error_message"], Value::Null);
+            if Arc::ptr_eq(node, &node_a) {
+                if let Some(original) = &original_a {
+                    assert_eq!(&current[0]["_docID"], original);
+                } else {
+                    original_a = Some(current[0]["_docID"].clone());
+                }
             }
         }
-        assert_eq!(probes.lock().unwrap().len(), 3);
-
-        let response = node
-            .execute(
-                r#"mutation {
-            update_ToolServiceRegistry(filter: { service_id: { _eq: "observability-mcp" }, node_did: { _eq: "did:key:zHealthA" } },
-                input: { enabled: false }) { _docID }
-        }"#,
-            )
-            .await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
+        let did = node_a.node_identity_did().unwrap();
+        let access =
+            crate::ConfigAccess::local_as(node_a.clone(), identity::Did::new(did).unwrap());
+        access.write("test.health.disable", r#"mutation { update_ToolServiceRegistry(filter: {service_id:{_eq:"observability-mcp"}}, input: {enabled:false}) {_docID} }"#).await.unwrap();
         run_health_check(
-            &node,
+            &node_a,
             &pool,
             &ServiceHealthMap::new(),
             "local-host",
             None,
             &HealthCheckerOptions::default(),
             Some(HealthPersistenceContext {
-                node: &node,
-                node_did: did_a,
+                node: &node_a,
+                node_did: did,
             }),
         )
         .await
         .unwrap();
-        let remaining = rows(&node).await;
-        assert_eq!(remaining.len(), 1);
-        assert_eq!(remaining[0]["node_did"], did_b);
-        assert_eq!(remaining[0]["service_id"], "observability-mcp");
+        assert!(rows(&node_a).await.is_empty());
+        assert_eq!(rows(&node_b).await.len(), 1);
+        node_a.shutdown().await.unwrap();
+        node_b.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn queued_health_probe_rechecks_service_visibility_and_route() {
+        for revoke in [false, true] {
+            let (node, _runtime) = crate::tools::mcp::meta::tests::test_node().await;
+            crate::tools::mcp::meta::tests::seed_registry_service(&node, "a", "first", 9001).await;
+            crate::tools::mcp::meta::tests::seed_registry_service(&node, "b", "old", 9002).await;
+            let did = node.node_identity_did().unwrap();
+            let access =
+                crate::ConfigAccess::local_as(node.clone(), identity::Did::new(did).unwrap());
+            let mut services =
+                crate::tools::mcp::registry::configured_mcp_services_on(&access, did)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(McpHealthCheckService::from)
+                    .collect::<Vec<_>>();
+            services.sort_by(|a, b| a.service_id.cmp(&b.service_id));
+            let observations = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let observed = observations.clone();
+            let writer = access.clone();
+            let pool = McpPool::new_with_list_tools_handler(move |service, endpoint| {
+                let (writer, observed) = (writer.clone(), observed.clone());
+                async move {
+                    observed.lock().unwrap().push((service.clone(), endpoint));
+                    if service == "a" {
+                        let mutation = if revoke {
+                            r#"mutation { update_ToolServiceRegistry(filter:{service_id:{_eq:"b"}}, input:{enabled:false}) {_docID} }"#
+                        } else {
+                            r#"mutation { update_ToolServiceRegistry(filter:{service_id:{_eq:"b"}}, input:{hostname:"new"}) {_docID} }"#
+                        };
+                        writer.write("test.health.rebind", mutation).await?;
+                    }
+                    Ok(ListToolsResult::default())
+                }
+            });
+            super::run_health_check_cycle_with_cancel(
+                services,
+                chrono::Utc::now(),
+                &pool,
+                &ServiceHealthMap::new(),
+                "local",
+                None,
+                &HealthCheckerOptions::default(),
+                Some(HealthPersistenceContext {
+                    node: &node,
+                    node_did: did,
+                }),
+                Some(did),
+                None,
+            )
+            .await
+            .unwrap();
+            {
+                let seen = observations.lock().unwrap();
+                assert_eq!(seen[0].0, "a");
+                if revoke {
+                    assert_eq!(seen.len(), 1);
+                } else {
+                    assert_eq!(seen.len(), 2);
+                    assert_eq!(seen[1].0, "b");
+                    assert_eq!(seen[1].1, "http://new:9002/mcp");
+                }
+            }
+            node.shutdown().await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn client_probe_sends_the_actual_actor_only_when_enabled() {
+        use crate::NodeIdentity;
+        let directory = tempfile::tempdir().unwrap();
+        let client =
+            crate::KeyIdentity::load_or_create(directory.path().join("client"), None).unwrap();
+        let (endpoint, requests) =
+            crate::tools::mcp::pool::tests::spawn_header_capture_mcp_server().await;
+        let endpoint = reqwest::Url::parse(&endpoint).unwrap();
+        let service = McpHealthCheckService {
+            service_id: "client-service".into(),
+            hostname: endpoint.host_str().unwrap().into(),
+            tailscale_ip: String::new(),
+            lan_ip: String::new(),
+            mcp_port: endpoint.port(),
+            mcp_path: endpoint.path().into(),
+            endpoint_url: String::new(),
+            send_node_did: true,
+            updated_at: None,
+        };
+        let options = HealthCheckerOptions::default();
+        super::run_health_check_cycle_for_actor(
+            vec![service.clone()],
+            chrono::Utc::now(),
+            &McpPool::new(),
+            &ServiceHealthMap::new(),
+            "local",
+            None,
+            &options,
+            client.did(),
+        )
+        .await
+        .unwrap();
+        {
+            let captured = requests.lock().unwrap();
+            assert!(captured
+                .iter()
+                .any(|request| request.method == "tools/list"));
+            assert!(captured
+                .iter()
+                .all(|request| request.node_did_header.as_deref() == Some(client.did())));
+        }
+        let before = requests.lock().unwrap().len();
+        assert!(super::run_health_check_cycle(
+            vec![service.clone()],
+            chrono::Utc::now(),
+            &McpPool::new(),
+            &ServiceHealthMap::new(),
+            "local",
+            None,
+            &options,
+            None
+        )
+        .await
+        .is_err());
+        assert_eq!(requests.lock().unwrap().len(), before);
+        let mut opt_out = service;
+        opt_out.send_node_did = false;
+        super::run_health_check_cycle_for_actor(
+            vec![opt_out],
+            chrono::Utc::now(),
+            &McpPool::new(),
+            &ServiceHealthMap::new(),
+            "local",
+            None,
+            &options,
+            client.did(),
+        )
+        .await
+        .unwrap();
+        let captured = requests.lock().unwrap();
+        assert!(captured.len() > before);
+        assert!(captured[before..]
+            .iter()
+            .all(|request| request.node_did_header.is_none()));
     }
 
     #[tokio::test]
     async fn persistence_collapses_twins_to_the_row_readers_select() {
-        let node = crate::inference::auth::credential::test_support::test_node().await;
-        let node_did = "did:key:health-owner";
+        let (node, runtime) = crate::tools::mcp::meta::tests::test_node().await;
+        let node_did = runtime.did();
         let mut created = std::collections::BTreeMap::<&str, Vec<String>>::new();
         for (service, updated_at, endpoint) in [
             ("newest", "2026-01-01T00:00:00Z", "a"),
@@ -1678,13 +2162,14 @@ mod tests {
             created.entry(service).or_default().push(doc_id.to_owned());
         }
         let reader_order = |node: Arc<EmbeddedNode>| async move {
-            let response = node
+            let actor = identity::Did::new(node.node_identity_did().unwrap()).unwrap();
+            let response = ConfigAccess::local_as(node, actor)
                 .execute(
                     r#"{ ToolServiceHealthState(order: [{ service_id: ASC }, { updated_at: DESC }, { _docID: ASC }]) { _docID service_id status } }"#,
                 )
-                .await;
-            assert!(!response.has_errors(), "{:?}", response.errors);
-            response.data.unwrap()["ToolServiceHealthState"]
+                .await
+                .unwrap();
+            response["data"]["ToolServiceHealthState"]
                 .as_array()
                 .unwrap()
                 .clone()
@@ -1707,6 +2192,8 @@ mod tests {
             last_probe_at: now,
             last_seen: now,
             last_error: Some("connection refused".into()),
+            auth_refusal: None,
+            registry_defect: None,
         });
         let map = ServiceHealthMap::new();
         let context = HealthPersistenceContext {
@@ -1721,7 +2208,7 @@ mod tests {
         assert_eq!(after[1]["_docID"], expected_tied.as_str());
         assert!(after.iter().all(|row| row["status"] == "stale"));
         assert_eq!(map.persisted.lock().await.len(), 2);
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
     #[tokio::test]
     async fn probe_shutdown_cancels_pending_mcp_without_pruning_or_failure() {
@@ -1769,6 +2256,7 @@ mod tests {
                 "local-host",
                 None,
                 &options,
+                None,
                 None,
                 Some(&run_cancel),
             )
@@ -1826,7 +2314,7 @@ mod tests {
             .unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 0);
         assert_eq!(health.snapshot_full(3).await, before);
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -1847,10 +2335,175 @@ mod tests {
             None,
             &HealthCheckerOptions::default(),
             None,
+            None,
             Some(&cancel),
         )
         .await
         .unwrap();
         assert!(health.snapshot().await.is_empty());
+    }
+
+    #[test]
+    fn persisted_error_class_comes_from_the_typed_registry_defect() {
+        for (service, defect) in [
+            (
+                McpHealthCheckService {
+                    service_id: "svc".into(),
+                    hostname: String::new(),
+                    tailscale_ip: String::new(),
+                    lan_ip: String::new(),
+                    mcp_port: None,
+                    mcp_path: String::new(),
+                    endpoint_url: "ftp://mcp.example.com".into(),
+                    send_node_did: false,
+                    updated_at: None,
+                },
+                super::McpEndpointDefect::InvalidEndpointUrl,
+            ),
+            (
+                McpHealthCheckService {
+                    service_id: "svc".into(),
+                    hostname: "host".into(),
+                    tailscale_ip: String::new(),
+                    lan_ip: String::new(),
+                    mcp_port: None,
+                    mcp_path: String::new(),
+                    endpoint_url: String::new(),
+                    send_node_did: false,
+                    updated_at: None,
+                },
+                super::McpEndpointDefect::MissingMcpPort,
+            ),
+            (
+                McpHealthCheckService {
+                    service_id: "svc".into(),
+                    hostname: String::new(),
+                    tailscale_ip: String::new(),
+                    lan_ip: String::new(),
+                    mcp_port: Some(8080),
+                    mcp_path: String::new(),
+                    endpoint_url: String::new(),
+                    send_node_did: false,
+                    updated_at: None,
+                },
+                super::McpEndpointDefect::MissingAddressFields,
+            ),
+        ] {
+            assert_eq!(service.endpoint("local", None), Err(defect));
+            let now = chrono::Utc::now();
+            let entry = super::MCPServiceHealthSnapshot {
+                service_id: "svc".into(),
+                endpoint: None,
+                status: "degraded".into(),
+                tool_count: None,
+                failure_count: 1,
+                k_max: 3,
+                backoff_until: None,
+                last_probe_at: now,
+                last_seen: now,
+                last_error: Some(defect.to_string()),
+                auth_refusal: None,
+                registry_defect: Some(defect),
+            };
+            assert_eq!(
+                super::persisted_health_fields(&entry)["last_error_class"],
+                "registry_invalid"
+            );
+        }
+    }
+
+    #[test]
+    fn persisted_error_class_comes_from_the_typed_auth_refusal() {
+        for refusal in [
+            McpAuthRefusal::Required {
+                resource_metadata: Some("https://mcp.example.com/.well-known/x".into()),
+                scope: None,
+            },
+            McpAuthRefusal::InsufficientScope {
+                scope: Some("read".into()),
+            },
+        ] {
+            let now = chrono::Utc::now();
+            let entry = super::MCPServiceHealthSnapshot {
+                service_id: "svc".into(),
+                endpoint: Some("https://mcp.example.com/mcp".into()),
+                status: "degraded".into(),
+                tool_count: None,
+                failure_count: 1,
+                k_max: 3,
+                backoff_until: None,
+                last_probe_at: now,
+                last_seen: now,
+                last_error: Some("server refused".into()),
+                auth_refusal: Some(refusal.clone()),
+                registry_defect: None,
+            };
+            assert_eq!(
+                super::persisted_health_fields(&entry)["last_error_class"],
+                refusal.class()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn health_cycle_records_an_auth_refusal_from_an_https_style_endpoint() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut buffer = [0_u8; 4096];
+                    let _ = stream.read(&mut buffer).await;
+                    let _ = stream
+                        .write_all(
+                            b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Bearer scope=\"read\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                        )
+                        .await;
+                });
+            }
+        });
+        let service = McpHealthCheckService {
+            service_id: "remote".into(),
+            hostname: String::new(),
+            tailscale_ip: String::new(),
+            lan_ip: String::new(),
+            mcp_port: None,
+            mcp_path: String::new(),
+            endpoint_url: format!("http://{addr}/mcp"),
+            send_node_did: false,
+            updated_at: None,
+        };
+        let health_map = ServiceHealthMap::new();
+        run_health_check_cycle(
+            vec![service],
+            chrono::Utc::now(),
+            &crate::tools::mcp::pool::McpPool::new(),
+            &health_map,
+            "local",
+            None,
+            &HealthCheckerOptions::default(),
+            None,
+        )
+        .await
+        .unwrap();
+        let entry = health_map.get_entry("remote").await.expect("health entry");
+        assert!(entry.health.last_error.is_some(), "probe failure recorded");
+        assert_eq!(
+            entry.auth_refusal,
+            Some(McpAuthRefusal::Required {
+                resource_metadata: None,
+                scope: Some("read".into()),
+            })
+        );
+        assert_eq!(
+            entry.endpoint.as_deref(),
+            Some(format!("http://{addr}/mcp").as_str())
+        );
+        let snapshot = health_map.snapshot_full(3).await;
+        assert_eq!(
+            super::persisted_health_fields(&snapshot[0])["last_error_class"],
+            "auth_required"
+        );
     }
 }

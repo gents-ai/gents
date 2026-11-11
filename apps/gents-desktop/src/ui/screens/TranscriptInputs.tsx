@@ -45,9 +45,8 @@ import { cn } from "@gents/ui/lib/utils";
 import { href } from "@/lib/router";
 import { holdRow } from "@/lib/scroll";
 import { GroupStateContext } from "./ActivityGroup";
-import { agentName } from "./behavior";
 import { Markdown } from "./Markdown";
-import { AgentInitials } from "./parts";
+import { AgentMark } from "./parts";
 import { ToolIcon } from "./tool-icon";
 import { spoken, toolSummary } from "./tool-summary";
 import { isWorkerStep } from "./WorkerStep";
@@ -181,7 +180,7 @@ type BackgroundName = {
   subject: string;
   outcome: string;
   /** the session a worker step reached, named as that step names it */
-  worker?: { sessionId: string | null; agentId: string | null };
+  worker?: { sessionId: string | null; agentDid: string | null };
 };
 
 /** the call a background result reports on, by what the step that started
@@ -201,7 +200,7 @@ export function backgroundName(
       outcome,
       worker: {
         sessionId: reached?.request.sessionId ?? p.sessionId ?? null,
-        agentId: reached?.summary?.agentId ?? null,
+        agentDid: reached?.summary?.agentDid ?? null,
       },
     };
   const subject = !call
@@ -421,8 +420,12 @@ function ModelInput({ content }: { content: string | null | undefined }) {
   );
 }
 
-const avatar = (name: string) => (
-  <AgentInitials name={name} className="size-4 text-[8px]" />
+const avatar = (agentDid: string | null, deployment: NodeView | null) => (
+  <AgentMark
+    agentDid={agentDid}
+    deployment={deployment}
+    className="size-4 text-[8px]"
+  />
 );
 
 export function AutomatedInput({
@@ -479,16 +482,16 @@ export function AutomatedInput({
       label
     );
     icon = sender ? (
-      avatar(agentName(sender.agentId, senderNode ?? node))
+      avatar(sender.agentDid, senderNode ?? node)
     ) : (
       <OriginIcon origin={origin} />
     );
   } else if (origin.kind === "backgroundCompletion") {
     label = backgroundText(named, content);
     title = <BackgroundTitle named={named} content={content} />;
-    const agentId = named?.worker?.agentId;
-    icon = agentId ? (
-      avatar(agentName(agentId, node))
+    const agentDid = named?.worker?.agentDid;
+    icon = agentDid ? (
+      avatar(agentDid, node)
     ) : call ? (
       <ToolIcon tool={call} className="size-3.5 shrink-0" />
     ) : (

@@ -1,8 +1,6 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::Context;
-use defra_node::EmbeddedNode;
 use gents_loop::provider_audit::{
     AuxiliaryObserve, AuxiliaryOutputError, AuxiliaryOutputEvent, AuxiliaryOutputObservation,
     AuxiliaryOutputSink,
@@ -16,19 +14,22 @@ use tokio::sync::Mutex;
 use super::{canonical::ProviderAttemptClose, DefraStreamWriter, StreamWriter};
 
 impl DefraStreamWriter {
+    /// Auxiliary output never publishes a transcript header. A separate writer
+    /// tail prevents nested compaction from replacing the main inference
+    /// attempt's uncommitted prefix.
     pub(crate) fn auxiliary_output_sink(
         &self,
-        request: crate::request::watcher::AgentRequest,
+        request: gents_protocol::row::AgentRequest,
         generation: String,
         profile: gents_loop::provider_input::ProviderInputProfile,
     ) -> AuxiliaryOutputSink {
-        sink(
+        let mut writer = DefraStreamWriter::new(
             Arc::clone(&self.node),
-            request,
-            generation,
-            profile,
+            &request.agent_did,
             self.batch_interval,
-        )
+        );
+        writer.agent_signer = self.agent_signer.clone();
+        sink_with_writer(Arc::new(writer), request, generation, profile)
     }
 }
 
@@ -36,26 +37,14 @@ impl DefraStreamWriter {
 struct State {
     active: Option<(CaptureScope, usize, u32)>,
     closed: Option<((CaptureScope, usize, u32), ProviderAttemptClose)>,
+    /// The closing event of the active source whose effects have started.
+    /// A dropped observation can commit its close without acknowledging it
+    /// (embedded commits complete on their I/O queue), and a source closes
+    /// exactly once, so a later shutdown `ClosePartial` replays this event
+    /// rather than proposing a different outcome.
+    closing: Option<AuxiliaryOutputEvent>,
     content: AssistantTurnAccumulator,
     audit_seen: bool,
-}
-
-/// Auxiliary output never publishes a transcript header. A separate writer
-/// tail prevents nested compaction from replacing the main inference attempt's
-/// uncommitted prefix.
-pub(crate) fn sink(
-    node: Arc<EmbeddedNode>,
-    request: crate::request::watcher::AgentRequest,
-    generation: String,
-    profile: gents_loop::provider_input::ProviderInputProfile,
-    batch_interval: Duration,
-) -> AuxiliaryOutputSink {
-    let writer = Arc::new(DefraStreamWriter::new(
-        node,
-        &request.node_did,
-        batch_interval,
-    ));
-    sink_with_writer(writer, request, generation, profile)
 }
 
 /// The loop receives this runtime's sink failures with their original chain.
@@ -69,7 +58,7 @@ async fn sink_result<T>(
 
 pub(crate) fn sink_with_writer(
     writer: Arc<DefraStreamWriter>,
-    request: crate::request::watcher::AgentRequest,
+    request: gents_protocol::row::AgentRequest,
     generation: String,
     profile: gents_loop::provider_input::ProviderInputProfile,
 ) -> AuxiliaryOutputSink {
@@ -119,6 +108,7 @@ pub(crate) fn sink_with_writer(
                     .await;
                 state.active = Some(coordinate);
                 state.closed = None;
+                state.closing = None;
                 state.content = AssistantTurnAccumulator::default();
                 state.audit_seen = false;
                 return Ok(());
@@ -142,14 +132,30 @@ pub(crate) fn sink_with_writer(
                 state.active == Some(coordinate),
                 "auxiliary output belongs to another attempt"
             );
+            let event = match (state.closing.as_ref(), observation.event) {
+                (Some(started), AuxiliaryOutputEvent::ClosePartial) => started.clone(),
+                (Some(_), _) => {
+                    anyhow::bail!("auxiliary output followed its started closure")
+                }
+                (None, event) => event,
+            };
+            if matches!(
+                event,
+                AuxiliaryOutputEvent::TurnReady { .. }
+                    | AuxiliaryOutputEvent::Retract
+                    | AuxiliaryOutputEvent::AttemptFailed { .. }
+                    | AuxiliaryOutputEvent::ClosePartial
+            ) {
+                state.closing = Some(event.clone());
+            }
             let mut close = None;
-            let pending = match &observation.event {
+            let pending = match &event {
                 AuxiliaryOutputEvent::Audit(event) => PendingOutput::of_audit(event),
                 AuxiliaryOutputEvent::ReasoningDelta { .. }
                 | AuxiliaryOutputEvent::Reasoning(_) => PendingOutput::Reasoning,
                 _ => PendingOutput::Visible,
             };
-            match observation.event {
+            match event {
                 AuxiliaryOutputEvent::AttemptStarted => unreachable!(),
                 AuxiliaryOutputEvent::Audit(event) => {
                     anyhow::ensure!(
@@ -210,11 +216,12 @@ pub(crate) fn sink_with_writer(
                     )
                     .await
                     .context("closing auxiliary audit output")?;
-                writer.reset_tail(&request.doc_id).await?;
                 state.active = None;
                 state.closed = Some((coordinate, close));
+                state.closing = None;
                 state.content = AssistantTurnAccumulator::default();
                 state.audit_seen = false;
+                writer.reset_tail(&request.doc_id).await?;
             }
             Ok(())
         }))

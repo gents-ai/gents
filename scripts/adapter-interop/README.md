@@ -93,7 +93,7 @@ The test validates each fixture against:
 Wrapped captures may also include a `mapping` block that describes how native
 framework evidence maps into Gents runtime documents. The ignored CLI
 roundtrip harness imports those mapped native captures into embedded DefraDB,
-runs the real `gents trace project` binary, writes JSON/JSONL/eval-JSONL
+runs the real `gents utils debug trace project` binary, writes JSON/JSONL/eval-JSONL
 exports, and lets framework-side verifiers consume those Gents exports:
 
 ```sh

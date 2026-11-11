@@ -7,7 +7,6 @@ mod store;
 mod sweep;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -24,11 +23,10 @@ pub use store::{materialize_enrollment_desired_in_txn, GraphqlPairingStateStore}
 pub use sweep::run_pairing_reconciler;
 
 #[cfg(test)]
-use desired::{data_plane_desired_from_pairing_row, desired_from_pairing_row};
+use desired::data_plane_desired_from_pairing_row;
 #[cfg(test)]
 use rows::PairingStateRow;
 
-pub const PAIRING_SWEEP_INTERVAL: Duration = Duration::from_secs(30);
 /// Limits concurrent peer preparation during a sweep so the number of peers
 /// does not create an unbounded number of in-flight transport operations.
 pub const MAX_CONCURRENT_PEER_PREPARATIONS: usize = 8;
