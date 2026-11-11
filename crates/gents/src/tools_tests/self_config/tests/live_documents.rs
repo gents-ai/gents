@@ -45,7 +45,7 @@ async fn fileless_tool_under(
     assert!(tool_config.process_ceiling.root.is_none());
     let tools = fixture.tools_with_plugins(
         &tool_config,
-        Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
+        Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(Some(
             home.to_owned(),
         ))),
     );
@@ -564,7 +564,7 @@ async fn a_rebuild_moves_the_pins_of_the_tools_that_select_the_plugin() {
 /// service and the next call, never the plugin's result.
 #[tokio::test]
 async fn plugin_run_drives_the_rounds_a_tool_call_does() {
-    use crate::plugin::tests::executor::{asking_plugin_wat, installed_plugin};
+    use gents_pack::test_support::{asking_plugin_wat, installed_plugin};
     let canned = json!({"data_calls": {"requests": [{"id": "notes", "query": {
         "collection": "Note", "filter": {}, "limit": 5, "fields": ["body"]}}]}});
     let (home, mut record) = installed_plugin(

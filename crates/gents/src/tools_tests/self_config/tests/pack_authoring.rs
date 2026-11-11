@@ -24,7 +24,7 @@ async fn authoring_tool(
     tool_config.process_ceiling.root = Some(root.clone());
     let tools = fixture.tools_with_plugins(
         &tool_config,
-        Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
+        Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(Some(
             home.to_owned(),
         ))),
     );
@@ -125,7 +125,7 @@ async fn a_shell_less_agent_takes_a_data_pack_from_scaffold_to_installed() {
     )
     .await;
     assert_eq!(installed["artifact_digest"], digest.as_str(), "{installed}");
-    crate::builtin::self_config::text_tests::assert_sizes(&sizes);
+    gents_tools::builtin::self_config::text_tests::assert_sizes(&sizes);
     let response = fixture
         .user_access()
         .execute("query { Note { run_id } }")
@@ -626,7 +626,7 @@ async fn page_help_discloses_detail_per_command_and_topic() {
     ] {
         assert!(pack.contains(fact), "{fact}: {pack}");
     }
-    crate::builtin::self_config::text_tests::assert_sizes(&[
+    gents_tools::builtin::self_config::text_tests::assert_sizes(&[
         ("help page sdk".into(), sdk.len(), 4_800),
         ("help page sdk Table".into(), table.len(), 600),
         ("help page sdk tokens".into(), tokens.len(), 2_800),

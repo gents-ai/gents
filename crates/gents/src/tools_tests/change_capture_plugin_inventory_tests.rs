@@ -1,13 +1,15 @@
-use super::*;
-use crate::native::args::WriteFileArgs;
-use crate::native::file_tools::write_file::WriteFileTool;
-use crate::native::shared::ToolContext;
-use crate::tools::call::lifecycle::admission_fixture::{
+use base64::Engine as _;
+use gents_tools::native::file_tools::change_capture::*;
+use gents_tools::native::args::WriteFileArgs;
+use gents_tools::native::file_tools::write_file::WriteFileTool;
+use gents_tools::native::shared::ToolContext;
+use gents_toolcalls::call::lifecycle::admission_fixture::{
     published_admission_with_owner, PublishedAdmissionOptions,
 };
 use gents_loop::live_output::LiveToolOutputRegistry;
 use gents_loop::tool::Tool;
 use gents_store::config_client::ConfigAccess;
+
 
 #[tokio::test]
 async fn plugin_file_effects_retain_exact_images_without_borrowing_parent_order() {
@@ -137,14 +139,14 @@ async fn plugin_file_effects_retain_exact_images_without_borrowing_parent_order(
     )
     .await
     .unwrap();
-    crate::tools::call::lifecycle::admission_fixture::grant_runtime_projection_readers(
+    gents_toolcalls::call::lifecycle::admission_fixture::grant_runtime_projection_readers(
         &access,
         parent.node_did(),
         parent.session_id(),
     )
     .await
     .unwrap();
-    let snapshot = crate::file_inventory::FileInventorySnapshot::load(&fixture.node, &admission)
+    let snapshot = gents_observe::file_inventory::FileInventorySnapshot::load(&fixture.node, &admission)
         .await
         .unwrap();
     assert_eq!(
@@ -167,7 +169,7 @@ async fn plugin_file_effects_retain_exact_images_without_borrowing_parent_order(
     let page = snapshot.page(None).unwrap();
     assert_eq!(page.entries, snapshot.entries());
     assert!(page.next.is_none());
-    let repeated = crate::file_inventory::FileInventorySnapshot::load(&fixture.node, &admission)
+    let repeated = gents_observe::file_inventory::FileInventorySnapshot::load(&fixture.node, &admission)
         .await
         .unwrap();
     assert_eq!(snapshot.binding(), repeated.binding());

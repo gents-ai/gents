@@ -8,8 +8,8 @@ use gents_protocol::tool_names::CONFIG_TOOL_NAME;
 
 use std::sync::Arc;
 
-use crate::builtin::self_config::build_self_config_tools_with_runtime;
-use crate::surface::SelfConfigToolConfig;
+use gents_tools::builtin::self_config::build_self_config_tools_with_runtime;
+use gents_tools::surface::SelfConfigToolConfig;
 use gents_documents::ConfigurationNodeBinding;
 use gents_loop::tool::{ToolDyn, ToolError};
 use gents_store::config_client::{ConfigAccess, NodePermission};
@@ -74,7 +74,7 @@ impl PolicyFixture {
     /// Grants the Engineer its modeled default-Agent sets, as init does, then
     /// each extra permission as the runtime owner.
     async fn grant_engineer_sets(&self, extra: &[NodePermission]) {
-        crate::builtin::self_config::tests::grant_modeled_direct_sets(
+        gents_tools::builtin::self_config::tests::grant_modeled_direct_sets(
             &self.db,
             "default-agent",
             &self.agent_did,
@@ -137,8 +137,8 @@ impl PolicyFixture {
             Some(self.agent.clone()),
             Some(self.db.node_identity.clone()),
             &config,
-            Arc::new(crate::plugin::executor::PluginExecutor::default()),
-            Arc::new(crate::task_run::NoTaskRunService),
+            Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::default()),
+            Arc::new(gents_tools::task_run::NoTaskRunService),
             Some(self.node_binding.clone()),
         )
     }

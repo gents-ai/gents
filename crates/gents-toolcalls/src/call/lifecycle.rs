@@ -30,6 +30,9 @@ use defra_node::Node as EmbeddedNode;
 
 pub mod delivery;
 pub(crate) use delivery::publish_background_receipt_in_txn;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod file_inventory;
+#[cfg(not(any(test, feature = "test-fixtures")))]
 pub(crate) mod file_inventory;
 pub mod query;
 pub use gents_session::tool_call::query::result::{
@@ -269,7 +272,7 @@ impl ToolCallLifecycle {
         }
     }
 
-    pub(crate) fn stage_deferred_writes(
+    pub fn stage_deferred_writes(
         &mut self,
         writes: Option<gents_loop::live_output::DeferredToolWrites>,
     ) {

@@ -2,9 +2,15 @@ use gents_protocol::tool_names::SESSION_HISTORY_TOOL_NAME;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod context_calls;
+#[cfg(not(any(test, feature = "test-fixtures")))]
 mod context_calls;
 pub use context_calls::load_latest_session_context_calls;
 mod context_details;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod discovery;
+#[cfg(not(any(test, feature = "test-fixtures")))]
 mod discovery;
 pub use context_details::{load_session_context_details, SessionContextDetails};
 mod inference;

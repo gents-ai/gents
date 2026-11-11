@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 use defra_node::Node as EmbeddedNode;
 use serde_json::Value;
 
@@ -170,7 +170,7 @@ impl ArtifactGrant {
         &self.0.execution_generation
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub(super) async fn create(
         node: Arc<EmbeddedNode>,
         request: &AgentRequest,

@@ -304,7 +304,7 @@ pub fn workspace_binding_upsert_mutation(doc: &WorkspaceBindingDoc) -> String {
     )
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub fn workspace_bindings_upsert_mutation(docs: &[WorkspaceBindingDoc]) -> String {
     let fields: Vec<String> = docs
         .iter()

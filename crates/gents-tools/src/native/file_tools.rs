@@ -1,6 +1,15 @@
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod change_capture;
+#[cfg(not(any(test, feature = "test-fixtures")))]
 pub(crate) mod change_capture;
 pub(super) mod edit_file;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod read_tools;
+#[cfg(not(any(test, feature = "test-fixtures")))]
 pub(super) mod read_tools;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod write_file;
+#[cfg(not(any(test, feature = "test-fixtures")))]
 pub(super) mod write_file;
 
 use std::path::{Path, PathBuf};
@@ -104,7 +113,7 @@ fn canonical_lock_key(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
-pub(crate) fn file_mutation_lock_for(path: &Path) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+pub fn file_mutation_lock_for(path: &Path) -> std::sync::Arc<tokio::sync::Mutex<()>> {
     let key = canonical_lock_key(path);
     let mut locks = FILE_MUTATION_LOCKS
         .lock()

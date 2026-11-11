@@ -1,5 +1,7 @@
-use super::*;
+use serde_json::json;
+use gents_tools::builtin::p2p::*;
 use crate::support::enrollment::{signed_enrollment_offer, wait_for_peer_identity};
+
 
 async fn call(tool: &P2pTool, value: Value) -> Value {
     let output = Tool::call(tool, serde_json::from_value(value).unwrap())

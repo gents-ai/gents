@@ -60,7 +60,7 @@ pub struct EnvVarGuard {
 }
 
 impl EnvVarGuard {
-    pub(crate) fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+    pub fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
         let previous = std::env::var(key).ok();
         std::env::set_var(key, value);
         Self { key, previous }

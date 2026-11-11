@@ -260,7 +260,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
             .with_node_acp_enabled()
             .with_document_projector(gents_store::local::document_projector(
                 runtime.clone(),
-                std::sync::Arc::new(crate::surface::ToolCeiling::meta_only()),
+                std::sync::Arc::new(gents_tools::surface::ToolCeiling::meta_only()),
             )?)
             .with_http(defra_node::HttpConfig::with_listener(listener)?)
             .build()
@@ -411,8 +411,8 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         Some(signer.clone()),
         Some(runtime.clone()),
         &tool_config,
-        Arc::<crate::plugin::executor::PluginExecutor>::default(),
-        Arc::new(crate::task_run::NoTaskRunService),
+        Arc::<gents_toolcalls::plugin::executor::PluginExecutor>::default(),
+        Arc::new(gents_tools::task_run::NoTaskRunService),
         Some(node_binding),
     );
     let tool = tools
@@ -907,7 +907,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         unreachable!()
     };
     let cached_tool =
-        crate::builtin::defra_query::BoundedQueryTool::new(sibling_writer.clone(), query_decl)
+        gents_tools::builtin::defra_query::BoundedQueryTool::new(sibling_writer.clone(), query_decl)
             .with_actor(sibling_did.clone())
             .declared_by(Some("fixture/surface".into()))
             .with_surface_owner(runtime.did().to_owned());
@@ -1004,7 +1004,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         surface_case("allowed")?["expected"].as_bool().unwrap()
     );
     use gents_loop::tool::Tool as _;
-    let cached_write = crate::builtin::defra_write::BoundedWriteTool::new(
+    let cached_write = gents_tools::builtin::defra_write::BoundedWriteTool::new(
         sibling_writer.clone(),
         write_decl.clone(),
     )
@@ -1072,7 +1072,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         Some(write_signer.as_str())
     );
     let found = cached_tool
-        .call(crate::builtin::defra_query::bounded::BoundedQueryParams(
+        .call(gents_tools::builtin::defra_query::bounded::BoundedQueryParams(
             Default::default(),
         ))
         .await
@@ -1358,7 +1358,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     );
     let error = gents_loop::tool::Tool::call(
         &cached_tool,
-        crate::builtin::defra_query::bounded::BoundedQueryParams(Default::default()),
+        gents_tools::builtin::defra_query::bounded::BoundedQueryParams(Default::default()),
     )
     .await
     .unwrap_err();

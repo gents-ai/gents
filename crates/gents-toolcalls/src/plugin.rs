@@ -11,5 +11,7 @@ mod service;
 pub mod tests;
 #[cfg(test)]
 mod http_calls_executor_tests;
+#[cfg(test)]
+mod host_call_surface_tests;
 pub mod tool;
 pub mod tool_calls;

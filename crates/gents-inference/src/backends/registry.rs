@@ -372,7 +372,7 @@ async fn write_probe_observation(
 
 // The connection is re-checked in the transaction so an in-flight probe
 // cannot publish a catalog for a replaced provider/authentication selection.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn record_model_catalog(
     node: &std::sync::Arc<EmbeddedNode>,
     backend: &InferenceBackend,

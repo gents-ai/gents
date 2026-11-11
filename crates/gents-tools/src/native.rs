@@ -10,13 +10,22 @@ use gents_documents::tool_limits::DEFAULT_COMMAND_TIMEOUT_SECS;
 use gents_loop::tool::ToolDyn;
 use rapidhash::RapidHashMap;
 
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod args;
+#[cfg(not(any(test, feature = "test-fixtures")))]
 mod args;
 pub mod background_args;
 mod bash_tools;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod cli_tool;
+#[cfg(not(any(test, feature = "test-fixtures")))]
 mod cli_tool;
 pub mod command_observability;
 mod context_budget;
 pub mod edit_match;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod file_tools;
+#[cfg(not(any(test, feature = "test-fixtures")))]
 mod file_tools;
 mod goal;
 pub mod lsp;
@@ -31,6 +40,9 @@ pub use title_audit_usage::load_session_goal_usage;
 pub use title_audit_usage::{register_lifecycle_reads, SESSION_TOKEN_USAGE};
 pub use title_audit_usage::{ParentAuditUsage, ParentAuditUsageObservation};
 mod session_message;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod shared;
+#[cfg(not(any(test, feature = "test-fixtures")))]
 mod shared;
 pub mod skills;
 #[cfg(test)]
@@ -666,7 +678,7 @@ pub(crate) fn build_agent_tools(config: AgentToolConfig) -> Vec<Box<dyn ToolDyn>
     tools
 }
 
-pub(crate) fn background_tool_names(config: &BackgroundToolConfig) -> Vec<String> {
+pub fn background_tool_names(config: &BackgroundToolConfig) -> Vec<String> {
     if !config.tools_enabled() {
         return Vec::new();
     }

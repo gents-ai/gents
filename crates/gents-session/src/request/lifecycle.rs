@@ -75,7 +75,7 @@ pub use recovery::{
     RecoverySelectionRejected,
 };
 mod task_title;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub mod test_support;
 mod transition;
 

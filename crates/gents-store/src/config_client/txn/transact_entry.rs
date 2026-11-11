@@ -10,7 +10,7 @@ use super::apply_txn::EmbeddedTransactionPurpose;
 use super::native::NativeOperationTracker;
 use super::telemetry::backend_for_access;
 use super::transact::TransactionFinalityError;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 use super::transact::TransactionOutcome;
 use super::transact::{
     expect_committed, transact_owned, transact_owned_with_finality, TransactionMode,
@@ -297,7 +297,7 @@ impl ConfigAccess {
         .map(expect_committed)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub(crate) async fn transact_observing_conflict<'a, T, E, F>(
         &'a self,
         operation: &'static str,
