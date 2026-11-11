@@ -15,7 +15,7 @@ pub(super) async fn generated_recovery_sweep_cases_drive_startup_recovery_contra
     let cases = lean_recovery_sweep_cases();
     assert_eq!(
         cases.len(),
-        55,
+        59,
         "Lean should emit one row per registered recovery predicate witness"
     );
 
@@ -29,6 +29,7 @@ pub(super) async fn generated_recovery_sweep_cases_drive_startup_recovery_contra
         PLUGIN_JOB_SWEEP_ID,
         "inference_call_recover_all_stale_calls",
         "task_hook_recover_interrupted_cleanup",
+        "lifecycle_hook_redrive_owed_deliveries",
     ]
     .into_iter()
     .collect::<BTreeSet<_>>();
@@ -258,6 +259,11 @@ async fn drive_recovery_sweep_case(case: &gents_lean_vocab::LeanRecoverySweepCas
         return;
     }
     if case.collection == "TaskHookRecord" {
+        return;
+    }
+    // Owed-delivery rows are driven through the production record by
+    // `generated_lifecycle_hook_owed_delivery_cases_drive_the_redrive_record`.
+    if case.collection == "OwedDelivery" {
         return;
     }
     match (case.collection.as_str(), case.sweep_id.as_str()) {

@@ -253,6 +253,10 @@ static BASELINE_SCHEMAS: &[BaselineCollection<'static>] = &[
         gents_protocol::schemas::NODE_RUNTIME
     ),
     baseline_entry!(
+        gents_protocol::schemas::OWED_DELIVERY_NAME,
+        gents_protocol::schemas::OWED_DELIVERY
+    ),
+    baseline_entry!(
         gents_protocol::schemas::NODE_READINESS_NAME,
         gents_protocol::schemas::NODE_READINESS
     ),

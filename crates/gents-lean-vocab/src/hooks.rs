@@ -149,7 +149,10 @@ pub struct LeanLifecycleHookRef {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LeanLifecycleHookSubjectKind {
     Actor,
-    Document { resource: String, collection: String },
+    Document {
+        resource: String,
+        collection: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -345,6 +348,69 @@ pub struct LeanLifecycleHookDeliveryCase {
     pub name: String,
     pub initial: LeanLifecycleHookDeliveryRecord,
     pub trace: Vec<LeanLifecycleHookDeliveryTraceStep>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanLifecycleHookOwedKey {
+    pub point: String,
+    pub plugin: String,
+    pub subject: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LeanLifecycleHookOwedSettlement {
+    Delivered,
+    Dropped,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanLifecycleHookOwedRecord {
+    pub key: LeanLifecycleHookOwedKey,
+    pub actor: String,
+    pub attempts: u64,
+    pub last_error: Option<String>,
+    pub settled: Option<LeanLifecycleHookOwedSettlement>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LeanLifecycleHookOwedAttempt {
+    Applied,
+    Failed { error: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LeanLifecycleHookOwedStep {
+    Publish {
+        actor: String,
+        keys: Vec<LeanLifecycleHookOwedKey>,
+        commit: bool,
+    },
+    Redrive {
+        key: LeanLifecycleHookOwedKey,
+        authorized: bool,
+        current: bool,
+        attempt: LeanLifecycleHookOwedAttempt,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanLifecycleHookOwedTraceStep {
+    pub step: LeanLifecycleHookOwedStep,
+    pub records: Vec<LeanLifecycleHookOwedRecord>,
+    pub performed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanLifecycleHookOwedDeliveryCase {
+    pub name: String,
+    pub trace: Vec<LeanLifecycleHookOwedTraceStep>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

@@ -274,6 +274,7 @@ where
                                 affected_documents: Some(affected_documents),
                                 rollback: RollbackStatus::NotNeeded,
                             });
+                            txn.publish_owed_deliveries().await;
                             txn.complete_relationship_grants().await.map_err(E::from)?;
                             return Ok(TransactionOutcome::Committed(value));
                         }

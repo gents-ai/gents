@@ -1478,6 +1478,12 @@ def caseCoverage : List CoverageEntry :=
       "LifecycleHookDeliveryCases"
       "conformance::hooks::generated_lifecycle_hook_delivery_cases_drive_the_delivery_record")
       "lifecycle-hooks" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "lifecycle_hook_owed_delivery_cases"
+      "LifecycleHookOwedDeliveryCases"
+      "conformance::hooks::generated_lifecycle_hook_owed_delivery_cases_drive_the_redrive_record"
+      "The production record (hooks::owed::Record) is driven by every case. Its publication through the store's post-commit runtime write and the redrive's actor-scoped observation of core rows are not driven by these cases.")
+      "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "lifecycle_hook_admit_cases"
       "LifecycleHookAdmitCases"

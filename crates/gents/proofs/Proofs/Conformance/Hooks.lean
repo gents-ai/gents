@@ -1,6 +1,7 @@
 import Proofs.Hooks.Claim
 import Proofs.Hooks.Grant
 import Proofs.Hooks.MustCommit
+import Proofs.Hooks.OwedDelivery
 import Proofs.Hooks.Prepared
 import Proofs.Hooks.QueueScope
 import Proofs.Conformance.ContractTypes
@@ -801,5 +802,98 @@ private def admitCaseJson (c : AdmitCase) : String :=
     ",\"result\":" ++ admitResultJson c.result ++ "}"
 
 def admitCasesJson : String := jsonArray (admitCases.map admitCaseJson)
+
+/-! The owed-delivery record: `Hooks.OwedDelivery.publish`, `redrive` and
+`performs`, over the records of one node. -/
+
+inductive OwedStep where
+  | publish (actor : String) (keys : List OwedDelivery.Key) (commit : Bool)
+  | redrive (key : OwedDelivery.Key) (authorized current : Bool) (attempt : OwedDelivery.Attempt)
+
+def OwedStep.run : OwedStep → List OwedDelivery.Record → List OwedDelivery.Record
+  | .publish actor keys commit, records => OwedDelivery.publish records actor keys commit
+  | .redrive key authorized current attempt, records =>
+      records.map fun record =>
+        if record.key == key then OwedDelivery.redrive record ⟨authorized, current⟩ attempt
+        else record
+
+def OwedStep.performed : OwedStep → List OwedDelivery.Record → Bool
+  | .publish .., _ => false
+  | .redrive key authorized current attempt, records =>
+      records.any fun record =>
+        record.key == key && OwedDelivery.performs record ⟨authorized, current⟩ attempt
+
+structure OwedCase where
+  name : String
+  steps : List OwedStep
+
+def OwedCase.trace (c : OwedCase) : List (OwedStep × List OwedDelivery.Record × Bool) :=
+  (c.steps.foldl (fun (acc : List OwedDelivery.Record × List (OwedStep × List OwedDelivery.Record × Bool))
+      step =>
+    let next := step.run acc.1
+    (next, acc.2 ++ [(step, next, step.performed acc.1)])) ([], [])).2
+
+def haltKey : OwedDelivery.Key := ⟨"control.session.halt", "goals", "session-1"⟩
+def terminalKey : OwedDelivery.Key := ⟨"request.terminal.stage", "triggers", "request-1"⟩
+
+def owedCases : List OwedCase :=
+  [ { name := "rollback_publishes_nothing"
+    , steps := [.publish "agent" [haltKey] false, .redrive haltKey true true .applied] }
+  , { name := "authorized_delivery_is_performed_once"
+    , steps := [.publish "agent" [haltKey] true, .redrive haltKey true true .applied] }
+  , { name := "revoked_actor_is_dropped_unperformed"
+    , steps := [.publish "agent" [haltKey] true, .redrive haltKey false true .applied] }
+  , { name := "superseded_transition_is_dropped_unperformed"
+    , steps := [.publish "agent" [haltKey] true, .redrive haltKey true false .applied] }
+  , { name := "failed_attempts_stay_owed_until_delivered"
+    , steps := [.publish "agent" [terminalKey] true, .redrive terminalKey true true (.failed "refused"),
+                .redrive terminalKey true true (.failed "unreadable"),
+                .redrive terminalKey true true .applied] }
+  , { name := "revocation_after_a_failed_attempt_drops"
+    , steps := [.publish "agent" [terminalKey] true, .redrive terminalKey true true (.failed "refused"),
+                .redrive terminalKey false true .applied] }
+  , { name := "redelivery_is_inert"
+    , steps := [.publish "agent" [haltKey] true, .redrive haltKey true true .applied,
+                .redrive haltKey true true .applied, .redrive haltKey false false (.failed "late")] }
+  , { name := "publishing_twice_is_inert"
+    , steps := [.publish "agent" [haltKey, terminalKey, haltKey] true,
+                .publish "other" [haltKey] true, .redrive terminalKey true true .applied,
+                .publish "other" [terminalKey] true] } ]
+
+private def owedKeyJson (key : OwedDelivery.Key) : String :=
+  "{\"point\":" ++ jsonString key.point ++ ",\"plugin\":" ++ jsonString key.plugin ++
+    ",\"subject\":" ++ jsonString key.subject ++ "}"
+
+private def owedRecordJson (record : OwedDelivery.Record) : String :=
+  "{\"key\":" ++ owedKeyJson record.key ++
+    ",\"actor\":" ++ jsonString record.actor ++
+    ",\"attempts\":" ++ toString record.attempts ++
+    ",\"last_error\":" ++ ((record.lastError.map jsonString).getD "null") ++
+    ",\"settled\":" ++ (match record.settled with
+      | none => "null"
+      | some .delivered => "\"delivered\""
+      | some .dropped => "\"dropped\"") ++ "}"
+
+private def owedAttemptJson : OwedDelivery.Attempt → String
+  | .applied => "{\"kind\":\"applied\"}"
+  | .failed error => "{\"kind\":\"failed\",\"error\":" ++ jsonString error ++ "}"
+
+private def owedStepJson : OwedStep → String
+  | .publish actor keys commit =>
+      "{\"kind\":\"publish\",\"actor\":" ++ jsonString actor ++
+        ",\"keys\":" ++ jsonArray (keys.map owedKeyJson) ++ ",\"commit\":" ++ boolJson commit ++ "}"
+  | .redrive key authorized current attempt =>
+      "{\"kind\":\"redrive\",\"key\":" ++ owedKeyJson key ++
+        ",\"authorized\":" ++ boolJson authorized ++ ",\"current\":" ++ boolJson current ++
+        ",\"attempt\":" ++ owedAttemptJson attempt ++ "}"
+
+private def owedCaseJson (c : OwedCase) : String :=
+  "{\"name\":" ++ jsonString c.name ++
+    ",\"trace\":" ++ jsonArray (c.trace.map fun (step, records, performed) =>
+      "{\"step\":" ++ owedStepJson step ++
+        ",\"records\":" ++ jsonArray (records.map owedRecordJson) ++
+        ",\"performed\":" ++ boolJson performed ++ "}") ++ "}"
+
+def owedCasesJson : String := jsonArray (owedCases.map owedCaseJson)
 
 end Conformance.HooksContracts
