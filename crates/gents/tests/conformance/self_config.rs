@@ -238,7 +238,19 @@ fn agent_catalog(inputs: &LeanAgentDecisionInputs) -> AgentCatalogView {
             .iter()
             .map(|agent| (agent.agent_did.clone(), agent.enabled))
             .collect(),
-        protected_ids: inputs.protected_ids.iter().cloned().collect(),
+        // The Lean catalog has no protected set; production fills this one
+        // from the Engineer tag (`agent_management.rs` `catalog_from_documents`).
+        protected_ids: inputs
+            .agents
+            .iter()
+            .filter(|agent| {
+                agent
+                    .tags
+                    .iter()
+                    .any(|tag| tag == gents::tools::builtin::self_config::ENGINEER_AGENT_TAG)
+            })
+            .map(|agent| agent.agent_did.clone())
+            .collect(),
         default_id: inputs.default_id.clone(),
         published_profiles: inputs.published_profiles.iter().cloned().collect(),
     }
@@ -258,12 +270,23 @@ fn agent_operation(inputs: &LeanAgentDecisionInputs) -> AgentOperation {
                 clone_from: Some(input.clone_from.clone()).filter(|source| !source.is_empty()),
             })
         }
-        "edit" => AgentOperation::Edit(entries_patch(
-            inputs
-                .edit_patch
-                .as_ref()
-                .unwrap_or_else(|| panic!("{}: edit without edit_patch", inputs.name)),
-        )),
+        "edit" => AgentOperation::Edit(
+            entries_patch(
+                inputs
+                    .edit_patch
+                    .as_ref()
+                    .unwrap_or_else(|| panic!("{}: edit without edit_patch", inputs.name)),
+            )
+            .into_iter()
+            .map(|(field, value)| match field.as_str() {
+                "enabled" | "tags" => {
+                    let value = value.map(parse_nested);
+                    (field, value)
+                }
+                _ => (field, value),
+            })
+            .collect(),
+        ),
         "disable" => AgentOperation::Disable,
         other => panic!("{}: unknown agent operation {other}", inputs.name),
     }
@@ -290,8 +313,11 @@ fn generated_agent_decision_cases_drive_production_agent_admission() {
             )
             .is_ok(),
             case.accepted,
-            "{}: production agent admission",
-            inputs.name
+            "{}: production agent admission (actor {:?}, front ends {:?}, refusal {:?})",
+            inputs.name,
+            inputs.actor,
+            inputs.front_ends,
+            case.refusal
         );
     }
 }
@@ -426,7 +452,7 @@ fn generated_sibling_tools_cases_drive_production_tools_selection() {
         let existing = network_mode(&case.existing_network);
         let admitted = admit_sibling_tools_target(&SiblingToolsTarget {
             owner_matches: case.owner_matches,
-            protected: case.protected,
+            protected: false,
             shared_context: case.shared_context,
             shared_tools: case.shared_tools,
         })

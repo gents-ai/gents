@@ -65,6 +65,19 @@ pub(crate) struct LeanSelfConfigCase {
 pub(crate) struct LeanAgentCatalogEntry {
     pub(crate) agent_did: String,
     pub(crate) enabled: bool,
+    pub(crate) tags: Vec<String>,
+}
+
+/// The acting actor of an agent decision row (Lean `SelfConfig.Actor`) with
+/// the grants native ACP gives it: `catalog` is `nodes update` on the Node,
+/// `configures` the Agents whose document it may update.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanAgentActor {
+    pub(crate) did: String,
+    pub(crate) kind: String,
+    pub(crate) catalog: bool,
+    pub(crate) configures: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -79,9 +92,12 @@ pub(crate) struct LeanAgentCreateInput {
 pub(crate) struct LeanAgentDecisionInputs {
     pub(crate) name: String,
     pub(crate) agents: Vec<LeanAgentCatalogEntry>,
-    pub(crate) protected_ids: Vec<String>,
     pub(crate) default_id: Option<String>,
     pub(crate) published_profiles: Vec<String>,
+    pub(crate) actor: LeanAgentActor,
+    /// Every front end decides this row alike (Lean
+    /// `SelfConfig.admission_ignores_front_end`).
+    pub(crate) front_ends: Vec<String>,
     pub(crate) operation: String,
     pub(crate) target: String,
     pub(crate) make_default: bool,
@@ -94,6 +110,8 @@ pub(crate) struct LeanAgentDecisionCase {
     #[serde(flatten)]
     pub(crate) inputs: LeanAgentDecisionInputs,
     pub(crate) accepted: bool,
+    /// Lean `SelfConfig.AgentRefusal`, snake case; null when accepted.
+    pub(crate) refusal: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -195,7 +213,6 @@ pub(crate) struct LeanAgentMaterializationCase {
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanSiblingToolsCase {
     pub(crate) owner_matches: bool,
-    pub(crate) protected: bool,
     pub(crate) shared_context: bool,
     pub(crate) shared_tools: bool,
     pub(crate) requested_network: Option<String>,
