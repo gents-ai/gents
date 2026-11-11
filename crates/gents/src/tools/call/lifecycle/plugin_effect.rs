@@ -16,11 +16,9 @@ use gents_protocol::output::rows::{
 };
 
 use super::ToolCallLifecycle;
-use crate::session::plugin_effect_rows::{
-    arguments_from_rows, PluginEffectBinding, MAX_PAYLOAD_BYTES,
-};
+use crate::session::plugin_effect_rows::{arguments_from_rows, PluginEffectBinding};
 use crate::session::tool_call_state::ToolCallState;
-use gents_protocol::plugin_tool_call_limits::MAX_EFFECTS;
+use gents_protocol::plugin_tool_call_limits::{MAX_EFFECTS, MAX_PAYLOAD_BYTES};
 
 #[derive(Clone)]
 pub(super) struct PluginEffectTerminal {

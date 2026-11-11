@@ -5,9 +5,7 @@ use gents_protocol::output::{
     OutputOutcome, OutputSource, OutputWriter, PayloadRef, SourceClose, StreamDeclaration,
     StreamPayload,
 };
-use gents_protocol::plugin_tool_call_limits::MAX_EFFECTS;
-
-pub(crate) const MAX_PAYLOAD_BYTES: usize = 1024 * 1024;
+use gents_protocol::plugin_tool_call_limits::{MAX_EFFECTS, MAX_PAYLOAD_BYTES};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PluginEffectBinding {
