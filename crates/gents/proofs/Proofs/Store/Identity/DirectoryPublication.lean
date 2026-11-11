@@ -48,15 +48,4 @@ def cases : List Case :=
   , ⟨"failed-delete", "local", [⟨"local", "first"⟩, ⟨"local", "second"⟩], ["first"]⟩
   , ⟨"foreign-only", "local", [⟨"foreign", "node"⟩], ["node"]⟩ ]
 
-def entryJson (entry : Entry) : Json :=
-  Json.mkObj [("source", toJson entry.source), ("node", toJson entry.node)]
-
-def caseJson (c : Case) : Json := Json.mkObj
-  [("name", toJson c.name), ("source", toJson c.source),
-   ("existing", toJson (c.existing.map entryJson)), ("deleted", toJson c.deleted),
-   ("expected_desired", toJson ((desiredEntries c.source).map entryJson)),
-   ("expected_remaining", toJson ((retract c.source c.existing c.deleted).map entryJson))]
-
-def casesJson : String := (toJson (cases.map caseJson)).compress
-
 end Identity.DirectoryPublication
