@@ -1,4 +1,5 @@
 import Mathlib.Data.Nat.Basic
+import Proofs.ToolPolicy.PluginCallLimits
 
 namespace ToolPolicy.PluginCalls
 
@@ -42,9 +43,6 @@ theorem delegation_requires_model_origin (selectedGrant : Bool) (origin : Origin
     (h : available selectedGrant (dispatcherFor origin) = true) :
     origin = .accepted ∨ origin = .spawnedByAccepted := by
   cases origin <;> simp_all [available, dispatcherFor]
-
-def maxEffects : Nat := 64
-def maxPayloadBytes : Nat := 1048576
 
 inductive DispatchRoute where
   | ordinary

@@ -1,4 +1,5 @@
 import Proofs.CanonicalOutput.Execution.State
+import Proofs.CanonicalOutput.SourceData
 import Proofs.CanonicalOutput.ToolDelivery
 import Proofs.ToolPolicy.PluginCalls
 import Proofs.RequestExecutionLease.Transition
@@ -42,9 +43,6 @@ def writtenBy (generation : Generation) (record : Segment) : Bool :=
 
 def sourceIdentitiesValid (records : List Segment) (coordinate : Coordinate) : Bool :=
   (sourceRecords records coordinate).all (exactIdentityAt records)
-
-def sourceData (records : List Segment) (coordinate : Coordinate) : List Segment :=
-  (sourceRecords records coordinate).filter (fun record => record.flush.isSome) |>.dedup
 
 def reconstructOpenPrefix (records : List Segment) (coordinate : Coordinate)
     (writer : Writer) : Except IntegrityError Streams := do

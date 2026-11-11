@@ -1,5 +1,5 @@
 import Proofs.CanonicalOutput.TerminalPayload
-import Proofs.CanonicalOutput.Execution.Projection
+import Proofs.CanonicalOutput.SourceData
 import Proofs.CanonicalOutput.Hydration
 
 namespace StreamingResponse

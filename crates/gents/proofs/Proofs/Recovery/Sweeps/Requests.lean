@@ -1,5 +1,5 @@
 import Proofs.Recovery.Contract
-import Proofs.Properties.Liveness
+import Proofs.Request.State
 
 namespace Recovery
 

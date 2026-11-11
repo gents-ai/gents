@@ -1,5 +1,5 @@
 import Proofs.CanonicalOutput.Message
-import Proofs.ToolPolicy.PluginCalls
+import Proofs.ToolPolicy.PluginCallLimits
 import Mathlib.Data.List.Dedup
 import Mathlib.Order.Interval.Finset.Nat
 
