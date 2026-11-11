@@ -579,10 +579,10 @@ async fn resolve(home: &Path, pack: &str, registry: Option<&str>) -> Result<Reso
             .map(|dependency| dependency.manifest())
             .collect::<Vec<_>>(),
     )?;
-    let host_tools = std::iter::once(&source)
-        .chain(&dependencies)
-        .flat_map(command::wire::tools_taking_installer_root)
-        .collect();
+    let mut host_tools = Vec::new();
+    for pack in std::iter::once(&source).chain(&dependencies) {
+        host_tools.extend(command::wire::tools_taking_installer_root(pack)?);
+    }
     Ok(Resolved {
         source,
         requested,
@@ -718,7 +718,8 @@ async fn install_one(
             );
         }
         // The Engineer installed the pack, so its rootless Tools took the
-        // Engineer's root: the one root this approval grants reader on.
+        // Engineer's root: the one root this approval grants reader on, and
+        // only when the approval listed that folder access (`reads_root`).
         let host_tool_roots = async {
             let supplied =
                 gents::pack::installer_tool_root(&access, &owner, Some(engineer)).await?;
@@ -727,7 +728,7 @@ async fn install_one(
                 &owner,
                 &installing,
                 supplied.as_deref(),
-                approved,
+                approved && reads_root,
             )
             .await?;
             if let Some(failed) = readers.iter().find_map(|reader| reader["failed"].as_str()) {
@@ -1944,6 +1945,148 @@ mod tests {
                 "{approval:?}: {documents}"
             );
         }
+    }
+
+    /// A fresh Engineer home with a model for a pack's slots, and what its
+    /// init reported.
+    async fn engineer_home() -> (tempfile::TempDir, Value) {
+        let home = tempfile::tempdir().unwrap();
+        let cli = crate::cli::Cli::try_parse_from([
+            "gents",
+            "init",
+            "--store-key-custody",
+            "file",
+            "--engineer",
+            "--no-default-packs",
+            "--model-name",
+            "test-model",
+            "--inference-url",
+            "http://127.0.0.1:9/v1",
+            "--home",
+            home.path().to_str().unwrap(),
+        ])
+        .unwrap();
+        let Some(crate::cli::Command::Init(args)) = cli.command else {
+            panic!("expected init")
+        };
+        let initialized = crate::commands::init::init_home(args).await.unwrap();
+        (home, initialized)
+    }
+
+    /// A documents pack `namespace/name` shipping one agent whose Tools
+    /// select host files under `host`, placed in `home`'s pack store.
+    fn store_host_tools_pack(
+        home: &Path,
+        namespace: &str,
+        name: &str,
+        dependencies: Value,
+        host: Value,
+    ) {
+        let packs = tempfile::tempdir().unwrap();
+        let dir = packs.path().join(name);
+        write_pack(
+            &dir,
+            json!({
+                "manifest_version": 1, "name": name, "namespace": namespace,
+                "version": "1.0.0", "description": "An agent with host tools",
+                "authors": ["tests"], "tags": [], "kind": "documents",
+                "assets": ["README.md", "pack_config.json"],
+                "dependencies": dependencies, "config": "pack_config.json",
+                "inference_slots": [{"name": "worker", "description": "The worker.",
+                    "agents": [format!("{name}-worker")]}],
+            }),
+            &[(
+                "pack_config.json",
+                serde_json::to_vec(&json!({
+                    "node": {},
+                    "agents": [{"agent_slot": format!("{name}-worker"),
+                        "context_id": format!("{name}-context"),
+                        "display_name": format!("{name} worker"), "description": "Does one task.",
+                        "inference_profile_id": "gents:inference-slot:worker"}],
+                    "contexts": [{"context_id": format!("{name}-context"),
+                        "system_prompt": "Work.", "tools_id": format!("{name}-tools")}],
+                    "tools": [{"tools_id": format!("{name}-tools"),
+                        "display_name": "Read-only files", "host": host}],
+                }))
+                .unwrap(),
+            )],
+        );
+        gents::pack::local::open(&gents::pack::local::LocalName::Path(&dir), home).unwrap();
+    }
+
+    /// The reader grant follows the folder access an approval listed, not the
+    /// approval alone: a pack approved for something else, whose Tools name
+    /// the Engineer's root themselves, is granted nothing; and a pack whose
+    /// config does not load for the review is not offered as reading nothing.
+    #[tokio::test]
+    async fn an_approval_grants_the_engineers_folder_only_when_it_listed_it() {
+        assert!(DYNAMIC_RUN_ON_APPROVAL.contains(&"gents/dynamic_workflows"));
+        let (home, initialized) = engineer_home().await;
+        let engineer = initialized["default_agent_did"].as_str().unwrap();
+        let engineer_root = initialized["tool_root"].as_str().unwrap();
+        let unreachable = Some("http://127.0.0.1:9");
+        // Approving this pack consents to dynamic runs, and its Tools name
+        // their root through a variable, so no folder access is listed.
+        store_host_tools_pack(
+            home.path(),
+            "gents",
+            "dynamic_workflows",
+            json!([]),
+            json!({"files": {"mode": "ReadOnly"},
+                "root": format!("${{GENTS_FIXTURE_UNSET_ROOT:-{engineer_root}}}")}),
+        );
+        let names = ["gents/dynamic_workflows"];
+        let listed = status(home.path(), &names, unreachable).await.unwrap();
+        assert!(
+            !listed[0].turns_on.contains(&READS_ENGINEER_ROOT),
+            "{listed:?}"
+        );
+        let report = install(
+            home.path(),
+            engineer,
+            &names,
+            unreachable,
+            Approval::Approved,
+        )
+        .await;
+        assert_eq!(report["not_installed"], json!([]), "{report}");
+        let roots = report["installed"][0]["host_tool_roots"]
+            .as_array()
+            .unwrap();
+        assert_eq!(roots.len(), 1, "{report}");
+        assert_eq!(roots[0]["root"], engineer_root, "{report}");
+        assert_eq!(
+            roots[0].get("reader_on"),
+            None,
+            "an approval that never listed the folder granted it: {report}"
+        );
+        assert!(
+            roots[0]["next"]
+                .as_str()
+                .unwrap()
+                .starts_with("gents config workspace-root grant-reader "),
+            "{report}"
+        );
+
+        store_host_tools_pack(
+            home.path(),
+            "fixture",
+            "unread",
+            json!([]),
+            json!({"files": {"mode": "ReadOnly"}, "root": "${GENTS_FIXTURE_NEVER_SET_ROOT}"}),
+        );
+        let listed = status(home.path(), &["fixture/unread"], unreachable)
+            .await
+            .unwrap();
+        assert_eq!(listed[0].state, PackState::Unavailable, "{listed:?}");
+        assert!(
+            listed[0]
+                .reason
+                .as_deref()
+                .unwrap()
+                .contains("the folder its agents would read is unknown"),
+            "{listed:?}"
+        );
     }
 
     /// Only a terminal is asked, and only when the caller may prompt; the

@@ -217,10 +217,11 @@ fn grant_reader_command(root: &str, agent: &str) -> String {
 /// The Tools `pack` ships that select host tools and name no root, by
 /// `tools_id`: the ones an install runs under its installer's own root, and
 /// whose agents an approved install grants reader there. A config that does
-/// not load offline lists none, so nothing is granted for it.
-pub(crate) fn tools_taking_installer_root(pack: &super::PackSource) -> Vec<String> {
+/// not load offline is an error, never "no such Tools": what was not read was
+/// not shown, and a grant follows only what was shown.
+pub(crate) fn tools_taking_installer_root(pack: &super::PackSource) -> Result<Vec<String>> {
     if pack.manifest().config.is_none() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     gents::pack::load_pack_authoring_config(
         pack.manifest(),
@@ -231,9 +232,12 @@ pub(crate) fn tools_taking_installer_root(pack: &super::PackSource) -> Vec<Strin
         &|name| std::env::var(name).ok(),
     )
     .and_then(|authored| gents::pack::tools_taking_installer_root(&authored.documents.tools))
-    .unwrap_or_else(|error| {
-        tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(error.as_ref()), pack = %pack.manifest().name, "pack config did not load for its host tool review");
-        Vec::new()
+    .with_context(|| {
+        format!(
+            "{}/{} did not load for its host tool review, so the folder its agents would read is unknown",
+            pack.manifest().metadata.namespace,
+            pack.manifest().name
+        )
     })
 }
 
@@ -266,7 +270,8 @@ pub(crate) async fn new_dependencies<'a>(
 /// to the Tools `packs` (the root pack and the dependencies it newly
 /// installs) ship without one, and the reader their agents need there: what a
 /// preview lists and an approval covers. `None` when they ship no such
-/// Tools, the installer has no root, or no reader is needed.
+/// Tools, one of them did not load for the review, the installer has no
+/// root, or no reader is needed.
 pub(crate) async fn supplied_tool_root(
     access: &ConfigAccess,
     owner: &str,
@@ -274,10 +279,19 @@ pub(crate) async fn supplied_tool_root(
     packs: &[&super::PackSource],
 ) -> Result<Option<Value>> {
     use gents::tools::surface::ToolRootReader;
-    let tools: Vec<String> = packs
-        .iter()
-        .flat_map(|pack| tools_taking_installer_root(pack))
-        .collect();
+    let mut tools = Vec::new();
+    for pack in packs {
+        match tools_taking_installer_root(pack) {
+            Ok(shipped) => tools.extend(shipped),
+            // An install variable the offline load cannot see may be what the
+            // install itself resolves, so the install goes on; with nothing
+            // listed, no root is supplied to the grant and none is made.
+            Err(error) => {
+                tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(error.as_ref()), "no host tool root is listed or granted for this install");
+                return Ok(None);
+            }
+        }
+    }
     if tools.is_empty() {
         return Ok(None);
     }
@@ -307,7 +321,8 @@ pub(super) static FAIL_GRANTS_FOR: std::sync::Mutex<Option<String>> = std::sync:
 /// without it the runtime reports the agent unavailable.
 ///
 /// The grant is the installer's consent to its own root and nothing else: it
-/// is made only when the install was `approved`, and only for an agent whose
+/// is made only when the install was `approved` with that folder access
+/// listed, and only for an agent whose
 /// tool root is `supplied`, the root this install gave the pack's rootless
 /// Tools ([`gents::pack::installer_tool_root`]). An agent under any other
 /// root, one an install variable set or a later edit wrote, is listed with
