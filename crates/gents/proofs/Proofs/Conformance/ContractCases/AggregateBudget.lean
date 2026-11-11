@@ -1,4 +1,4 @@
-import Proofs.PromptAssembly.AggregateBudget
+import Proofs.Session.PromptAssembly.AggregateBudget
 
 namespace Conformance.ContractCases
 

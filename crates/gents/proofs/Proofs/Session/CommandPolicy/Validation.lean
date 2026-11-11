@@ -1,4 +1,4 @@
-import Proofs.CommandPolicy.Types
+import Proofs.Session.CommandPolicy.Types
 
 namespace CommandPolicy
 

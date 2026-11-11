@@ -1,6 +1,6 @@
-import Proofs.CanonicalOutput.Execution.BackgroundGate
-import Proofs.Background.CompletionContinuation
-import Proofs.Session.Executable
+import Proofs.Runtime.CanonicalOutput.Execution.BackgroundGate
+import Proofs.ToolCalls.Background.CompletionContinuation
+import Proofs.Session.SessionQueue.Executable
 
 namespace CanonicalOutput.Execution.Handover
 

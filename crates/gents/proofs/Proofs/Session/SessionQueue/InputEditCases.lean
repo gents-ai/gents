@@ -1,5 +1,5 @@
-import Proofs.Session.InputEdit
-import Proofs.Session.ManagementCases
+import Proofs.Session.SessionQueue.InputEdit
+import Proofs.Session.SessionQueue.ManagementCases
 
 namespace SessionQueue.InputEditCases
 open InputEdit ManagementCases FoldCases

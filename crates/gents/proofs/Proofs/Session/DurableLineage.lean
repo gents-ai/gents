@@ -1,5 +1,5 @@
-import Proofs.Basic
-import Proofs.Request.CausalHop
+import Proofs.Shared.Basic
+import Proofs.Session.Request.CausalHop
 
 /-! Ingest boundary for durable request lineage: malformed replicated rows are
 rejected individually. `requestHop` is provenance only and grants no hierarchy,

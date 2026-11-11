@@ -1,4 +1,4 @@
-import Proofs.Callback.Properties
+import Proofs.Automation.Callback.Properties
 
 namespace Callback
 namespace Conformance

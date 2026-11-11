@@ -1,6 +1,6 @@
-import Proofs.Hooks.Claim
-import Proofs.Triggers.Durable
-import Proofs.GoalAutomation.RequestAssignment
+import Proofs.Session.Hooks.Claim
+import Proofs.Automation.Triggers.Durable
+import Proofs.Automation.GoalAutomation.RequestAssignment
 
 namespace Hooks.GoalTask
 

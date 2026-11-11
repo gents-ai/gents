@@ -1,5 +1,5 @@
-import Proofs.CanonicalOutput.Message
-import Proofs.CanonicalOutput.ReconstructionGrowth
+import Proofs.Session.CanonicalOutput.Message
+import Proofs.Session.CanonicalOutput.ReconstructionGrowth
 
 namespace CanonicalOutput
 

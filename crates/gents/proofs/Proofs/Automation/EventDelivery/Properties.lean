@@ -1,4 +1,4 @@
-import Proofs.EventDelivery.Contract
+import Proofs.Automation.EventDelivery.Contract
 
 namespace EventDelivery
 

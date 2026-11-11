@@ -1,5 +1,5 @@
 import Lean
-import Proofs.Identity.DeclaredAccess
+import Proofs.Store.Identity.DeclaredAccess
 
 namespace Identity.AgentTargetAccess
 

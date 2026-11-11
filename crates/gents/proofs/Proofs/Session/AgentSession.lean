@@ -1,4 +1,4 @@
-import Proofs.Request.State
+import Proofs.Session.Request.State
 
 /-! Durable session owner; Nat identifiers/times abstract validated canonical
 strings. Authorization and atomic query/write remain DB adapter obligations.

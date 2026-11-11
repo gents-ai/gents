@@ -1,4 +1,4 @@
-//! Fenced by `proofs/Proofs/ClientShell/Timeline.lean`.
+//! Fenced by `proofs/Proofs/Clients/ClientShell/Timeline.lean`.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimelineRole {

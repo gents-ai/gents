@@ -1,4 +1,4 @@
-import Proofs.RuntimeReconcile.State
+import Proofs.Automation.RuntimeReconcile.State
 
 namespace RuntimeState
 

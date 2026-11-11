@@ -1,6 +1,6 @@
-import Proofs.Transcript.State
-import Proofs.CanonicalOutput.Message
-import Proofs.PromptAssembly.ReplayFrontier
+import Proofs.Session.Transcript.State
+import Proofs.Session.CanonicalOutput.Message
+import Proofs.Session.PromptAssembly.ReplayFrontier
 
 /-!
 # Claude content-block map (Track B / B2)

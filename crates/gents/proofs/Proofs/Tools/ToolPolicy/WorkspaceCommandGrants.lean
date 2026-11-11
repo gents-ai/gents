@@ -1,4 +1,4 @@
-import Proofs.ToolPolicy.WorkspacePermissions
+import Proofs.Tools.ToolPolicy.WorkspacePermissions
 
 namespace ToolPolicy.WorkspaceCommandGrants
 

@@ -1,4 +1,4 @@
-import Proofs.ToolPolicy.Instances
+import Proofs.Tools.ToolPolicy.Instances
 
 namespace ToolPolicy.ContractCases
 

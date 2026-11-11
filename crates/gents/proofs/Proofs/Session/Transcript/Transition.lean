@@ -1,4 +1,4 @@
-import Proofs.Transcript.State
+import Proofs.Session.Transcript.State
 
 namespace Transcript
 

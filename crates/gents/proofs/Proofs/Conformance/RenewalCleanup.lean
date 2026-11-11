@@ -1,4 +1,4 @@
-import Proofs.Enrollment.AutoRenewal
+import Proofs.P2P.Enrollment.AutoRenewal
 import Proofs.Conformance.ContractTypes
 
 open Conformance.Contracts

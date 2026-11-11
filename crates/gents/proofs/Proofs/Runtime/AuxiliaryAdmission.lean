@@ -1,5 +1,5 @@
-import Proofs.Enrollment.RequestAdmission
-import Proofs.CanonicalOutput.Execution.SessionComposition
+import Proofs.Session.Enrollment.RequestAdmission
+import Proofs.Runtime.CanonicalOutput.Execution.SessionComposition
 
 namespace AuxiliaryAdmission
 

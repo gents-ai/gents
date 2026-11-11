@@ -1,7 +1,7 @@
-import Proofs.Workspace.Types
-import Proofs.Workspace.Transition
-import Proofs.Workspace.Properties
-import Proofs.Workspace.Conformance
-import Proofs.Workspace.PathCapability
+import Proofs.Session.Workspace.Types
+import Proofs.Session.Workspace.Transition
+import Proofs.Session.Workspace.Properties
+import Proofs.Session.Workspace.Conformance
+import Proofs.Session.Workspace.PathCapability
 
-import Proofs.Workspace.OperatorBaseFreeze
+import Proofs.Session.Workspace.OperatorBaseFreeze

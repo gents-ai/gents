@@ -1,4 +1,4 @@
-import Proofs.CrossMachineComposed.State
+import Proofs.Runtime.CrossMachineComposed.State
 import Mathlib.Data.Nat.Basic
 import Mathlib.Tactic.Set
 

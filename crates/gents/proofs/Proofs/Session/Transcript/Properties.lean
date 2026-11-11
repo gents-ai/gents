@@ -1,4 +1,4 @@
-import Proofs.Transcript.Transition
+import Proofs.Session.Transcript.Transition
 
 namespace Transcript
 

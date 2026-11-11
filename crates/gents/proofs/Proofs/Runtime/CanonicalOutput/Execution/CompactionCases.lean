@@ -1,6 +1,6 @@
-import Proofs.CanonicalOutput.Execution.Compaction
-import Proofs.CanonicalOutput.Execution.Examples
-import Proofs.CanonicalOutput.Execution.ToolDeliveryCases
+import Proofs.Runtime.CanonicalOutput.Execution.Compaction
+import Proofs.Runtime.CanonicalOutput.Execution.Examples
+import Proofs.Runtime.CanonicalOutput.Execution.ToolDeliveryCases
 
 namespace CanonicalOutput.Execution.Compaction.Examples
 

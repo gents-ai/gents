@@ -1,5 +1,5 @@
-import Proofs.GoalAutomation
-import Proofs.Enrollment.RequestInput
+import Proofs.Automation.GoalAutomation
+import Proofs.Session.Enrollment.RequestInput
 
 namespace GoalAutomation.FirstRequestBinding
 

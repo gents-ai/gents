@@ -1,6 +1,6 @@
-import Proofs.Basic
-import Proofs.AgentSession
-import Proofs.Scheduling
+import Proofs.Shared.Basic
+import Proofs.Session.AgentSession
+import Proofs.Inference.Scheduling
 import Mathlib.Data.Finset.Basic
 import Mathlib.Data.Finset.Card
 

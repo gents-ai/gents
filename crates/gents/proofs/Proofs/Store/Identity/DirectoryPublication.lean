@@ -1,4 +1,4 @@
-import Proofs.Identity.State
+import Proofs.Store.Identity.State
 import Lean
 
 namespace Identity.DirectoryPublication

@@ -1,5 +1,5 @@
-import Proofs.Workspace.Transition
-import Proofs.CommandPolicy.ArtifactAuthority
+import Proofs.Session.Workspace.Transition
+import Proofs.Session.CommandPolicy.ArtifactAuthority
 
 namespace IsolatedWorkspace
 

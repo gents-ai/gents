@@ -1,7 +1,7 @@
 import Mathlib.Data.String.Basic
-import Proofs.FileInventory.FileImages
-import Proofs.ToolExecution.Executable
-import Proofs.CanonicalOutput.ToolDelivery
+import Proofs.Observe.FileInventory.FileImages
+import Proofs.Session.ToolExecution.Executable
+import Proofs.Session.CanonicalOutput.ToolDelivery
 
 namespace FileInventory
 

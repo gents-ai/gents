@@ -1,4 +1,4 @@
-import Proofs.ClientShell.Types
+import Proofs.Clients.ClientShell.Types
 
 /-!
 Ephemeral async presentation fence. These epochs order a single UI owner's

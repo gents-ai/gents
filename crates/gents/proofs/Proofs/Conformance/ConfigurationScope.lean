@@ -1,5 +1,5 @@
-import Proofs.Configuration
-import Proofs.ConfigDefaults
+import Proofs.Documents.Configuration
+import Proofs.Documents.ConfigDefaults
 import Lean
 
 namespace Conformance.ConfigurationScope

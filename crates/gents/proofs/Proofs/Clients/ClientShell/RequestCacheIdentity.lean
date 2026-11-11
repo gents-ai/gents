@@ -1,4 +1,4 @@
-import Proofs.ClientShell.SessionTurn
+import Proofs.Clients.ClientShell.SessionTurn
 
 /-!
 The desktop cache updates persisted AgentRequest documents by physical

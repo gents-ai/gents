@@ -1,4 +1,4 @@
-import Proofs.FileInventory.Cases
+import Proofs.Observe.FileInventory.Cases
 
 namespace FileInventory.ReaderExamples
 

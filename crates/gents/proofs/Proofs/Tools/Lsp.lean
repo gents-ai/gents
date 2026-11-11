@@ -1,3 +1,3 @@
-import Proofs.Lsp.Types
-import Proofs.Lsp.Theorems
-import Proofs.Lsp.Cases
+import Proofs.Tools.Lsp.Types
+import Proofs.Tools.Lsp.Theorems
+import Proofs.Tools.Lsp.Cases

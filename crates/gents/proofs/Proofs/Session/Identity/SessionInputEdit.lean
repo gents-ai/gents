@@ -1,7 +1,7 @@
 import Lean
-import Proofs.Identity.Household
-import Proofs.Request.CrossActorAuthorization
-import Proofs.Request.ClientSignedEditHandoff
+import Proofs.Store.Identity.Household
+import Proofs.Session.Request.CrossActorAuthorization
+import Proofs.Session.Request.ClientSignedEditHandoff
 
 namespace Identity.SessionInputEdit
 

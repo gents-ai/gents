@@ -1,4 +1,4 @@
-import Proofs.Mailbox.Properties
+import Proofs.Automation.Mailbox.Properties
 
 namespace Mailbox.Notification
 

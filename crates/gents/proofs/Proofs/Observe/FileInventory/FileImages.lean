@@ -1,4 +1,4 @@
-import Proofs.FileInventory.Source
+import Proofs.Observe.FileInventory.Source
 
 namespace FileInventory.FileImages
 

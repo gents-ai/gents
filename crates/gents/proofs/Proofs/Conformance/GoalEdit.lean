@@ -1,4 +1,4 @@
-import Proofs.GoalAutomation.Edit
+import Proofs.Automation.GoalAutomation.Edit
 import Proofs.Conformance.ContractTypes
 
 namespace Conformance.GoalEditContracts

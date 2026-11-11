@@ -1,6 +1,6 @@
-import Proofs.SelfConfig.Theorems
-import Proofs.SelfConfig.Auth
-import Proofs.SelfConfig.AgentDecision
+import Proofs.Tools.SelfConfig.Theorems
+import Proofs.Tools.SelfConfig.Auth
+import Proofs.Tools.SelfConfig.AgentDecision
 
 namespace SelfConfig.ContractCases
 

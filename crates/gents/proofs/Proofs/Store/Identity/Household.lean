@@ -1,4 +1,4 @@
-import Proofs.Identity.Permission
+import Proofs.Store.Identity.Permission
 import Lean
 
 namespace Identity.Household

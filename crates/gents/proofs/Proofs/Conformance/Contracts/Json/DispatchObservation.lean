@@ -1,4 +1,4 @@
-import Proofs.CanonicalOutput.Execution.DispatchObservationCases
+import Proofs.Runtime.CanonicalOutput.Execution.DispatchObservationCases
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.RequestExecutionLease
 

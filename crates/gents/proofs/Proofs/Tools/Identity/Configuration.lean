@@ -1,6 +1,6 @@
-import Proofs.Identity.Household
-import Proofs.Identity.GrantSets
-import Proofs.ToolPolicy.Types
+import Proofs.Store.Identity.Household
+import Proofs.Store.Identity.GrantSets
+import Proofs.Tools.ToolPolicy.Types
 
 namespace Identity.Configuration
 open Household

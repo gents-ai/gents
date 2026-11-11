@@ -1,5 +1,5 @@
-import Proofs.Hooks.Claim
-import Proofs.Mailbox.Reply
+import Proofs.Session.Hooks.Claim
+import Proofs.Automation.Mailbox.Reply
 
 namespace Hooks.MailboxPlugin
 

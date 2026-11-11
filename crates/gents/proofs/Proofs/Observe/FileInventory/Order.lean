@@ -1,4 +1,4 @@
-import Proofs.FileInventory.Snapshot
+import Proofs.Observe.FileInventory.Snapshot
 
 namespace FileInventory.Order
 

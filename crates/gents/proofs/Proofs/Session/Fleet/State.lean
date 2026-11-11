@@ -1,4 +1,4 @@
-import Proofs.Request.State
+import Proofs.Session.Request.State
 import Mathlib.Algebra.BigOperators.Group.Finset.Basic
 import Mathlib.Data.Finset.Card
 

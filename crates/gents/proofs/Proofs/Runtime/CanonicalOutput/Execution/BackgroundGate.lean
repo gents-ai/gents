@@ -1,5 +1,5 @@
-import Proofs.CanonicalOutput.Execution.Gate
-import Proofs.CanonicalOutput.Execution.BackgroundContinuation
+import Proofs.Runtime.CanonicalOutput.Execution.Gate
+import Proofs.Runtime.CanonicalOutput.Execution.BackgroundContinuation
 namespace CanonicalOutput.Execution.BackgroundGate
 
 def committedQueue (before : SessionQueue.SessionQueueState)

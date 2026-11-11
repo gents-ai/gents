@@ -1,4 +1,4 @@
-import Proofs.ClientShell.ObservationScope
+import Proofs.Clients.ClientShell.ObservationScope
 
 namespace ClientInstallation
 

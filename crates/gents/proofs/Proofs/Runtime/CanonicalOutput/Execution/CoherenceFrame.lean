@@ -1,5 +1,5 @@
-import Proofs.CanonicalOutput.Execution.Projection
-import Proofs.CanonicalOutput.ReconstructionFrame
+import Proofs.Runtime.CanonicalOutput.Execution.Projection
+import Proofs.Session.CanonicalOutput.ReconstructionFrame
 
 namespace CanonicalOutput.Execution
 

@@ -1,5 +1,5 @@
-import Proofs.CanonicalOutput.Terminal
-import Proofs.RequestExecutionLease.Transition
+import Proofs.Session.CanonicalOutput.Terminal
+import Proofs.Session.RequestExecutionLease.Transition
 namespace CanonicalOutput.Examples
 
 local instance {ε α : Type} [DecidableEq ε] [DecidableEq α] :

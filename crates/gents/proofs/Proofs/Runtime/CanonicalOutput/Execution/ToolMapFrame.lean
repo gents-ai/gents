@@ -1,4 +1,4 @@
-import Proofs.CanonicalOutput.Execution.RequestCoherence
+import Proofs.Runtime.CanonicalOutput.Execution.RequestCoherence
 
 namespace CanonicalOutput.Execution
 

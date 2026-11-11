@@ -1,6 +1,6 @@
-import Proofs.Basic
-import Proofs.CanonicalOutput.State
-import Proofs.ToolExecution.State
+import Proofs.Shared.Basic
+import Proofs.Shared.CanonicalOutput.State
+import Proofs.Session.ToolExecution.State
 import Mathlib.Data.Finset.Basic
 
 namespace Transcript

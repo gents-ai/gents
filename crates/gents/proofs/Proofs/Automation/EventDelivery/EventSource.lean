@@ -1,5 +1,5 @@
-import Proofs.EventDelivery.Contract
-import Proofs.EventDelivery.Properties
+import Proofs.Automation.EventDelivery.Contract
+import Proofs.Automation.EventDelivery.Properties
 
 open EventDelivery
 

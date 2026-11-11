@@ -1,7 +1,7 @@
-import Proofs.Enrollment.Transition
-import Proofs.Enrollment.RequestInput
-import Proofs.Request.Executable
-import Proofs.Request.CausalHop
+import Proofs.P2P.Enrollment.Transition
+import Proofs.Session.Enrollment.RequestInput
+import Proofs.Session.Request.Executable
+import Proofs.Session.Request.CausalHop
 
 namespace Enrollment
 

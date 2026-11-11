@@ -1,4 +1,4 @@
-import Proofs.ManagedExec.Transition
+import Proofs.Session.ManagedExec.Transition
 
 namespace ManagedExecContext
 

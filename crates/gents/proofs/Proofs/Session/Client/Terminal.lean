@@ -1,4 +1,4 @@
-import Proofs.Client.Lifecycle
+import Proofs.Session.Client.Lifecycle
 
 def effectivelyTerminal (view : AttemptView) : Prop :=
   view.request.isSuperseded = true ∨

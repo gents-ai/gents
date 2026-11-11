@@ -1,4 +1,4 @@
-import Proofs.StreamingResponse.Transition
+import Proofs.Session.StreamingResponse.Transition
 
 namespace StreamingResponse
 

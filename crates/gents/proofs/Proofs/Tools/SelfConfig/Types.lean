@@ -1,4 +1,4 @@
-import Proofs.ConfigDocuments
+import Proofs.Documents.ConfigDocuments
 
 namespace SelfConfig
 

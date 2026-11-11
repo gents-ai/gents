@@ -1,4 +1,4 @@
-import Proofs.Eval
+import Proofs.Runtime.Eval
 import Mathlib.Data.List.Basic
 
 /-! Configuration optimization (#1455), on the eval core contract.

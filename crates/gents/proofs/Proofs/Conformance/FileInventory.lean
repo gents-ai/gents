@@ -1,6 +1,6 @@
-import Proofs.FileInventory.Cases
-import Proofs.FileInventory.OrderCases
-import Proofs.FileInventory.ReaderCases
+import Proofs.Observe.FileInventory.Cases
+import Proofs.Observe.FileInventory.OrderCases
+import Proofs.Observe.FileInventory.ReaderCases
 import Proofs.Conformance.Contracts.Json.FileInventoryClosure
 import Proofs.Conformance.Contracts.Json.NativeExecution
 

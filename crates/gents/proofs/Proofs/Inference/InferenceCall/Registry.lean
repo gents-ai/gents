@@ -1,4 +1,4 @@
-import Proofs.InferenceCall.ControllerBookkeeping
+import Proofs.Inference.InferenceCall.ControllerBookkeeping
 
 /-! One backend's admission capacity pool (#897, #1366).
 

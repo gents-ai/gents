@@ -1,4 +1,4 @@
-import Proofs.Mailbox.Question
+import Proofs.Automation.Mailbox.Question
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.MailboxQuestionContracts

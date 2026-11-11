@@ -1,10 +1,10 @@
 import Batteries.Tactic.OpenPrivate
-import Proofs.PluginJob.Admission
-import Proofs.ToolExecution.Transition
-import Proofs.ToolPolicy.PluginReceipt
+import Proofs.ToolCalls.PluginJob.Admission
+import Proofs.Session.ToolExecution.Transition
+import Proofs.Tools.ToolPolicy.PluginReceipt
 
-open private toString_nat_injective prefix_cancel from Proofs.PluginJob.Keys
-open private admitStep_pinned from Proofs.PluginJob.Admission
+open private toString_nat_injective prefix_cancel from Proofs.ToolCalls.PluginJob.Keys
+open private admitStep_pinned from Proofs.ToolCalls.PluginJob.Admission
 
 /-!
 # Plugin-job adoption

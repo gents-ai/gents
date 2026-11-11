@@ -1,5 +1,5 @@
-import Proofs.Hooks.Effect
-import Proofs.Identity.Household
+import Proofs.Session.Hooks.Effect
+import Proofs.Store.Identity.Household
 
 namespace Hooks
 

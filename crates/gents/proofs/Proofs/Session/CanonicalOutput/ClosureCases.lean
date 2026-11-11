@@ -1,4 +1,4 @@
-import Proofs.CanonicalOutput.Reconstruction
+import Proofs.Session.CanonicalOutput.Reconstruction
 
 namespace CanonicalOutput.ClosureCases
 

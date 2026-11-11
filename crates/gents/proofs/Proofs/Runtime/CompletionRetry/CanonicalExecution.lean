@@ -1,7 +1,7 @@
-import Proofs.CompletionRetry.Properties
-import Proofs.CanonicalOutput.Execution.Transition
-import Proofs.CanonicalOutput.Execution.Properties
-import Proofs.CanonicalOutput.Execution.Examples
+import Proofs.Shared.CompletionRetry.Properties
+import Proofs.Runtime.CanonicalOutput.Execution.Transition
+import Proofs.Runtime.CanonicalOutput.Execution.Properties
+import Proofs.Runtime.CanonicalOutput.Execution.Examples
 
 namespace CompletionRetry.CanonicalExecution
 

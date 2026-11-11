@@ -1,4 +1,4 @@
-import Proofs.Enrollment.Executable
+import Proofs.P2P.Enrollment.Executable
 
 namespace Enrollment
 

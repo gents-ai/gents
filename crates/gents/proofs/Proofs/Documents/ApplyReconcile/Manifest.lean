@@ -1,4 +1,4 @@
-import Proofs.ApplyReconcile.Collections
+import Proofs.Documents.ApplyReconcile.Collections
 import Mathlib.Data.Finset.Basic
 
 namespace ApplyReconcile

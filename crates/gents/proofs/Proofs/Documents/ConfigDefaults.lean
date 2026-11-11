@@ -1,4 +1,4 @@
-import Proofs.Basic
+import Proofs.Shared.Basic
 
 /-! Signed configuration limits are validated before conversion to natural numbers.
 Defaults and minimum values remain with the capability that owns each setting. -/

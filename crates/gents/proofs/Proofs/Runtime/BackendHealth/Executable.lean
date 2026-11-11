@@ -1,5 +1,5 @@
-import Proofs.BackendHealth.Transition
-import Proofs.BackendHealth.Scheduling
+import Proofs.Runtime.BackendHealth.Transition
+import Proofs.Runtime.BackendHealth.Scheduling
 
 namespace Proofs.BackendHealth
 

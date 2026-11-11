@@ -1,5 +1,5 @@
-import Proofs.Recovery.Contract
-import Proofs.Request.State
+import Proofs.Inference.Recovery.Contract
+import Proofs.Session.Request.State
 
 namespace Recovery
 

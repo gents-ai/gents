@@ -1,4 +1,4 @@
-import Proofs.PluginJob.TargetResolution
+import Proofs.ToolCalls.PluginJob.TargetResolution
 
 /-!
 # Plugin jobs: the executable source of steps, pins and admission

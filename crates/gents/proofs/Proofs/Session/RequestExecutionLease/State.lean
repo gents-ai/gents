@@ -1,4 +1,4 @@
-import Proofs.Request.State
+import Proofs.Session.Request.State
 
 /-!
 # Request execution lease state

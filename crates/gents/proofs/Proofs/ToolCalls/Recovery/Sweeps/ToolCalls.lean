@@ -1,6 +1,6 @@
-import Proofs.Recovery.Sweeps.Requests
-import Proofs.ToolExecution.State
-import Proofs.ManagedExec.Ownership
+import Proofs.Session.Recovery.Sweeps.Requests
+import Proofs.Session.ToolExecution.State
+import Proofs.Session.ManagedExec.Ownership
 
 namespace Recovery
 

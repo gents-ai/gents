@@ -1,4 +1,4 @@
-import Proofs.ClientShell.ObservationOrdering
+import Proofs.Clients.ClientShell.ObservationOrdering
 
 /-! Executes the reconnect schedule: for each origin and event whether it
 reconnects, and for each consecutive reconnect count and connected duration the

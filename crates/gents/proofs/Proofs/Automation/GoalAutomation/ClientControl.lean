@@ -1,5 +1,5 @@
-import Proofs.GoalAutomation.Edit
-import Proofs.GoalAutomation.OperatorResume
+import Proofs.Automation.GoalAutomation.Edit
+import Proofs.Automation.GoalAutomation.OperatorResume
 
 namespace GoalAutomation.ClientControl
 

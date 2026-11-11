@@ -1,5 +1,5 @@
-import Proofs.Session.Management
-import Proofs.Session.FoldCases
+import Proofs.Session.SessionQueue.Management
+import Proofs.Session.SessionQueue.FoldCases
 
 namespace SessionQueue.ManagementCases
 

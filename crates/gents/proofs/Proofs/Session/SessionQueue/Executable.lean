@@ -1,4 +1,4 @@
-import Proofs.Session.Transition
+import Proofs.Session.SessionQueue.Transition
 
 namespace SessionQueue
 

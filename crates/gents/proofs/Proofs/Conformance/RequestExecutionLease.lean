@@ -1,4 +1,4 @@
-import Proofs.RequestExecutionLease
+import Proofs.Session.RequestExecutionLease
 import Proofs.Conformance.ContractTypes
 
 namespace Conformance.RequestExecutionLeaseContracts

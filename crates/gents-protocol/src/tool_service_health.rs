@@ -2,7 +2,7 @@
 //! and its projection to the collapsed operator-facing status.
 //!
 //! Source of truth: the Lean `HealthState` model in
-//! `crates/gents/proofs/Proofs/MCPHealth/State.lean` — `as_str` here must
+//! `crates/gents/proofs/Proofs/Tools/MCPHealth/State.lean` — `as_str` here must
 //! stay byte-identical to that model's `toDefraDB`.
 
 use std::error::Error;
@@ -36,7 +36,7 @@ impl ToolServiceHealthState {
     ];
 
     /// String form persisted to the `status` column. Mirrors
-    /// `HealthState.toDefraDB` in `Proofs/MCPHealth/State.lean` exactly.
+    /// `HealthState.toDefraDB` in `Proofs/Tools/MCPHealth/State.lean` exactly.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Healthy => "healthy",

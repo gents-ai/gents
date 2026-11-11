@@ -1,5 +1,5 @@
-import Proofs.CanonicalOutput.Execution.AccountingPending
-import Proofs.CanonicalOutput.Execution.AccountingRunning
+import Proofs.Runtime.CanonicalOutput.Execution.AccountingPending
+import Proofs.Runtime.CanonicalOutput.Execution.AccountingRunning
 
 namespace CanonicalOutput.Execution
 

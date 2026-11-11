@@ -1,5 +1,5 @@
-import Proofs.CanonicalOutput.Execution.Properties
-import Proofs.Request.CrossActorAuthorization
+import Proofs.Runtime.CanonicalOutput.Execution.Properties
+import Proofs.Session.Request.CrossActorAuthorization
 
 namespace CanonicalOutput.Execution.AdmissionHandoff
 

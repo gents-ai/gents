@@ -1,4 +1,4 @@
-import Proofs.RequestExecutionLease.State
-import Proofs.RequestExecutionLease.Transition
-import Proofs.RequestExecutionLease.Properties
-import Proofs.RequestExecutionLease.ObservedTransaction
+import Proofs.Session.RequestExecutionLease.State
+import Proofs.Session.RequestExecutionLease.Transition
+import Proofs.Session.RequestExecutionLease.Properties
+import Proofs.Session.RequestExecutionLease.ObservedTransaction

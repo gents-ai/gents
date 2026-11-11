@@ -1,4 +1,4 @@
-import Proofs.ClientShell.ObservationOrdering
+import Proofs.Clients.ClientShell.ObservationOrdering
 
 namespace Conformance.RuntimeConnectionObservation
 open _root_.RuntimeConnectionObservation

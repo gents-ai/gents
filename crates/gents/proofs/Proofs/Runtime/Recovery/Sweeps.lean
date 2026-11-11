@@ -1,8 +1,8 @@
-import Proofs.Recovery.Sweeps.Requests
-import Proofs.Recovery.Sweeps.ToolCalls
-import Proofs.Recovery.Sweeps.SessionMessage
-import Proofs.Recovery.Sweeps.Inference
-import Proofs.Recovery.Sweeps.TaskHooks
-import Proofs.Recovery.Sweeps.PluginJob
-import Proofs.Recovery.Sweeps.BackgroundRestart
-import Proofs.Recovery.Sweeps.Registry
+import Proofs.Session.Recovery.Sweeps.Requests
+import Proofs.ToolCalls.Recovery.Sweeps.ToolCalls
+import Proofs.ToolCalls.Recovery.Sweeps.SessionMessage
+import Proofs.Inference.Recovery.Sweeps.Inference
+import Proofs.ToolCalls.Recovery.Sweeps.TaskHooks
+import Proofs.ToolCalls.Recovery.Sweeps.PluginJob
+import Proofs.ToolCalls.Recovery.Sweeps.BackgroundRestart
+import Proofs.Runtime.Recovery.Sweeps.Registry

@@ -1,5 +1,5 @@
-import Proofs.PromptAssembly.ClaudeBody
-import Proofs.PromptAssembly.ClaudeMap
+import Proofs.Session.PromptAssembly.ClaudeBody
+import Proofs.Session.PromptAssembly.ClaudeMap
 import Lean
 
 namespace PromptAssembly.ClaudeOutput

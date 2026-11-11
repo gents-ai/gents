@@ -1,4 +1,4 @@
-import Proofs.Callback.Types
-import Proofs.Callback.Transition
-import Proofs.Callback.Properties
-import Proofs.Callback.Conformance
+import Proofs.Automation.Callback.Types
+import Proofs.Automation.Callback.Transition
+import Proofs.Automation.Callback.Properties
+import Proofs.Automation.Callback.Conformance

@@ -1,4 +1,4 @@
-import Proofs.NativeCompletion
+import Proofs.Store.NativeCompletion
 
 /-!
 # Claimed local-store lifetime

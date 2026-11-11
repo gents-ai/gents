@@ -1,4 +1,4 @@
-import Proofs.EditMatch.Model
+import Proofs.Tools.EditMatch.Model
 
 namespace Proofs.EditMatch
 

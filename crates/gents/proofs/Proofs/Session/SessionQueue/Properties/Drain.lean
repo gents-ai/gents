@@ -1,4 +1,4 @@
-import Proofs.Session.Executable
+import Proofs.Session.SessionQueue.Executable
 
 namespace SessionQueue
 

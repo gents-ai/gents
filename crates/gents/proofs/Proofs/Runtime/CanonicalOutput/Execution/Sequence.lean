@@ -1,4 +1,4 @@
-import Proofs.CanonicalOutput.Execution.Transition
+import Proofs.Runtime.CanonicalOutput.Execution.Transition
 
 namespace CanonicalOutput.Execution
 

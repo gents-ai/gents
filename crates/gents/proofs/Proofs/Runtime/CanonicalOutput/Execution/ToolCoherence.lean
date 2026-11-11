@@ -1,6 +1,6 @@
-import Proofs.CanonicalOutput.Execution.AccountingMetadata
-import Proofs.CanonicalOutput.Execution.CoherenceFrame
-import Proofs.CanonicalOutput.Execution.ToolDelivery
+import Proofs.Runtime.CanonicalOutput.Execution.AccountingMetadata
+import Proofs.Runtime.CanonicalOutput.Execution.CoherenceFrame
+import Proofs.Runtime.CanonicalOutput.Execution.ToolDelivery
 
 namespace CanonicalOutput.Execution.ToolDelivery
 

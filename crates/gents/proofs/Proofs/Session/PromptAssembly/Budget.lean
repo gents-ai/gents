@@ -1,4 +1,4 @@
-import Proofs.PromptAssembly.State
+import Proofs.Session.PromptAssembly.State
 
 /-! The configured threshold arrives as an exact integer budget; production
 owns the floating-point percentage conversion in

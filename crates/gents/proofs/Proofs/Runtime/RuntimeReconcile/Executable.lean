@@ -1,4 +1,4 @@
-import Proofs.RuntimeReconcile.Transition
+import Proofs.Runtime.RuntimeReconcile.Transition
 
 namespace RuntimeState
 

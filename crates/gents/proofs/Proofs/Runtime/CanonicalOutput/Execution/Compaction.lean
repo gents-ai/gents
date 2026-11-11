@@ -1,6 +1,6 @@
-import Proofs.CanonicalOutput.Execution.State
-import Proofs.Compaction.State
-import Proofs.Compaction.ReductionEngine
+import Proofs.Runtime.CanonicalOutput.Execution.State
+import Proofs.Session.Compaction.State
+import Proofs.Session.Compaction.ReductionEngine
 
 /-!
 # Canonical publication / provider compaction boundary

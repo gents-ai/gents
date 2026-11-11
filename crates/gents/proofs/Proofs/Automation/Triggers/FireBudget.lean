@@ -1,4 +1,4 @@
-import Proofs.EventDelivery.Durable
+import Proofs.Automation.EventDelivery.Durable
 
 /-! Rolling fire budget. Admission counts its own receipts in the window, so
 budget accounting commits atomically with the receipt it limits. `dispatch` is

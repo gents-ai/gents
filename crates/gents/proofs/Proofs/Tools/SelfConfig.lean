@@ -1,5 +1,5 @@
-import Proofs.SelfConfig.Types
-import Proofs.SelfConfig.Apply
-import Proofs.SelfConfig.Theorems
-import Proofs.SelfConfig.Cases
-import Proofs.SelfConfig.Scope
+import Proofs.Tools.SelfConfig.Types
+import Proofs.Tools.SelfConfig.Apply
+import Proofs.Tools.SelfConfig.Theorems
+import Proofs.Tools.SelfConfig.Cases
+import Proofs.Tools.SelfConfig.Scope

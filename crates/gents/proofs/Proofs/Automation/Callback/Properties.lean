@@ -1,4 +1,4 @@
-import Proofs.Callback.Transition
+import Proofs.Automation.Callback.Transition
 
 namespace CallbackInvocation
 

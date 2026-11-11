@@ -1,9 +1,9 @@
-import Proofs.CanonicalOutput.Execution.InvariantComposition
-import Proofs.CanonicalOutput.Execution.ClaimInvariant
-import Proofs.CanonicalOutput.Execution.ClosureInvariant
-import Proofs.CanonicalOutput.Execution.CoherenceComposition
-import Proofs.CanonicalOutput.Execution.GoalContinuationCases
-import Proofs.CanonicalOutput.Execution.Examples
+import Proofs.Runtime.CanonicalOutput.Execution.InvariantComposition
+import Proofs.Runtime.CanonicalOutput.Execution.ClaimInvariant
+import Proofs.Runtime.CanonicalOutput.Execution.ClosureInvariant
+import Proofs.Runtime.CanonicalOutput.Execution.CoherenceComposition
+import Proofs.Runtime.CanonicalOutput.Execution.GoalContinuationCases
+import Proofs.Runtime.CanonicalOutput.Execution.Examples
 
 namespace CanonicalOutput.Execution.SessionComposition.Cases
 

@@ -1,4 +1,4 @@
-import Proofs.PromptAssembly.Budget
+import Proofs.Session.PromptAssembly.Budget
 import Mathlib.Data.List.Basic
 
 /-! The compaction trigger. Provider-input size is this estimator's raw count

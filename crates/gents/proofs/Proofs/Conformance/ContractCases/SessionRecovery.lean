@@ -1,5 +1,5 @@
-import Proofs.Request
-import Proofs.SessionRecovery
+import Proofs.Session.Request
+import Proofs.Session.SessionRecovery
 import Proofs.Conformance.ContractCases.Types
 
 namespace Conformance.ContractCases

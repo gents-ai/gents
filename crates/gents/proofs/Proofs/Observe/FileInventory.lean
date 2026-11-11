@@ -1,7 +1,7 @@
-import Proofs.FileInventory.Source
-import Proofs.FileInventory.FileImages
-import Proofs.FileInventory.Snapshot
-import Proofs.FileInventory.Order
-import Proofs.FileInventory.Cases
-import Proofs.FileInventory.OrderCases
-import Proofs.FileInventory.ReaderCases
+import Proofs.Observe.FileInventory.Source
+import Proofs.Observe.FileInventory.FileImages
+import Proofs.Observe.FileInventory.Snapshot
+import Proofs.Observe.FileInventory.Order
+import Proofs.Observe.FileInventory.Cases
+import Proofs.Observe.FileInventory.OrderCases
+import Proofs.Observe.FileInventory.ReaderCases

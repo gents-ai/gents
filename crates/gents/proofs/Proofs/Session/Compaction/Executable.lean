@@ -1,5 +1,5 @@
-import Proofs.Compaction.Summarize
-import Proofs.Compaction.Prefix
+import Proofs.Session.Compaction.Summarize
+import Proofs.Session.Compaction.Prefix
 
 namespace Compaction
 

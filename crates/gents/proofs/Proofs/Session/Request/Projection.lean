@@ -1,4 +1,4 @@
-import Proofs.Request.Transition
+import Proofs.Session.Request.Transition
 
 namespace Request.Projection
 

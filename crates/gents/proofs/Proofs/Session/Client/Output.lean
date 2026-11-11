@@ -1,5 +1,5 @@
-import Proofs.Client.Replacement
-import Proofs.StreamingResponse.Properties
+import Proofs.Session.Client.Replacement
+import Proofs.Session.StreamingResponse.Properties
 
 namespace Client
 

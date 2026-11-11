@@ -1,8 +1,8 @@
-import Proofs.PluginJob.Control
-import Proofs.ToolPolicy.PluginCalls
-import Proofs.Request.CausalHop
-import Proofs.Background.Budget
-import Proofs.Enrollment.RequestInput
+import Proofs.ToolCalls.PluginJob.Control
+import Proofs.Tools.ToolPolicy.PluginCalls
+import Proofs.Session.Request.CausalHop
+import Proofs.ToolCalls.Background.Budget
+import Proofs.Session.Enrollment.RequestInput
 
 /-!
 # Plugin-job step admission

@@ -1,7 +1,7 @@
-import Proofs.GoalAutomation
-import Proofs.GoalAutomation.ClientControl
-import Proofs.AgentSession
-import Proofs.Session.CommandAuthority
+import Proofs.Automation.GoalAutomation
+import Proofs.Automation.GoalAutomation.ClientControl
+import Proofs.Session.AgentSession
+import Proofs.Session.SessionQueue.CommandAuthority
 
 namespace GoalAutomation.ClientStart
 

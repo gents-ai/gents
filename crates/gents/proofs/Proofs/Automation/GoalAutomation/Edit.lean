@@ -1,4 +1,4 @@
-import Proofs.GoalAutomation
+import Proofs.Automation.GoalAutomation
 
 namespace GoalAutomation.Edit
 

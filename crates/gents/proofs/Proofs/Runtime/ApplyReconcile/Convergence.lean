@@ -1,5 +1,5 @@
-import Proofs.ApplyReconcile.RuntimeBridge
-import Proofs.ApplyReconcile.Publication
+import Proofs.Runtime.ApplyReconcile.RuntimeBridge
+import Proofs.Documents.ApplyReconcile.Publication
 
 namespace ApplyReconcile
 

@@ -1,5 +1,5 @@
-import Proofs.TextNormalization
-import Proofs.Enrollment.CapturedContext
+import Proofs.Shared.TextNormalization
+import Proofs.Session.Enrollment.CapturedContext
 import Lean
 
 namespace TitleText

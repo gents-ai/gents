@@ -10,7 +10,7 @@ import Proofs.Conformance.Contracts.Machines.ManagedExec
 import Proofs.Conformance.Contracts.Machines.Goal
 import Proofs.Conformance.Contracts.Machines.Mailbox
 import Proofs.Conformance.CompletionRetry.Contracts
-import Proofs.Eval
+import Proofs.Runtime.Eval
 
 namespace Conformance.Contracts
 

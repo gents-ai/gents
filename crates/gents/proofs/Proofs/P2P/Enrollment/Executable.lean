@@ -1,4 +1,4 @@
-import Proofs.Enrollment.Transition
+import Proofs.P2P.Enrollment.Transition
 
 namespace Enrollment
 

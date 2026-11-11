@@ -1,9 +1,9 @@
-import Proofs.Recovery.Sweeps.Requests
-import Proofs.Recovery.Sweeps.ToolCalls
-import Proofs.Recovery.Sweeps.SessionMessage
-import Proofs.Recovery.Sweeps.Inference
-import Proofs.Recovery.Sweeps.TaskHooks
-import Proofs.Recovery.Sweeps.PluginJob
+import Proofs.Session.Recovery.Sweeps.Requests
+import Proofs.ToolCalls.Recovery.Sweeps.ToolCalls
+import Proofs.ToolCalls.Recovery.Sweeps.SessionMessage
+import Proofs.Inference.Recovery.Sweeps.Inference
+import Proofs.ToolCalls.Recovery.Sweeps.TaskHooks
+import Proofs.ToolCalls.Recovery.Sweeps.PluginJob
 
 namespace Recovery
 

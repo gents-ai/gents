@@ -1,5 +1,5 @@
-import Proofs.CompletionRetry.OutputObligation
-import Proofs.GoalAutomation.RequestAncestry
+import Proofs.Shared.CompletionRetry.OutputObligation
+import Proofs.Automation.GoalAutomation.RequestAncestry
 
 namespace CompletionRetry.OutputObligation.Logical
 open GoalAutomation.RequestAncestry

@@ -1,8 +1,8 @@
-import Proofs.Basic
-import Proofs.Request.BackendWake
-import Proofs.Persistence
-import Proofs.Scheduling
-import Proofs.ToolExecution.State
+import Proofs.Shared.Basic
+import Proofs.Session.Request.BackendWake
+import Proofs.Store.Persistence
+import Proofs.Inference.Scheduling
+import Proofs.Session.ToolExecution.State
 
 /-- Wire-boundary required signed purpose; an audit request never becomes ordinary session work by omission. -/
 inductive RequestPurpose where

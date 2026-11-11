@@ -1,5 +1,5 @@
-import Proofs.InferenceCall.LimitObservation
-import Proofs.InferenceCall.Usage
+import Proofs.Inference.InferenceCall.LimitObservation
+import Proofs.Inference.InferenceCall.Usage
 import Proofs.Conformance.ContractTypes
 
 namespace Conformance.ProviderUsage

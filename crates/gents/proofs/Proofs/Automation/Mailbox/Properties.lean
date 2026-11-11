@@ -1,4 +1,4 @@
-import Proofs.Mailbox.Transition
+import Proofs.Automation.Mailbox.Transition
 
 namespace Mailbox
 

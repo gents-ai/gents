@@ -1,5 +1,5 @@
-import Proofs.CrossMachineComposed.State
-import Proofs.Request.Properties
+import Proofs.Runtime.CrossMachineComposed.State
+import Proofs.Session.Request.Properties
 
 open RequestState RequestContext ComposedState
 

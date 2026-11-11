@@ -1,12 +1,12 @@
-import Proofs.Background.Budget
-import Proofs.Background.ToolOutput
-import Proofs.Background.CompletionContinuation
-import Proofs.Background.ProcessControl
+import Proofs.ToolCalls.Background.Budget
+import Proofs.Runtime.Background.ToolOutput
+import Proofs.ToolCalls.Background.CompletionContinuation
+import Proofs.ToolCalls.Background.ProcessControl
 import Proofs.Conformance.ContractCases.Types
-import Proofs.Goals
-import Proofs.Recovery.Sweeps.BackgroundRestart
-import Proofs.Session.State
-import Proofs.ToolExecution.Executable
+import Proofs.Automation.Goals
+import Proofs.ToolCalls.Recovery.Sweeps.BackgroundRestart
+import Proofs.Session.SessionQueue.State
+import Proofs.Session.ToolExecution.Executable
 
 namespace Conformance.ContractCases
 

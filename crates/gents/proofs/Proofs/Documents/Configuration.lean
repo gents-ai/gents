@@ -1,5 +1,5 @@
-import Proofs.ConfigDefaults
-import Proofs.Configuration.PackIdentity
+import Proofs.Documents.ConfigDefaults
+import Proofs.Documents.Configuration.PackIdentity
 import Mathlib.Data.Rat.Defs
 
 /-!

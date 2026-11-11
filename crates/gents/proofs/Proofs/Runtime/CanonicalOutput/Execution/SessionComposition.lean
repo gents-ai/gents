@@ -1,7 +1,7 @@
-import Proofs.CanonicalOutput.Execution.Handover
-import Proofs.CanonicalOutput.Execution.GoalContinuation
-import Proofs.CanonicalOutput.Execution.RestartRecovery
-import Proofs.CompletionRetry.CanonicalGate
+import Proofs.Runtime.CanonicalOutput.Execution.Handover
+import Proofs.Runtime.CanonicalOutput.Execution.GoalContinuation
+import Proofs.Runtime.CanonicalOutput.Execution.RestartRecovery
+import Proofs.Runtime.CompletionRetry.CanonicalGate
 
 namespace CanonicalOutput.Execution.SessionComposition
 

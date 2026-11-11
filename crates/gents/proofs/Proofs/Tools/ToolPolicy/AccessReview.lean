@@ -1,6 +1,6 @@
 import Lean
-import Proofs.ToolPolicy.WorkspacePermissions
-import Proofs.TextNormalization
+import Proofs.Tools.ToolPolicy.WorkspacePermissions
+import Proofs.Shared.TextNormalization
 
 namespace ToolPolicy.AccessReview
 open Lean WorkspacePermissions

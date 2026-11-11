@@ -1,6 +1,6 @@
-import Proofs.PromptAssembly.CurrentInput
-import Proofs.CanonicalOutput.Execution
-import Proofs.Request.Executable
+import Proofs.Session.PromptAssembly.CurrentInput
+import Proofs.Runtime.CanonicalOutput.Execution
+import Proofs.Session.Request.Executable
 
 namespace ClientShell.FreshPromptCompletion
 

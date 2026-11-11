@@ -1,6 +1,6 @@
-import Proofs.CommandPolicy.Validation
-import Proofs.CommandPolicy.Sandbox
-import Proofs.CommandPolicy.Env
+import Proofs.Session.CommandPolicy.Validation
+import Proofs.Session.CommandPolicy.Sandbox
+import Proofs.Session.CommandPolicy.Env
 
 namespace CommandPolicy
 

@@ -1,5 +1,5 @@
-import Proofs.Fleet.Transition
-import Proofs.Properties.Liveness
+import Proofs.Session.Fleet.Transition
+import Proofs.Runtime.Properties.Liveness
 
 open FleetState AdmissionState
 

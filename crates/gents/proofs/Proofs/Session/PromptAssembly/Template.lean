@@ -1,9 +1,9 @@
 import Mathlib.Data.Finset.Basic
 import Mathlib.Data.Finset.Image
 import Mathlib.Data.Finset.Card
-import Proofs.PromptAssembly.Executable
-import Proofs.Configuration
-import Proofs.Skills
+import Proofs.Session.PromptAssembly.Executable
+import Proofs.Documents.Configuration
+import Proofs.Documents.Skills
 
 set_option linter.dupNamespace false
 

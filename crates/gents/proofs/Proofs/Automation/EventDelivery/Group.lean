@@ -1,5 +1,5 @@
-import Proofs.Triggers.Groups
-import Proofs.Callback.Properties
+import Proofs.Automation.Triggers.Groups
+import Proofs.Automation.Callback.Properties
 
 namespace EventDelivery.Group
 open Triggers.Groups

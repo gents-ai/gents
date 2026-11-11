@@ -1,5 +1,5 @@
-import Proofs.Identity.State
-import Proofs.Identity.Permission
+import Proofs.Store.Identity.State
+import Proofs.Store.Identity.Permission
 
 namespace Identity
 

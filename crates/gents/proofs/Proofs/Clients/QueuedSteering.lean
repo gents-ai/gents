@@ -1,12 +1,12 @@
-import Proofs.Goals
-import Proofs.Session.Interrupt
-import Proofs.Request.Executable
-import Proofs.ClientShell.Projection
-import Proofs.CanonicalOutput.Execution.Gate
-import Proofs.CanonicalOutput.Execution.Handover
-import Proofs.CanonicalOutput.Execution.SessionComposition
-import Proofs.CanonicalOutput.Execution.Examples
-import Proofs.RenderedCapture
+import Proofs.Automation.Goals
+import Proofs.Session.SessionQueue.Interrupt
+import Proofs.Session.Request.Executable
+import Proofs.Clients.ClientShell.Projection
+import Proofs.Runtime.CanonicalOutput.Execution.Gate
+import Proofs.Runtime.CanonicalOutput.Execution.Handover
+import Proofs.Runtime.CanonicalOutput.Execution.SessionComposition
+import Proofs.Runtime.CanonicalOutput.Execution.Examples
+import Proofs.Shared.RenderedCapture
 
 namespace QueuedSteering
 

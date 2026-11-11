@@ -1,4 +1,4 @@
-import Proofs.GoalAutomation.RequestAncestry
+import Proofs.Automation.GoalAutomation.RequestAncestry
 import Mathlib.Data.Nat.Pairing
 
 namespace GoalAutomation.RequestAssignment

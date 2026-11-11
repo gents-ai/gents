@@ -1,4 +1,4 @@
-import Proofs.Session.Properties.Drain
+import Proofs.Session.SessionQueue.Properties.Drain
 
 namespace SessionQueue
 

@@ -1,6 +1,6 @@
-import Proofs.Identity.Household
-import Proofs.Identity.GrantSets
-import Proofs.SelfConfig.Scope
+import Proofs.Store.Identity.Household
+import Proofs.Store.Identity.GrantSets
+import Proofs.Tools.SelfConfig.Scope
 
 /-!
 # Self-config categories as groupings of ACP grants

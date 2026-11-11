@@ -1,4 +1,4 @@
-import Proofs.Workspace.PathCapability
+import Proofs.Session.Workspace.PathCapability
 
 namespace Workspace.PathCapability.OperatorBaseFreeze
 

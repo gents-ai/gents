@@ -1,5 +1,5 @@
-import Proofs.Identity.Household
-import Proofs.Identity.DeclaredAccess
+import Proofs.Store.Identity.Household
+import Proofs.Store.Identity.DeclaredAccess
 
 namespace Identity.Automation
 

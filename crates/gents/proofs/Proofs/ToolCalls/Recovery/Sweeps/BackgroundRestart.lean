@@ -1,4 +1,4 @@
-import Proofs.Recovery.Sweeps.ToolCalls
+import Proofs.ToolCalls.Recovery.Sweeps.ToolCalls
 
 /-! Models `ToolCallLifecycle::recover_all` startup classification. Native
 background rows use the host stop verdict and require durable completion

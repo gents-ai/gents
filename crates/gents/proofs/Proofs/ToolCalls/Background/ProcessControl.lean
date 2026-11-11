@@ -1,6 +1,6 @@
-import Proofs.ToolExecution.State
-import Proofs.ToolExecution.Executable
-import Proofs.ManagedExec.Ownership
+import Proofs.Session.ToolExecution.State
+import Proofs.Session.ToolExecution.Executable
+import Proofs.Session.ManagedExec.Ownership
 namespace Background.ProcessControl
 
 structure Scope where

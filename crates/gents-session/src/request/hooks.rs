@@ -1,6 +1,6 @@
 //! Lifecycle data hooks: the seam through which a bundled plugin takes part in
 //! a request or session transition without holding its transaction. Lean
-//! `Proofs.Hooks` is the contract; each item names the definition it executes.
+//! `Proofs.Automation.Hooks` is the contract; each item names the definition it executes.
 
 pub mod claim;
 pub mod delivery;

@@ -1,7 +1,7 @@
-import Proofs.Background.Budget
-import Proofs.Background.CompletionDelivery
-import Proofs.Background.ToolOutput
-import Proofs.Background.ToolOutputCases
-import Proofs.Background.CompletionContinuation
-import Proofs.Background.ProcessControl
-import Proofs.Background.Interrupt
+import Proofs.ToolCalls.Background.Budget
+import Proofs.ToolCalls.Background.CompletionDelivery
+import Proofs.Runtime.Background.ToolOutput
+import Proofs.Runtime.Background.ToolOutputCases
+import Proofs.ToolCalls.Background.CompletionContinuation
+import Proofs.ToolCalls.Background.ProcessControl
+import Proofs.ToolCalls.Background.Interrupt

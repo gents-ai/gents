@@ -1,4 +1,4 @@
-import Proofs.CanonicalOutput.Execution.AccountingMetadata
+import Proofs.Runtime.CanonicalOutput.Execution.AccountingMetadata
 
 namespace CanonicalOutput.Execution
 

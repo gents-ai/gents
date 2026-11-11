@@ -1,6 +1,6 @@
 import Lean
-import Proofs.Identity.Automation
-import Proofs.Identity.DeclaredAccess
+import Proofs.Store.Identity.Automation
+import Proofs.Store.Identity.DeclaredAccess
 
 namespace Identity.PackPlacementReaders
 

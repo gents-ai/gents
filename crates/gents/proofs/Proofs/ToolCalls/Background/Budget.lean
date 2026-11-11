@@ -1,4 +1,4 @@
-import Proofs.Basic
+import Proofs.Shared.Basic
 
 namespace Background
 

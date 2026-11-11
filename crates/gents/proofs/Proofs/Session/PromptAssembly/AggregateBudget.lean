@@ -1,4 +1,4 @@
-import Proofs.Basic
+import Proofs.Shared.Basic
 
 /-! The provider tokenizer and truthfulness of provider usage reports are
 external assumptions. The durable call owner must ensure completed calls have

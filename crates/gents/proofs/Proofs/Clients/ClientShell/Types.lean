@@ -1,4 +1,4 @@
-import Proofs.Client.Types
+import Proofs.Session.Client.Types
 
 abbrev PeerId := Nat
 

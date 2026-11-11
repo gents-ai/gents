@@ -1,7 +1,7 @@
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.Contracts.Json.ClientRuntime
 import Proofs.Conformance.ContractCases
-import Proofs.Background.ToolOutputCases
+import Proofs.Runtime.Background.ToolOutputCases
 
 namespace Conformance.Contracts
 

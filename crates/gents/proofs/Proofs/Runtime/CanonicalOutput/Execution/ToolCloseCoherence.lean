@@ -1,5 +1,5 @@
-import Proofs.CanonicalOutput.Execution.ToolDelivery
-import Proofs.CanonicalOutput.Execution.ToolTerminalFrame
+import Proofs.Runtime.CanonicalOutput.Execution.ToolDelivery
+import Proofs.Runtime.CanonicalOutput.Execution.ToolTerminalFrame
 
 namespace CanonicalOutput.Execution.ToolDelivery
 

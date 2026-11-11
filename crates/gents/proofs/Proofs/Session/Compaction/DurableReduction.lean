@@ -1,4 +1,4 @@
-import Proofs.Basic
+import Proofs.Shared.Basic
 
 /-! Production binds the opaque source boundary to the exact request version and
 bounded canonical-message high-water identity, with the stored split retaining

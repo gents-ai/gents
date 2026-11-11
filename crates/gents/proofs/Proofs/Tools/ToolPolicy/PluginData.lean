@@ -1,5 +1,5 @@
-import Proofs.ToolPolicy.WriteInput
-import Proofs.ToolPolicy.ApplicationWrite
+import Proofs.Shared.ToolPolicy.WriteInput
+import Proofs.Tools.ToolPolicy.ApplicationWrite
 
 namespace ToolPolicy.PluginData
 

@@ -1,6 +1,6 @@
-import Proofs.Request.CausalHop
-import Proofs.DurableLineage
-import Proofs.AgentSession
+import Proofs.Session.Request.CausalHop
+import Proofs.Session.DurableLineage
+import Proofs.Session.AgentSession
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.CausalHopContracts

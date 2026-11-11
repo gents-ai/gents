@@ -1,4 +1,4 @@
-import Proofs.PromptAssembly.State
+import Proofs.Session.PromptAssembly.State
 
 namespace PromptAssembly.Content
 

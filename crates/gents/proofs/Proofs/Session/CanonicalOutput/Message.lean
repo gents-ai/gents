@@ -1,4 +1,4 @@
-import Proofs.CanonicalOutput.Terminal
+import Proofs.Session.CanonicalOutput.Terminal
 import Lean
 
 namespace CanonicalOutput

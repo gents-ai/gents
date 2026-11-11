@@ -1,4 +1,4 @@
-import Proofs.StorageWriteGate
+import Proofs.Store.StorageWriteGate
 
 namespace StorageWriteGate.StreamWaiter
 

@@ -1,4 +1,4 @@
-import Proofs.Request.CrossActorAuthorization
+import Proofs.Session.Request.CrossActorAuthorization
 
 namespace Request.ClientSignedEditHandoff
 

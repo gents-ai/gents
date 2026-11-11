@@ -1,6 +1,6 @@
-import Proofs.Compaction.Prefix
-import Proofs.Compaction.Properties
-import Proofs.PromptAssembly.ClaudeMap
+import Proofs.Session.Compaction.Prefix
+import Proofs.Session.Compaction.Properties
+import Proofs.Session.PromptAssembly.ClaudeMap
 
 namespace Compaction
 

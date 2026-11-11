@@ -1,5 +1,5 @@
-import Proofs.CanonicalOutput.Reconstruction
-import Proofs.Request.State
+import Proofs.Session.CanonicalOutput.Reconstruction
+import Proofs.Session.Request.State
 
 namespace CanonicalOutput
 

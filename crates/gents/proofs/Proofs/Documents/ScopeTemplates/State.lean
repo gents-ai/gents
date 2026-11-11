@@ -1,9 +1,9 @@
-import Proofs.ConfigDocuments
-import Proofs.Basic
+import Proofs.Documents.ConfigDocuments
+import Proofs.Shared.Basic
 import Mathlib.Data.Finset.Basic
 import Mathlib.Data.List.Basic
 
-import Proofs.Identity.State
+import Proofs.Store.Identity.State
 
 /-! P2P routes exchange discovery and enrollment protocol only. Runtime data is
 read and written through its authenticated database endpoint. Neither a route

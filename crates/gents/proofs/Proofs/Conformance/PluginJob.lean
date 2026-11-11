@@ -1,10 +1,10 @@
-import Proofs.PluginJob.Admission
-import Proofs.PluginJob.Adoption
-import Proofs.PluginJob.Step
-import Proofs.PluginJob.Authority
-import Proofs.PluginJob.ExecutionIdentity
-import Proofs.PluginJob.RecoveryTrace
-import Proofs.Recovery.Sweeps.PluginJob
+import Proofs.ToolCalls.PluginJob.Admission
+import Proofs.ToolCalls.PluginJob.Adoption
+import Proofs.ToolCalls.PluginJob.Step
+import Proofs.ToolCalls.PluginJob.Authority
+import Proofs.ToolCalls.PluginJob.ExecutionIdentity
+import Proofs.ToolCalls.PluginJob.RecoveryTrace
+import Proofs.ToolCalls.Recovery.Sweeps.PluginJob
 import Lean
 
 /-!

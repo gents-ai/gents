@@ -1,4 +1,4 @@
-import Proofs.Transcript.State
-import Proofs.Transcript.Transition
-import Proofs.Transcript.Properties
-import Proofs.Transcript.Executable
+import Proofs.Session.Transcript.State
+import Proofs.Session.Transcript.Transition
+import Proofs.Session.Transcript.Properties
+import Proofs.Session.Transcript.Executable

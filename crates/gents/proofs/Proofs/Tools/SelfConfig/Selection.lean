@@ -1,5 +1,5 @@
-import Proofs.ToolPolicy.Meet
-import Proofs.SelfConfig.Cases
+import Proofs.Tools.ToolPolicy.Meet
+import Proofs.Tools.SelfConfig.Cases
 
 /-!
 # Selection obligations for the agent sibling-tools operation

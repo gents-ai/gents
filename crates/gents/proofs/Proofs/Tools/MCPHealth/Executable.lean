@@ -1,5 +1,5 @@
-import Proofs.MCPHealth.Transition
-import Proofs.MCPHealth.Coupling
+import Proofs.Tools.MCPHealth.Transition
+import Proofs.Tools.MCPHealth.Coupling
 
 namespace Proofs.MCPHealth
 

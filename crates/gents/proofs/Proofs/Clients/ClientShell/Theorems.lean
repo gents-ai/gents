@@ -1,4 +1,4 @@
-import Proofs.ClientShell.Projection
+import Proofs.Clients.ClientShell.Projection
 
 theorem matching_terminal_snapshot_allows_follow_up
     (s : ShellState) (store : LocalStore) (ctx : SubmitContext)

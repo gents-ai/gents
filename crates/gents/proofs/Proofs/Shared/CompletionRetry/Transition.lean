@@ -1,4 +1,4 @@
-import Proofs.CompletionRetry.State
+import Proofs.Shared.CompletionRetry.State
 
 namespace CompletionRetry
 

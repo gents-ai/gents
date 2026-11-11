@@ -1,5 +1,5 @@
-import Proofs.AgentSession
-import Proofs.Triggers.Durable
+import Proofs.Session.AgentSession
+import Proofs.Automation.Triggers.Durable
 
 /-! Get-or-create destinations. The rendered `session_id_template` is the
 session's own ID: admission accepts a key that names no session yet, and the

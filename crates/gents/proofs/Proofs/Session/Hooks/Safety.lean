@@ -1,5 +1,5 @@
-import Proofs.Hooks.MustCommit
-import Proofs.Hooks.Prepared
+import Proofs.Session.Hooks.MustCommit
+import Proofs.Session.Hooks.Prepared
 
 namespace Hooks.Safety
 

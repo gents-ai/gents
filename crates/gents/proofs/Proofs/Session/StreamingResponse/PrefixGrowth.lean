@@ -1,5 +1,5 @@
-import Proofs.StreamingResponse.State
-import Proofs.CanonicalOutput.ReconstructionGrowth
+import Proofs.Session.StreamingResponse.State
+import Proofs.Session.CanonicalOutput.ReconstructionGrowth
 import Mathlib.Data.List.Perm.Subperm
 
 namespace StreamingResponse

@@ -1,4 +1,4 @@
-import Proofs.CanonicalOutput.Execution.ToolMapFrame
+import Proofs.Runtime.CanonicalOutput.Execution.ToolMapFrame
 
 namespace CanonicalOutput.Execution
 

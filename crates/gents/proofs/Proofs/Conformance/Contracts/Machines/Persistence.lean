@@ -1,4 +1,4 @@
-import Proofs.Persistence
+import Proofs.Store.Persistence
 import Proofs.Conformance.ContractTypes
 
 namespace Conformance.Contracts

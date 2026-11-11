@@ -1,4 +1,4 @@
-import Proofs.AccountRotation.Cases
+import Proofs.Shared.AccountRotation.Cases
 import Proofs.Conformance.ContractTypes
 
 namespace AccountRotation.Contracts

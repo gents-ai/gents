@@ -1,4 +1,4 @@
-import Proofs.ToolPolicy.Types
+import Proofs.Tools.ToolPolicy.Types
 
 namespace ToolPolicy
 

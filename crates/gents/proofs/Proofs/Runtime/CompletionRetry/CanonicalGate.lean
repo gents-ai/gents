@@ -1,5 +1,5 @@
-import Proofs.CompletionRetry.CanonicalExecution
-import Proofs.CanonicalOutput.Execution.Gate
+import Proofs.Runtime.CompletionRetry.CanonicalExecution
+import Proofs.Runtime.CanonicalOutput.Execution.Gate
 
 namespace CompletionRetry.CanonicalGate
 

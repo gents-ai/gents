@@ -1,4 +1,4 @@
-import Proofs.InferenceCall.Properties
+import Proofs.Inference.InferenceCall.Properties
 import Mathlib.Algebra.BigOperators.Group.Finset.Basic
 
 open scoped BigOperators

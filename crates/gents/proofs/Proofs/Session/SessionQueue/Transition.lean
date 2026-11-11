@@ -1,4 +1,4 @@
-import Proofs.Session.State
+import Proofs.Session.SessionQueue.State
 
 namespace SessionQueue
 

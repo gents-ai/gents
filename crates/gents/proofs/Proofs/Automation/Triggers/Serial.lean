@@ -1,4 +1,4 @@
-import Proofs.Triggers.SerialSupport
+import Proofs.Automation.Triggers.SerialSupport
 
 theorem T2_serial_at_most_one
     (s : SystemState) (t : TriggerKey) (h_reach : Reachable s) :

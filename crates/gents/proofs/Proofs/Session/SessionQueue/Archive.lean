@@ -1,4 +1,4 @@
-import Proofs.AgentSession
+import Proofs.Session.AgentSession
 
 namespace AgentSession.Archive
 

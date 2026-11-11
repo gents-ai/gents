@@ -1,4 +1,4 @@
-import Proofs.GoalAutomation.ClientDelivery
+import Proofs.Automation.GoalAutomation.ClientDelivery
 import Lean
 
 namespace Conformance.GoalClientDeliveryContracts

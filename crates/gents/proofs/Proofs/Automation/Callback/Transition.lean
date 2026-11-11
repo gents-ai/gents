@@ -1,4 +1,4 @@
-import Proofs.Callback.Types
+import Proofs.Automation.Callback.Types
 
 namespace CallbackInvocation
 

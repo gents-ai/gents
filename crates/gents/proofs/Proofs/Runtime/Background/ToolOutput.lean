@@ -1,4 +1,4 @@
-import Proofs.CanonicalOutput.Execution.Projection
+import Proofs.Runtime.CanonicalOutput.Execution.Projection
 namespace Background
 namespace ToolOutput
 structure RetainedWindow where

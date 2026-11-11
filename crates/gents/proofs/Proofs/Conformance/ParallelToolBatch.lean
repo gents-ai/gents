@@ -1,4 +1,4 @@
-import Proofs.ToolExecution.Parallel
+import Proofs.Shared.ToolExecution.Parallel
 import Lean
 
 namespace Conformance.ParallelToolBatch

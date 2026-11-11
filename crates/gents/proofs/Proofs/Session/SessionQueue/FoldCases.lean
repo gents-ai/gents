@@ -1,5 +1,5 @@
-import Proofs.Session.Fold
-import Proofs.PromptAssembly.CurrentInput
+import Proofs.Session.SessionQueue.Fold
+import Proofs.Session.PromptAssembly.CurrentInput
 
 namespace SessionQueue.FoldCases
 

@@ -1,5 +1,5 @@
 import Lean
-import Proofs.Basic
+import Proofs.Shared.Basic
 
 namespace PromptAssembly.SchemaArgumentRepair
 open Lean

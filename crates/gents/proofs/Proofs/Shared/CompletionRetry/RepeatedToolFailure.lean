@@ -1,4 +1,4 @@
-import Proofs.CompletionRetry.InvalidToolProgress
+import Proofs.Shared.CompletionRetry.InvalidToolProgress
 
 /-! The guard folds the execution's dispatch record and is execution-local; it is
 not persisted and owns no request lifecycle. Either ending asks the existing

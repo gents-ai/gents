@@ -1,5 +1,5 @@
-import Proofs.ToolPolicy.Configuration
-import Proofs.PluginJob.Admission
+import Proofs.Tools.ToolPolicy.Configuration
+import Proofs.ToolCalls.PluginJob.Admission
 
 /-!
 # Plugin-job authority: install provenance and script origin

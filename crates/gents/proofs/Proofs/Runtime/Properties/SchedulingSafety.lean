@@ -1,5 +1,5 @@
-import Proofs.Fleet.Properties
-import Proofs.Request.Properties
+import Proofs.Session.Fleet.Properties
+import Proofs.Session.Request.Properties
 
 open AdmissionState SchedulerState FleetState
 

@@ -1,8 +1,8 @@
-import Proofs.PluginJob.Types
-import Proofs.PluginJob.Keys
-import Proofs.PluginJob.Control
-import Proofs.PluginJob.Admission
-import Proofs.PluginJob.Adoption
-import Proofs.PluginJob.Step
-import Proofs.PluginJob.Authority
-import Proofs.PluginJob.ExecutionIdentity
+import Proofs.ToolCalls.PluginJob.Types
+import Proofs.ToolCalls.PluginJob.Keys
+import Proofs.ToolCalls.PluginJob.Control
+import Proofs.ToolCalls.PluginJob.Admission
+import Proofs.ToolCalls.PluginJob.Adoption
+import Proofs.ToolCalls.PluginJob.Step
+import Proofs.ToolCalls.PluginJob.Authority
+import Proofs.ToolCalls.PluginJob.ExecutionIdentity

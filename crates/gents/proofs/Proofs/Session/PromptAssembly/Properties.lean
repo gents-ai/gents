@@ -1,4 +1,4 @@
-import Proofs.PromptAssembly.Executable
+import Proofs.Session.PromptAssembly.Executable
 
 namespace PromptAssembly
 

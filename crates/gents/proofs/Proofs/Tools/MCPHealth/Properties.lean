@@ -1,4 +1,4 @@
-import Proofs.MCPHealth.Transition
+import Proofs.Tools.MCPHealth.Transition
 
 namespace Proofs.MCPHealth
 

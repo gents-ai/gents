@@ -1,5 +1,5 @@
-import Proofs.MCPHealth.State
-import Proofs.ToolExecution.Policy
+import Proofs.Tools.MCPHealth.State
+import Proofs.Session.ToolExecution.Policy
 
 namespace Proofs.MCPHealth
 

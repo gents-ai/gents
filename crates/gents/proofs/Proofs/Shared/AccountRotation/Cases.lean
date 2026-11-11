@@ -1,4 +1,4 @@
-import Proofs.AccountRotation.Properties
+import Proofs.Shared.AccountRotation.Properties
 
 /-!
 Executable rotation witnesses. The single-account cases replay Claude Code

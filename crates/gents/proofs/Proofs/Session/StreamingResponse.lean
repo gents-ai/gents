@@ -1,6 +1,6 @@
-import Proofs.StreamingResponse.State
-import Proofs.StreamingResponse.TargetSelection
-import Proofs.StreamingResponse.Transition
-import Proofs.StreamingResponse.Properties
-import Proofs.StreamingResponse.PrefixGrowth
-import Proofs.StreamingResponse.Executable
+import Proofs.Session.StreamingResponse.State
+import Proofs.Session.StreamingResponse.TargetSelection
+import Proofs.Session.StreamingResponse.Transition
+import Proofs.Session.StreamingResponse.Properties
+import Proofs.Session.StreamingResponse.PrefixGrowth
+import Proofs.Session.StreamingResponse.Executable

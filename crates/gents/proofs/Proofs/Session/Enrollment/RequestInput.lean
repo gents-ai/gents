@@ -1,8 +1,8 @@
-import Proofs.AgentSession
-import Proofs.Session.State
-import Proofs.Enrollment.State
-import Proofs.Enrollment.CapturedContext
-import Proofs.Workspace.Types
+import Proofs.Session.AgentSession
+import Proofs.Session.SessionQueue.State
+import Proofs.P2P.Enrollment.State
+import Proofs.Session.Enrollment.CapturedContext
+import Proofs.Session.Workspace.Types
 
 namespace Enrollment
 

@@ -1,4 +1,4 @@
-import Proofs.Scheduling
+import Proofs.Inference.Scheduling
 
 inductive InferenceCallState where
   | queued

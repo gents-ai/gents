@@ -1,4 +1,4 @@
-import Proofs.SelfConfig.Types
+import Proofs.Tools.SelfConfig.Types
 
 namespace SelfConfig
 

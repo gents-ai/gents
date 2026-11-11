@@ -162,16 +162,23 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
 }
 
 fn proofs_models(root: &Path) -> Vec<String> {
+    // Models live one directory down, in the layer directory of the crate they specify.
     let proofs = root.join("crates/gents/proofs/Proofs");
     let mut models = Vec::new();
-    for entry in std::fs::read_dir(&proofs).expect("read Proofs/").flatten() {
-        let path = entry.path();
-        if path.extension().is_some_and(|ext| ext == "lean") {
-            let name = path.file_stem().unwrap().to_string_lossy().to_string();
-            if matches!(name.as_str(), "Basic" | "Conformance") {
-                continue;
+    for layer in std::fs::read_dir(&proofs).expect("read Proofs/").flatten() {
+        let layer = layer.path();
+        if !layer.is_dir() || layer.file_name().is_some_and(|name| name == "Conformance") {
+            continue;
+        }
+        for entry in std::fs::read_dir(&layer).expect("read a layer directory").flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|ext| ext == "lean") {
+                let name = path.file_stem().unwrap().to_string_lossy().to_string();
+                if name == "Basic" {
+                    continue;
+                }
+                models.push(name);
             }
-            models.push(name);
         }
     }
     models.sort();

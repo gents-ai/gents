@@ -1,5 +1,5 @@
-import Proofs.Session.Management
-import Proofs.Session.CommandAuthority
+import Proofs.Session.SessionQueue.Management
+import Proofs.Session.SessionQueue.CommandAuthority
 
 namespace SessionQueue.InputEdit
 

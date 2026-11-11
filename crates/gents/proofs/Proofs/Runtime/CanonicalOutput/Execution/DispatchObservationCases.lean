@@ -1,7 +1,7 @@
-import Proofs.CanonicalOutput.Execution.DispatchObservation
-import Proofs.CanonicalOutput.Execution.Examples
-import Proofs.CanonicalOutput.Execution.GateCases
-import Proofs.Recovery.Sweeps.ToolCalls
+import Proofs.Runtime.CanonicalOutput.Execution.DispatchObservation
+import Proofs.Runtime.CanonicalOutput.Execution.Examples
+import Proofs.Runtime.CanonicalOutput.Execution.GateCases
+import Proofs.ToolCalls.Recovery.Sweeps.ToolCalls
 
 namespace CanonicalOutput.Execution.DispatchObservation.Cases
 

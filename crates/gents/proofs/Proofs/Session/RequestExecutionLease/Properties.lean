@@ -1,4 +1,4 @@
-import Proofs.RequestExecutionLease.Transition
+import Proofs.Session.RequestExecutionLease.Transition
 
 namespace RequestExecutionLease
 

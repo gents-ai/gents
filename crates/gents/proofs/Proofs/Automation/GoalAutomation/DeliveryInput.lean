@@ -1,6 +1,6 @@
-import Proofs.GoalAutomation.RequestAssignment
-import Proofs.Triggers.Durable
-import Proofs.PluginJob.Keys
+import Proofs.Automation.GoalAutomation.RequestAssignment
+import Proofs.Automation.Triggers.Durable
+import Proofs.ToolCalls.PluginJob.Keys
 
 namespace GoalAutomation.DeliveryInput
 

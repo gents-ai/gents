@@ -1,5 +1,5 @@
-import Proofs.CanonicalOutput.Execution.Examples
-import Proofs.StreamingResponse.ReasoningAudit
+import Proofs.Runtime.CanonicalOutput.Execution.Examples
+import Proofs.Session.StreamingResponse.ReasoningAudit
 namespace CanonicalOutput.Execution.AuxiliaryCases
 
 open CanonicalOutput

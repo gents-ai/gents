@@ -1,7 +1,7 @@
 import Lean
-import Proofs.CanonicalOutput.Terminal
-import Proofs.Identity.Household
-import Proofs.Request.CausalHop
+import Proofs.Session.CanonicalOutput.Terminal
+import Proofs.Store.Identity.Household
+import Proofs.Session.Request.CausalHop
 
 namespace Request.CrossActorAuthorization
 

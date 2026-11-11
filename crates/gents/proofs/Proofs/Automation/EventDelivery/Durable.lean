@@ -1,4 +1,4 @@
-import Proofs.Triggers.Durable
+import Proofs.Automation.Triggers.Durable
 
 namespace EventDelivery.Durable
 open Triggers.Durable

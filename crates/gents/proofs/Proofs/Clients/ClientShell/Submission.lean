@@ -1,4 +1,4 @@
-import Proofs.ClientShell.Types
+import Proofs.Clients.ClientShell.Types
 
 structure SubmitContext where
   clientAvailable   : Bool

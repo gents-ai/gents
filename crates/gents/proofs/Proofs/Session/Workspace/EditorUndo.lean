@@ -1,4 +1,4 @@
-import Proofs.Workspace.Properties
+import Proofs.Session.Workspace.Properties
 
 namespace Workspace.EditorUndo
 

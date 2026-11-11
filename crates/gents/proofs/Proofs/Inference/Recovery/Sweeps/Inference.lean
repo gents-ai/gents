@@ -1,5 +1,5 @@
-import Proofs.Recovery.Contract
-import Proofs.InferenceCall.SlotAccounting
+import Proofs.Inference.Recovery.Contract
+import Proofs.Inference.InferenceCall.SlotAccounting
 
 namespace Recovery
 

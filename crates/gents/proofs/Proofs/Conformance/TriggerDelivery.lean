@@ -1,8 +1,8 @@
-import Proofs.Triggers.Durable
-import Proofs.EventDelivery.Durable
+import Proofs.Automation.Triggers.Durable
+import Proofs.Automation.EventDelivery.Durable
 import Proofs.Conformance.ContractTypes
-import Proofs.Triggers.SessionKey
-import Proofs.Triggers.FireBudget
+import Proofs.Automation.Triggers.SessionKey
+import Proofs.Automation.Triggers.FireBudget
 
 namespace Conformance.TriggerDelivery
 

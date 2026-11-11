@@ -1,4 +1,4 @@
-import Proofs.ToolPolicy.PluginApproval
+import Proofs.Tools.ToolPolicy.PluginApproval
 
 namespace ToolPolicy.WorkspacePermissions
 

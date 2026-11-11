@@ -1,5 +1,5 @@
-import Proofs.PromptAssembly.Content
-import Proofs.PromptAssembly.Properties
+import Proofs.Session.PromptAssembly.Content
+import Proofs.Session.PromptAssembly.Properties
 
 /-!
 # Content-bearing provider model with global resolution

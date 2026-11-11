@@ -1,4 +1,4 @@
-import Proofs.CanonicalOutput.Message
+import Proofs.Session.CanonicalOutput.Message
 
 namespace CanonicalOutput.MessageCases
 

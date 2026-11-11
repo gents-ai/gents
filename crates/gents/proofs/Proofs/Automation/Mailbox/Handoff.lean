@@ -1,7 +1,7 @@
-import Proofs.Mailbox.Properties
-import Proofs.Mailbox.Reply
-import Proofs.ToolExecution.Executable
-import Proofs.RequestExecutionLease.Properties
+import Proofs.Automation.Mailbox.Properties
+import Proofs.Automation.Mailbox.Reply
+import Proofs.Session.ToolExecution.Executable
+import Proofs.Session.RequestExecutionLease.Properties
 
 /-!
 # Session-bound mailbox handoff

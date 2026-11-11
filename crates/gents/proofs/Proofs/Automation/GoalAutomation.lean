@@ -1,5 +1,5 @@
-import Proofs.Goals
-import Proofs.TextNormalization
+import Proofs.Automation.Goals
+import Proofs.Shared.TextNormalization
 
 namespace GoalAutomation
 

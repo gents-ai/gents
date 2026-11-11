@@ -1,5 +1,5 @@
-import Proofs.CrossMachineComposed.Foreground
-import Proofs.CrossMachineComposed.UniqueCallIds
+import Proofs.Runtime.CrossMachineComposed.Foreground
+import Proofs.Runtime.CrossMachineComposed.UniqueCallIds
 
 namespace ComposedState
 

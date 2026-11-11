@@ -1,4 +1,4 @@
-import Proofs.ToolPolicy.WriteInput
+import Proofs.Shared.ToolPolicy.WriteInput
 import Mathlib.Data.Nat.Basic
 
 namespace CompletionRetry.CountCarrier

@@ -1,2 +1,2 @@
-import Proofs.Triggers.SerialSupport.Counting
-import Proofs.Triggers.SerialSupport.Preservation
+import Proofs.Automation.Triggers.SerialSupport.Counting
+import Proofs.Automation.Triggers.SerialSupport.Preservation

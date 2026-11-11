@@ -1,4 +1,4 @@
-import Proofs.Basic
+import Proofs.Shared.Basic
 
 /-!
 # Reasoning replay frontier derived from accepted captures

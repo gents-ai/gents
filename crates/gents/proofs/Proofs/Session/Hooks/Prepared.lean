@@ -1,4 +1,4 @@
-import Proofs.Hooks.Effect
+import Proofs.Session.Hooks.Effect
 
 namespace Hooks
 

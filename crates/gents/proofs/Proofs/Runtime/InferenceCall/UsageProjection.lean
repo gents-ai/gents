@@ -1,6 +1,6 @@
-import Proofs.InferenceCall.Persistence
-import Proofs.CanonicalOutput.Execution.State
-import Proofs.PromptAssembly.AggregateBudget
+import Proofs.Inference.InferenceCall.Persistence
+import Proofs.Runtime.CanonicalOutput.Execution.State
+import Proofs.Session.PromptAssembly.AggregateBudget
 import Mathlib.Algebra.BigOperators.Group.Finset.Basic
 
 open scoped BigOperators

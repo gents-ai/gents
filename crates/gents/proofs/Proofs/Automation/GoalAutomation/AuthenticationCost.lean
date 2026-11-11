@@ -1,4 +1,4 @@
-import Proofs.GoalAutomation.RequestAncestry
+import Proofs.Automation.GoalAutomation.RequestAncestry
 
 namespace GoalAutomation.AuthenticationCost
 

@@ -1,5 +1,5 @@
-import Proofs.Triggers.Durable
-import Proofs.Triggers.Reachability
+import Proofs.Automation.Triggers.Durable
+import Proofs.Automation.Triggers.Reachability
 
 namespace Triggers.Durable
 

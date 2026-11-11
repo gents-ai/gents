@@ -1,5 +1,5 @@
-import Proofs.Lsp.Theorems
-import Proofs.ToolPolicy.Meet
+import Proofs.Tools.Lsp.Theorems
+import Proofs.Tools.ToolPolicy.Meet
 
 namespace Lsp.ContractCases
 

@@ -1,5 +1,5 @@
-import Proofs.Identity.Operations
-import Proofs.Identity.RelationshipReplay
+import Proofs.Store.Identity.Operations
+import Proofs.Store.Identity.RelationshipReplay
 import Lean
 
 namespace Identity.OperationsConformance

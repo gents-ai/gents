@@ -1,4 +1,4 @@
-import Proofs.CanonicalOutput.Execution.Properties
+import Proofs.Runtime.CanonicalOutput.Execution.Properties
 
 namespace CanonicalOutput.Execution.Examples
 

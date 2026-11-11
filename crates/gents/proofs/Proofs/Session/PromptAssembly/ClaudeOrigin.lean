@@ -1,4 +1,4 @@
-import Proofs.PromptAssembly.ClaudeMap
+import Proofs.Session.PromptAssembly.ClaudeMap
 
 /-!
 # Claude Code wire mode of a Gents request

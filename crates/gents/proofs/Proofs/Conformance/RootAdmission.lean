@@ -1,4 +1,4 @@
-import Proofs.PeerRegistryDiscovery.RootAdmission
+import Proofs.Tools.PeerRegistryDiscovery.RootAdmission
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.RootAdmissionContracts

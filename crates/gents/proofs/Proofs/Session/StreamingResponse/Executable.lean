@@ -1,5 +1,5 @@
-import Proofs.StreamingResponse.Properties
-import Proofs.StreamingResponse.TargetSelection
+import Proofs.Session.StreamingResponse.Properties
+import Proofs.Session.StreamingResponse.TargetSelection
 
 namespace StreamingResponse
 

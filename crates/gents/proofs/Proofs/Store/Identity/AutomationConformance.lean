@@ -1,4 +1,4 @@
-import Proofs.Identity.Automation
+import Proofs.Store.Identity.Automation
 import Lean
 
 namespace Identity.AutomationConformance

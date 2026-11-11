@@ -1,5 +1,5 @@
-import Proofs.GoalAutomation.OperatorResume
-import Proofs.Identity.SessionChild
+import Proofs.Automation.GoalAutomation.OperatorResume
+import Proofs.Store.Identity.SessionChild
 
 /-! Transaction-boundary refinement of the existing claimed → childPresent
 phase. Claim has already consumed the Goal sequence. `commit` means the SAME

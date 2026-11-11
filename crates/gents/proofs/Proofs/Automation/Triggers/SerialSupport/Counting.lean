@@ -1,4 +1,4 @@
-import Proofs.Triggers.Reachability
+import Proofs.Automation.Triggers.Reachability
 
 private theorem list_any_false_filter_length_zero
     {α : Type} {p : α → Bool} {l : List α}

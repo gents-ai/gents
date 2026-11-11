@@ -1,7 +1,7 @@
-import Proofs.Basic
-import Proofs.Transcript.State
-import Proofs.StreamingResponse.State
-import Proofs.PromptAssembly.Executable
+import Proofs.Shared.Basic
+import Proofs.Session.Transcript.State
+import Proofs.Session.StreamingResponse.State
+import Proofs.Session.PromptAssembly.Executable
 import Mathlib.Logic.Equiv.List
 
 namespace Compaction

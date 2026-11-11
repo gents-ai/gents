@@ -1,4 +1,4 @@
-import Proofs.Configuration
+import Proofs.Documents.Configuration
 
 namespace Configuration.Affected
 

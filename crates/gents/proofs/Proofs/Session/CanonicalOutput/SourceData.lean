@@ -1,4 +1,4 @@
-import Proofs.CanonicalOutput.State
+import Proofs.Shared.CanonicalOutput.State
 import Mathlib.Data.List.Dedup
 
 namespace CanonicalOutput.Execution

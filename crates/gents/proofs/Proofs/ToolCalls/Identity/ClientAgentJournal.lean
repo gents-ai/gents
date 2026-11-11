@@ -1,6 +1,6 @@
-import Proofs.Identity.Household
-import Proofs.Identity.ClientAgentCreation
-import Proofs.ToolPolicy.PluginData
+import Proofs.Store.Identity.Household
+import Proofs.Store.Identity.ClientAgentCreation
+import Proofs.Tools.ToolPolicy.PluginData
 
 namespace Identity.ClientAgentJournal
 open Lean

@@ -2,6 +2,7 @@
 """Print the group-level import graph of the proof tree. Reports only; never fails on layering."""
 import argparse
 import importlib.util
+import json
 from pathlib import Path
 import sys
 
@@ -13,9 +14,19 @@ spec.loader.exec_module(closure)
 FEATURE_GROUPS = ("Goals", "GoalAutomation", "Workspace", "Mailbox")
 
 
+LAYER_DIRECTORIES = {layer["directory"].split("/")[-1] for layer in json.loads(
+    Path(__file__).with_name("lean-import-layers.json").read_text())["layers"]
+    if layer.get("directory") and layer["name"] != "conformance"}
+
+
 def group(module):
+    """Model group of a module: the directory or file under its layer directory."""
     parts = module.split(".")
-    return parts[1] if len(parts) > 1 and parts[0] == "Proofs" else None
+    if len(parts) < 2 or parts[0] != "Proofs":
+        return None
+    if parts[1] in LAYER_DIRECTORIES and len(parts) > 2:
+        return parts[2]
+    return parts[1]
 
 
 def modules(root):

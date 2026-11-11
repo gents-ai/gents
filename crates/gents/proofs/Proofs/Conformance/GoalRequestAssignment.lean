@@ -1,6 +1,6 @@
-import Proofs.GoalAutomation.HistoryProjection
-import Proofs.GoalAutomation.RequestAssignment
-import Proofs.Recovery.Sweeps.SessionMessage
+import Proofs.Automation.GoalAutomation.HistoryProjection
+import Proofs.Automation.GoalAutomation.RequestAssignment
+import Proofs.ToolCalls.Recovery.Sweeps.SessionMessage
 import Proofs.Conformance.ContractTypes
 import Lean
 

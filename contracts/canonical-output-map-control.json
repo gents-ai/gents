@@ -2,11 +2,11 @@
   {
     "id": "control.completion-retry-policy",
     "model_symbols": [
-      { "file": "crates/gents/proofs/Proofs/CompletionRetry/Transition.lean", "symbol": "CompletionRetry.Action" },
-      { "file": "crates/gents/proofs/Proofs/CompletionRetry/CanonicalGate.lean", "symbol": "CompletionRetry.CanonicalGate.stepPolicy" },
-      { "file": "crates/gents/proofs/Proofs/CompletionRetry/Properties.lean", "symbol": "CompletionRetry.retry_budget_caps_preserved" },
-      { "file": "crates/gents/proofs/Proofs/CompletionRetry/Properties.lean", "symbol": "CompletionRetry.scheduled_backoff_fits_deadline" },
-      { "file": "crates/gents/proofs/Proofs/CompletionRetry/Properties.lean", "symbol": "CompletionRetry.successful_wake_uses_observed_time" }
+      { "file": "crates/gents/proofs/Proofs/Shared/CompletionRetry/Transition.lean", "symbol": "CompletionRetry.Action" },
+      { "file": "crates/gents/proofs/Proofs/Runtime/CompletionRetry/CanonicalGate.lean", "symbol": "CompletionRetry.CanonicalGate.stepPolicy" },
+      { "file": "crates/gents/proofs/Proofs/Shared/CompletionRetry/Properties.lean", "symbol": "CompletionRetry.retry_budget_caps_preserved" },
+      { "file": "crates/gents/proofs/Proofs/Shared/CompletionRetry/Properties.lean", "symbol": "CompletionRetry.scheduled_backoff_fits_deadline" },
+      { "file": "crates/gents/proofs/Proofs/Shared/CompletionRetry/Properties.lean", "symbol": "CompletionRetry.successful_wake_uses_observed_time" }
     ],
     "constructors": [
       "CompletionRetry.Action.issue",
@@ -43,9 +43,9 @@
   {
     "id": "control.completion-retry-canonical-routing",
     "model_symbols": [
-      { "file": "crates/gents/proofs/Proofs/CompletionRetry/Transition.lean", "symbol": "CompletionRetry.Action" },
-      { "file": "crates/gents/proofs/Proofs/CompletionRetry/CanonicalGate.lean", "symbol": "CompletionRetry.CanonicalGate.policyActionAllowed" },
-      { "file": "crates/gents/proofs/Proofs/CompletionRetry/CanonicalGate.lean", "symbol": "CompletionRetry.CanonicalGate.commit" }
+      { "file": "crates/gents/proofs/Proofs/Shared/CompletionRetry/Transition.lean", "symbol": "CompletionRetry.Action" },
+      { "file": "crates/gents/proofs/Proofs/Runtime/CompletionRetry/CanonicalGate.lean", "symbol": "CompletionRetry.CanonicalGate.policyActionAllowed" },
+      { "file": "crates/gents/proofs/Proofs/Runtime/CompletionRetry/CanonicalGate.lean", "symbol": "CompletionRetry.CanonicalGate.commit" }
     ],
     "constructors": [
       "CompletionRetry.Action.confirmRetraction",
@@ -75,9 +75,9 @@
   {
     "id": "control.completion-retry-canonical-commit",
     "model_symbols": [
-      { "file": "crates/gents/proofs/Proofs/CompletionRetry/CanonicalGate.lean", "symbol": "CompletionRetry.CanonicalGate.Operation" },
-      { "file": "crates/gents/proofs/Proofs/CompletionRetry/CanonicalGate.lean", "symbol": "CompletionRetry.CanonicalGate.commit" },
-      { "file": "crates/gents/proofs/Proofs/CompletionRetry/CanonicalGate.lean", "symbol": "CompletionRetry.CanonicalGate.successful_commit_is_actual_gate_commit" }
+      { "file": "crates/gents/proofs/Proofs/Runtime/CompletionRetry/CanonicalGate.lean", "symbol": "CompletionRetry.CanonicalGate.Operation" },
+      { "file": "crates/gents/proofs/Proofs/Runtime/CompletionRetry/CanonicalGate.lean", "symbol": "CompletionRetry.CanonicalGate.commit" },
+      { "file": "crates/gents/proofs/Proofs/Runtime/CompletionRetry/CanonicalGate.lean", "symbol": "CompletionRetry.CanonicalGate.successful_commit_is_actual_gate_commit" }
     ],
     "constructors": [
       "CompletionRetry.CanonicalGate.Operation.retract",
@@ -106,8 +106,8 @@
   {
     "id": "control.session-queue-request-mutations",
     "model_symbols": [
-      { "file": "crates/gents/proofs/Proofs/Session/Executable.lean", "symbol": "SessionQueue.Action" },
-      { "file": "crates/gents/proofs/Proofs/Session/Executable.lean", "symbol": "SessionQueue.scopedStep?" }
+      { "file": "crates/gents/proofs/Proofs/Session/SessionQueue/Executable.lean", "symbol": "SessionQueue.Action" },
+      { "file": "crates/gents/proofs/Proofs/Session/SessionQueue/Executable.lean", "symbol": "SessionQueue.scopedStep?" }
     ],
     "constructors": [
       "SessionQueue.Action.appendPending",
@@ -141,9 +141,9 @@
   {
     "id": "control.session-queue-notification-drain",
     "model_symbols": [
-      { "file": "crates/gents/proofs/Proofs/Session/Executable.lean", "symbol": "SessionQueue.Action" },
-      { "file": "crates/gents/proofs/Proofs/Session/Executable.lean", "symbol": "SessionQueue.scopedStep?" },
-      { "file": "crates/gents/proofs/Proofs/Session/Properties/Coalescing.lean", "symbol": "SessionQueue.goal_queue_is_separate_from_background" },
+      { "file": "crates/gents/proofs/Proofs/Session/SessionQueue/Executable.lean", "symbol": "SessionQueue.Action" },
+      { "file": "crates/gents/proofs/Proofs/Session/SessionQueue/Executable.lean", "symbol": "SessionQueue.scopedStep?" },
+      { "file": "crates/gents/proofs/Proofs/Session/SessionQueue/Properties/Coalescing.lean", "symbol": "SessionQueue.goal_queue_is_separate_from_background" },
       { "file": "crates/gents/proofs/Proofs/Conformance/ContractCases/QueueDeadline.lean", "symbol": "Conformance.ContractCases.backgroundCompletionCreatesNoAgentRequestCase" }
     ],
     "constructors": ["SessionQueue.Action.drainAutomated"],
@@ -176,12 +176,12 @@
   {
     "id": "control.interrupt-wake-cutoff",
     "model_symbols": [
-      { "file": "crates/gents/proofs/Proofs/Session/Interrupt.lean", "symbol": "SessionQueue.latchInterruptScoped" },
-      { "file": "crates/gents/proofs/Proofs/Session/Interrupt.lean", "symbol": "SessionQueue.latchInterruptObserved" },
-      { "file": "crates/gents/proofs/Proofs/Session/Interrupt.lean", "symbol": "SessionQueue.latchInterruptObservedScoped" },
-      { "file": "crates/gents/proofs/Proofs/Session/Interrupt.lean", "symbol": "SessionQueue.latchInterruptObserved_preserves_unobserved" },
-      { "file": "crates/gents/proofs/Proofs/Session/Interrupt.lean", "symbol": "SessionQueue.latchInterrupt_replay_preserves_later_queue" },
-      { "file": "crates/gents/proofs/Proofs/Session/InterruptCases.lean", "symbol": "SessionQueue.InterruptCases.cases" }
+      { "file": "crates/gents/proofs/Proofs/Session/SessionQueue/Interrupt.lean", "symbol": "SessionQueue.latchInterruptScoped" },
+      { "file": "crates/gents/proofs/Proofs/Session/SessionQueue/Interrupt.lean", "symbol": "SessionQueue.latchInterruptObserved" },
+      { "file": "crates/gents/proofs/Proofs/Session/SessionQueue/Interrupt.lean", "symbol": "SessionQueue.latchInterruptObservedScoped" },
+      { "file": "crates/gents/proofs/Proofs/Session/SessionQueue/Interrupt.lean", "symbol": "SessionQueue.latchInterruptObserved_preserves_unobserved" },
+      { "file": "crates/gents/proofs/Proofs/Session/SessionQueue/Interrupt.lean", "symbol": "SessionQueue.latchInterrupt_replay_preserves_later_queue" },
+      { "file": "crates/gents/proofs/Proofs/Session/SessionQueue/InterruptCases.lean", "symbol": "SessionQueue.InterruptCases.cases" }
     ],
     "constructors": ["SessionQueue.Action.drainObservedAutomated"],
     "generated_groups": ["interrupt_queue_cases"],
@@ -213,12 +213,12 @@
   {
     "id": "control.physical-wake-claim-and-acknowledgement",
     "model_symbols": [
-      { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/Handover.lean", "symbol": "CanonicalOutput.Execution.Handover.canonicalWakeBindings" },
-      { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/Handover.lean", "symbol": "CanonicalOutput.Execution.Handover.evidenceValid" },
-      { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/Handover.lean", "symbol": "CanonicalOutput.Execution.Handover.claimAndActivate" },
-      { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/Handover.lean", "symbol": "CanonicalOutput.Execution.Handover.successful_claim_has_exact_binding" },
-      { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/Handover.lean", "symbol": "CanonicalOutput.Execution.Handover.finishAndAcknowledge" },
-      { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/Handover.lean", "symbol": "CanonicalOutput.Execution.Handover.successful_finish_clears_claim_control" }
+      { "file": "crates/gents/proofs/Proofs/Runtime/CanonicalOutput/Execution/Handover.lean", "symbol": "CanonicalOutput.Execution.Handover.canonicalWakeBindings" },
+      { "file": "crates/gents/proofs/Proofs/Runtime/CanonicalOutput/Execution/Handover.lean", "symbol": "CanonicalOutput.Execution.Handover.evidenceValid" },
+      { "file": "crates/gents/proofs/Proofs/Runtime/CanonicalOutput/Execution/Handover.lean", "symbol": "CanonicalOutput.Execution.Handover.claimAndActivate" },
+      { "file": "crates/gents/proofs/Proofs/Runtime/CanonicalOutput/Execution/Handover.lean", "symbol": "CanonicalOutput.Execution.Handover.successful_claim_has_exact_binding" },
+      { "file": "crates/gents/proofs/Proofs/Runtime/CanonicalOutput/Execution/Handover.lean", "symbol": "CanonicalOutput.Execution.Handover.finishAndAcknowledge" },
+      { "file": "crates/gents/proofs/Proofs/Runtime/CanonicalOutput/Execution/Handover.lean", "symbol": "CanonicalOutput.Execution.Handover.successful_finish_clears_claim_control" }
     ],
     "constructors": [],
     "generated_groups": [],
@@ -249,13 +249,13 @@
   {
     "id": "control.storage-write-gate-events",
     "model_symbols": [
-      { "file": "crates/gents/proofs/Proofs/StorageWriteGate.lean", "symbol": "StorageWriteGate.Event" },
-      { "file": "crates/gents/proofs/Proofs/StorageWriteGate.lean", "symbol": "StorageWriteGate.step" },
-      { "file": "crates/gents/proofs/Proofs/StorageWriteGate.lean", "symbol": "StorageWriteGate.elapsed_is_not_timeout_observation" },
-      { "file": "crates/gents/proofs/Proofs/StorageWriteGate.lean", "symbol": "StorageWriteGate.observed_cleanup_return_releases" },
-      { "file": "crates/gents/proofs/Proofs/StorageWriteGate.lean", "symbol": "StorageWriteGate.observed_drop_return_releases" },
-      { "file": "crates/gents/proofs/Proofs/StorageWriteGate.lean", "symbol": "StorageWriteGate.scheduled_rollback_timeout_releases_gate" },
-      { "file": "crates/gents/proofs/Proofs/StorageWriteGate.lean", "symbol": "StorageWriteGate.suspended_forever_is_valid" },
+      { "file": "crates/gents/proofs/Proofs/Store/StorageWriteGate.lean", "symbol": "StorageWriteGate.Event" },
+      { "file": "crates/gents/proofs/Proofs/Store/StorageWriteGate.lean", "symbol": "StorageWriteGate.step" },
+      { "file": "crates/gents/proofs/Proofs/Store/StorageWriteGate.lean", "symbol": "StorageWriteGate.elapsed_is_not_timeout_observation" },
+      { "file": "crates/gents/proofs/Proofs/Store/StorageWriteGate.lean", "symbol": "StorageWriteGate.observed_cleanup_return_releases" },
+      { "file": "crates/gents/proofs/Proofs/Store/StorageWriteGate.lean", "symbol": "StorageWriteGate.observed_drop_return_releases" },
+      { "file": "crates/gents/proofs/Proofs/Store/StorageWriteGate.lean", "symbol": "StorageWriteGate.scheduled_rollback_timeout_releases_gate" },
+      { "file": "crates/gents/proofs/Proofs/Store/StorageWriteGate.lean", "symbol": "StorageWriteGate.suspended_forever_is_valid" },
       { "file": "crates/gents/proofs/Proofs/Conformance/StorageWriteGate.lean", "symbol": "Conformance.StorageWriteGateContracts.cases" }
     ],
     "constructors": [
@@ -297,18 +297,18 @@
   {
     "id": "control.session-queue-user-fold",
     "model_symbols": [
-      { "file": "crates/gents/proofs/Proofs/Session/Executable.lean", "symbol": "SessionQueue.Action" },
-      { "file": "crates/gents/proofs/Proofs/Session/Executable.lean", "symbol": "SessionQueue.scopedStep?" },
-      { "file": "crates/gents/proofs/Proofs/Session/State.lean", "symbol": "SessionQueue.foldRun" },
-      { "file": "crates/gents/proofs/Proofs/Session/Fold.lean", "symbol": "SessionQueue.folded_share_head_authority" },
-      { "file": "crates/gents/proofs/Proofs/Session/Fold.lean", "symbol": "SessionQueue.TurnInput.providerInput_eq_authored" },
-      { "file": "crates/gents/proofs/Proofs/Session/FoldCases.lean", "symbol": "SessionQueue.FoldCases.cases" },
-      { "file": "crates/gents/proofs/Proofs/Session/Fold.lean", "symbol": "SessionQueue.early_finish_restores_queue" },
-      { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/Transition.lean", "symbol": "CanonicalOutput.Execution.reuseAuthored" },
-      { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/HandoverCases.lean", "symbol": "CanonicalOutput.Execution.Handover.Cases.foldClaimCases" },
-      { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/Transition.lean", "symbol": "CanonicalOutput.Execution.publishAuthoredComposed" },
-      { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/FoldPublicationCases.lean", "symbol": "CanonicalOutput.Execution.FoldPublication.cases" },
-      { "file": "crates/gents/proofs/Proofs/PromptAssembly/CurrentInput.lean", "symbol": "PromptAssembly.CurrentInput.answersSelection" }
+      { "file": "crates/gents/proofs/Proofs/Session/SessionQueue/Executable.lean", "symbol": "SessionQueue.Action" },
+      { "file": "crates/gents/proofs/Proofs/Session/SessionQueue/Executable.lean", "symbol": "SessionQueue.scopedStep?" },
+      { "file": "crates/gents/proofs/Proofs/Session/SessionQueue/State.lean", "symbol": "SessionQueue.foldRun" },
+      { "file": "crates/gents/proofs/Proofs/Session/SessionQueue/Fold.lean", "symbol": "SessionQueue.folded_share_head_authority" },
+      { "file": "crates/gents/proofs/Proofs/Session/SessionQueue/Fold.lean", "symbol": "SessionQueue.TurnInput.providerInput_eq_authored" },
+      { "file": "crates/gents/proofs/Proofs/Session/SessionQueue/FoldCases.lean", "symbol": "SessionQueue.FoldCases.cases" },
+      { "file": "crates/gents/proofs/Proofs/Session/SessionQueue/Fold.lean", "symbol": "SessionQueue.early_finish_restores_queue" },
+      { "file": "crates/gents/proofs/Proofs/Runtime/CanonicalOutput/Execution/Transition.lean", "symbol": "CanonicalOutput.Execution.reuseAuthored" },
+      { "file": "crates/gents/proofs/Proofs/Runtime/CanonicalOutput/Execution/HandoverCases.lean", "symbol": "CanonicalOutput.Execution.Handover.Cases.foldClaimCases" },
+      { "file": "crates/gents/proofs/Proofs/Runtime/CanonicalOutput/Execution/Transition.lean", "symbol": "CanonicalOutput.Execution.publishAuthoredComposed" },
+      { "file": "crates/gents/proofs/Proofs/Runtime/CanonicalOutput/Execution/FoldPublicationCases.lean", "symbol": "CanonicalOutput.Execution.FoldPublication.cases" },
+      { "file": "crates/gents/proofs/Proofs/Session/PromptAssembly/CurrentInput.lean", "symbol": "PromptAssembly.CurrentInput.answersSelection" }
     ],
     "constructors": [
       "SessionQueue.Action.claimFolding",

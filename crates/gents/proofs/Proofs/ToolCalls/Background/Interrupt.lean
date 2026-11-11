@@ -1,4 +1,4 @@
-import Proofs.ToolExecution.Transition
+import Proofs.Session.ToolExecution.Transition
 namespace Background
 namespace Interrupt
 

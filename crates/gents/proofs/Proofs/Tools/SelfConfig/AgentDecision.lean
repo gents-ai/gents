@@ -1,6 +1,6 @@
-import Proofs.SelfConfig.Theorems
-import Proofs.SelfConfig.CategoryGrants
-import Proofs.Configuration
+import Proofs.Tools.SelfConfig.Theorems
+import Proofs.Tools.SelfConfig.CategoryGrants
+import Proofs.Documents.Configuration
 
 /-!
 # Agent operations: one admission for every front end

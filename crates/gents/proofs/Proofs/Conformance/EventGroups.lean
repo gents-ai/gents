@@ -1,4 +1,4 @@
-import Proofs.Triggers.Groups
+import Proofs.Automation.Triggers.Groups
 import Proofs.Conformance.ContractTypes
 
 namespace Conformance.EventGroupContracts

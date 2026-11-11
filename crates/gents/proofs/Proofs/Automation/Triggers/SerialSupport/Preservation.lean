@@ -1,4 +1,4 @@
-import Proofs.Triggers.Reachability
+import Proofs.Automation.Triggers.Reachability
 
 private theorem dispatchStep_preserves_target_seriality
     (s : SystemState) (snap : TriggerSnapshot) (intent : FireIntent) (t : TriggerKey)

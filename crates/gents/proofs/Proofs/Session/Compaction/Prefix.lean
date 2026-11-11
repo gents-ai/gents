@@ -1,4 +1,4 @@
-import Proofs.Compaction.ProviderView
+import Proofs.Session.Compaction.ProviderView
 
 namespace Compaction
 

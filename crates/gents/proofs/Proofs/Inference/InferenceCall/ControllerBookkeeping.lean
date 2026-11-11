@@ -1,4 +1,4 @@
-import Proofs.InferenceCall.SlotAccounting
+import Proofs.Inference.InferenceCall.SlotAccounting
 
 namespace InferenceCall
 namespace ControllerBookkeeping

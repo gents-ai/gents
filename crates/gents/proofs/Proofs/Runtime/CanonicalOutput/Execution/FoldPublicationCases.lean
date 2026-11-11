@@ -1,6 +1,6 @@
-import Proofs.CanonicalOutput.Execution.HandoverCases
-import Proofs.CanonicalOutput.Execution.Transition
-import Proofs.Session.Management
+import Proofs.Runtime.CanonicalOutput.Execution.HandoverCases
+import Proofs.Runtime.CanonicalOutput.Execution.Transition
+import Proofs.Session.SessionQueue.Management
 
 namespace CanonicalOutput.Execution.FoldPublication
 

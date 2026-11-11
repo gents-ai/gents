@@ -1,6 +1,6 @@
-import Proofs.AgentSession
-import Proofs.CanonicalOutput.Message
-import Proofs.CanonicalOutput.Hydration
+import Proofs.Session.AgentSession
+import Proofs.Session.CanonicalOutput.Message
+import Proofs.Session.CanonicalOutput.Hydration
 import Mathlib.Data.List.Basic
 import Mathlib.Data.List.Dedup
 

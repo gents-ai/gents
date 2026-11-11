@@ -1,4 +1,4 @@
-import Proofs.Session.Interrupt
+import Proofs.Session.SessionQueue.Interrupt
 
 namespace SessionQueue.InterruptCases
 

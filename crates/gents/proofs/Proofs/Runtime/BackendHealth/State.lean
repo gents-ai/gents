@@ -1,5 +1,5 @@
-import Proofs.Basic
-import Proofs.RuntimeReconcile.State
+import Proofs.Shared.Basic
+import Proofs.Automation.RuntimeReconcile.State
 
 namespace Proofs.BackendHealth
 

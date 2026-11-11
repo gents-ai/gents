@@ -1,8 +1,8 @@
-import Proofs.CanonicalOutput.Execution.State
-import Proofs.CanonicalOutput.SourceData
-import Proofs.CanonicalOutput.ToolDelivery
-import Proofs.ToolPolicy.PluginCalls
-import Proofs.RequestExecutionLease.Transition
+import Proofs.Runtime.CanonicalOutput.Execution.State
+import Proofs.Session.CanonicalOutput.SourceData
+import Proofs.Session.CanonicalOutput.ToolDelivery
+import Proofs.Tools.ToolPolicy.PluginCalls
+import Proofs.Session.RequestExecutionLease.Transition
 
 namespace CanonicalOutput.Execution
 

@@ -1,6 +1,6 @@
 import Lean
-import Proofs.Identity.Household
-import Proofs.Identity.NodeFileRequests
+import Proofs.Store.Identity.Household
+import Proofs.Store.Identity.NodeFileRequests
 
 namespace Identity.WorkspaceAndFileRequests
 

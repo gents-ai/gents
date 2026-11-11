@@ -1,4 +1,4 @@
-import Proofs.Session.Properties.Ordering
+import Proofs.Session.SessionQueue.Properties.Ordering
 
 namespace SessionQueue
 

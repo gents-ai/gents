@@ -1,5 +1,5 @@
-import Proofs.Hooks.Claim
-import Proofs.Hooks.GoalTask
+import Proofs.Session.Hooks.Claim
+import Proofs.Automation.Hooks.GoalTask
 
 namespace Hooks
 

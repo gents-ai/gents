@@ -1,5 +1,5 @@
-import Proofs.CompletionRetry.Executable
-import Proofs.CompletionRetry.OutputObligation
+import Proofs.Shared.CompletionRetry.Executable
+import Proofs.Shared.CompletionRetry.OutputObligation
 import Proofs.Conformance.ContractTypes
 
 namespace CompletionRetry.Contracts

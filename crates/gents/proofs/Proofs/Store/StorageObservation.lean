@@ -1,4 +1,4 @@
-import Proofs.Persistence
+import Proofs.Store.Persistence
 
 inductive StorageObservation where
   | noMutation

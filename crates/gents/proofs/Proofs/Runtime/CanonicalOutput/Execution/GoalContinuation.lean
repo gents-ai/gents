@@ -1,5 +1,5 @@
-import Proofs.CanonicalOutput.Execution.Handover
-import Proofs.GoalAutomation.ClaimedPublication
+import Proofs.Runtime.CanonicalOutput.Execution.Handover
+import Proofs.Automation.GoalAutomation.ClaimedPublication
 
 namespace CanonicalOutput.Execution.GoalContinuation
 

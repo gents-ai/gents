@@ -1,4 +1,4 @@
-import Proofs.AccountRotation.Policy
+import Proofs.Shared.AccountRotation.Policy
 
 namespace AccountRotation
 

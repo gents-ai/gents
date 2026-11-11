@@ -336,7 +336,7 @@ struct Row {
 }
 
 /// The job state of a plugin job row: the native mirror of Lean
-/// `JobState.of` (`Proofs/PluginJob/Types.lean`). `job_progress.state` alone
+/// `JobState.of` (`Proofs/ToolCalls/PluginJob/Types.lean`). `job_progress.state` alone
 /// is not the state of an ended row, because a settle rewrites it only for a
 /// pause or an await.
 pub fn job_state(lifecycle: ToolCallState, progress: Option<&JobProgress>) -> JobState {

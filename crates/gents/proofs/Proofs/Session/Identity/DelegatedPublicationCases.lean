@@ -1,4 +1,4 @@
-import Proofs.Identity.DelegatedPublication
+import Proofs.Session.Identity.DelegatedPublication
 
 namespace Identity.DelegatedPublication.Cases
 

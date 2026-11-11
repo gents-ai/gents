@@ -1,4 +1,4 @@
-import Proofs.Triggers.Dispatch
+import Proofs.Automation.Triggers.Dispatch
 
 def consistentLineage (seed : RequestSeed) (origin : ExecutionOrigin) : Prop :=
   (seed.causedByTriggerKind = .manual ∧ seed.causedByTriggerId = none ∧

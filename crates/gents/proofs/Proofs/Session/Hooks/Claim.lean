@@ -1,4 +1,4 @@
-import Proofs.Hooks.Returned
+import Proofs.Session.Hooks.Returned
 
 namespace Hooks
 

@@ -1,4 +1,4 @@
-import Proofs.PromptAssembly.Budget
+import Proofs.Session.PromptAssembly.Budget
 
 namespace Compaction.ReductionEngine
 

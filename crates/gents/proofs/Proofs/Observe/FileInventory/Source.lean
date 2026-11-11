@@ -1,4 +1,4 @@
-import Proofs.CanonicalOutput.Hydration
+import Proofs.Session.CanonicalOutput.Hydration
 import Mathlib.Data.Finset.Basic
 import Mathlib.Data.Finset.Card
 

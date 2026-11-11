@@ -1,6 +1,6 @@
-import Proofs.CanonicalOutput.Execution.CoherenceFrame
-import Proofs.CanonicalOutput.Execution.Properties
-import Proofs.CanonicalOutput.Execution.Compaction
+import Proofs.Runtime.CanonicalOutput.Execution.CoherenceFrame
+import Proofs.Runtime.CanonicalOutput.Execution.Properties
+import Proofs.Runtime.CanonicalOutput.Execution.Compaction
 
 namespace CanonicalOutput.Execution
 

@@ -1,8 +1,8 @@
-import Proofs.Session.Properties.Executable
-import Proofs.AgentSession
-import Proofs.Request.State
-import Proofs.ToolExecution.State
-import Proofs.Transcript.State
+import Proofs.Session.SessionQueue.Properties.Executable
+import Proofs.Session.AgentSession
+import Proofs.Session.Request.State
+import Proofs.Session.ToolExecution.State
+import Proofs.Session.Transcript.State
 
 /-!
 # Background Completion Continuation

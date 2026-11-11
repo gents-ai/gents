@@ -1,5 +1,5 @@
-import Proofs.CanonicalOutput.Message
-import Proofs.ToolExecution.Executable
+import Proofs.Session.CanonicalOutput.Message
+import Proofs.Session.ToolExecution.Executable
 
 namespace CanonicalOutput.ToolDelivery
 

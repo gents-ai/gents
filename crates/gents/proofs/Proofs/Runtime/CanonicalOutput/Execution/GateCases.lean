@@ -1,6 +1,6 @@
-import Proofs.CanonicalOutput.Execution.Gate
-import Proofs.CanonicalOutput.Execution.BackgroundContinuation
-import Proofs.CanonicalOutput.Execution.Examples
+import Proofs.Runtime.CanonicalOutput.Execution.Gate
+import Proofs.Runtime.CanonicalOutput.Execution.BackgroundContinuation
+import Proofs.Runtime.CanonicalOutput.Execution.Examples
 
 namespace CanonicalOutput.Execution.Gate.Cases
 

@@ -1,5 +1,5 @@
-import Proofs.Basic
-import Proofs.Transcript.State
+import Proofs.Shared.Basic
+import Proofs.Session.Transcript.State
 
 namespace PromptAssembly
 

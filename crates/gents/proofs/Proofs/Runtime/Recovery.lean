@@ -1,3 +1,3 @@
-import Proofs.Recovery.Contract
-import Proofs.Recovery.Sweeps
-import Proofs.Recovery.StartupOrder
+import Proofs.Inference.Recovery.Contract
+import Proofs.Runtime.Recovery.Sweeps
+import Proofs.Runtime.Recovery.StartupOrder

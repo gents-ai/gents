@@ -1,4 +1,4 @@
-import Proofs.ToolPolicy.Meet
+import Proofs.Tools.ToolPolicy.Meet
 
 namespace PluginJob
 

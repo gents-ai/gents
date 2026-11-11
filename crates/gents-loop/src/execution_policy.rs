@@ -1,5 +1,5 @@
 //! Native counterpart of the executable Lean owners in
-//! `Proofs/RequestExecutionLease/`: turns observed durable facts into
+//! `Proofs/Session/RequestExecutionLease/RequestExecutionLease/`: turns observed durable facts into
 //! admission, bounded-renewal, and revocation decisions. Policy helper only —
 //! it never reads or writes. Lifecycle-changing writes (begin, renewal,
 //! producer decisions, finalization, revocation) must CAS the exact observed

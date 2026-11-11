@@ -1,4 +1,4 @@
-import Proofs.Identity.EnrollmentGrant
+import Proofs.Store.Identity.EnrollmentGrant
 import Lean
 
 namespace Identity.EnrollmentGrantConformance

@@ -1,5 +1,5 @@
-import Proofs.Recovery.Sweeps.Requests
-import Proofs.Recovery.Sweeps.Inference
+import Proofs.Session.Recovery.Sweeps.Requests
+import Proofs.Inference.Recovery.Sweeps.Inference
 
 /-! The inference sweep skips calls with live parents, so crash-orphaned calls
 converge only after request recovery. Startup must run the request sweep first. -/

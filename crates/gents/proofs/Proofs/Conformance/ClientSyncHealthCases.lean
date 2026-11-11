@@ -1,4 +1,4 @@
-import Proofs.ClientShell.SyncHealth
+import Proofs.Clients.ClientShell.SyncHealth
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.ClientSyncHealthCases

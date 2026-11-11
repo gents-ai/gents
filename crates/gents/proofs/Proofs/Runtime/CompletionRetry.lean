@@ -1,14 +1,14 @@
-import Proofs.CompletionRetry.State
-import Proofs.CompletionRetry.Transition
-import Proofs.CompletionRetry.Executable
-import Proofs.CompletionRetry.Properties
-import Proofs.CompletionRetry.CanonicalExecution
-import Proofs.CompletionRetry.CanonicalGate
-import Proofs.CompletionRetry.CanonicalGateCases
-import Proofs.CompletionRetry.OutputObligation
-import Proofs.CompletionRetry.InvalidToolProgress
-import Proofs.CompletionRetry.RepeatedToolFailure
+import Proofs.Shared.CompletionRetry.State
+import Proofs.Shared.CompletionRetry.Transition
+import Proofs.Shared.CompletionRetry.Executable
+import Proofs.Shared.CompletionRetry.Properties
+import Proofs.Runtime.CompletionRetry.CanonicalExecution
+import Proofs.Runtime.CompletionRetry.CanonicalGate
+import Proofs.Runtime.CompletionRetry.CanonicalGateCases
+import Proofs.Shared.CompletionRetry.OutputObligation
+import Proofs.Shared.CompletionRetry.InvalidToolProgress
+import Proofs.Shared.CompletionRetry.RepeatedToolFailure
 
-import Proofs.CompletionRetry.LogicalOutputObligation
+import Proofs.Runtime.CompletionRetry.LogicalOutputObligation
 
-import Proofs.CompletionRetry.CountCarrier
+import Proofs.Shared.CompletionRetry.CountCarrier

@@ -1,4 +1,4 @@
-import Proofs.Compaction.State
+import Proofs.Session.Compaction.State
 
 namespace Compaction
 

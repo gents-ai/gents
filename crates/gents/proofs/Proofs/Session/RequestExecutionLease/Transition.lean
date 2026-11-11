@@ -1,4 +1,4 @@
-import Proofs.RequestExecutionLease.State
+import Proofs.Session.RequestExecutionLease.State
 
 namespace RequestExecutionLease
 

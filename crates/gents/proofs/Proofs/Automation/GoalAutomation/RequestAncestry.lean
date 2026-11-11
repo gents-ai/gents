@@ -1,5 +1,5 @@
-import Proofs.GoalAutomation
-import Proofs.GoalAutomation.RequestHead
+import Proofs.Automation.GoalAutomation
+import Proofs.Automation.GoalAutomation.RequestHead
 
 /-!
 Authenticated physical request ancestry. The Rust owner is

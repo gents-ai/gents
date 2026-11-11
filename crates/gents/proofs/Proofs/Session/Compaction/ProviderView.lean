@@ -1,5 +1,5 @@
-import Proofs.Compaction.Strip
-import Proofs.PromptAssembly.Properties
+import Proofs.Session.Compaction.Strip
+import Proofs.Session.PromptAssembly.Properties
 
 namespace Compaction
 

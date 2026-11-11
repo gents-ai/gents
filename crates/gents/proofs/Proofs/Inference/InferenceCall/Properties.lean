@@ -1,4 +1,4 @@
-import Proofs.InferenceCall.Transition
+import Proofs.Inference.InferenceCall.Transition
 
 namespace InferenceCall
 

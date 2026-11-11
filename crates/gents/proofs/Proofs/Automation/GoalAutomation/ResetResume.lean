@@ -1,4 +1,4 @@
-import Proofs.GoalAutomation.OperatorResume
+import Proofs.Automation.GoalAutomation.OperatorResume
 
 namespace GoalAutomation.OperatorResume
 

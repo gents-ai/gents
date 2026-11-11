@@ -1,4 +1,4 @@
-import Proofs.ClientShell.SessionLoad
+import Proofs.Clients.ClientShell.SessionLoad
 
 namespace Conformance.ClientSessionLoad
 open _root_.ClientSessionLoad

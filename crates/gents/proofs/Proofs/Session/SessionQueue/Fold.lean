@@ -1,5 +1,5 @@
-import Proofs.Session.Properties
-import Proofs.Request.Executable
+import Proofs.Session.SessionQueue.Properties
+import Proofs.Session.Request.Executable
 
 /-! Folding queued user messages into the turn that claims them.
 

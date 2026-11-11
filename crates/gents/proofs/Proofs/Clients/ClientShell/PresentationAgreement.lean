@@ -1,4 +1,4 @@
-import Proofs.ClientShell.Projection
+import Proofs.Clients.ClientShell.Projection
 
 namespace ClientShell
 namespace PresentationAgreement

@@ -1,5 +1,5 @@
-import Proofs.Configuration
-import Proofs.SelfConfig.Theorems
+import Proofs.Documents.Configuration
+import Proofs.Tools.SelfConfig.Theorems
 
 namespace SelfConfig
 

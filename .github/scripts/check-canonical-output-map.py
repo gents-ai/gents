@@ -11,16 +11,16 @@ import sys
 
 PROOFS = Path("crates/gents/proofs")
 INVENTORIES = {
-    "Gate.Operation": ("CanonicalOutput/Execution/Gate.lean", "Operation"),
-    "SessionComposition.Trace": ("CanonicalOutput/Execution/SessionComposition.lean", "Trace"),
-    "RequestExecutionLease.Action": ("RequestExecutionLease/Transition.lean", "Action"),
-    "ToolExecution.ToolCallContext.Action": ("ToolExecution/Executable.lean", "Action"),
+    "Gate.Operation": ("Runtime/CanonicalOutput/Execution/Gate.lean", "Operation"),
+    "SessionComposition.Trace": ("Runtime/CanonicalOutput/Execution/SessionComposition.lean", "Trace"),
+    "RequestExecutionLease.Action": ("Session/RequestExecutionLease/Transition.lean", "Action"),
+    "ToolExecution.ToolCallContext.Action": ("Session/ToolExecution/Executable.lean", "Action"),
     "CanonicalOutput.Execution.ToolDelivery.CloseAuthority":
-        ("CanonicalOutput/Execution/ToolDelivery.lean", "CloseAuthority"),
-    "CompletionRetry.Action": ("CompletionRetry/Transition.lean", "Action"),
-    "CompletionRetry.CanonicalGate.Operation": ("CompletionRetry/CanonicalGate.lean", "Operation"),
-    "SessionQueue.Action": ("Session/Executable.lean", "Action"),
-    "StorageWriteGate.Event": ("StorageWriteGate.lean", "Event"),
+        ("Runtime/CanonicalOutput/Execution/ToolDelivery.lean", "CloseAuthority"),
+    "CompletionRetry.Action": ("Shared/CompletionRetry/Transition.lean", "Action"),
+    "CompletionRetry.CanonicalGate.Operation": ("Runtime/CompletionRetry/CanonicalGate.lean", "Operation"),
+    "SessionQueue.Action": ("Session/SessionQueue/Executable.lean", "Action"),
+    "StorageWriteGate.Event": ("Store/StorageWriteGate.lean", "Event"),
 }
 LEAN_NAMES = {name: ("CanonicalOutput.Execution." + name
                     if name in {"Gate.Operation", "SessionComposition.Trace"} else name)

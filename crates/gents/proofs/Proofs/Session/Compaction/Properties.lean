@@ -1,4 +1,4 @@
-import Proofs.Compaction.Transition
+import Proofs.Session.Compaction.Transition
 
 namespace Compaction
 

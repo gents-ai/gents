@@ -1,4 +1,4 @@
-import Proofs.EventDelivery.Watcher
+import Proofs.Automation.EventDelivery.Watcher
 import Lean
 
 namespace EventDelivery.WatcherConformance

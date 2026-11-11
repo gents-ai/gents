@@ -1,5 +1,5 @@
-import Proofs.GoalAutomation.RequestAssignment
-import Proofs.GoalAutomation.ClientControl
+import Proofs.Automation.GoalAutomation.RequestAssignment
+import Proofs.Automation.GoalAutomation.ClientControl
 
 /-!
 The client's read of one session's signed Goal projection, what that read

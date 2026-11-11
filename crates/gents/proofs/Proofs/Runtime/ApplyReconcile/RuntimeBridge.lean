@@ -1,8 +1,8 @@
-import Proofs.RuntimeReconcile.State
+import Proofs.Automation.RuntimeReconcile.State
 import Mathlib.Data.Finset.Image
 import Mathlib.Data.Finset.SDiff
-import Proofs.ApplyReconcile.Manifest
-import Proofs.Configuration
+import Proofs.Documents.ApplyReconcile.Manifest
+import Proofs.Documents.Configuration
 
 namespace ApplyReconcile
 

@@ -1,4 +1,4 @@
-import Proofs.ScopeTemplates.State
+import Proofs.Documents.ScopeTemplates.State
 import Mathlib.Data.List.Basic
 
 namespace ScopeTemplates

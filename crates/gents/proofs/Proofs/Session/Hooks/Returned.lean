@@ -1,4 +1,4 @@
-import Proofs.Hooks.Staging
+import Proofs.Session.Hooks.Staging
 
 namespace Hooks
 

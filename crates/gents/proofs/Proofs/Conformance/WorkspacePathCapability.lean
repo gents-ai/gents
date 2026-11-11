@@ -1,4 +1,4 @@
-import Proofs.Workspace.PathCapability
+import Proofs.Session.Workspace.PathCapability
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.WorkspacePathCapabilityContracts

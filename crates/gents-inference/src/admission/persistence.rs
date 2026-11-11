@@ -186,7 +186,7 @@ pub(super) async fn persist_existing_call_terminal(
     usage: Option<ProviderCallUsage>,
     cache_observation: CachedInputTokensObservation,
 ) -> Result<()> {
-    // Proofs/InferenceCall/Persistence.lean: only an existing legal source
+    // Proofs/Inference/InferenceCall/Persistence.lean: only an existing legal source
     // may install the first terminal outcome; later observations are usage only.
     let live_source = match call_state {
         "completed" | "failed" => r#"{ _eq: "running" }"#,

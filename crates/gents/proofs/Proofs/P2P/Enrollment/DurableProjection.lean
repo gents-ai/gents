@@ -1,4 +1,4 @@
-import Proofs.Enrollment.Properties
+import Proofs.P2P.Enrollment.Properties
 
 namespace Enrollment
 

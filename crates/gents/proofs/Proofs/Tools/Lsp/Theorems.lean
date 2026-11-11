@@ -1,4 +1,4 @@
-import Proofs.Lsp.Types
+import Proofs.Tools.Lsp.Types
 
 namespace Lsp
 

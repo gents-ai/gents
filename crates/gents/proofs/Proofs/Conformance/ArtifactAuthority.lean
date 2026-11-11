@@ -1,5 +1,5 @@
-import Proofs.CommandPolicy.ArtifactAuthority
-import Proofs.Workspace.Properties
+import Proofs.Session.CommandPolicy.ArtifactAuthority
+import Proofs.Session.Workspace.Properties
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.Contracts

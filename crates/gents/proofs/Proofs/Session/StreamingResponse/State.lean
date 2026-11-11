@@ -1,6 +1,6 @@
-import Proofs.CanonicalOutput.TerminalPayload
-import Proofs.CanonicalOutput.SourceData
-import Proofs.CanonicalOutput.Hydration
+import Proofs.Session.CanonicalOutput.TerminalPayload
+import Proofs.Session.CanonicalOutput.SourceData
+import Proofs.Session.CanonicalOutput.Hydration
 
 namespace StreamingResponse
 

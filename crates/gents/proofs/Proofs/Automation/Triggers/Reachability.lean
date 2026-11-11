@@ -1,4 +1,4 @@
-import Proofs.Triggers.Dispatch
+import Proofs.Automation.Triggers.Dispatch
 
 def dispatchStep
     (state  : SystemState)

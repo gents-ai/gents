@@ -1,6 +1,6 @@
-import Proofs.Request.State
-import Proofs.ToolExecution.State
-import Proofs.ManagedExec.Properties
+import Proofs.Session.Request.State
+import Proofs.Session.ToolExecution.State
+import Proofs.Session.ManagedExec.Properties
 
 namespace ManagedExec
 

@@ -83,6 +83,9 @@ def check(root, manifest):
         layer_of[module] = named or (by_directory[0] if by_directory else None)
     for module in sorted(explicit.keys() - modules.keys()):
         errors.append(f"{MANIFEST.name} names {module}, which does not exist")
+    for name in sorted(manifest.get("placements", {})):
+        if not any(module == name or module.startswith(name + ".") for module in modules):
+            errors.append(f"placement {name} names no module")
 
     exceptions = {(entry["module"], entry["imports"]): entry for entry in manifest.get("exceptions", [])}
     used = set()

@@ -1,5 +1,5 @@
-import Proofs.CrossMachineComposed.State
-import Proofs.Request.Executable
+import Proofs.Runtime.CrossMachineComposed.State
+import Proofs.Session.Request.Executable
 
 open RequestState RequestContext ProcessState PersistenceState ComposedState
 

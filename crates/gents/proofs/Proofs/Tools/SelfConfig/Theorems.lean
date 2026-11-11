@@ -1,4 +1,4 @@
-import Proofs.SelfConfig.Apply
+import Proofs.Tools.SelfConfig.Apply
 
 namespace SelfConfig
 

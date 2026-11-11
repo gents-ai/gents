@@ -1,5 +1,5 @@
-import Proofs.CanonicalOutput.Execution.Gate
-import Proofs.CanonicalOutput.Execution.Properties
+import Proofs.Runtime.CanonicalOutput.Execution.Gate
+import Proofs.Runtime.CanonicalOutput.Execution.Properties
 
 namespace CanonicalOutput.Execution
 

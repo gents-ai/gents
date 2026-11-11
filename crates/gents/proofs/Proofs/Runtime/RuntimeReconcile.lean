@@ -1,7 +1,7 @@
-import Proofs.RuntimeReconcile.StartupReadiness
-import Proofs.RuntimeReconcile.ServiceReplacement
-import Proofs.RuntimeReconcile.HttpAccess
-import Proofs.RuntimeReconcile.MetricsScrapeAccess
-import Proofs.RuntimeReconcile.State
-import Proofs.RuntimeReconcile.Transition
-import Proofs.RuntimeReconcile.Executable
+import Proofs.Runtime.RuntimeReconcile.StartupReadiness
+import Proofs.Runtime.RuntimeReconcile.ServiceReplacement
+import Proofs.Runtime.RuntimeReconcile.HttpAccess
+import Proofs.Runtime.RuntimeReconcile.MetricsScrapeAccess
+import Proofs.Automation.RuntimeReconcile.State
+import Proofs.Runtime.RuntimeReconcile.Transition
+import Proofs.Runtime.RuntimeReconcile.Executable

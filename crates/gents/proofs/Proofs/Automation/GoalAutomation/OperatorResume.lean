@@ -1,4 +1,4 @@
-import Proofs.GoalAutomation
+import Proofs.Automation.GoalAutomation
 
 /-! #1354: transaction-boundary refinement, not a new Goal status machine.
 `children` projects existing AgentRequest rows; no new durable registry.

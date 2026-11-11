@@ -1,4 +1,4 @@
-import Proofs.Fleet.State
+import Proofs.Session.Fleet.State
 
 namespace FleetState
 

@@ -1,4 +1,4 @@
-import Proofs.Workspace.EditorUndo
+import Proofs.Session.Workspace.EditorUndo
 
 namespace Workspace.EditorUndo.Checkpoint
 

@@ -1,7 +1,7 @@
-import Proofs.ToolPolicy.AccessReview
+import Proofs.Tools.ToolPolicy.AccessReview
 import Proofs.Conformance.Contracts.Json.ToolPolicy
-import Proofs.CanonicalOutput.Execution.Examples
-import Proofs.CanonicalOutput.Execution.Gate
+import Proofs.Runtime.CanonicalOutput.Execution.Examples
+import Proofs.Runtime.CanonicalOutput.Execution.Gate
 
 namespace Conformance.AccessReview
 open Lean ToolPolicy ToolPolicy.WorkspacePermissions

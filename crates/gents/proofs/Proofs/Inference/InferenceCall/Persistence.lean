@@ -1,4 +1,4 @@
-import Proofs.InferenceCall.State
+import Proofs.Inference.InferenceCall.State
 
 /-!
 Write guards at the persisted inference-call database boundary. Failure and

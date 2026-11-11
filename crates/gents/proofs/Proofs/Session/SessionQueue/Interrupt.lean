@@ -1,5 +1,5 @@
-import Proofs.Session.Properties
-import Proofs.Request.State
+import Proofs.Session.SessionQueue.Properties
+import Proofs.Session.Request.State
 
 namespace SessionQueue
 

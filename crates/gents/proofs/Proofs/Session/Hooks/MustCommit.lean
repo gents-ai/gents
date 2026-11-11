@@ -1,5 +1,5 @@
-import Proofs.Hooks.Staging
-import Proofs.Hooks.Delivery
+import Proofs.Session.Hooks.Staging
+import Proofs.Session.Hooks.Delivery
 
 namespace Hooks
 

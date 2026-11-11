@@ -1,5 +1,5 @@
-import Proofs.CanonicalOutput.Execution.ToolDelivery
-import Proofs.Background.CompletionContinuation
+import Proofs.Runtime.CanonicalOutput.Execution.ToolDelivery
+import Proofs.ToolCalls.Background.CompletionContinuation
 namespace CanonicalOutput.Execution.BackgroundContinuation
 
 def publishNotification (binding : WakeDocumentBinding) (world : World)

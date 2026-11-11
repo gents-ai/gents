@@ -1,6 +1,6 @@
-import Proofs.Basic
-import Proofs.Persistence
-import Proofs.ToolExecution.Policy
+import Proofs.Shared.Basic
+import Proofs.Store.Persistence
+import Proofs.Session.ToolExecution.Policy
 
 namespace ToolExecution
 

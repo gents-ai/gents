@@ -1,10 +1,10 @@
-import Proofs.PluginJob.Keys
-import Proofs.Recovery.Sweeps.SessionMessage
-import Proofs.Background.CompletionDelivery
-import Proofs.Background.Interrupt
-import Proofs.DurableLineage
-import Proofs.Background.ProcessControl
-import Proofs.ToolPolicy.PluginData
+import Proofs.ToolCalls.PluginJob.Keys
+import Proofs.ToolCalls.Recovery.Sweeps.SessionMessage
+import Proofs.ToolCalls.Background.CompletionDelivery
+import Proofs.ToolCalls.Background.Interrupt
+import Proofs.Session.DurableLineage
+import Proofs.ToolCalls.Background.ProcessControl
+import Proofs.Tools.ToolPolicy.PluginData
 
 /-!
 # Plugin-job controls

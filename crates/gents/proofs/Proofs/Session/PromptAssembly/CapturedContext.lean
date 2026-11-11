@@ -1,5 +1,5 @@
-import Proofs.Enrollment.CapturedContext
-import Proofs.CanonicalOutput.Message
+import Proofs.Session.Enrollment.CapturedContext
+import Proofs.Session.CanonicalOutput.Message
 
 namespace PromptAssembly.CapturedContext
 

@@ -1,6 +1,6 @@
 import Mathlib.Data.List.Basic
-import Proofs.Request.State
-import Proofs.ScopeTemplates.State
+import Proofs.Session.Request.State
+import Proofs.Documents.ScopeTemplates.State
 
 namespace Eval
 

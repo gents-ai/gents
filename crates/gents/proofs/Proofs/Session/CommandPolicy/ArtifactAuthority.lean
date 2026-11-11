@@ -1,7 +1,7 @@
-import Proofs.CommandPolicy.Types
-import Proofs.CommandPolicy.Sandbox
-import Proofs.CommandPolicy.Validation
-import Proofs.Workspace.Types
+import Proofs.Session.CommandPolicy.Types
+import Proofs.Session.CommandPolicy.Sandbox
+import Proofs.Session.CommandPolicy.Validation
+import Proofs.Session.Workspace.Types
 
 namespace CommandPolicy
 

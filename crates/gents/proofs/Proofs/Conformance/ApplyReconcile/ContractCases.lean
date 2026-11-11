@@ -1,4 +1,4 @@
-import Proofs.ApplyReconcile.Publication
+import Proofs.Documents.ApplyReconcile.Publication
 import Proofs.Conformance.ContractTypes
 import Mathlib.Data.Finset.Card
 namespace ApplyReconcile.ContractCases

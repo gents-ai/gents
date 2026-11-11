@@ -1,4 +1,4 @@
-import Proofs.CompletionRetry.RepeatedToolFailure
+import Proofs.Shared.CompletionRetry.RepeatedToolFailure
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.RepeatedToolFailureContracts

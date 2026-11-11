@@ -1,4 +1,4 @@
-import Proofs.Session.Properties.Coalescing
+import Proofs.Session.SessionQueue.Properties.Coalescing
 
 namespace SessionQueue
 

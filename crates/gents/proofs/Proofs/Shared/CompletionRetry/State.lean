@@ -1,4 +1,4 @@
-import Proofs.CanonicalOutput.State
+import Proofs.Shared.CanonicalOutput.State
 
 namespace CompletionRetry
 

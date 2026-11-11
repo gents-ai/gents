@@ -1,7 +1,7 @@
-import Proofs.Request.State
-import Proofs.Request.Transition
-import Proofs.Request.Executable
-import Proofs.Request.Properties
-import Proofs.Request.Projection
-import Proofs.Request.CausalHop
-import Proofs.Request.CrossActorAuthorization
+import Proofs.Session.Request.State
+import Proofs.Session.Request.Transition
+import Proofs.Session.Request.Executable
+import Proofs.Session.Request.Properties
+import Proofs.Session.Request.Projection
+import Proofs.Session.Request.CausalHop
+import Proofs.Session.Request.CrossActorAuthorization

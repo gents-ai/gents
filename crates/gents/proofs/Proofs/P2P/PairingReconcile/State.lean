@@ -1,4 +1,4 @@
-import Proofs.Basic
+import Proofs.Shared.Basic
 import Mathlib.Data.Finset.Basic
 import Mathlib.Data.Finset.Card
 

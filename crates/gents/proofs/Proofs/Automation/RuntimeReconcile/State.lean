@@ -1,5 +1,5 @@
-import Proofs.Basic
-import Proofs.Process
+import Proofs.Shared.Basic
+import Proofs.Automation.Process
 import Mathlib.Data.Finset.Basic
 import Mathlib.Data.Finset.Card
 

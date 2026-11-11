@@ -1,9 +1,9 @@
-import Proofs.Process
-import Proofs.Request.Transition
-import Proofs.InferenceCall.Transition
-import Proofs.Persistence
-import Proofs.ToolExecution.Transition
-import Proofs.ManagedExec.Composed
+import Proofs.Automation.Process
+import Proofs.Session.Request.Transition
+import Proofs.Inference.InferenceCall.Transition
+import Proofs.Store.Persistence
+import Proofs.Session.ToolExecution.Transition
+import Proofs.Session.ManagedExec.Composed
 
 structure ComposedState where
   requestId : RequestId

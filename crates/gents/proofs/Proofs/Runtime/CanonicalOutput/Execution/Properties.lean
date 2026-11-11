@@ -1,5 +1,5 @@
-import Proofs.CanonicalOutput.Execution.Transition
-import Proofs.RequestExecutionLease.Properties
+import Proofs.Runtime.CanonicalOutput.Execution.Transition
+import Proofs.Session.RequestExecutionLease.Properties
 
 namespace CanonicalOutput.Execution
 

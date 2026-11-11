@@ -1,4 +1,4 @@
-import Proofs.ApplyReconcile.Manifest
+import Proofs.Documents.ApplyReconcile.Manifest
 
 namespace ApplyReconcile
 

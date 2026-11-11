@@ -1,4 +1,4 @@
-import Proofs.InferenceCall.State
+import Proofs.Inference.InferenceCall.State
 
 namespace InferenceCall
 

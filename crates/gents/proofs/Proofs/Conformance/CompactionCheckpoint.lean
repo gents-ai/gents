@@ -1,5 +1,5 @@
-import Proofs.Compaction.Checkpoint
-import Proofs.PromptAssembly.ClaudeOutput
+import Proofs.Session.Compaction.Checkpoint
+import Proofs.Session.PromptAssembly.ClaudeOutput
 
 namespace Conformance.CompactionCheckpoint
 open Lean

@@ -1,12 +1,12 @@
-import Proofs.CanonicalOutput.Message
-import Proofs.Request.State
-import Proofs.RequestExecutionLease.State
-import Proofs.Transcript.State
-import Proofs.ToolExecution.Executable
-import Proofs.Session.State
-import Proofs.StorageWriteGate
-import Proofs.Background.CompletionContinuation
-import Proofs.CompletionRetry.State
+import Proofs.Session.CanonicalOutput.Message
+import Proofs.Session.Request.State
+import Proofs.Session.RequestExecutionLease.State
+import Proofs.Session.Transcript.State
+import Proofs.Session.ToolExecution.Executable
+import Proofs.Session.SessionQueue.State
+import Proofs.Store.StorageWriteGate
+import Proofs.ToolCalls.Background.CompletionContinuation
+import Proofs.Shared.CompletionRetry.State
 
 namespace CanonicalOutput.Execution
 

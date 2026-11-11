@@ -1,4 +1,4 @@
-import Proofs.Recovery.Sweeps
+import Proofs.Runtime.Recovery.Sweeps
 import Proofs.Conformance.ContractCases
 import Proofs.Conformance.PluginJob
 

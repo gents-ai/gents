@@ -1,5 +1,5 @@
-import Proofs.Triggers.Types
-import Proofs.Configuration
+import Proofs.Automation.Triggers.Types
+import Proofs.Documents.Configuration
 
 def dispatchEnabledForSchedule
     (snap : TriggerSnapshot) (triggerId : String) : Option ActiveSchedule :=

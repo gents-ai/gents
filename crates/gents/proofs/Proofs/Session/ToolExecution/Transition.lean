@@ -1,5 +1,5 @@
-import Proofs.ToolExecution.CancelCause
-import Proofs.ToolExecution.State
+import Proofs.Session.ToolExecution.CancelCause
+import Proofs.Session.ToolExecution.State
 
 namespace ToolExecution
 namespace ToolCallContext

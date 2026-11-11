@@ -1,8 +1,8 @@
 import Batteries.Tactic.OpenPrivate
-import Proofs.PluginJob.Types
-import Proofs.Triggers.Identity
+import Proofs.ToolCalls.PluginJob.Types
+import Proofs.ToolCalls.Triggers.Identity
 
-open private decimalValue repr_no_colon from Proofs.Triggers.Identity
+open private decimalValue repr_no_colon from Proofs.ToolCalls.Triggers.Identity
 
 namespace PluginJob
 

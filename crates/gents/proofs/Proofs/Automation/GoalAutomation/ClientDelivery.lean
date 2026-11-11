@@ -1,4 +1,4 @@
-import Proofs.GoalAutomation.ClientMutation
+import Proofs.Automation.GoalAutomation.ClientMutation
 
 namespace GoalAutomation.ClientDelivery
 

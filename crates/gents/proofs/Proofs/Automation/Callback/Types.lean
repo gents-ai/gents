@@ -1,5 +1,5 @@
-import Proofs.Basic
-import Proofs.Triggers.Groups
+import Proofs.Shared.Basic
+import Proofs.Automation.Triggers.Groups
 
 inductive InvocationState where
   | pending

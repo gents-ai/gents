@@ -1,5 +1,5 @@
-import Proofs.Session.Interrupt
-import Proofs.Goals
+import Proofs.Session.SessionQueue.Interrupt
+import Proofs.Automation.Goals
 
 namespace SessionQueue.Control
 

@@ -1,7 +1,7 @@
-import Proofs.CanonicalOutput.Execution.Sequence
-import Proofs.CanonicalOutput.Execution.ToolDelivery
-import Proofs.CanonicalOutput.Execution.Compaction
-import Proofs.StorageWriteGate
+import Proofs.Runtime.CanonicalOutput.Execution.Sequence
+import Proofs.Runtime.CanonicalOutput.Execution.ToolDelivery
+import Proofs.Runtime.CanonicalOutput.Execution.Compaction
+import Proofs.Store.StorageWriteGate
 
 namespace CanonicalOutput.Execution.Gate
 

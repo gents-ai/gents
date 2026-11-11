@@ -1,4 +1,4 @@
-import Proofs.CanonicalOutput.Execution.SessionComposition
+import Proofs.Runtime.CanonicalOutput.Execution.SessionComposition
 
 namespace CanonicalOutput.Execution.SessionComposition
 

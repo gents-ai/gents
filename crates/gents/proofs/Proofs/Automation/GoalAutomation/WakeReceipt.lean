@@ -1,5 +1,5 @@
-import Proofs.Background.CompletionContinuation
-import Proofs.GoalAutomation.RequestAssignment
+import Proofs.ToolCalls.Background.CompletionContinuation
+import Proofs.Automation.GoalAutomation.RequestAssignment
 
 namespace GoalAutomation.WakeReceipt
 

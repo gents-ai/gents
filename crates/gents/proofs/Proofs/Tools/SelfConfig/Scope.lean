@@ -1,4 +1,4 @@
-import Proofs.SelfConfig.Types
+import Proofs.Tools.SelfConfig.Types
 
 /-!
 # Self-config scope: own configuration versus foreign configuration

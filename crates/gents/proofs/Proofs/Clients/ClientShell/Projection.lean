@@ -1,6 +1,6 @@
-import Proofs.ClientShell.Transition
-import Proofs.ClientShell.ChatReadiness
-import Proofs.ClientShell.SyncHealth
+import Proofs.Clients.ClientShell.Transition
+import Proofs.Clients.ClientShell.ChatReadiness
+import Proofs.Clients.ClientShell.SyncHealth
 
 inductive SelectionHealth where
   | noSelection

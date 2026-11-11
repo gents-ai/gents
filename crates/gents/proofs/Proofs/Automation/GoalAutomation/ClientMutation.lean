@@ -1,5 +1,5 @@
-import Proofs.GoalAutomation.ClientControl
-import Proofs.Session.CommandAuthority
+import Proofs.Automation.GoalAutomation.ClientControl
+import Proofs.Session.SessionQueue.CommandAuthority
 
 namespace GoalAutomation.ClientMutation
 

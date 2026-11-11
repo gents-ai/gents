@@ -1,4 +1,4 @@
-import Proofs.Transcript.Properties
+import Proofs.Session.Transcript.Properties
 import Mathlib.Data.Finset.Card
 
 namespace Transcript

@@ -1,4 +1,4 @@
-import Proofs.PairingReconcile.State
+import Proofs.P2P.PairingReconcile.State
 
 namespace PairingReconcile.Layering
 

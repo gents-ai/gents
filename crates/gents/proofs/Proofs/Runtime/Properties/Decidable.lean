@@ -1,9 +1,9 @@
-import Proofs.Request.State
-import Proofs.Process
-import Proofs.Persistence
-import Proofs.StorageObservation
-import Proofs.InferenceCall.State
-import Proofs.Scheduling
+import Proofs.Session.Request.State
+import Proofs.Automation.Process
+import Proofs.Store.Persistence
+import Proofs.Store.StorageObservation
+import Proofs.Inference.InferenceCall.State
+import Proofs.Inference.Scheduling
 import Mathlib.Data.Fintype.Card
 
 open RequestState ProcessState PersistenceState StorageObservation InferenceCallState ExecutionOrigin AdmissionState

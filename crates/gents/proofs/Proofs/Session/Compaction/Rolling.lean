@@ -1,4 +1,4 @@
-import Proofs.Compaction.ReductionEngine
+import Proofs.Session.Compaction.ReductionEngine
 
 namespace Compaction.Rolling
 

@@ -1,6 +1,6 @@
-import Proofs.Identity.SessionChild
-import Proofs.Request.CrossActorAuthorization
-import Proofs.Enrollment.RequestAdmission
+import Proofs.Store.Identity.SessionChild
+import Proofs.Session.Request.CrossActorAuthorization
+import Proofs.Session.Enrollment.RequestAdmission
 import Lean
 
 namespace Identity.DelegatedPublication

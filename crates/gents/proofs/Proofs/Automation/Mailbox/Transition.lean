@@ -1,4 +1,4 @@
-import Proofs.Mailbox.State
+import Proofs.Automation.Mailbox.State
 
 namespace Mailbox
 

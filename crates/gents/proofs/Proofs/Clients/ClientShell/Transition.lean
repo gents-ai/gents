@@ -1,4 +1,4 @@
-import Proofs.ClientShell.Submission
+import Proofs.Clients.ClientShell.Submission
 
 def workflowAfterSelectSession
     (sid : SessionId) : SubmissionWorkflow → SubmissionWorkflow

@@ -1,7 +1,7 @@
-import Proofs.Triggers.Identity
-import Proofs.Triggers.Types
-import Proofs.Triggers.Queue
-import Proofs.Goals
+import Proofs.ToolCalls.Triggers.Identity
+import Proofs.Automation.Triggers.Types
+import Proofs.Automation.Triggers.Queue
+import Proofs.Automation.Goals
 
 namespace Triggers.Durable
 
@@ -400,7 +400,7 @@ theorem terminal_publication_gap (state : State) (id : Identity)
 
 /-- A rendered destination is admitted when it names an owned same-agent
 session, or, with the Trigger's `create_session`, when it does not exist yet:
-the claim owner creates it through `AgentSession.ensure?` (`Proofs.Triggers.SessionKey`). -/
+the claim owner creates it through `AgentSession.ensure?` (`Proofs.Automation.Triggers.SessionKey`). -/
 def resolveSession (id : Identity) (target : Option String)
     (ownedSameAgent : Bool) (createMissing : Bool := false) : Option String :=
   match target with

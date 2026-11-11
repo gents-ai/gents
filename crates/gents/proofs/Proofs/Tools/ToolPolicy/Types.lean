@@ -1,4 +1,4 @@
-import Proofs.CommandPolicy.ArtifactAuthority
+import Proofs.Session.CommandPolicy.ArtifactAuthority
 import Mathlib.Data.Finset.Basic
 import Mathlib.Data.Finset.Lattice.Basic
 

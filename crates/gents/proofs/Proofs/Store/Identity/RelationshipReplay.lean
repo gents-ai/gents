@@ -1,4 +1,4 @@
-import Proofs.Identity.State
+import Proofs.Store.Identity.State
 
 namespace Identity.RelationshipReplay
 

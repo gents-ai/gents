@@ -1,7 +1,7 @@
-import Proofs.Hooks.Claim
-import Proofs.Goals
-import Proofs.GoalAutomation.RequestAssignment
-import Proofs.Enrollment.RequestAdmission
+import Proofs.Session.Hooks.Claim
+import Proofs.Automation.Goals
+import Proofs.Automation.GoalAutomation.RequestAssignment
+import Proofs.Session.Enrollment.RequestAdmission
 
 namespace Hooks.GoalFence
 

@@ -1,4 +1,4 @@
-import Proofs.Identity.Configuration
+import Proofs.Tools.Identity.Configuration
 
 namespace Identity.TaskTarget
 open Household

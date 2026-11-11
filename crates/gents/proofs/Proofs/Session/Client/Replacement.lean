@@ -1,4 +1,4 @@
-import Proofs.Client.Terminal
+import Proofs.Session.Client.Terminal
 
 theorem turn_replacement_derives_new_tip
     (attempts : List AttemptView)

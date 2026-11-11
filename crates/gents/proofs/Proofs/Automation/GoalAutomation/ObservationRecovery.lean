@@ -1,5 +1,5 @@
-import Proofs.Background.Observation
-import Proofs.GoalAutomation.Observation
+import Proofs.ToolCalls.Background.Observation
+import Proofs.Automation.GoalAutomation.Observation
 
 namespace GoalAutomation.ObservationRecovery
 

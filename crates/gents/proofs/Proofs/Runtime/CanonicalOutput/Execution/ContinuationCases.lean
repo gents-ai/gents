@@ -1,6 +1,6 @@
-import Proofs.CanonicalOutput.Execution.BackgroundGate
-import Proofs.CanonicalOutput.Execution.RestartRecovery
-import Proofs.CanonicalOutput.Execution.ToolDeliveryCases
+import Proofs.Runtime.CanonicalOutput.Execution.BackgroundGate
+import Proofs.Runtime.CanonicalOutput.Execution.RestartRecovery
+import Proofs.Runtime.CanonicalOutput.Execution.ToolDeliveryCases
 
 namespace CanonicalOutput.Execution.ContinuationCases
 

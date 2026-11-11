@@ -1,5 +1,5 @@
-import Proofs.PluginJob.Admission
-import Proofs.Recovery.Sweeps.PluginJob
+import Proofs.ToolCalls.PluginJob.Admission
+import Proofs.ToolCalls.Recovery.Sweeps.PluginJob
 
 namespace PluginJob.RecoveryTrace
 

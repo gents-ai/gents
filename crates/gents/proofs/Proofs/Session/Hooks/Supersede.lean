@@ -1,4 +1,4 @@
-import Proofs.Hooks.Claim
+import Proofs.Session.Hooks.Claim
 
 namespace Hooks
 

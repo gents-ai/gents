@@ -1,9 +1,9 @@
 import Batteries.Tactic.OpenPrivate
-import Proofs.PluginJob.Adoption
-import Proofs.ToolPolicy.PluginCalls
+import Proofs.ToolCalls.PluginJob.Adoption
+import Proofs.Tools.ToolPolicy.PluginCalls
 import Mathlib.Algebra.BigOperators.Group.List.Basic
 
-open private admitStep_pinned liveCount_addSpawns from Proofs.PluginJob.Admission
+open private admitStep_pinned liveCount_addSpawns from Proofs.ToolCalls.PluginJob.Admission
 
 /-!
 # Plugin-job steps

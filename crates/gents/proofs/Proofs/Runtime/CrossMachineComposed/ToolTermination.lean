@@ -1,5 +1,5 @@
-import Proofs.CrossMachineComposed.WellFormed
-import Proofs.Request.Executable
+import Proofs.Runtime.CrossMachineComposed.WellFormed
+import Proofs.Session.Request.Executable
 
 namespace ComposedState
 

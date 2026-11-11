@@ -1,4 +1,4 @@
-import Proofs.Identity.Household
+import Proofs.Store.Identity.Household
 
 namespace Identity.McpService
 

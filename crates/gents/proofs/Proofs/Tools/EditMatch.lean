@@ -1,2 +1,2 @@
-import Proofs.EditMatch.Model
-import Proofs.EditMatch.Properties
+import Proofs.Tools.EditMatch.Model
+import Proofs.Tools.EditMatch.Properties

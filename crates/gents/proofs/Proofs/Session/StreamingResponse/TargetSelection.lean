@@ -1,4 +1,4 @@
-import Proofs.StreamingResponse.State
+import Proofs.Session.StreamingResponse.State
 
 namespace StreamingResponse
 

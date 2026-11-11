@@ -1,5 +1,5 @@
-import Proofs.CanonicalOutput.Execution.GoalContinuation
-import Proofs.CanonicalOutput.Execution.Examples
+import Proofs.Runtime.CanonicalOutput.Execution.GoalContinuation
+import Proofs.Runtime.CanonicalOutput.Execution.Examples
 
 namespace CanonicalOutput.Execution.GoalContinuation.Cases
 

@@ -1,6 +1,6 @@
-import Proofs.Background.ToolOutput
-import Proofs.CanonicalOutput.Execution.Examples
-import Proofs.CanonicalOutput.Execution.ToolDelivery
+import Proofs.Runtime.Background.ToolOutput
+import Proofs.Runtime.CanonicalOutput.Execution.Examples
+import Proofs.Runtime.CanonicalOutput.Execution.ToolDelivery
 
 namespace Background.ToolOutput.Cases
 

@@ -1,4 +1,4 @@
-import Proofs.Workspace.Types
+import Proofs.Session.Workspace.Types
 
 namespace IsolatedWorkspace
 

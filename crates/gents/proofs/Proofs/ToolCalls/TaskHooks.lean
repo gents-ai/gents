@@ -1,8 +1,8 @@
-import Proofs.ConfigDefaults
-import Proofs.ManagedExec.State
-import Proofs.Request.State
-import Proofs.Recovery.Sweeps.Requests
-import Proofs.RequestExecutionLease.State
+import Proofs.Documents.ConfigDefaults
+import Proofs.Session.ManagedExec.State
+import Proofs.Session.Request.State
+import Proofs.Session.Recovery.Sweeps.Requests
+import Proofs.Session.RequestExecutionLease.State
 
 namespace TaskHooks
 /-! # Task hook-phase semantics (spec PR #1430)

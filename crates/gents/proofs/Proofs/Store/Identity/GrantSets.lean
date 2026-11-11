@@ -1,4 +1,4 @@
-import Proofs.Identity.NodeProvisioning
+import Proofs.Store.Identity.NodeProvisioning
 
 /-!
 The named node-permission sets Gents issues, who receives each, and the

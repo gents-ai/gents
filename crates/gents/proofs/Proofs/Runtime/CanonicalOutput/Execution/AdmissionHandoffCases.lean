@@ -1,5 +1,5 @@
-import Proofs.CanonicalOutput.Execution.AdmissionHandoff
-import Proofs.CanonicalOutput.Execution.Examples
+import Proofs.Runtime.CanonicalOutput.Execution.AdmissionHandoff
+import Proofs.Runtime.CanonicalOutput.Execution.Examples
 import Lean
 
 namespace CanonicalOutput.Execution.AdmissionHandoff.Cases

@@ -1,4 +1,4 @@
-import Proofs.GoalAutomation.RequestAssignment
+import Proofs.Automation.GoalAutomation.RequestAssignment
 
 namespace GoalAutomation.ToolContext
 

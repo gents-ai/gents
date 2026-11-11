@@ -1,5 +1,5 @@
-import Proofs.Compaction.State
-import Proofs.PromptAssembly.State
+import Proofs.Session.Compaction.State
+import Proofs.Session.PromptAssembly.State
 
 namespace Compaction
 

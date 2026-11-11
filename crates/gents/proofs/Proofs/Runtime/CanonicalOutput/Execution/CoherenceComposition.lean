@@ -1,9 +1,9 @@
-import Proofs.CanonicalOutput.Execution.CoherenceInvariant
-import Proofs.CanonicalOutput.Execution.RequestCoherence
-import Proofs.CanonicalOutput.Execution.ToolCoherence
-import Proofs.CanonicalOutput.Execution.ToolCloseCoherence
-import Proofs.CanonicalOutput.Execution.AccountingInvariant
-import Proofs.CanonicalOutput.Execution.SessionComposition
+import Proofs.Runtime.CanonicalOutput.Execution.CoherenceInvariant
+import Proofs.Runtime.CanonicalOutput.Execution.RequestCoherence
+import Proofs.Runtime.CanonicalOutput.Execution.ToolCoherence
+import Proofs.Runtime.CanonicalOutput.Execution.ToolCloseCoherence
+import Proofs.Runtime.CanonicalOutput.Execution.AccountingInvariant
+import Proofs.Runtime.CanonicalOutput.Execution.SessionComposition
 
 namespace CanonicalOutput.Execution
 

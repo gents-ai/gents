@@ -1,5 +1,5 @@
-import Proofs.GoalAutomation
-import Proofs.Request.State
+import Proofs.Automation.GoalAutomation
+import Proofs.Session.Request.State
 
 namespace GoalAutomation.RequestHead
 

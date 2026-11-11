@@ -1,4 +1,4 @@
-import Proofs.Identity.GrantSets
+import Proofs.Store.Identity.GrantSets
 import Lean
 
 namespace Identity.GrantSetsConformance

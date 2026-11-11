@@ -1,4 +1,4 @@
-import Proofs.Recovery.Contract
+import Proofs.Inference.Recovery.Contract
 
 namespace Recovery
 

@@ -1,4 +1,4 @@
-import Proofs.CanonicalOutput.Execution.CompactionCases
+import Proofs.Runtime.CanonicalOutput.Execution.CompactionCases
 
 namespace Conformance.ContractCases.CompactionCanonicalProjection
 

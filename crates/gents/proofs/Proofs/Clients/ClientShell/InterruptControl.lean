@@ -1,5 +1,5 @@
-import Proofs.ClientShell.SessionTurn
-import Proofs.ClientShell.Submission
+import Proofs.Clients.ClientShell.SessionTurn
+import Proofs.Clients.ClientShell.Submission
 
 namespace ClientShell.InterruptControl
 

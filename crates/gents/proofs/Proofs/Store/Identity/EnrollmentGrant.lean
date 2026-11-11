@@ -1,4 +1,4 @@
-import Proofs.Identity.GrantSets
+import Proofs.Store.Identity.GrantSets
 
 /-!
 The authority an explicit enrollment grant derives for one verified client

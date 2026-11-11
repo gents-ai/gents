@@ -1,5 +1,5 @@
-import Proofs.MCPHealth.State
-import Proofs.MCPHealth.Transition
-import Proofs.MCPHealth.Properties
-import Proofs.MCPHealth.Coupling
-import Proofs.MCPHealth.Executable
+import Proofs.Tools.MCPHealth.State
+import Proofs.Tools.MCPHealth.Transition
+import Proofs.Tools.MCPHealth.Properties
+import Proofs.Tools.MCPHealth.Coupling
+import Proofs.Tools.MCPHealth.Executable

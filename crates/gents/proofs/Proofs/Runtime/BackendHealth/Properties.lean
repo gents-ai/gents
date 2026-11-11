@@ -1,4 +1,4 @@
-import Proofs.BackendHealth.Transition
+import Proofs.Runtime.BackendHealth.Transition
 
 namespace Proofs.BackendHealth
 

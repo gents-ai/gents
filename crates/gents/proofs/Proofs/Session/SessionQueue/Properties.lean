@@ -1,4 +1,4 @@
-import Proofs.Session.Properties.Drain
-import Proofs.Session.Properties.Ordering
-import Proofs.Session.Properties.Coalescing
-import Proofs.Session.Properties.Executable
+import Proofs.Session.SessionQueue.Properties.Drain
+import Proofs.Session.SessionQueue.Properties.Ordering
+import Proofs.Session.SessionQueue.Properties.Coalescing
+import Proofs.Session.SessionQueue.Properties.Executable

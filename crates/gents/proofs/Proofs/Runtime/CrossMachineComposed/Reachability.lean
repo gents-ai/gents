@@ -1,4 +1,4 @@
-import Proofs.CrossMachineComposed.ToolTermination
+import Proofs.Runtime.CrossMachineComposed.ToolTermination
 
 namespace ComposedState
 namespace ReachabilityWitness

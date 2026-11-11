@@ -1,4 +1,4 @@
-import Proofs.Basic
+import Proofs.Shared.Basic
 
 /-! Providers share one HTTP transport. It persists the capture after body
 rewrites and immediately before the network call; this is the provider-boundary

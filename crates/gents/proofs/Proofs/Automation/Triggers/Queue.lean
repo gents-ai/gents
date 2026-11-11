@@ -1,4 +1,4 @@
-import Proofs.Triggers.Types
+import Proofs.Automation.Triggers.Types
 
 namespace Triggers.Durable
 

@@ -1,5 +1,5 @@
-import Proofs.PairingReconcile.State
-import Proofs.PairingReconcile.Transition
+import Proofs.P2P.PairingReconcile.State
+import Proofs.P2P.PairingReconcile.Transition
 import Mathlib.Data.Finset.SDiff
 
 namespace PairingReconcile

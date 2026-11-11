@@ -1,4 +1,4 @@
-import Proofs.GoalAutomation.ClientControl
+import Proofs.Automation.GoalAutomation.ClientControl
 import Proofs.Conformance.GoalOperatorResume
 
 namespace Conformance.GoalClientControlContracts

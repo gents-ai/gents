@@ -1,6 +1,6 @@
-import Proofs.ConfigDefaults
-import Proofs.ToolPolicy.Instances
-import Proofs.ToolPolicy.PluginInvocation
+import Proofs.Documents.ConfigDefaults
+import Proofs.Tools.ToolPolicy.Instances
+import Proofs.Tools.ToolPolicy.PluginInvocation
 
 namespace ToolPolicy
 

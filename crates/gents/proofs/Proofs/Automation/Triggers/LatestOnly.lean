@@ -1,4 +1,4 @@
-import Proofs.Triggers.Reachability
+import Proofs.Automation.Triggers.Reachability
 
 theorem T3_latest_only_convergence
     (before : SystemState) (snap : TriggerSnapshot) (intent : FireIntent)

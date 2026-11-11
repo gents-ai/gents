@@ -1,6 +1,6 @@
-import Proofs.CanonicalOutput.Execution.Handover
-import Proofs.CanonicalOutput.Execution.ToolDeliveryCases
-import Proofs.CanonicalOutput.Execution.ContinuationCases
+import Proofs.Runtime.CanonicalOutput.Execution.Handover
+import Proofs.Runtime.CanonicalOutput.Execution.ToolDeliveryCases
+import Proofs.Runtime.CanonicalOutput.Execution.ContinuationCases
 
 namespace CanonicalOutput.Execution.Handover.Cases
 

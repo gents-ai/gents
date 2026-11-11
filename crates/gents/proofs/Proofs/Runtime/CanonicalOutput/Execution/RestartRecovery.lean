@@ -1,5 +1,5 @@
-import Proofs.CanonicalOutput.Execution.BackgroundGate
-import Proofs.Recovery.Sweeps.BackgroundRestart
+import Proofs.Runtime.CanonicalOutput.Execution.BackgroundGate
+import Proofs.ToolCalls.Recovery.Sweeps.BackgroundRestart
 
 namespace CanonicalOutput.Execution.RestartRecovery
 

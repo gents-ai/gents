@@ -1,6 +1,6 @@
-import Proofs.GoalAutomation.RequestHead
-import Proofs.GoalAutomation.RequestAncestry
-import Proofs.GoalAutomation.AuthenticationCost
+import Proofs.Automation.GoalAutomation.RequestHead
+import Proofs.Automation.GoalAutomation.RequestAncestry
+import Proofs.Automation.GoalAutomation.AuthenticationCost
 import Proofs.Conformance.ContractTypes
 
 namespace Conformance.GoalRequestHeadContracts

@@ -1,4 +1,4 @@
-import Proofs.Recovery.Sweeps.ToolCalls
+import Proofs.ToolCalls.Recovery.Sweeps.ToolCalls
 
 namespace Recovery
 

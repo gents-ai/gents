@@ -1,5 +1,5 @@
-import Proofs.Request.State
-import Proofs.AgentSession
+import Proofs.Session.Request.State
+import Proofs.Session.AgentSession
 import Mathlib.Data.Finset.Basic
 
 namespace SessionRetry

@@ -1,5 +1,5 @@
-import Proofs.GoalAutomation.Observation
-import Proofs.GoalAutomation.ObservationRecovery
+import Proofs.Automation.GoalAutomation.Observation
+import Proofs.Automation.GoalAutomation.ObservationRecovery
 import Proofs.Conformance.ContractTypes
 
 namespace Conformance.GoalObservationContracts

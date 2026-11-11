@@ -1,5 +1,5 @@
 import Mathlib.Data.Nat.Basic
-import Proofs.ToolPolicy.PluginCallLimits
+import Proofs.Session.ToolPolicy.PluginCallLimits
 
 namespace ToolPolicy.PluginCalls
 

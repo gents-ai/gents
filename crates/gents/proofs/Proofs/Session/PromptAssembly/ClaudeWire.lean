@@ -1,4 +1,4 @@
-import Proofs.PromptAssembly.ClaudeMap
+import Proofs.Session.PromptAssembly.ClaudeMap
 import Lean
 
 namespace PromptAssembly.ClaudeWire

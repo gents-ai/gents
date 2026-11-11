@@ -1,5 +1,5 @@
-import Proofs.CanonicalOutput.Execution.ToolDelivery
-import Proofs.CanonicalOutput.Execution.Examples
+import Proofs.Runtime.CanonicalOutput.Execution.ToolDelivery
+import Proofs.Runtime.CanonicalOutput.Execution.Examples
 
 namespace CanonicalOutput.Execution.ToolDelivery.Cases
 
