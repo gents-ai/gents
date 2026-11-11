@@ -502,6 +502,12 @@ async fn run_inner(
     };
     gents::store::config_client::verify_pack_schema_approval(actor.as_str(), &scope, evidence)
         .map_err(|error| (anyhow::Error::new(error), "not_installed"))?;
+    // Read before any schema is applied: the collections this install
+    // brings, which `pack remove --with-collections` later drops.
+    let created_collections =
+        gents::pack::collections_install_creates(&runtime_access, received.root.archive())
+            .await
+            .map_err(|error| (error, "not_installed"))?;
     gents::pack::apply_prepared_dependency_schemas(&runtime_access, &prepared)
         .await
         .map_err(|error| (error, "not_installed"))?;
@@ -561,7 +567,7 @@ async fn run_inner(
             installed_via: Some(gents::pack::InstalledVia::Operator),
             source: Some(received.root.provenance()),
             source_history: Vec::new(),
-            created_collections: Vec::new(),
+            created_collections,
         };
         Some(gents::pack::HostedHomePublication {
             home,
