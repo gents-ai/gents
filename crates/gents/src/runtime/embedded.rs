@@ -784,3 +784,21 @@ mod tests {
         home.node.shutdown().await.unwrap();
     }
 }
+
+#[cfg(all(test, any(target_vendor = "apple", target_os = "linux")))]
+mod node_release_tests;
+
+#[cfg(test)]
+mod runtime_hop_cap_tests;
+
+#[cfg(test)]
+mod deferred_enrollment_tests;
+
+#[cfg(test)]
+mod grant_sets_tests;
+
+#[cfg(test)]
+mod agent_provisioning_tests;
+
+#[cfg(test)]
+mod authored_document_tests;

@@ -1,4 +1,4 @@
-use super::*;
+use crate::store::config_client::session_children::*;
 use crate::store::identity::{KeyIdentity, NodeIdentity};
 use gents_protocol::output::OutputSource;
 use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};

@@ -102,11 +102,12 @@ async fn tracked_transaction_finality_distinguishes_rejection_from_lost_receipt(
 async fn http_transaction_cursors_keep_all_pages() {
     let root = tempfile::tempdir().unwrap();
     let key = root.path().join("cursor.key");
-    let identity =
-        tokio::task::spawn_blocking(move || crate::KeyIdentity::load_or_create(key, None))
-            .await
-            .unwrap()
-            .unwrap();
+    let identity = tokio::task::spawn_blocking(move || {
+        crate::store::identity::KeyIdentity::load_or_create(key, None)
+    })
+    .await
+    .unwrap()
+    .unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
     let node = Arc::new(
@@ -1888,7 +1889,7 @@ resources:
     let root = tempfile::tempdir().unwrap();
     let key = root.path().join("identity-owner.key");
     let (identity, reader, denied) = tokio::task::spawn_blocking(move || {
-        let identity = crate::KeyIdentity::load_or_create(key, None).unwrap();
+        let identity = crate::store::identity::KeyIdentity::load_or_create(key, None).unwrap();
         let binding = crate::store::identity::provision_agent_identity(&identity).unwrap();
         let reader = crate::store::identity::resolve_agent_identity(&identity, &binding).unwrap();
         let denied_binding = crate::store::identity::provision_agent_identity(&identity).unwrap();
@@ -2035,7 +2036,7 @@ async fn embedded_reader_owner_observations_do_not_inherit_the_node_identity() {
     let home = tempfile::tempdir().unwrap();
     let key_path = home.path().join("owner.key");
     let (key, reader_agent) = tokio::task::spawn_blocking(move || {
-        let key = crate::KeyIdentity::load_or_create(key_path, None).unwrap();
+        let key = crate::store::identity::KeyIdentity::load_or_create(key_path, None).unwrap();
         let binding = crate::store::identity::provision_agent_identity(&key).unwrap();
         let reader = crate::store::identity::resolve_agent_identity(&key, &binding).unwrap();
         (key, reader)

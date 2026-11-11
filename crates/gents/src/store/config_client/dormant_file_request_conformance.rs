@@ -12,7 +12,10 @@ fn envelope_rows<'a>(response: &'a Value, name: &str) -> anyhow::Result<&'a [Val
         .ok_or_else(|| anyhow::anyhow!("{name} response omitted rows"))
 }
 
-fn client(endpoint: &str, key: &crate::KeyIdentity) -> anyhow::Result<ConfigAccess> {
+fn client(
+    endpoint: &str,
+    key: &crate::store::identity::KeyIdentity,
+) -> anyhow::Result<ConfigAccess> {
     Ok(ConfigAccess::Graphql(
         GraphqlEndpoint::as_principal(endpoint, key.did())
             .with_client_signing_capability(key.client_signing_capability()?)?
@@ -25,10 +28,22 @@ fn client(endpoint: &str, key: &crate::KeyIdentity) -> anyhow::Result<ConfigAcce
 #[tokio::test]
 async fn native_node_scoped_file_requests_match_modeled_access() -> anyhow::Result<()> {
     let directory = tempfile::tempdir()?;
-    let user = crate::KeyIdentity::load_or_create(directory.path().join("user.key"), None)?;
-    let runtime = crate::KeyIdentity::load_or_create(directory.path().join("runtime.key"), None)?;
-    let agent = crate::KeyIdentity::load_or_create(directory.path().join("agent.key"), None)?;
-    let other = crate::KeyIdentity::load_or_create(directory.path().join("other.key"), None)?;
+    let user = crate::store::identity::KeyIdentity::load_or_create(
+        directory.path().join("user.key"),
+        None,
+    )?;
+    let runtime = crate::store::identity::KeyIdentity::load_or_create(
+        directory.path().join("runtime.key"),
+        None,
+    )?;
+    let agent = crate::store::identity::KeyIdentity::load_or_create(
+        directory.path().join("agent.key"),
+        None,
+    )?;
+    let other = crate::store::identity::KeyIdentity::load_or_create(
+        directory.path().join("other.key"),
+        None,
+    )?;
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     let address = listener.local_addr()?;
     let node = Arc::new(

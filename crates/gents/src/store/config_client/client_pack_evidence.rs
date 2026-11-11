@@ -589,7 +589,7 @@ mod tests {
                 .build()
                 .await?,
         );
-        crate::ensure_runtime_schemas(&node).await?;
+        crate::store::schema::ensure_runtime_schemas(&node).await?;
         let user_access = ConfigAccess::local_as(node.clone(), user.did().parse()?);
         let node_access = ConfigAccess::local_as(node, runtime.did().parse()?);
         let user_did = identity::Did::new(user.did())?;
@@ -730,7 +730,7 @@ mod tests {
                 .build()
                 .await?,
         );
-        crate::ensure_runtime_schemas(&node).await?;
+        crate::store::schema::ensure_runtime_schemas(&node).await?;
         let access = ConfigAccess::local_as(node.clone(), actor.did().parse()?);
         let scope = PackApprovalScope {
             node_did: runtime.did().to_owned(),

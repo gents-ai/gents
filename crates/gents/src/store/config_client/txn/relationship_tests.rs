@@ -19,15 +19,21 @@ async fn modeled_native_entity_sets_preserve_selection_sources() -> anyhow::Resu
         .find(|case| case.name == "configuration-explicit-grants")
         .expect("configuration model");
     let directory = tempfile::tempdir()?;
-    let root = crate::KeyIdentity::load_or_create(directory.path().join("node"), None)?;
+    let root =
+        crate::store::identity::KeyIdentity::load_or_create(directory.path().join("node"), None)?;
     let binding = crate::store::identity::provision_agent_identity(&root)?;
     let profile_owner = crate::store::identity::resolve_agent_identity(&root, &binding)?;
-    let agent = crate::KeyIdentity::load_or_create(directory.path().join("agent"), None)?;
-    let sibling = crate::KeyIdentity::load_or_create(directory.path().join("sibling"), None)?;
+    let agent =
+        crate::store::identity::KeyIdentity::load_or_create(directory.path().join("agent"), None)?;
+    let sibling = crate::store::identity::KeyIdentity::load_or_create(
+        directory.path().join("sibling"),
+        None,
+    )?;
     let runtime_path = directory.path().join("runtime");
-    let runtime =
-        tokio::task::spawn_blocking(move || crate::KeyIdentity::load_or_create(runtime_path, None))
-            .await??;
+    let runtime = tokio::task::spawn_blocking(move || {
+        crate::store::identity::KeyIdentity::load_or_create(runtime_path, None)
+    })
+    .await??;
     let node = Arc::new(
         defra_node::Node::builder()
             .with_node_identity_did(root.did())
@@ -874,10 +880,16 @@ async fn modeled_node_owners_and_administrators_manage_only_their_selected_relat
         .find(|case| case.name == "configuration-explicit-grants")
         .expect("configuration policy model");
     let directory = tempfile::tempdir()?;
-    let user = crate::KeyIdentity::load_or_create(directory.path().join("user"), None)?;
-    let admin = crate::KeyIdentity::load_or_create(directory.path().join("admin"), None)?;
-    let other = crate::KeyIdentity::load_or_create(directory.path().join("other"), None)?;
-    let runtime = crate::KeyIdentity::load_or_create(directory.path().join("runtime"), None)?;
+    let user =
+        crate::store::identity::KeyIdentity::load_or_create(directory.path().join("user"), None)?;
+    let admin =
+        crate::store::identity::KeyIdentity::load_or_create(directory.path().join("admin"), None)?;
+    let other =
+        crate::store::identity::KeyIdentity::load_or_create(directory.path().join("other"), None)?;
+    let runtime = crate::store::identity::KeyIdentity::load_or_create(
+        directory.path().join("runtime"),
+        None,
+    )?;
     let creator_binding = crate::store::identity::provision_agent_identity(&runtime)?;
     let selected_binding = crate::store::identity::provision_agent_identity(&runtime)?;
     let creator = crate::store::identity::resolve_agent_identity(&runtime, &creator_binding)?;

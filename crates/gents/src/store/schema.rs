@@ -187,9 +187,11 @@ mod legacy_backend_tests {
         let directory = tempfile::tempdir()?;
         let key = directory.path().join("node.key");
         let did = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
-            Ok(crate::KeyIdentity::load_or_create(key, None)?
-                .did()
-                .to_owned())
+            Ok(
+                crate::store::identity::KeyIdentity::load_or_create(key, None)?
+                    .did()
+                    .to_owned(),
+            )
         })
         .await??;
         let data = directory.path().join("data");

@@ -19,7 +19,9 @@ async fn publication_matches_atomic_session_child_model() {
                 .await
                 .unwrap(),
         );
-        crate::ensure_runtime_schemas(&node).await.unwrap();
+        crate::store::schema::ensure_runtime_schemas(&node)
+            .await
+            .unwrap();
         let actor = identity::Did::new(agent.did()).unwrap();
         let access =
             ConfigAccess::local_managed_agent(node.clone(), actor.clone(), agent.as_ref()).unwrap();

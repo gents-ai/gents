@@ -2816,3 +2816,9 @@ mod tests {
         .is_err());
     }
 }
+
+#[cfg(test)]
+mod auxiliary_repair_tests;
+
+#[cfg(test)]
+mod auxiliary_binding_contract_tests;

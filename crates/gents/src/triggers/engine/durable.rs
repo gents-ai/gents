@@ -1101,3 +1101,6 @@ async fn stage_task_delivery_with_receipt(
         },
     })
 }
+
+#[cfg(test)]
+mod session_permission_tests;
