@@ -67,12 +67,10 @@ gents-fs-runner = { path = "../gents-fs-runner" }
 gents-protocol.workspace = true
 gents-shell.workspace = true
 defra-node = { workspace = true, features = ["http"] }
-defra-http.workspace = true
 defra-p2p-adapter.workspace = true
 futures-util = "0.3"
 flate2 = "1"
 iana-time-zone = "0.1"
-include_dir = "0.7"
 identity.workspace = true
 iroh.workspace = true
 query.workspace = true
@@ -97,7 +95,6 @@ serde_json.workspace = true
 shlex = "1.3"
 sha2.workspace = true
 serde_yaml.workspace = true
-subtle.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tokio-tungstenite = { version = "0.26.2", features = ["rustls-tls-native-roots"] }
