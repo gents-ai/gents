@@ -7,7 +7,6 @@ use super::super::input::{chain_of, derive_children_in_txn, CallArgs};
 use super::super::records::{read_pin, read_progress, read_step_state};
 use crate::plugin::job_calls::job_state;
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::store::graphql::escape_graphql_string;
 use crate::tools::call::lifecycle::query::load_tool_call_arguments_in_txn;
 use crate::tools::call::lifecycle::{ToolCallLifecycle, ToolCallState};
 
@@ -15,12 +14,15 @@ pub(super) async fn read_lifecycle_state(
     txn: &ConfigApplyTxn<'_>,
     row_doc_id: &str,
 ) -> Result<String> {
-    let response = txn
-        .execute(&format!(
-            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state }} }}"#,
-            escape_graphql_string(row_doc_id)
-        ))
-        .await?;
+    let query = {
+        use gents_protocol::document_query::{
+            fields::agent_tool_call as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::new().field(fields::LIFECYCLE_STATE))
+            .filter(Filter::eq(fields::DOC_ID, row_doc_id))
+            .render()
+    };
+    let response = txn.run(&query).await?;
     response
         .pointer("/data/AgentToolCall/0/lifecycle_state")
         .and_then(Value::as_str)
@@ -40,38 +42,52 @@ pub(in crate::tools::background::job) async fn load_lifecycle(
         anyhow::bail!("a job step needs a local node");
     };
     let node = node.node().clone();
-    access.transact_readonly("plugin_job.load_lifecycle", |txn| {
-        let node = node.clone();
-        let actor = &actor;
-        Box::pin(async move {
-            let response = txn
-                .execute(&format!(
-                    r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ session_id node_did requester_did request_doc_id }} }}"#,
-                    escape_graphql_string(row_doc_id)
-                ))
-                .await?;
-            let stored: StoredRow = serde_json::from_value(
-                response
-                    .pointer("/data/AgentToolCall/0")
-                    .cloned()
-                    .with_context(|| format!("job row {row_doc_id} does not exist"))?,
-            )
-            .with_context(|| format!("decoding job row {row_doc_id}"))?;
-            let mut lifecycle = ToolCallLifecycle::load_by_doc_id_in_txn(
-                txn,
-                node,
-                row_doc_id,
-                &stored.node_did,
-                &stored.session_id,
-                stored.requester_did.as_deref(),
-            )
-            .await?
-            .with_context(|| format!("job row {row_doc_id} does not exist"))?;
-            anyhow::ensure!(lifecycle.actor().as_str() == actor, "job row belongs to another agent");
-            lifecycle.bind_agent_signer(txn.managed_agent_signer())?;
-            Ok::<_, anyhow::Error>(lifecycle)
+    access
+        .transact_readonly("plugin_job.load_lifecycle", |txn| {
+            let node = node.clone();
+            let actor = &actor;
+            Box::pin(async move {
+                let query = {
+                    use gents_protocol::document_query::{
+                        fields::agent_tool_call as fields, Filter, Query, Selection,
+                    };
+                    Query::select(
+                        Selection::new()
+                            .field(fields::SESSION_ID)
+                            .field(fields::NODE_DID)
+                            .field(fields::REQUESTER_DID)
+                            .field(fields::REQUEST_DOC_ID),
+                    )
+                    .filter(Filter::eq(fields::DOC_ID, row_doc_id))
+                    .render()
+                };
+                let response = txn.run(&query).await?;
+                let stored: StoredRow = serde_json::from_value(
+                    response
+                        .pointer("/data/AgentToolCall/0")
+                        .cloned()
+                        .with_context(|| format!("job row {row_doc_id} does not exist"))?,
+                )
+                .with_context(|| format!("decoding job row {row_doc_id}"))?;
+                let mut lifecycle = ToolCallLifecycle::load_by_doc_id_in_txn(
+                    txn,
+                    node,
+                    row_doc_id,
+                    &stored.node_did,
+                    &stored.session_id,
+                    stored.requester_did.as_deref(),
+                )
+                .await?
+                .with_context(|| format!("job row {row_doc_id} does not exist"))?;
+                anyhow::ensure!(
+                    lifecycle.actor().as_str() == actor,
+                    "job row belongs to another agent"
+                );
+                lifecycle.bind_agent_signer(txn.managed_agent_signer())?;
+                Ok::<_, anyhow::Error>(lifecycle)
+            })
         })
-    }).await
+        .await
 }
 
 #[derive(Deserialize)]
@@ -110,12 +126,22 @@ pub(crate) async fn read_step_row(access: &ConfigAccess, row_doc_id: &str) -> Re
 
 /// One row's own facts; `root_call` is the caller's to fill from the chain root.
 async fn read_row(txn: &ConfigApplyTxn<'_>, row_doc_id: &str) -> Result<StepRow> {
-    let stored = txn
-        .execute(&format!(
-            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ session_id node_did requester_did request_doc_id lifecycle_state }} }}"#,
-            escape_graphql_string(row_doc_id)
-        ))
-        .await?;
+    let query = {
+        use gents_protocol::document_query::{
+            fields::agent_tool_call as fields, Filter, Query, Selection,
+        };
+        Query::select(
+            Selection::new()
+                .field(fields::SESSION_ID)
+                .field(fields::NODE_DID)
+                .field(fields::REQUESTER_DID)
+                .field(fields::REQUEST_DOC_ID)
+                .field(fields::LIFECYCLE_STATE),
+        )
+        .filter(Filter::eq(fields::DOC_ID, row_doc_id))
+        .render()
+    };
+    let stored = txn.run(&query).await?;
     let stored: StoredRow = serde_json::from_value(
         stored
             .pointer("/data/AgentToolCall/0")
@@ -123,12 +149,15 @@ async fn read_row(txn: &ConfigApplyTxn<'_>, row_doc_id: &str) -> Result<StepRow>
             .with_context(|| format!("job row {row_doc_id} does not exist"))?,
     )
     .with_context(|| format!("decoding job row {row_doc_id}"))?;
-    let hop = txn
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ request_hop }} }}"#,
-            escape_graphql_string(&stored.request_doc_id)
-        ))
-        .await?;
+    let query = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::new().field(fields::REQUEST_HOP))
+            .filter(Filter::eq(fields::DOC_ID, &stored.request_doc_id))
+            .render()
+    };
+    let hop = txn.run(&query).await?;
     let caller_hop = hop
         .pointer("/data/AgentRequest/0")
         .with_context(|| format!("the caller request of job row {row_doc_id} does not exist"))?

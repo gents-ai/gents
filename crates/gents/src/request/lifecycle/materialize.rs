@@ -703,33 +703,44 @@ pub async fn activate_workspace_bound_request_with_identity(
         actor,
         identity.and_then(|identity| identity.managed_agent_signer()),
     )?;
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentRequest(
-                docID: "{doc_id}", filter: {{
-                    _docID: {{ _eq: "{doc_id}" }},
-                    lifecycle_state: {{ _eq: "{workspace_binding_pending}" }}
-                }},
-                input: {{ lifecycle_state: "{pending}" }}
-            ) {{ _docID }}
-        }}"#,
-        doc_id = escape_graphql_string(request_doc_id),
-        workspace_binding_pending = RequestLifecycleState::WorkspaceBindingPending.as_str(),
-        pending = RequestLifecycleState::Pending.as_str(),
-    );
+    let mutation = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Input, Update,
+        };
+        Update::doc(
+            request_doc_id,
+            Input::new().set(
+                fields::LIFECYCLE_STATE,
+                RequestLifecycleState::Pending.as_str(),
+            ),
+        )
+        .filter(Filter::eq(fields::DOC_ID, request_doc_id).and(Filter::eq(
+            fields::LIFECYCLE_STATE,
+            RequestLifecycleState::WorkspaceBindingPending.as_str(),
+        )))
+        .render()
+    };
     let response = access
-        .write("lifecycle.activate_workspace_bound", &mutation)
+        .write_rendered("lifecycle.activate_workspace_bound", &mutation)
         .await?;
     let response: defra_node::QueryResponse = serde_json::from_value(response)?;
     if crate::store::graphql::single_mutation_document(&response, "update_AgentRequest")?.is_none()
     {
-        let query = format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
-                request_id lifecycle_state workspace_id
-            }} }}"#,
-            doc_id = escape_graphql_string(request_doc_id),
-        );
-        let response = serde_json::from_value(access.execute(&query).await?)?;
+        let query = {
+            use gents_protocol::document_query::{
+                fields::agent_request as fields, Filter, Query, Selection,
+            };
+            Query::select(
+                Selection::new()
+                    .field(fields::REQUEST_ID)
+                    .field(fields::LIFECYCLE_STATE)
+                    .field(fields::WORKSPACE_ID),
+            )
+            .filter(Filter::eq(fields::DOC_ID, request_doc_id))
+            .limit(1)
+            .render()
+        };
+        let response = serde_json::from_value(access.read(&query).await?)?;
         let row = crate::store::graphql::first_row::<gents_protocol::row::AgentRequestRow>(
             &response,
             "AgentRequest",
@@ -889,10 +900,16 @@ impl RequestLifecycle {
         let signer = RequestSigner::Identity(identity.as_ref());
         let create = super::client::build_signed_client_request(&access, spec, signer).await?;
         super::client::submit_client_request(&access, &create).await?;
-        let escaped_request = escape_graphql_string(&request_id);
-        let response = access.execute(&format!(
-            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request}" }} }}, limit: 2) {{ _docID }} }}"#,
-        )).await?;
+        let query = {
+            use gents_protocol::document_query::{
+                fields::agent_request as fields, Filter, Query, Selection,
+            };
+            Query::select(Selection::doc_id())
+                .filter(Filter::eq(fields::REQUEST_ID, &request_id))
+                .limit(2)
+                .render()
+        };
+        let response = access.read(&query).await?;
         let [row] = response["data"]["AgentRequest"]
             .as_array()
             .context("published AgentRequest query omitted rows")?
@@ -1029,14 +1046,18 @@ async fn labeled_session_rows_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequest,
 ) -> Result<LabeledSessionRows> {
-    let response = txn
-        .execute(&format!(
-            r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
-            escape_graphql_string(&request.node_did),
-            escape_graphql_string(&request.session_id),
+    let query = {
+        use gents_protocol::document_query::{
+            fields::agent_session as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::owned(
             gents_protocol::session::AGENT_SESSION_FIELDS,
         ))
-        .await?;
+        .filter(Filter::eq(fields::NODE_DID, &request.node_did))
+        .filter(Filter::eq(fields::SESSION_ID, &request.session_id))
+        .render()
+    };
+    let response = txn.run(&query).await?;
     let rows = response["data"]["AgentSession"]
         .as_array()
         .context("AgentSession query omitted rows")?;
@@ -1102,12 +1123,27 @@ pub(crate) async fn created_session_provenance_in_txn(
     if !matches!(kind, Some("manual" | "event" | "schedule")) {
         return Ok(provenance);
     }
-    let query = format!(
-        r#"{{ TriggerFire(filter: {{owner_did: {{_eq: "{}"}}, request_id: {{_eq: "{}"}}}}, limit: 2) {{fire_key owner_did request_id session_id trigger_id task_id source_collection source_doc_id}} }}"#,
-        escape_graphql_string(&request.node_did),
-        escape_graphql_string(&request.request_id),
-    );
-    let response = txn.execute(&query).await?;
+    let query = {
+        use gents_protocol::document_query::{
+            fields::trigger_fire as fields, Filter, Query, Selection,
+        };
+        Query::select(
+            Selection::new()
+                .field(fields::FIRE_KEY)
+                .field(fields::OWNER_DID)
+                .field(fields::REQUEST_ID)
+                .field(fields::SESSION_ID)
+                .field(fields::TRIGGER_ID)
+                .field(fields::TASK_ID)
+                .field(fields::SOURCE_COLLECTION)
+                .field(fields::SOURCE_DOC_ID),
+        )
+        .filter(Filter::eq(fields::OWNER_DID, &request.node_did))
+        .filter(Filter::eq(fields::REQUEST_ID, &request.request_id))
+        .limit(2)
+        .render()
+    };
+    let response = txn.run(&query).await?;
     let rows = response
         .pointer("/data/TriggerFire")
         .and_then(serde_json::Value::as_array)
@@ -1540,25 +1576,37 @@ pub async fn supersede_trigger_requests_in_txn(
     trigger_id: &str,
     excluded_request_id: Option<&str>,
 ) -> Result<usize> {
-    let owner_gql = escape_graphql_string(owner);
-    let trigger_gql = escape_graphql_string(trigger_id);
-    let excluded = excluded_request_id
-        .map(|id| {
-            format!(
-                ", request_id: {{ _neq: \"{}\" }}",
-                escape_graphql_string(id),
-            )
-        })
-        .unwrap_or_default();
+    use gents_protocol::document_query::{
+        fields::agent_request as fields, Filter, Input, Query, Selection, Update,
+    };
     let now = chrono::Utc::now().to_rfc3339();
-    let unclaimed = gents_protocol::request_lifecycle::RequestLifecycleState::graphql_list([
-        gents_protocol::request_lifecycle::RequestLifecycleState::Pending,
-        gents_protocol::request_lifecycle::RequestLifecycleState::WorkspaceBindingPending,
-    ]);
-    let response = txn.execute(&format!(r#"mutation {{ update_AgentRequest(
-        filter: {{ node_did: {{ _eq: "{owner_gql}" }}, caused_by_trigger_id: {{ _eq: "{trigger_gql}" }}{excluded}, lifecycle_state: {{ _in: {unclaimed} }} }},
-        input: {{ lifecycle_state: "{superseded}", terminalized_at: "{}", terminal_redrive_attempts: 0 }}
-    ) {{ _docID request_id }} }}"#, escape_graphql_string(&now), superseded = RequestLifecycleState::Superseded.as_str())).await?;
+    let scope = Filter::eq(fields::NODE_DID, owner)
+        .and(Filter::eq(fields::CAUSED_BY_TRIGGER_ID, trigger_id));
+    let scope = match excluded_request_id {
+        Some(id) => scope.and(Filter::ne(fields::REQUEST_ID, id)),
+        None => scope,
+    };
+    let mutation = Update::matching(
+        scope.clone().and(Filter::any_of(
+            fields::LIFECYCLE_STATE,
+            [
+                gents_protocol::request_lifecycle::RequestLifecycleState::Pending,
+                gents_protocol::request_lifecycle::RequestLifecycleState::WorkspaceBindingPending,
+            ]
+            .into_iter()
+            .map(gents_protocol::request_lifecycle::RequestLifecycleState::as_str),
+        )),
+        Input::new()
+            .set(
+                fields::LIFECYCLE_STATE,
+                RequestLifecycleState::Superseded.as_str(),
+            )
+            .set(fields::TERMINALIZED_AT, now.as_str())
+            .set(fields::TERMINAL_REDRIVE_ATTEMPTS, 0_i32),
+    )
+    .returning(Selection::doc_id().field(fields::REQUEST_ID))
+    .render();
+    let response = txn.run(&mutation).await?;
     let pending = response["data"]["update_AgentRequest"]
         .as_array()
         .context("supersession omitted pending requests")?;
@@ -1575,15 +1623,30 @@ pub async fn supersede_trigger_requests_in_txn(
         )
         .await?;
     }
-    let active = gents_protocol::request_lifecycle::RequestLifecycleState::graphql_list([
-        gents_protocol::request_lifecycle::RequestLifecycleState::Claimed,
-        gents_protocol::request_lifecycle::RequestLifecycleState::Processing,
-    ]);
-    let response = txn.execute(&format!(r#"{{ AgentRequest(filter: {{
-        node_did: {{ _eq: "{owner_gql}" }}, caused_by_trigger_id: {{ _eq: "{trigger_gql}" }}{excluded},
-        lifecycle_state: {{ _in: {active} }}
-    }}) {{ _docID request_id node_did requester_did agent_did session_id lifecycle_state
-        execution_generation execution_lease_expires_at }} }}"#)).await?;
+    let query = Query::select(
+        Selection::doc_id()
+            .field(fields::REQUEST_ID)
+            .field(fields::NODE_DID)
+            .field(fields::REQUESTER_DID)
+            .field(fields::AGENT_DID)
+            .field(fields::SESSION_ID)
+            .field(fields::LIFECYCLE_STATE)
+            .field(fields::EXECUTION_GENERATION)
+            .field(fields::EXECUTION_LEASE_EXPIRES_AT),
+    )
+    .filter(
+        scope.and(Filter::any_of(
+            fields::LIFECYCLE_STATE,
+            [
+                gents_protocol::request_lifecycle::RequestLifecycleState::Claimed,
+                gents_protocol::request_lifecycle::RequestLifecycleState::Processing,
+            ]
+            .into_iter()
+            .map(gents_protocol::request_lifecycle::RequestLifecycleState::as_str),
+        )),
+    )
+    .render();
+    let response = txn.run(&query).await?;
     let active: Vec<gents_protocol::row::AgentRequestRow> =
         serde_json::from_value(response["data"]["AgentRequest"].clone())?;
     for row in &active {
@@ -1752,10 +1815,16 @@ async fn stage_task_delivery_with_receipt(
                 .await?;
         }
     }
-    let query = format!("{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, request_id: {{_eq: \"{}\"}}}}) {{ {} }} }}",
-        escape_graphql_string(&fire.identity.owner_did), escape_graphql_string(&fire.request_id),
-        gents_protocol::row::AGENT_REQUEST_FIELDS);
-    let response = txn.execute(&query).await?;
+    let query = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::owned(gents_protocol::row::AGENT_REQUEST_FIELDS))
+            .filter(Filter::eq(fields::NODE_DID, &fire.identity.owner_did))
+            .filter(Filter::eq(fields::REQUEST_ID, &fire.request_id))
+            .render()
+    };
+    let response = txn.run(&query).await?;
     let rows = response
         .pointer("/data/AgentRequest")
         .and_then(serde_json::Value::as_array)
@@ -1873,12 +1942,16 @@ async fn stage_task_delivery_with_receipt(
         )
         .await?
         .context("Task receipt session is unavailable")?;
-        let receipt = txn
-            .execute(&format!(
-                "{{ TriggerFire(filter: {{fire_key: {{_eq: \"{}\"}}}}, limit: 2) {{_docID}} }}",
-                escape_graphql_string(&fire.fire_key),
-            ))
-            .await?;
+        let query = {
+            use gents_protocol::document_query::{
+                fields::trigger_fire as fields, Filter, Query, Selection,
+            };
+            Query::select(Selection::doc_id())
+                .filter(Filter::eq(fields::FIRE_KEY, &fire.fire_key))
+                .limit(2)
+                .render()
+        };
+        let receipt = txn.run(&query).await?;
         let rows = receipt["data"]["TriggerFire"]
             .as_array()
             .context("Task receipt query omitted rows")?;
@@ -2385,14 +2458,11 @@ mod task_delivery_tests {
             "mutation {{ update_AgentRequest(docID: \"{}\", input: {{ lifecycle_state: \"completed\" }}) {{ _docID }} }}",
             escape_graphql_string(&first.request.doc_id)
         )).await.unwrap();
-        let observed = crate::eval::runner::embedded::observe::poll_request_with_access(
-            &user_access,
-            &first.request.request_id,
-        )
-        .await
-        .unwrap()
-        .expect("the user can observe the completed Task request");
-        assert_eq!(observed.lifecycle_state.as_deref(), Some("completed"));
+        let observed = user_access.execute(&request_query).await.unwrap();
+        assert_eq!(
+            observed["data"]["AgentRequest"][0]["lifecycle_state"],
+            "completed"
+        );
         let session_doc = session["_docID"].as_str().unwrap();
         let trace = crate::lean_vocab_test::lean_contract_snapshot()
             .identity_publication_cases
@@ -2650,10 +2720,16 @@ async fn is_client_request_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequest,
 ) -> Result<bool> {
-    let response = txn.execute(&format!(
-        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ admission_kind }} }}"#,
-        escape_graphql_string(&request.doc_id),
-    )).await?;
+    let query = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::new().field(fields::ADMISSION_KIND))
+            .filter(Filter::eq(fields::DOC_ID, &request.doc_id))
+            .limit(1)
+            .render()
+    };
+    let response = txn.run(&query).await?;
     let row = response
         .pointer("/data/AgentRequest/0")
         .context("session projection request disappeared")?;

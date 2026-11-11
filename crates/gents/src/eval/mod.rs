@@ -1,12 +1,8 @@
 //! Eval core contract: outcome vocabulary, scoring rules and the run, trial
 //! and verdict documents. Execution lives in the runner.
 
-pub mod checks;
 pub mod documents;
-pub mod optimization;
 pub mod outcome;
-pub mod report;
-pub mod runner;
 pub mod scoring;
 
 #[cfg(test)]

@@ -66,33 +66,26 @@ pub async fn claim_continuation_from_access(
     goal: &GoalDocument,
     parent_request_id: &str,
 ) -> Result<bool> {
-    let doc_id = escape_graphql_string(&goal.doc_id);
-    let node_did = escape_graphql_string(&goal.node_did);
-    let parent_request_id = escape_graphql_string(parent_request_id);
+    use gents_protocol::document_query::{fields::goal as fields, Filter, Input, Update};
     let expected_sequence = goal.continuation_sequence();
     let next_sequence = expected_sequence
         .checked_add(1)
         .context("goal continuation sequence exhausted")?;
-    let expected_status = escape_graphql_string(&goal.status);
-    let now = escape_graphql_string(&Utc::now().to_rfc3339());
-    let mutation = format!(
-        r#"mutation {{
-            update_Goal(
-                filter: {{
-                    _docID: {{ _eq: "{doc_id}" }},
-                    node_did: {{ _eq: "{node_did}" }},
-                    status: {{ _eq: "{expected_status}" }},
-                    continuation_sequence: {{ _eq: {expected_sequence} }}
-                }},
-                input: {{
-                    last_continued_from_request_id: "{parent_request_id}",
-                    continuation_sequence: {next_sequence},
-                    updated_at: "{now}"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = access.write("goal.claim_continuation", &mutation).await?;
+    let now = Utc::now().to_rfc3339();
+    let rendered = Update::matching(
+        Filter::eq(fields::DOC_ID, &goal.doc_id)
+            .and(Filter::eq(fields::NODE_DID, &goal.node_did))
+            .and(Filter::eq(fields::STATUS, &goal.status))
+            .and(Filter::eq(fields::CONTINUATION_SEQUENCE, expected_sequence)),
+        Input::new()
+            .set(fields::LAST_CONTINUED_FROM_REQUEST_ID, parent_request_id)
+            .set(fields::CONTINUATION_SEQUENCE, next_sequence)
+            .set(fields::UPDATED_AT, now),
+    )
+    .render();
+    let response = access
+        .write_rendered("goal.claim_continuation", &rendered)
+        .await?;
     let response: defra_node::QueryResponse = serde_json::from_value(response)?;
     Ok(response
         .data
@@ -108,37 +101,27 @@ pub async fn claim_retry_continuation_from_access(
     retry_count: i64,
     failure: &str,
 ) -> Result<bool> {
-    let doc_id = escape_graphql_string(&goal.doc_id);
-    let node_did = escape_graphql_string(&goal.node_did);
-    let parent_request_id = escape_graphql_string(parent_request_id);
-    let failure = escape_graphql_string(failure);
+    use gents_protocol::document_query::{fields::goal as fields, Filter, Input, Update};
     let expected_sequence = goal.continuation_sequence();
     let next_sequence = expected_sequence
         .checked_add(1)
         .context("goal continuation sequence exhausted")?;
-    let expected_status = escape_graphql_string(&goal.status);
-    let now = escape_graphql_string(&Utc::now().to_rfc3339());
-    let mutation = format!(
-        r#"mutation {{
-            update_Goal(
-                filter: {{
-                    _docID: {{ _eq: "{doc_id}" }},
-                    node_did: {{ _eq: "{node_did}" }},
-                    status: {{ _eq: "{expected_status}" }},
-                    continuation_sequence: {{ _eq: {expected_sequence} }}
-                }},
-                input: {{
-                    last_continued_from_request_id: "{parent_request_id}",
-                    continuation_sequence: {next_sequence},
-                    infrastructure_retry_count: {retry_count},
-                    last_failure: "{failure}",
-                    updated_at: "{now}"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
+    let now = Utc::now().to_rfc3339();
+    let rendered = Update::matching(
+        Filter::eq(fields::DOC_ID, &goal.doc_id)
+            .and(Filter::eq(fields::NODE_DID, &goal.node_did))
+            .and(Filter::eq(fields::STATUS, &goal.status))
+            .and(Filter::eq(fields::CONTINUATION_SEQUENCE, expected_sequence)),
+        Input::new()
+            .set(fields::LAST_CONTINUED_FROM_REQUEST_ID, parent_request_id)
+            .set(fields::CONTINUATION_SEQUENCE, next_sequence)
+            .set(fields::INFRASTRUCTURE_RETRY_COUNT, retry_count)
+            .set(fields::LAST_FAILURE, failure)
+            .set(fields::UPDATED_AT, now),
+    )
+    .render();
     let response = access
-        .write("goal.claim_retry_continuation", &mutation)
+        .write_rendered("goal.claim_retry_continuation", &rendered)
         .await?;
     let response: defra_node::QueryResponse = serde_json::from_value(response)?;
     Ok(response
@@ -180,11 +163,18 @@ async fn client_goal_opening_verified_in_txn(
     else {
         return Ok((false, false));
     };
-    let response = txn.execute(&format!(
-        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}, limit: 2) {{ {} }} }}"#,
-        escape_graphql_string(root), escape_graphql_string(&goal.node_did),
-        escape_graphql_string(&goal.session_id), gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
-    )).await?;
+    use gents_protocol::document_query::{
+        fields::agent_request as request, Filter, Query, Selection,
+    };
+    let rendered = Query::select(Selection::owned(
+        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
+    ))
+    .filter(Filter::eq(request::DOC_ID, root))
+    .filter(Filter::eq(request::NODE_DID, &goal.node_did))
+    .filter(Filter::eq(request::SESSION_ID, &goal.session_id))
+    .limit(2)
+    .render();
+    let response = txn.run(&rendered).await?;
     let rows: Vec<gents_protocol::row::AgentRequestRow> = serde_json::from_value(
         response
             .pointer("/data/AgentRequest")

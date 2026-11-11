@@ -1,15 +1,15 @@
 use std::io::{self, Write};
 
-use gents::eval::optimization::Decision;
-use gents::eval::report::{
+use gents::eval::TrialUsage;
+use gents_eval::optimization::Decision;
+use gents_eval::report::{
     CaseView, CheckDiff, Comparison, EvalReport, SideTrial, SlotClass, SlotCounts, SlotReport,
     SlotScore, StageDiff,
 };
-use gents::eval::runner::{
+use gents_eval::runner::{
     is_fresh, EvidenceRecord, GoalEntry, LiveSnapshot, Progress, RunView, ToolTally, SCHEMAS_GOAL,
     STALE_WINDOW,
 };
-use gents::eval::TrialUsage;
 use serde::Serialize;
 
 use super::inspect::{ListRow, TrialView};
@@ -565,7 +565,7 @@ fn staleness(
 ) -> String {
     if fresh {
         String::new()
-    } else if !gents::eval::runner::host_alive(pid) {
+    } else if !gents_eval::runner::host_alive(pid) {
         format!(" stale: pid {pid} is not running")
     } else {
         format!(

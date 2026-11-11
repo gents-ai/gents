@@ -1808,7 +1808,7 @@ mod inference_seed_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::eval::runner::embedded::EmbeddedHome;
+    use gents::runtime::embedded::EmbeddedHome;
 
     #[tokio::test]
     async fn an_identity_only_home_protects_its_fresh_store_for_later_openers() {

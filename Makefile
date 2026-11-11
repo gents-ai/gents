@@ -179,8 +179,8 @@ lint:
 proofs:
 	cd $(PROOFS_DIR) && $(LAKE) build
 
-.PHONY: test test-agent test-agent-conformance test-agent-e2e test-cli test-evals live-configurator-eval
-test: test-agent test-cli
+.PHONY: test test-agent test-agent-conformance test-agent-e2e test-cli test-eval-drivers test-evals live-configurator-eval
+test: test-agent test-cli test-eval-drivers
 
 test-agent:
 	$(CARGO) test -p gents $(CARGO_PROFILE_FLAG)
@@ -188,9 +188,12 @@ test-agent:
 test-agent-conformance:
 	$(CARGO) test -p gents --test conformance $(CARGO_PROFILE_FLAG)
 
+test-eval-drivers:
+	$(CARGO) test -p gents-eval $(CARGO_PROFILE_FLAG)
+
 test-evals:
-	$(CARGO) test -p gents --test onboarding_evals $(CARGO_PROFILE_FLAG)
-	$(CARGO) test -p gents --test eval_runner_canary $(CARGO_PROFILE_FLAG)
+	$(CARGO) test -p gents-eval --test onboarding_evals $(CARGO_PROFILE_FLAG)
+	$(CARGO) test -p gents-eval --test eval_runner_canary $(CARGO_PROFILE_FLAG)
 
 live-configurator-eval:
 	GENTS_EVAL_TARGET=$${GENTS_EVAL_TARGET:-workstation-1} scripts/evals/run-ladder.sh $${GENTS_EVAL_SUITE:-all} $${GENTS_EVAL_TRIALS:-3} $${GENTS_EVAL_CONCURRENCY:-4}

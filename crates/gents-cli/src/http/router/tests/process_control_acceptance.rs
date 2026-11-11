@@ -90,7 +90,7 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
     // A runtime that refuses its configuration exits; report that refusal
     // rather than waiting out readiness.
     tokio::select! {
-        ready = gents::eval::runner::embedded::wait_for_runtime_ready(&node, &did) => ready.unwrap(),
+        ready = gents::runtime::embedded::wait_for_runtime_ready(&node, &did) => ready.unwrap(),
         exited = &mut running => panic!("runtime exited before readiness: {:?}",
             exited.map(|run| run.map_err(|error| format!("{error:#}")))),
     }

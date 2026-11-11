@@ -13,10 +13,13 @@ pub async fn dismiss_mailbox_item_on(
     );
     access.transact_write("mailbox.dismiss", |txn| {
         Box::pin(async move {
-            let response = txn.execute(&format!(
-                r#"{{ MailboxItem(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {MAILBOX_FIELDS} }} }}"#,
-                escape_graphql_string(doc_id),
-            )).await?;
+            use gents_protocol::document_query::{
+                fields::mailbox_item as fields, Filter, Query, Selection,
+            };
+            let rendered = Query::select(Selection::owned(MAILBOX_FIELDS))
+                .filter(Filter::eq(fields::DOC_ID, doc_id))
+                .render();
+            let response = txn.run(&rendered).await?;
             let response = defra_node::QueryResponse::success(response.get("data").context("mailbox read omitted data")?.clone());
             let item = rows::<MailboxItem>(&response, MAILBOX_COLLECTION)?
                 .into_iter().next().context("MailboxItem not found")?;

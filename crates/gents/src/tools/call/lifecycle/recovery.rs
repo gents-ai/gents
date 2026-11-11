@@ -1124,37 +1124,38 @@ async fn load_pending_background_completion_rows(
     node_did: &str,
     accesses: &RecoveryAccesses,
 ) -> Result<Vec<TerminalBackgroundToolRow>> {
-    let node_did = escape_graphql_string(node_did);
-    let query = format!(
-        r#"{{
-            AgentToolCall(filter: {{
-                node_did: {{ _eq: "{node_did}" }},
-                await_mode: {{ _eq: "background" }},
-                lifecycle_state: {{ _in: ["completed", "failed", "timedOut", "cancelled"] }},
-                status: {{
-                    _like: "completionPending%",
-                    _ge: "completionPending",
-                    _lt: "completionPendinh"
-                }}
-            }}) {{
-                _docID
-                request_id
-                request_doc_id
-                node_did
-                requester_did
-                session_id
-                tool_call_id
-                tool_name
-                status
-                lifecycle_state
-                cancel_cause
-            }}
-        }}"#
-    );
+    let query = {
+        use gents_protocol::document_query::{
+            fields::agent_tool_call as fields, Filter, Query, Selection,
+        };
+        Query::select(
+            Selection::doc_id()
+                .field(fields::REQUEST_ID)
+                .field(fields::REQUEST_DOC_ID)
+                .field(fields::NODE_DID)
+                .field(fields::REQUESTER_DID)
+                .field(fields::SESSION_ID)
+                .field(fields::TOOL_CALL_ID)
+                .field(fields::TOOL_NAME)
+                .field(fields::STATUS)
+                .field(fields::LIFECYCLE_STATE)
+                .field(fields::CANCEL_CAUSE),
+        )
+        .filter(Filter::eq(fields::NODE_DID, node_did))
+        .filter(Filter::eq(fields::AWAIT_MODE, "background"))
+        .filter(Filter::any_of(
+            fields::LIFECYCLE_STATE,
+            ["completed", "failed", "timedOut", "cancelled"],
+        ))
+        .filter(Filter::like(fields::STATUS, "completionPending%"))
+        .filter(Filter::ge(fields::STATUS, "completionPending"))
+        .filter(Filter::lt(fields::STATUS, "completionPendinh"))
+        .render()
+    };
     let mut rows = Vec::new();
     let mut seen = rapidhash::RapidHashSet::default();
     for access in accesses.values() {
-        let response = access.execute(&query).await?;
+        let response = access.read(&query).await?;
         let values = response
             .pointer("/data/AgentToolCall")
             .and_then(serde_json::Value::as_array)
@@ -1302,15 +1303,31 @@ async fn selected_agent_observes_terminal_tool(
         row: RunningToolCallRow,
         lifecycle_state: Option<String>,
     }
-    let query = format!(
-        r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{
-            _docID request_id request_doc_id requester_did node_did session_id
-            tool_call_id tool_name deadline_at await_mode cancel_cause job_pin lifecycle_state
-        }} }}"#,
-        escape_graphql_string(tool_doc_id)
-    );
+    let query = {
+        use gents_protocol::document_query::{
+            fields::agent_tool_call as fields, Filter, Query, Selection,
+        };
+        Query::select(
+            Selection::doc_id()
+                .field(fields::REQUEST_ID)
+                .field(fields::REQUEST_DOC_ID)
+                .field(fields::REQUESTER_DID)
+                .field(fields::NODE_DID)
+                .field(fields::SESSION_ID)
+                .field(fields::TOOL_CALL_ID)
+                .field(fields::TOOL_NAME)
+                .field(fields::DEADLINE_AT)
+                .field(fields::AWAIT_MODE)
+                .field(fields::CANCEL_CAUSE)
+                .field(fields::JOB_PIN)
+                .field(fields::LIFECYCLE_STATE),
+        )
+        .filter(Filter::eq(fields::DOC_ID, tool_doc_id))
+        .limit(2)
+        .render()
+    };
     for (agent_did, access) in accesses {
-        let response = access.execute(&query).await?;
+        let response = access.read(&query).await?;
         let values = response
             .pointer("/data/AgentToolCall")
             .and_then(serde_json::Value::as_array)

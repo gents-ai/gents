@@ -534,23 +534,27 @@ pub(crate) async fn refresh_session_request_observation_in_txn(
     if latest.request_doc_id != request_doc_id || latest.request_id != request_id {
         return Ok(false);
     }
-    let escaped_doc_id = escape_graphql_string(request_doc_id);
-    let escaped_request_id = escape_graphql_string(request_id);
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{
-                    _docID: {{ _eq: "{escaped_doc_id}" }},
-                    request_id: {{ _eq: "{escaped_request_id}" }},
-                    purpose: {{ _eq: "normal" }}
-                }},
-                limit: 2
-            ) {{
-                _docID request_id node_did session_id requester_did agent_did created_at lifecycle_state
-            }}
-        }}"#
-    );
-    let response = txn.execute_local_response(&query).await?;
+    let query = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        Query::select(
+            Selection::doc_id()
+                .field(fields::REQUEST_ID)
+                .field(fields::NODE_DID)
+                .field(fields::SESSION_ID)
+                .field(fields::REQUESTER_DID)
+                .field(fields::AGENT_DID)
+                .field(fields::CREATED_AT)
+                .field(fields::LIFECYCLE_STATE),
+        )
+        .filter(Filter::eq(fields::DOC_ID, request_doc_id))
+        .filter(Filter::eq(fields::REQUEST_ID, request_id))
+        .filter(Filter::eq(fields::PURPOSE, "normal"))
+        .limit(2)
+        .render()
+    };
+    let response = txn.run_local_response(&query).await?;
     let rows = crate::store::graphql::rows::<serde_json::Value>(&response, "AgentRequest")?;
     anyhow::ensure!(
         rows.len() <= 1,
@@ -721,24 +725,19 @@ pub(crate) async fn load_recent_titles_for_agent(
     exclude_session_id: &str,
     limit: usize,
 ) -> Result<Vec<String>> {
-    let escaped_node_did = escape_graphql_string(node_did);
-    let escaped_session_id = escape_graphql_string(exclude_session_id);
     // Activity lives in the observation JSON. Rank the complete owner scope
     // before limiting; a creation-time window can omit recently active sessions.
-    let query = format!(
-        r#"{{
-            AgentSession(
-                filter: {{
-                    node_did: {{ _eq: "{escaped_node_did}" }},
-                    session_id: {{ _ne: "{escaped_session_id}" }}
-                }}
-            ) {{
-                {SESSION_SCOPE_FIELDS}
-            }}
-        }}"#
-    );
+    let query = {
+        use gents_protocol::document_query::{
+            fields::agent_session as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::owned(SESSION_SCOPE_FIELDS))
+            .filter(Filter::eq(fields::NODE_DID, node_did))
+            .filter(Filter::ne(fields::SESSION_ID, exclude_session_id))
+            .render()
+    };
 
-    let resp = access.execute(&query).await?;
+    let resp = access.read(&query).await?;
     let rows = resp["data"]["AgentSession"]
         .as_array()
         .context("recent title query omitted AgentSession rows")?;

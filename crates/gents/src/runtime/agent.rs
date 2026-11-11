@@ -699,3 +699,5 @@ pub(crate) fn tool_selection_from_document(
 ) -> anyhow::Result<ResolvedToolSelection> {
     ResolvedToolSelection::from_document(selection)
 }
+
+pub use loop_stream::REPEATED_TOOL_FAILURE_PREFIX;

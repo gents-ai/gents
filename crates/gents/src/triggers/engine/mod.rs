@@ -160,7 +160,7 @@ pub(crate) fn fire_result_from_materialize(result: anyhow::Result<String>) -> Fi
 
 pub(crate) const SERIAL_BUSY: &str = "serial: prior fire still in-flight";
 
-pub(crate) const UNACKNOWLEDGED_STATUS: &str = "unacknowledged";
+pub const UNACKNOWLEDGED_STATUS: &str = "unacknowledged";
 
 #[derive(Debug, Clone)]
 pub enum FireResult {

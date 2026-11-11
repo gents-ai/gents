@@ -11,7 +11,6 @@ use serde_json::Value;
 
 use crate::plugin::job_calls::job_state;
 use crate::store::config_client::ConfigAccess;
-use crate::store::graphql::escape_graphql_string;
 use crate::tools::background::job::admit::StepChild;
 use crate::tools::background::job::input::{chain_of, derive_children, derive_children_for_jobs};
 use crate::tools::background::job::keys::job_spawn_key;
@@ -30,7 +29,23 @@ pub enum JobKey {
     },
 }
 
-const FIELDS: &str = "_docID session_id tool_call_id request_id request_doc_id node_did requester_did lifecycle_state started_at completed_at job_pin job_progress";
+fn job_row_selection() -> gents_protocol::document_query::Selection<
+    gents_protocol::document_query::fields::agent_tool_call::Doc,
+> {
+    use gents_protocol::document_query::{fields::agent_tool_call as fields, Selection};
+    Selection::doc_id()
+        .field(fields::SESSION_ID)
+        .field(fields::TOOL_CALL_ID)
+        .field(fields::REQUEST_ID)
+        .field(fields::REQUEST_DOC_ID)
+        .field(fields::NODE_DID)
+        .field(fields::REQUESTER_DID)
+        .field(fields::LIFECYCLE_STATE)
+        .field(fields::STARTED_AT)
+        .field(fields::COMPLETED_AT)
+        .field(fields::JOB_PIN)
+        .field(fields::JOB_PROGRESS)
+}
 
 #[derive(Deserialize)]
 struct Owner {
@@ -186,25 +201,21 @@ pub async fn load_job_view(
     scope: Option<&ProcessControlScope>,
     key: JobKey,
 ) -> Result<JobView, JobReadError> {
-    let filter = match &key {
-        JobKey::RowDocId(doc_id) => {
-            format!(r#"_docID: {{ _eq: "{}" }}"#, escape_graphql_string(doc_id))
+    let query = {
+        use gents_protocol::document_query::{fields::agent_tool_call as fields, Filter, Query};
+        let query = Query::select(job_row_selection());
+        match &key {
+            JobKey::RowDocId(doc_id) => query.filter(Filter::eq(fields::DOC_ID, doc_id)),
+            JobKey::Address {
+                session_id,
+                tool_call_id,
+            } => query
+                .filter(Filter::eq(fields::SESSION_ID, session_id))
+                .filter(Filter::eq(fields::TOOL_CALL_ID, tool_call_id)),
         }
-        JobKey::Address {
-            session_id,
-            tool_call_id,
-        } => format!(
-            r#"session_id: {{ _eq: "{}" }}, tool_call_id: {{ _eq: "{}" }}"#,
-            escape_graphql_string(session_id),
-            escape_graphql_string(tool_call_id)
-        ),
+        .render()
     };
-    let response = access
-        .execute(&format!(
-            "{{ AgentToolCall(filter: {{ {filter} }}) {{ {FIELDS} }} }}"
-        ))
-        .await
-        .map_err(unavailable)?;
+    let response = access.read(&query).await.map_err(unavailable)?;
     let Some(row) = response
         .pointer("/data/AgentToolCall/0")
         .filter(|row| !row.is_null())
@@ -263,20 +274,16 @@ pub async fn list_jobs(
     access: &ConfigAccess,
     filter: &JobFilter,
 ) -> Result<Vec<JobView>, JobReadError> {
-    let mut clauses = vec!["job_pin: { _ne: null }".to_owned()];
-    if let Some(session_id) = &filter.session_id {
-        clauses.push(format!(
-            r#"session_id: {{ _eq: "{}" }}"#,
-            escape_graphql_string(session_id)
-        ));
-    }
-    let response = access
-        .execute(&format!(
-            "{{ AgentToolCall(filter: {{ {} }}) {{ {FIELDS} }} }}",
-            clauses.join(", ")
-        ))
-        .await
-        .map_err(unavailable)?;
+    let rendered = {
+        use gents_protocol::document_query::{fields::agent_tool_call as fields, Filter, Query};
+        let mut query =
+            Query::select(job_row_selection()).filter(Filter::not_null(fields::JOB_PIN));
+        if let Some(session_id) = &filter.session_id {
+            query = query.filter(Filter::eq(fields::SESSION_ID, session_id));
+        }
+        query.render()
+    };
+    let response = access.read(&rendered).await.map_err(unavailable)?;
     let rows = response
         .pointer("/data/AgentToolCall")
         .and_then(Value::as_array)

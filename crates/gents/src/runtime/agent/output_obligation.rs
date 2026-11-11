@@ -6,7 +6,9 @@ use defra_node::Node as EmbeddedNode;
 use serde::Deserialize;
 
 use crate::documents::OutputObligationDecision;
-use crate::store::graphql::{canonical_positive_count, escape_graphql_string};
+use crate::store::graphql::canonical_positive_count;
+#[cfg(test)]
+use crate::store::graphql::escape_graphql_string;
 
 use gents_loop::output_obligation::OutputObligationCheck;
 pub(crate) use gents_loop::output_obligation::UnmetOutputObligation;
@@ -81,14 +83,16 @@ impl OutputObligationGate {
         let mut request_doc_ids = vec![request.doc_id.clone()];
         let mut triggered = request.has_automated_trigger_lineage();
         if request.caused_by_trigger_kind.as_deref() == Some(crate::goal::GOAL_TRIGGER_KIND) {
-            let query = format!(
-                r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }},
-                    session_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
-                escape_graphql_string(&request.node_did),
-                escape_graphql_string(&request.session_id),
+            use gents_protocol::document_query::{
+                fields::agent_request as fields, Filter, Query, Selection,
+            };
+            let query = Query::select(Selection::owned(
                 gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
-            );
-            let response = access.execute(&query).await?;
+            ))
+            .filter(Filter::eq(fields::NODE_DID, &request.node_did))
+            .filter(Filter::eq(fields::SESSION_ID, &request.session_id))
+            .render();
+            let response = access.read(&query).await?;
             let rows: Vec<gents_protocol::row::AgentRequestRow> = serde_json::from_value(
                 response
                     .get("data")
@@ -124,21 +128,24 @@ impl OutputObligationGate {
             bail!("output obligations require a physical request document id");
         }
 
-        let query = format!(
-            r#"{{
-                AgentToolCall(
-                    filter: {{
-                        request_doc_id: {{ _in: {} }},
-                        lifecycle_state: {{ _eq: "completed" }}
-                    }}
-                ) {{
-                    _docID node_did requester_did session_id request_doc_id
-                    tool_name
-                }}
-            }}"#,
-            gents_protocol::graphql::graphql_string_list_literal(&self.request_doc_ids),
-        );
-        let response = self.access.execute(&query).await?;
+        use gents_protocol::document_query::{
+            fields::agent_tool_call as fields, Filter, Query, Selection,
+        };
+        let query = Query::select(
+            Selection::doc_id()
+                .field(fields::NODE_DID)
+                .field(fields::REQUESTER_DID)
+                .field(fields::SESSION_ID)
+                .field(fields::REQUEST_DOC_ID)
+                .field(fields::TOOL_NAME),
+        )
+        .filter(Filter::any_of(
+            fields::REQUEST_DOC_ID,
+            &self.request_doc_ids,
+        ))
+        .filter(Filter::eq(fields::LIFECYCLE_STATE, "completed"))
+        .render();
+        let response = self.access.read(&query).await?;
         let rows: Vec<CompletedWriteIdentity> = serde_json::from_value(
             response
                 .get("data")

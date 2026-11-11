@@ -393,7 +393,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/eval/runner/embedded/inspect.rs",
+      "path": "crates/gents-eval/src/runner/embedded/inspect.rs",
       "collection": "AgentRequest",
       "arguments": "filter: { node_did: { _eq: \"$GENTS_0$\" } }, order: { created_at: ASC }, limit: $GENTS_1$"
     },
@@ -406,7 +406,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/eval/runner/embedded/live.rs",
+      "path": "crates/gents-eval/src/runner/embedded/live.rs",
       "collection": "AgentToolCall",
       "arguments": "order: { started_at: DESC }, limit: 1"
     },

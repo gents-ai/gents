@@ -210,8 +210,15 @@ async fn stage_claimed_continuation(
     let now = Utc::now();
     let created_at = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let key = goal_continuation_identity(&goal.goal_id, parent_request_id, sequence)?.retry_key;
-    let key = escape_graphql_string(&key);
-    let response = txn.execute(&format!(r#"{{ AgentRequest(filter: {{ retry_key: {{ _eq: "{key}" }} }}) {{ {SIGNED_REQUEST_FIELDS} }} }}"#)).await?;
+    let response = {
+        use gents_protocol::document_query::{
+            fields::agent_request as request, Filter, Query, Selection,
+        };
+        let query = Query::select(Selection::owned(SIGNED_REQUEST_FIELDS))
+            .filter(Filter::eq(request::RETRY_KEY, &key))
+            .render();
+        txn.run(&query).await?
+    };
     let children: Vec<AgentRequestRow> = serde_json::from_value(
         response
             .pointer("/data/AgentRequest")
@@ -328,19 +335,19 @@ async fn stage_claimed_continuation(
         }
     }
     sign_request(&mut create, RequestSigner::Identity(identity)).await?;
-    let doc_id = escape_graphql_string(&goal.doc_id);
-    let status = escape_graphql_string(&goal.status);
-    let parent_id = escape_graphql_string(parent_request_id);
-    let timestamp = escape_graphql_string(&now.to_rfc3339());
-    let response = txn
-        .execute(&format!(
-            r#"mutation {{ update_Goal(filter: {{
-        _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{did}" }},
-        status: {{ _eq: "{status}" }}, continuation_sequence: {{ _eq: {sequence} }},
-        last_continued_from_request_id: {{ _eq: "{parent_id}" }}
-    }}, input: {{ updated_at: "{timestamp}" }}) {{ _docID }} }}"#
-        ))
-        .await?;
+    let response = {
+        use gents_protocol::document_query::{fields::goal as goal_fields, Filter, Input, Update};
+        let filter = Filter::eq(goal_fields::DOC_ID, &goal.doc_id)
+            .and(Filter::eq(goal_fields::NODE_DID, &goal.node_did))
+            .and(Filter::eq(goal_fields::STATUS, &goal.status))
+            .and(Filter::eq(goal_fields::CONTINUATION_SEQUENCE, sequence))
+            .and(Filter::eq(
+                goal_fields::LAST_CONTINUED_FROM_REQUEST_ID,
+                parent_request_id,
+            ));
+        let input = Input::new().set(goal_fields::UPDATED_AT, now.to_rfc3339());
+        txn.run(&Update::matching(filter, input).render()).await?
+    };
     if !response
         .pointer("/data/update_Goal")
         .is_some_and(mutation_returned_rows)
@@ -382,12 +389,6 @@ async fn stop_claimed_continuation_in_txn(
     now: DateTime<Utc>,
 ) -> Result<Option<String>> {
     let state = goal.state().context("goal has an unknown status")?;
-    let failure_field = if record_failure {
-        format!(r#", last_failure: "{}""#, escape_graphql_string(reason))
-    } else {
-        String::new()
-    };
-    let updated_at = escape_graphql_string(&now.to_rfc3339());
     let action = if state.status == GoalStatus::Active {
         GoalAction::Pause
     } else {
@@ -396,28 +397,38 @@ async fn stop_claimed_continuation_in_txn(
     let Some(post) = state.step(action) else {
         return Ok(None);
     };
-    let fields = if action == GoalAction::Pause {
-        format!(
-            r#"status: "{}", active_time_seconds: {}, active_started_at: null{failure_field}, updated_at: "{updated_at}""#,
-            post.status.as_str(),
-            goal.current_active_time_seconds(now),
-        )
-    } else {
-        format!(r#"wrapup_completed: true{failure_field}, updated_at: "{updated_at}""#)
+    let input = {
+        use gents_protocol::document_query::{fields::goal as goal_fields, Input};
+        let input = if action == GoalAction::Pause {
+            Input::new()
+                .set(goal_fields::STATUS, post.status.as_str())
+                .set(
+                    goal_fields::ACTIVE_TIME_SECONDS,
+                    goal.current_active_time_seconds(now),
+                )
+                .set_null(goal_fields::ACTIVE_STARTED_AT)
+        } else {
+            Input::new().set(goal_fields::WRAPUP_COMPLETED, true)
+        };
+        let input = if record_failure {
+            input.set(goal_fields::LAST_FAILURE, reason)
+        } else {
+            input
+        };
+        input.set(goal_fields::UPDATED_AT, now.to_rfc3339())
     };
-    let doc_id = escape_graphql_string(&goal.doc_id);
-    let did = escape_graphql_string(&goal.node_did);
-    let status = escape_graphql_string(&goal.status);
-    let parent_id = escape_graphql_string(parent_request_id);
-    let response = txn
-        .execute(&format!(
-            r#"mutation {{ update_Goal(filter: {{
-        _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{did}" }},
-        status: {{ _eq: "{status}" }}, continuation_sequence: {{ _eq: {sequence} }},
-        last_continued_from_request_id: {{ _eq: "{parent_id}" }}
-    }}, input: {{ {fields} }}) {{ _docID }} }}"#
-        ))
-        .await?;
+    let response = {
+        use gents_protocol::document_query::{fields::goal as goal_fields, Filter, Update};
+        let filter = Filter::eq(goal_fields::DOC_ID, &goal.doc_id)
+            .and(Filter::eq(goal_fields::NODE_DID, &goal.node_did))
+            .and(Filter::eq(goal_fields::STATUS, &goal.status))
+            .and(Filter::eq(goal_fields::CONTINUATION_SEQUENCE, sequence))
+            .and(Filter::eq(
+                goal_fields::LAST_CONTINUED_FROM_REQUEST_ID,
+                parent_request_id,
+            ));
+        txn.run(&Update::matching(filter, input).render()).await?
+    };
     Ok(response
         .pointer("/data/update_Goal")
         .is_some_and(mutation_returned_rows)

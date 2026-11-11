@@ -207,14 +207,14 @@ pub(super) fn materialize_cached_pack(
 }
 
 pub(crate) struct SubjectPack {
-    pub(crate) source: gents::eval::runner::CellSource,
+    pub(crate) source: gents_eval::runner::CellSource,
     pub(crate) manifest: PackManifest,
     _lease: Option<gents::store::local::file_lock::FileLock>,
 }
 
 impl SubjectPack {
     pub(crate) fn directory(&self) -> &std::path::Path {
-        let gents::eval::runner::CellSource::Directory(dir) = &self.source;
+        let gents_eval::runner::CellSource::Directory(dir) = &self.source;
         dir
     }
 
@@ -253,7 +253,7 @@ pub(crate) async fn resolve_subject_pack(
         )
         .with_context(|| format!("parsing {}", manifest_path.display()))?;
         return Ok(SubjectPack {
-            source: gents::eval::runner::CellSource::Directory(path.to_path_buf()),
+            source: gents_eval::runner::CellSource::Directory(path.to_path_buf()),
             manifest,
             _lease: None,
         });
@@ -262,7 +262,7 @@ pub(crate) async fn resolve_subject_pack(
     let manifest = pack.manifest().clone();
     let (root, lease) = materialize_cached_pack(home, &pack)?;
     Ok(SubjectPack {
-        source: gents::eval::runner::CellSource::Directory(root),
+        source: gents_eval::runner::CellSource::Directory(root),
         manifest,
         _lease: Some(lease),
     })

@@ -4280,7 +4280,6 @@ dependencies = [
  "gents-loop",
  "gents-migration",
  "gents-protocol",
- "glob",
  "hkdf",
  "hmac 0.12.1",
  "hostname",
@@ -4453,6 +4452,7 @@ dependencies = [
  "gents-chatgpt-login",
  "gents-claude-login",
  "gents-desktop-core",
+ "gents-eval",
  "gents-fs-runner",
  "gents-lean-contract",
  "gents-protocol",
@@ -4682,6 +4682,40 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "gents-eval"
+version = "1.0.0-rc1"
+dependencies = [
+ "acp",
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "db",
+ "defra-core",
+ "futures",
+ "gents",
+ "gents-lean-contract",
+ "gents-protocol",
+ "glob",
+ "identity",
+ "jsonschema",
+ "libc",
+ "proptest",
+ "query",
+ "rapidhash",
+ "regex",
+ "schema",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
