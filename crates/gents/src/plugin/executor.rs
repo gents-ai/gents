@@ -890,6 +890,31 @@ impl crate::tools::plugin_host::PluginHost for PluginExecutor {
             .run_once(input)
             .await
     }
+
+    fn application_write_tool(
+        &self,
+        access: crate::store::config_client::ConfigAccess,
+        collections: std::collections::BTreeSet<String>,
+        actor: Option<identity::Did>,
+    ) -> Result<Box<dyn crate::inference::llm::tool::ToolDyn>> {
+        Ok(Box::new(
+            crate::plugin::application_write::WriteTool::new(access, collections, actor),
+        ))
+    }
+
+    fn plugin_tool(
+        self: Arc<Self>,
+        plugin: &crate::documents::PluginToolRef,
+        read_root: Option<PathBuf>,
+        node: Arc<defra_node::Node>,
+        node_did: &str,
+        agent_did: Option<&str>,
+    ) -> Result<Box<dyn crate::inference::llm::tool::ToolDyn>> {
+        Ok(Box::new(
+            super::tool::PluginTool::resolve(self, plugin, read_root)?
+                .with_agent_data(node, node_did, agent_did)?,
+        ))
+    }
 }
 
 pub async fn call_runner(

@@ -483,7 +483,7 @@ impl ToolSurface {
             ));
         }
         if !self.application_write_collections.is_empty() {
-            tools.push(Box::new(crate::plugin::application_write::WriteTool::new(
+            tools.push(runtime.plugins.application_write_tool(
                 crate::store::config_client::ConfigAccess::local_managed_agent(
                     runtime.node.clone(),
                     datastore_actor.clone().expect("write actor was validated"),
@@ -495,7 +495,7 @@ impl ToolSurface {
                 )?,
                 self.application_write_collections.iter().cloned().collect(),
                 datastore_actor.clone(),
-            )));
+            )?);
         }
         if let Some(lsp) = &self.lsp {
             tools.push(Box::new(crate::tools::native::lsp::LspTool::new(
@@ -648,14 +648,11 @@ impl ToolSurface {
             tools.push(Box::new(tool) as Box<dyn ToolDyn>);
         }
         for plugin in &self.plugin_tools {
-            let tool = crate::plugin::tool::PluginTool::resolve(
-                runtime.plugins.clone(),
+            let tool = runtime.plugins.clone().plugin_tool(
                 plugin,
                 self.host_tools
                     .read_root()
                     .map(std::path::Path::to_path_buf),
-            )?
-            .with_agent_data(
                 runtime.node.clone(),
                 &runtime.node_did,
                 runtime
@@ -669,7 +666,7 @@ impl ToolSurface {
                     tool.name()
                 );
             }
-            tools.push(Box::new(tool) as Box<dyn ToolDyn>);
+            tools.push(tool);
         }
         Ok(tools)
     }

@@ -456,7 +456,7 @@ impl AgentToolSurfaceConfig {
         &self,
         node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
-        plugins: &crate::plugin::executor::PluginExecutor,
+        plugins: &dyn crate::tools::plugin_host::PluginHost,
     ) -> Result<ToolSurface> {
         self.resolve_with_agent_tools(node, node_did, plugins, AgentToolConfig::default())
             .await
@@ -466,7 +466,7 @@ impl AgentToolSurfaceConfig {
         &self,
         node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
-        plugins: &crate::plugin::executor::PluginExecutor,
+        plugins: &dyn crate::tools::plugin_host::PluginHost,
         agent_tools: AgentToolConfig,
     ) -> Result<ToolSurface> {
         let available_service_ids = enabled_mcp_service_ids(node, node_did).await?;
@@ -638,7 +638,7 @@ impl AgentToolSurfaceConfig {
         node: &std::sync::Arc<EmbeddedNode>,
         own_node_did: &str,
         active_agent_dids: &RapidHashSet<String>,
-        plugins: &crate::plugin::executor::PluginExecutor,
+        plugins: &dyn crate::tools::plugin_host::PluginHost,
     ) -> Result<ToolSurface> {
         let mut agent_tools = self.agent_tools.clone();
         agent_tools.targets.retain(|target| {
@@ -682,7 +682,7 @@ impl Default for AgentToolSurfaceConfig {
 }
 
 fn resolve_plugin_identities(
-    plugins: &crate::plugin::executor::PluginExecutor,
+    plugins: &dyn crate::tools::plugin_host::PluginHost,
     plugin_tools: &[crate::documents::PluginToolRef],
 ) -> Vec<(
     crate::documents::PluginToolRef,
