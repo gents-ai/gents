@@ -625,10 +625,10 @@ def publishedProfiles : List String := ["fast", "deep"]
 Every Agent is created by `Identity.Household.commitAgentCreation`. The User
 owns the Node; `admin` is an enrolled member holding `nodes#administrator`;
 `operator` is a person granted `administrator` on `worker` alone. The Engineer
-holds `config_writer` on itself (`gents init`) and owns `helper`, which it
-created. `lead` is an Agent holding the catalog through `nodes#administrator`:
-the grant the `node` category needs and that no Agent receives today
-(`SelfConfig.category_gaps`). `worker` holds no grant. -/
+holds what node initialisation gives it (`SelfConfig.engineerInitRelations`:
+`nodes#agent_manager` and `config_writer` on itself) and owns `helper`, which it
+created. `lead` is an Agent a User made Node administrator, which is stronger
+than the catalog. `worker` holds no grant. -/
 def agentAcpState : Identity.Household.State :=
   let base : Identity.Household.State :=
     { objects := [⟨"nodes", "node", "user"⟩]
@@ -640,7 +640,7 @@ def agentAcpState : Identity.Household.State :=
     (fun s (id, creator) => Identity.Household.commitAgentCreation s id creator id "node" true)
     base
   { created with relations :=
-      ⟨"agents", "engineer", "config_writer", .actor "engineer"⟩ ::
+      engineerInitRelations "engineer" "node" ++
       ⟨"agents", "lead", "config_writer", .actor "lead"⟩ ::
       ⟨"agents", "worker", "administrator", .actor "operator"⟩ :: created.relations }
 
@@ -665,9 +665,10 @@ def leadActor : Actor := fixtureActor "lead" .agent
 def workerActor : Actor := fixtureActor "worker" .agent
 
 /-- The grants each fixture actor holds, read from `agentAcpState` by native
-ACP evaluation: owner and administrator reach the catalog and every Agent; a
-per-Agent grant reaches that Agent alone; `config_writer` reaches the holder
-itself; ownership reaches the Agents an Agent created; nothing else does. -/
+ACP evaluation: owner and administrator reach the catalog and every Agent;
+`agent_manager` reaches the catalog and no Agent; a per-Agent grant reaches that
+Agent alone; `config_writer` reaches the holder itself; ownership reaches the
+Agents an Agent created; nothing else does. -/
 theorem fixture_actor_grants :
     [userActor, adminActor, operatorActor, strangerActor, engineerActor, leadActor,
       workerActor].map (fun a => (a.did, a.grants)) =
@@ -675,7 +676,7 @@ theorem fixture_actor_grants :
      ("admin", ⟨true, ["default", "engineer", "worker", "idle", "lead", "helper"]⟩),
      ("operator", ⟨false, ["worker"]⟩),
      ("stranger", ⟨false, []⟩),
-     ("engineer", ⟨false, ["engineer", "helper"]⟩),
+     ("engineer", ⟨true, ["engineer", "helper"]⟩),
      ("lead", ⟨true, ["default", "engineer", "worker", "idle", "lead", "helper"]⟩),
      ("worker", ⟨false, []⟩)] := by
   native_decide
@@ -798,10 +799,18 @@ def agentDecisionScenarios : List AgentDecisionRow :=
     , request := createOf "reviewer" }
   , { name := "agent_create_without_catalog_person_rejected", actor := operatorActor
     , request := createOf "reviewer" }
-  , { name := "agent_create_without_catalog_agent_rejected", actor := engineerActor
+  , { name := "agent_create_without_catalog_agent_rejected", actor := workerActor
     , request := createOf "reviewer" }
-  , { name := "agent_clone_without_catalog_agent_rejected", actor := engineerActor
+  , { name := "agent_clone_without_catalog_agent_rejected", actor := workerActor
+    , request := createOf "reviewer" (cloneOf "worker") }
+  , { name := "agent_create_by_engineer_accepted", actor := engineerActor
+    , request := createOf "reviewer" }
+  , { name := "agent_clone_by_engineer_accepted", actor := engineerActor
     , request := createOf "reviewer" (cloneOf "engineer") }
+  , { name := "agent_choose_default_by_engineer_accepted", actor := engineerActor
+    , request := chooseDefault "worker" }
+  , { name := "agent_engineer_catalog_does_not_disable_user_agent_rejected"
+    , actor := engineerActor, request := disableOf "worker" }
   , { name := "agent_choose_default_without_catalog_rejected", actor := operatorActor
     , request := chooseDefault "worker" }
   , { name := "agent_choose_default_by_catalog_agent_accepted", actor := leadActor
@@ -839,7 +848,9 @@ theorem agent_decision_cases_regressions :
        "agent_edit_prompt_accepted", "agent_create_fresh_id_accepted",
        "agent_create_as_default_accepted", "agent_create_clone_inherits_prompt_accepted",
        "agent_create_clone_of_engineer_accepted", "agent_create_by_node_administrator_accepted",
-       "agent_create_by_catalog_agent_accepted", "agent_choose_default_by_catalog_agent_accepted",
+       "agent_create_by_catalog_agent_accepted", "agent_create_by_engineer_accepted",
+       "agent_clone_by_engineer_accepted", "agent_choose_default_by_engineer_accepted",
+       "agent_choose_default_by_catalog_agent_accepted",
        "agent_edit_by_per_agent_administrator_accepted",
        "agent_disable_by_per_agent_administrator_accepted",
        "agent_edit_own_with_self_config_accepted", "agent_edit_created_agent_by_owner_accepted"] := by
@@ -872,6 +883,7 @@ theorem agent_decision_refusals :
        ("agent_create_without_catalog_person_rejected", .catalogNotHeld),
        ("agent_create_without_catalog_agent_rejected", .catalogNotHeld),
        ("agent_clone_without_catalog_agent_rejected", .catalogNotHeld),
+       ("agent_engineer_catalog_does_not_disable_user_agent_rejected", .agentNotHeld),
        ("agent_choose_default_without_catalog_rejected", .catalogNotHeld),
        ("agent_edit_foreign_without_grant_rejected", .agentNotHeld),
        ("agent_edit_other_agent_without_grant_rejected", .agentNotHeld),

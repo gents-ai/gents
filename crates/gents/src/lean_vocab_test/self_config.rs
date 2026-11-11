@@ -69,7 +69,7 @@ pub(crate) struct LeanAgentCatalogEntry {
 }
 
 /// The acting actor of an agent decision row (Lean `SelfConfig.Actor`) with
-/// the grants native ACP gives it: `catalog` is `nodes update` on the Node,
+/// the grants native ACP gives it: `catalog` is `nodes manage_agents` on the Node,
 /// `configures` the Agents whose document it may update.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]

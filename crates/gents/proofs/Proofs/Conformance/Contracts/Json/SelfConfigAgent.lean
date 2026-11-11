@@ -54,7 +54,7 @@ def agentRefusalName : AgentRefusal → String
   | .selfLockout => "self_lockout"
 
 /-- The acting actor and the grants native ACP gives it
-(`SelfConfig.actorGrantsOf`): `catalog` is `nodes update` on the Node and
+(`SelfConfig.actorGrantsOf`): `catalog` is `nodes manage_agents` on the Node and
 `configures` the Agents whose document it may update. -/
 private def actorJson (a : Actor) : String :=
   "{"
