@@ -916,3 +916,6 @@ pub fn register(registry: &mut Registry) {
         manifest: manifest(),
     }));
 }
+
+#[cfg(test)]
+mod resume_conformance;

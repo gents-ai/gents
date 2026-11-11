@@ -1463,6 +1463,12 @@ def caseCoverage : List CoverageEntry :=
       "conformance::hooks::generated_lifecycle_hook_rerun_cases_drive_the_transaction_classifier"
       "Production TransactionFailure::rerun_requested classifies a ConfigClientError::rerun carried through production wrappers (anyhow context, HookError::Operation, CommitError::Other re-erased as on the plugin-job path, text rendering). The transaction owner's rerun loop itself is not driven by these cases.")
       "lifecycle-hooks" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "lifecycle_hook_goal_resume_cases"
+      "LifecycleHookGoalResumeCases"
+      "goal::lifecycle_hooks::resume_conformance::generated_goal_resume_cases_drive_the_resume_and_binding_listeners"
+      "Production RestageOnResume and BindResumedRoot decide every case on rows built from it; the Goal row is advanced by applying their writes. Core's request.create operation and the DefraDB host are not driven by these cases.")
+      "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "lifecycle_hook_combine_cases"
       "LifecycleHookCombineCases"

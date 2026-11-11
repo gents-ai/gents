@@ -2,11 +2,17 @@ import Proofs.Session.Hooks.Staging
 
 namespace Hooks.Resume
 
-/-- A request core created, with the DID that signed it. -/
+/-- A request core created, with the DID that signed it. `trigger` names the
+trigger that caused it (a Goal for a Goal continuation), `reference` the
+assignment its signed input names (a Goal and that Goal's root, if any), and
+`terminal` whether it reached a terminal lifecycle state. -/
 structure Request where
   id : Nat
   agent : Actor
   signer : Actor
+  trigger : Option Nat := none
+  reference : Option (Nat × Option Nat) := none
+  terminal : Bool := false
   deriving DecidableEq, Repr
 
 /-- The part of core state a session resume touches: the session stop latch
@@ -27,7 +33,14 @@ binds client targets, signs with its own identity and creates the row. -/
 structure CreateArgs where
   id : Nat
   agent : Actor
+  trigger : Option Nat := none
+  reference : Option (Nat × Option Nat) := none
   deriving DecidableEq, Repr
+
+/-- The pending request core creates from `args`, signed by `actor`. -/
+def CreateArgs.request (args : CreateArgs) (actor : Actor) : Request :=
+  { id := args.id, agent := args.agent, signer := actor, trigger := args.trigger,
+    reference := args.reference }
 
 /-- Core performs a requested creation under its own rule and the
 transaction's actor, stated like `Hooks.Safety.perform`: `mayCreate` is core's
@@ -44,7 +57,7 @@ rule as the stop operations. Hooks narrow authority and never widen it. -/
 def perform (mayCreate : Actor → CreateArgs → Session → Bool) (actor : Actor)
     (args : CreateArgs) (session : Session) : Option Session :=
   if mayCreate actor args session = true ∧ !(session.requests.any (·.id == args.id)) = true then
-    some { session with requests := ⟨args.id, args.agent, actor⟩ :: session.requests }
+    some { session with requests := args.request actor :: session.requests }
   else none
 
 theorem create_needs_the_actors_own_authority (mayCreate : Actor → CreateArgs → Session → Bool)
@@ -59,7 +72,7 @@ theorem created_request_is_signed_by_the_actor (mayCreate : Actor → CreateArgs
     (actor : Actor) (args : CreateArgs) (session next : Session)
     (performed : perform mayCreate actor args session = some next) :
     mayCreate actor args session = true ∧
-      next = { session with requests := ⟨args.id, args.agent, actor⟩ :: session.requests } := by
+      next = { session with requests := args.request actor :: session.requests } := by
   unfold perform at performed
   split at performed
   · rename_i accepted

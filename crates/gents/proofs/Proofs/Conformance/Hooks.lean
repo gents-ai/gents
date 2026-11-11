@@ -4,6 +4,7 @@ import Proofs.Session.Hooks.MustCommit
 import Proofs.Session.Hooks.OwedDelivery
 import Proofs.Session.Hooks.Prepared
 import Proofs.Automation.Hooks.QueueScope
+import Proofs.Automation.Hooks.GoalResume
 import Proofs.Conformance.ContractTypes
 
 namespace Conformance.HooksContracts
@@ -511,6 +512,124 @@ private def rerunCaseJson (path : List Carrier) : String :=
     ",\"rerun\":" ++ boolJson (rerunSurvives path) ++ "}"
 
 def rerunCasesJson : String := jsonArray (rerunPaths.map rerunCaseJson)
+
+/-! The Goals instance at resume: `Hooks.GoalResume.restage`, `bind` and
+`resumeGoal`. -/
+
+structure GoalResumeCase where
+  name : String
+  goal : GoalResume.Goal
+  requests : List Resume.Request
+  next : Nat := 50
+
+private def resumeAgent : Actor := "did:key:z6MkResumedAgent"
+
+private def resumeGoalRef : Ref Nat := ⟨GoalResume.collection, 1⟩
+
+private def finished (id : Nat) : Resume.Request :=
+  { id := id, agent := resumeAgent, signer := resumeAgent, terminal := true }
+
+private def running (id : Nat) : Resume.Request :=
+  { id := id, agent := resumeAgent, signer := resumeAgent }
+
+def GoalResumeCase.event (c : GoalResumeCase) : GoalResume.Resumed := ⟨c.next, resumeAgent⟩
+
+def GoalResumeCase.state (c : GoalResumeCase) : State Resume.Session Nat GoalResume.Fact :=
+  ⟨⟨true, c.requests⟩, [GoalResume.goalRow resumeGoalRef 0 c.goal]⟩
+
+def GoalResumeCase.restaged (c : GoalResumeCase) : Outcome Unit Nat GoalResume.Fact Resume.CreateArgs :=
+  GoalResume.restage c.event [[GoalResume.goalRow resumeGoalRef 0 c.goal],
+    c.requests.map GoalResume.render]
+
+def GoalResumeCase.created (c : GoalResumeCase) : Option Resume.CreateArgs :=
+  c.restaged.effects.findSome? fun effect =>
+    match effect with
+    | .core args => some args
+    | .write _ => none
+
+def GoalResumeCase.bound (c : GoalResumeCase) : Option (Outcome Unit Nat GoalResume.Fact Resume.CreateArgs) :=
+  c.created.map fun args =>
+    GoalResume.bind (some (args.request resumeAgent))
+      [[GoalResume.goalRow resumeGoalRef 1 { c.goal with status := .active }]]
+
+def GoalResumeCase.result (c : GoalResumeCase) :=
+  GoalResume.resumeGoal (fun _ _ _ => true) resumeAgent c.event c.state
+
+def goalResumeCases : List GoalResumeCase :=
+  [ { name := "rootless_idle_goal_binds_its_continuation"
+    , goal := ⟨7, .paused, none⟩, requests := [finished 10] }
+  , { name := "bound_idle_goal_keeps_its_root"
+    , goal := ⟨7, .paused, some 10⟩, requests := [finished 10] }
+  , { name := "busy_goal_creates_nothing"
+    , goal := ⟨7, .paused, none⟩, requests := [running 11, finished 10] }
+  , { name := "active_goal_is_left_alone"
+    , goal := ⟨7, .active, none⟩, requests := [finished 10] }
+  , { name := "goal_without_predecessor_refuses"
+    , goal := ⟨7, .paused, none⟩, requests := [] } ]
+
+private def statusString : GoalResume.Status → String
+  | .active => "active"
+  | .paused => "paused"
+  | .complete => "complete"
+
+private def optionNat : Option Nat → String
+  | some value => toString value
+  | none => "null"
+
+private def goalJson (goal : GoalResume.Goal) : String :=
+  "{\"goal\":" ++ toString goal.goal ++ ",\"status\":" ++ jsonString (statusString goal.status) ++
+    ",\"root\":" ++ optionNat goal.root ++ "}"
+
+private def referenceJson : Option (Nat × Option Nat) → String
+  | some (goal, root) => "{\"goal\":" ++ toString goal ++ ",\"root\":" ++ optionNat root ++ "}"
+  | none => "null"
+
+private def resumeRequestJson (request : Resume.Request) : String :=
+  "{\"id\":" ++ toString request.id ++ ",\"terminal\":" ++ boolJson request.terminal ++
+    ",\"trigger\":" ++ optionNat request.trigger ++
+    ",\"reference\":" ++ referenceJson request.reference ++ "}"
+
+private def writtenGoal (effects : List (Effect Nat GoalResume.Fact Resume.CreateArgs)) :
+    Option GoalResume.Goal :=
+  effects.findSome? fun effect =>
+    match effect with
+    | .write (.update _ _ (.goal goal)) => some goal
+    | _ => none
+
+private def goalDecisionJson (createdOf : Bool) :
+    Outcome Unit Nat GoalResume.Fact Resume.CreateArgs → String
+  | .refuse reason => "{\"kind\":\"refuse\",\"reason\":" ++ jsonString reason ++ "}"
+  | .proceed _ effects =>
+      "{\"kind\":\"proceed\",\"goal\":" ++ ((writtenGoal effects).map goalJson).getD "null" ++
+        (if createdOf then
+          ",\"create\":" ++ ((effects.findSome? fun effect =>
+            match effect with
+            | .core args => some ("{\"id\":" ++ toString args.id ++
+                ",\"trigger\":" ++ optionNat args.trigger ++
+                ",\"reference\":" ++ referenceJson args.reference ++ "}")
+            | .write _ => none).getD "null")
+        else "") ++ "}"
+
+private def goalResumeResultJson :
+    Except Refusal (State Resume.Session Nat GoalResume.Fact × List Unit) → String
+  | .ok (state, _) =>
+      "{\"kind\":\"ok\",\"goals\":" ++ jsonArray (state.docs.filterMap fun row =>
+          match row.value with
+          | .goal goal => some (goalJson goal)
+          | .request _ => none) ++
+        ",\"requests\":" ++ jsonArray (state.core.requests.map resumeRequestJson) ++ "}"
+  | .error refusal => "{\"kind\":\"error\",\"refusal\":" ++ refusalJson refusal ++ "}"
+
+private def goalResumeCaseJson (c : GoalResumeCase) : String :=
+  "{\"name\":" ++ jsonString c.name ++
+    ",\"goal\":" ++ goalJson c.goal ++
+    ",\"requests\":" ++ jsonArray (c.requests.map resumeRequestJson) ++
+    ",\"next\":" ++ toString c.next ++
+    ",\"restage\":" ++ goalDecisionJson true c.restaged ++
+    ",\"bind\":" ++ ((c.bound.map (goalDecisionJson false)).getD "null") ++
+    ",\"result\":" ++ goalResumeResultJson c.result ++ "}"
+
+def goalResumeCasesJson : String := jsonArray (goalResumeCases.map goalResumeCaseJson)
 
 /-! Claim verdicts: `Hooks.combine` and `Hooks.gate`. -/
 
