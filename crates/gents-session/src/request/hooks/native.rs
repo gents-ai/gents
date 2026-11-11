@@ -390,6 +390,9 @@ impl Host for TxnHost<'_, '_> {
         Ok(true)
     }
 
+    /// Lean `Hooks.precheckedApply`: every revision is checked before the
+    /// first write, which equals the model's sequential check only because a
+    /// valid result writes each document once (`Hooks.prechecked_apply_is_apply`).
     async fn apply(&self, manifest: &Manifest, effects: &[Effect]) -> Result<(), ApplyFailure> {
         let plugin = manifest.name;
         let clean = |error| ApplyFailure { clean: true, error };

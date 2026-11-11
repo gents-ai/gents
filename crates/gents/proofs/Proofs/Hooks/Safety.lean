@@ -185,11 +185,11 @@ theorem stop_verdict_commits_the_interrupt (mayStop : Actor → Run → Bool)
   | true =>
     refine ⟨{ state with core := { state.core with interrupted := true, stopped := true } },
       ?_, rfl, fun _ => rfl⟩
-    simp [observe, stage, stageFrom, Hook.run, plugin, answered, whole, valid, manifest,
+    simp [observe, stage, stageFrom, Hook.run, plugin, answered, whole, valid, distinctWrites, Effect.written, manifest,
       Effect.permitted, applyEffects, applyEffect, host, perform, permitted, StopOp.request]
   | false =>
     refine ⟨{ state with core := { state.core with interrupted := true } }, ?_, rfl, ?_⟩
-    · simp [observe, stage, stageFrom, Hook.run, plugin, answered, whole, valid, manifest,
+    · simp [observe, stage, stageFrom, Hook.run, plugin, answered, whole, valid, distinctWrites, Effect.written, manifest,
         Effect.permitted, applyEffects, applyEffect, host, perform, permitted, StopOp.request]
     · intro impossible
       cases impossible

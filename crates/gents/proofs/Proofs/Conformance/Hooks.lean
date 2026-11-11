@@ -235,17 +235,21 @@ def effectCases : List EffectCase :=
   , { name := "delete_with_stale_revision_misses"
     , world := { effectWorld with denied := [] }, manifest := notes
     , effects := [delete "Note" "n1" 3] }
-  , { name := "create_then_update_sees_the_created_revision", world := effectWorld
+  , { name := "create_then_update_of_one_document_is_invalid", world := effectWorld
     , manifest := notes, effects := [create "Note" "n2" "a", update "Note" "n2" 0 "b"] }
-  , { name := "update_then_create_misses_in_that_order", world := effectWorld
+  , { name := "update_then_create_of_one_document_is_invalid", world := effectWorld
     , manifest := notes, effects := [update "Note" "n2" 0 "b", create "Note" "n2" "a"] }
-  , { name := "two_updates_chain_revisions", world := effectWorld, manifest := notes
+  , { name := "two_updates_of_one_document_are_invalid", world := effectWorld, manifest := notes
     , effects := [update "Note" "n1" 2 "b", update "Note" "n1" 3 "c"] }
-  , { name := "delete_then_create_restarts_the_revision"
+  , { name := "delete_then_create_of_one_document_is_invalid"
     , world := { effectWorld with denied := [] }, manifest := notes
     , effects := [delete "Note" "n1" 2, create "Note" "n1" "again"] }
   , { name := "core_operations_apply_in_returned_order", world := effectWorld
-    , manifest := notes, effects := [coreOp "second", coreOp "first"] } ]
+    , manifest := notes, effects := [coreOp "second", coreOp "first"] }
+  , { name := "writes_to_distinct_documents_check_against_the_snapshot", world := effectWorld
+    , manifest := notes, effects := [update "Note" "n1" 2 "b", create "Note" "n2" "c"] }
+  , { name := "one_stale_write_among_distinct_documents_misses", world := effectWorld
+    , manifest := notes, effects := [create "Note" "n2" "c", update "Note" "n1" 1 "b"] } ]
 
 private def effectCaseJson (c : EffectCase) : String :=
   "{\"name\":" ++ jsonString c.name ++
@@ -457,9 +461,12 @@ def mustCommitCases : List MustCommitCase :=
   , { name := "failed_core_operation_is_dropped_whole", world := stageWorld
     , plugins := [notesPlugin.deciding
         (.proceed "notes-ok" [update "Note" "n1" 0 "b", coreOp "explode"]), tagsPlugin] }
+  , { name := "repeated_document_is_dropped_and_owed", world := stageWorld
+    , plugins := [notesPlugin.deciding
+        (.proceed "notes-ok" [update "Note" "n1" 0 "b", update "Note" "n1" 1 "c"]), tagsPlugin] }
   , { name := "partial_miss_is_dropped_whole", world := stageWorld
     , plugins := [notesPlugin.deciding
-        (.proceed "notes-ok" [update "Note" "n1" 0 "b", update "Note" "n1" 0 "c"]),
+        (.proceed "notes-ok" [update "Note" "n1" 0 "b", update "Note" "n7" 0 "c"]),
                   auditPlugin] }
   , { name := "every_plugin_failing_still_commits_the_transition", world := stageWorld
     , plugins := [notesPlugin, tagsWith (.refuse "cannot record")], readFailed := ["notes"] }

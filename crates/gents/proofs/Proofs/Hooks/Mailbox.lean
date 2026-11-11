@@ -274,7 +274,7 @@ theorem admitted_reply_commits_with_the_claim (observe : String â†’ Ref String â
       [(.write (.update ref revision (.item post envelope deadline)) :
         Effect String Fact Empty)] = true := by
     have owned : collection = ref.collection := by rw [named]; rfl
-    simp [valid, Effect.permitted, plugin, manifest, host, Write.ref, Write.access, owned]
+    simp [valid, distinctWrites, Effect.written, Effect.permitted, plugin, manifest, host, Write.ref, Write.access, owned]
     exact permitted
   simp only [claimStep, gate, combine, List.foldl_nil, wins, stage, stageFrom, decided, accepted,
     if_true, applyEffects, applyEffect, applyWrite, present, Option.map_some']

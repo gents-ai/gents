@@ -192,6 +192,48 @@ private theorem binding_is_absent (candidate : Request) (goals : List GoalBindin
   simp only [key, binding, Prod.mk.injEq] at keys
   simp [sameSession, keys.1, keys.2.1] at differs
 
+private theorem deleted_refs_nodup (candidate : Request) (goals : List GoalBinding)
+    (distinct : (goals.map key).Nodup) :
+    (((goals.map encode).filter fun row => sameSession candidate (decode row)).map
+      (·.ref)).Nodup := by
+  have all : ((goals.map encode).map (·.ref)).Nodup := by
+    have injective : Function.Injective (fun doc : GoalDoc => (⟨collection, doc⟩ : Ref GoalDoc)) := by
+      intro left right same
+      simpa using same
+    have mapped := distinct.map injective
+    simpa [List.map_map, encode, Function.comp] using mapped
+  exact all.sublist ((List.filter_sublist _).map _)
+
+/-- The replacement writes each Goal document once, provided no Goal binding
+is already for the claimed fire: such a binding would be deleted and created
+again by one result, which validation rejects (`Hooks.distinctWrites`,
+decision 2026-11-11, maintainer-approved). Natively a fire's assignment is
+applied once (`goal_assignment_applied`) and the plugin never deletes. -/
+private theorem assignment_writes_are_distinct (candidate : Request) (goals : List GoalBinding)
+    (distinct : (goals.map key).Nodup)
+    (fresh : ∀ goal ∈ goals, goal.assignment ≠ candidate.fire.identity) :
+    distinctWrites (assignmentEffects candidate (goals.map encode)) = true := by
+  have written : (assignmentEffects candidate (goals.map encode)).filterMap Effect.written =
+      ((goals.map encode).filter fun row => sameSession candidate (decode row)).map (·.ref) ++
+        [(encode (binding candidate)).ref] := by
+    simp [assignmentEffects, Effect.written, Write.ref, List.filterMap_append,
+      List.filterMap_map, Function.comp]
+    have deletes : (Effect.written ∘ fun row : Row GoalDoc Goals.Status =>
+        (Effect.write (Write.delete row.ref row.revision) : Effect GoalDoc Goals.Status TaskOp)) =
+        some ∘ (·.ref) := rfl
+    rw [deletes, List.filterMap_eq_map]
+  simp only [distinctWrites, decide_eq_true_eq, written]
+  rw [List.nodup_append]
+  refine ⟨deleted_refs_nodup candidate goals distinct, List.nodup_singleton _, ?_⟩
+  intro ref deleted bound
+  simp only [List.mem_singleton] at bound
+  subst bound
+  simp only [List.mem_map, List.mem_filter] at deleted
+  obtain ⟨row, ⟨⟨goal, member, rfl⟩, _⟩, sameRef⟩ := deleted
+  have keys : key goal = key (binding candidate) := by simpa [encode] using sameRef
+  simp only [key, binding, Prod.mk.injEq] at keys
+  exact fresh goal member keys.2.2
+
 /-- The plugin's effects, applied by core, are the existing model's
 `applyAssignment`: core's part of it on core state, the Goal binding
 replacement on the plugin's rows. -/
@@ -204,15 +246,7 @@ theorem assignment_effects_are_applyAssignment (actor : Actor) (core : TaskCore)
       some ⟨coreOf (applyAssignment (join core goals) candidate),
         (binding candidate :: goals.filter fun goal => !sameSession candidate goal).map
           encode⟩ := by
-  have refs : (((goals.map encode).filter fun row => sameSession candidate (decode row)).map
-      (·.ref)).Nodup := by
-    have all : ((goals.map encode).map (·.ref)).Nodup := by
-      have injective : Function.Injective (fun doc : GoalDoc => (⟨collection, doc⟩ : Ref GoalDoc)) := by
-        intro left right same
-        simpa using same
-      have mapped := distinct.map injective
-      simpa [List.map_map, encode, Function.comp] using mapped
-    exact all.sublist ((List.filter_sublist _).map _)
+  have refs := deleted_refs_nodup candidate goals distinct
   have deleted := deletes_remove_shown_rows perform actor
     ((goals.map encode).filter fun row => sameSession candidate (decode row))
     ⟨coreOf (recoverOutcomes (join core goals)), goals.map encode⟩ refs
@@ -232,7 +266,9 @@ theorem assignment_effects_are_applyAssignment (actor : Actor) (core : TaskCore)
   rfl
 
 private theorem assignment_effects_are_valid (actor : Actor) (bound : Nat)
-    (candidate : Request) (goals : List GoalBinding) (room : goals.length + 4 ≤ bound) :
+    (candidate : Request) (goals : List GoalBinding) (room : goals.length + 4 ≤ bound)
+    (distinct : (goals.map key).Nodup)
+    (fresh : ∀ goal ∈ goals, goal.assignment ≠ candidate.fire.identity) :
     valid (manifest bound) host.allowed actor
       (assignmentEffects candidate (goals.map encode)) = true := by
   have shorter : ((goals.map encode).filter fun row =>
@@ -241,7 +277,7 @@ private theorem assignment_effects_are_valid (actor : Actor) (bound : Nat)
       (goals.map encode)
     simpa using this
   simp only [valid, Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true]
-  refine ⟨?_, ?_⟩
+  refine ⟨⟨?_, ?_⟩, assignment_writes_are_distinct candidate goals distinct fresh⟩
   · simp only [assignmentEffects, List.length_append, List.length_map, List.length_cons,
       List.length_nil, manifest]
     omega
@@ -257,9 +293,11 @@ private theorem assignment_effects_are_valid (actor : Actor) (bound : Nat)
 
 /-- The slice is equal: core's claim composed with the Goals plugin through
 the contract is `Triggers.Durable.claim`, for every state whose Goal documents
-are distinct and every fire, given room for the effects under the bound. -/
+are distinct and no Goal binding is already for the fire, given room for the
+effects under the bound. -/
 theorem composed_claim_is_durable_claim (bound : Nat) (state : Triggers.Durable.State)
     (fire : Identity) (distinct : (state.goals.map key).Nodup)
+    (fresh : ∀ goal ∈ state.goals, goal.assignment ≠ fire)
     (room : state.goals.length + 4 ≤ bound) :
     composedClaim bound state fire = claim state fire := by
   unfold composedClaim claimStep
@@ -279,7 +317,8 @@ theorem composed_claim_is_durable_claim (bound : Nat) (state : Triggers.Durable.
     | none =>
       simp only [stage, stageFrom, Hook.run, plugin, host, applyTaskGoal, located, embed,
         List.map_cons, List.map_nil, valid, manifest, List.length_nil, Nat.zero_le,
-        decide_true, List.all_nil, Bool.and_self, if_true, applyEffects, settle, project,
+        decide_true, List.all_nil, distinctWrites, List.filterMap_nil, List.nodup_nil,
+        Bool.and_self, if_true, applyEffects, settle, project,
         decode_map_encode]
       rfl
     | some candidate =>
@@ -288,6 +327,7 @@ theorem composed_claim_is_durable_claim (bound : Nat) (state : Triggers.Durable.
         simpa using holds
       by_cases backed : candidate.fire.goalBacked = true
       · have accepted := assignment_effects_are_valid "runtime" bound candidate state.goals room
+          distinct (by rw [identity]; exact fresh)
         have applied := assignment_effects_are_applyAssignment "runtime"
           { coreOf state with requests := state.requests.map fun request =>
             if request.fire.identity == fire then { request with running := true }
@@ -306,7 +346,8 @@ theorem composed_claim_is_durable_claim (bound : Nat) (state : Triggers.Durable.
       · have plain : candidate.fire.goalBacked = false := by simpa using backed
         simp only [stage, stageFrom, Hook.run, plugin, host, applyTaskGoal, located, embed,
           List.map_cons, List.map_nil, plain, Bool.false_eq_true, if_false, valid, manifest,
-          List.length_nil, Nat.zero_le, decide_true, List.all_nil, Bool.and_self, if_true,
+          List.length_nil, Nat.zero_le, decide_true, List.all_nil, distinctWrites,
+          List.filterMap_nil, List.nodup_nil, Bool.and_self, if_true,
           applyEffects, settle, project, decode_map_encode]
         rfl
   · have blocked : canClaim state fire = false := by simpa using queued
