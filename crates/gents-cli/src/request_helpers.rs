@@ -546,24 +546,29 @@ async fn resolve_request_agent_did(
         );
     }
     let requested = session_agent.as_deref().or(requested);
-    let escaped_node_did = gents_store::graphql::escape_graphql_string(node_did);
-    let response = post_graphql(
+    let rendered = {
+        use gents_protocol::document_query::{
+            fields::{agent, default_agent_selection, node},
+            Filter, Query, QuerySet, Selection,
+        };
+        let nodes = Query::select(Selection::owned("node_did enabled"))
+            .filter(Filter::eq(node::NODE_DID, node_did))
+            .limit(2);
+        let default_agent = Query::select(Selection::owned("default_agent_did"))
+            .filter(Filter::eq(default_agent_selection::NODE_DID, node_did))
+            .limit(1);
+        let agents = Query::select(Selection::owned("agent_did node_did enabled"))
+            .filter(Filter::eq(agent::NODE_DID, node_did));
+        QuerySet::new()
+            .plain(&nodes)
+            .plain(&default_agent)
+            .plain(&agents)
+            .render()
+    };
+    let response = gents_store::config_client::post_graphql_with_variables(
         graphql,
-        &format!(
-            r#"{{
-                Node(
-                    filter: {{ node_did: {{ _eq: "{escaped_node_did}" }} }},
-                    limit: 2
-                ) {{ node_did enabled }}
-                DefaultAgentSelection(
-                    filter: {{ node_did: {{ _eq: "{escaped_node_did}" }} }},
-                    limit: 1
-                ) {{ default_agent_did }}
-                Agent(
-                    filter: {{ node_did: {{ _eq: "{escaped_node_did}" }} }}
-                ) {{ agent_did node_did enabled }}
-            }}"#,
-        ),
+        &rendered.document,
+        &rendered.variables,
     )
     .await
     .context("loading authoritative request agent")?;
@@ -1030,12 +1035,12 @@ pub(crate) async fn fetch_request_view(
     graphql: &GraphqlEndpoint,
     request_id: &str,
 ) -> Result<AgentRequestRow> {
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
-                limit: 2
-            ) {{
+    let rendered = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::owned(
+            r#"
                 _docID
                 request_id
                 node_did
@@ -1052,11 +1057,18 @@ pub(crate) async fn fetch_request_view(
                 requester_did
                 session_id
                 input
-            }}
-        }}"#,
-        request_id = escape_graphql_string(request_id),
-    );
-    let response = post_graphql(graphql, &query).await?;
+            "#,
+        ))
+        .filter(Filter::eq(fields::REQUEST_ID, request_id))
+        .limit(2)
+        .render()
+    };
+    let response = gents_store::config_client::post_graphql_with_variables(
+        graphql,
+        &rendered.document,
+        &rendered.variables,
+    )
+    .await?;
     let rows = response
         .pointer("/data/AgentRequest")
         .and_then(|v| v.as_array())

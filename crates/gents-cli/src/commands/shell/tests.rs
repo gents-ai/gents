@@ -3004,10 +3004,10 @@ pub(super) fn mailbox_item(
 /// Answers the open-mailbox list with the open `items`, newest first as the node orders them,
 /// each `_docID` read with its item. The node answers every other query.
 fn mailbox_answer(query: &str, items: &[Value]) -> Option<Value> {
-    if !query.trim_start().starts_with("{ MailboxItem(") {
+    if !query.contains("{ MailboxItem(") {
         return None;
     }
-    let rows: Vec<&Value> = match query.split_once(r#"_docID: { _eq: ""#) {
+    let rows: Vec<&Value> = match query.split_once(r#"_docID: {_eq: ""#) {
         Some((_, rest)) => {
             let id = rest.split('"').next().unwrap();
             items.iter().filter(|item| item["_docID"] == id).collect()

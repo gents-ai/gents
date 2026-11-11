@@ -7,12 +7,11 @@ use gents_protocol::row::{
     decode_node_readiness_snapshot, project_node_readiness_summary, NodeReadinessRow,
     ProjectedNodeReadinessSummary,
 };
-use gents_store::graphql::escape_graphql_string;
 use serde_json::{json, Value};
 
 use crate::cli::args::StatusArgs;
 use crate::config_writes::ConfigAccess;
-use crate::{post_graphql, print_json};
+use crate::print_json;
 use gents_service::home_state::read_runtime_state;
 use gents_service::home_state::resolve_graphql_endpoint;
 use gents_service::home_state::resolve_home_dir;
@@ -64,26 +63,32 @@ pub(crate) async fn load_runtime_status_output(
                 BTreeMap::new(),
             ),
         };
-    let query = format!(
-        r#"{{
-            NodeRuntime(
-                filter: {{ node_did: {{ _eq: "{node_did}" }} }},
-                limit: 1
-            ) {{
-                node_did
-                reconcile_phase
-                agent_executor_capacity
-                agent_executor_queue_depth
-                agent_executor_status_json
-                last_reconcile_result
-                last_reconcile_error
-                last_reconcile_completed_at
-                updated_at
-            }}
-        }}"#,
-        node_did = escape_graphql_string(node_did),
-    );
-    let response = post_graphql(graphql, &query).await?;
+    let rendered = {
+        use gents_protocol::document_query::{
+            fields::node_runtime as fields, Filter, Query, Selection,
+        };
+        Query::select(
+            Selection::new()
+                .field(fields::NODE_DID)
+                .field(fields::RECONCILE_PHASE)
+                .field(fields::AGENT_EXECUTOR_CAPACITY)
+                .field(fields::AGENT_EXECUTOR_QUEUE_DEPTH)
+                .field(fields::AGENT_EXECUTOR_STATUS_JSON)
+                .field(fields::LAST_RECONCILE_RESULT)
+                .field(fields::LAST_RECONCILE_ERROR)
+                .field(fields::LAST_RECONCILE_COMPLETED_AT)
+                .field(fields::UPDATED_AT),
+        )
+        .filter(Filter::eq(fields::NODE_DID, node_did))
+        .limit(1)
+        .render()
+    };
+    let response = gents_store::config_client::post_graphql_with_variables(
+        graphql,
+        &rendered.document,
+        &rendered.variables,
+    )
+    .await?;
     let runtime_row = response
         .pointer("/data/NodeRuntime")
         .and_then(Value::as_array)

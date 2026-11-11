@@ -6,12 +6,11 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use gents_protocol::client_protocol::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
-use gents_store::graphql::escape_graphql_string;
 use serde_json::Value;
 
 use crate::{
-    observe_canonical_request_output, post_graphql, request_diagnostic_hint,
-    request_output_envelope, RequestOutputEnvelope,
+    observe_canonical_request_output, request_diagnostic_hint, request_output_envelope,
+    RequestOutputEnvelope,
 };
 
 use crate::SubmittedRequest;
@@ -58,19 +57,17 @@ struct ChatToolProgressMarker {
 /// The exact `_docID` request read carries no `order`: DefraDB plans an
 /// ordered read as an index scan and applies `limit` before the `_docID`
 /// filter, so later rows in the collection would hide this request.
-pub(super) fn chat_progress_query(request: &SubmittedRequest) -> String {
+pub(super) fn chat_progress_query(
+    request: &SubmittedRequest,
+) -> gents_protocol::document_query::Rendered {
+    use gents_protocol::document_query::{
+        fields::{agent_request, agent_tool_call},
+        session_scope, Direction, Filter, Query, QuerySet, Selection,
+    };
     let request_doc_id = &request.request_doc_id;
-    let scope = gents_protocol::session::session_scope_filter(
-        &request.node_did,
-        &request.session_id,
-        request.requester_did.as_deref(),
-    );
-    format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ {scope}, _docID: {{ _eq: "{request_doc_id}" }} }},
-                limit: 2
-            ) {{
+    let requester_did = request.requester_did.as_deref();
+    let requests = Query::select(Selection::owned(
+        r#"
                 _docID node_did requester_did session_id
                 request_id agent_did
                 lifecycle_state
@@ -84,42 +81,55 @@ pub(super) fn chat_progress_query(request: &SubmittedRequest) -> String {
                 terminalized_at
                 interrupt_requested_at
                 valid_until
-            }}
-            AgentToolCall(
-                filter: {{
-                    {scope},
-                    request_doc_id: {{ _eq: "{request_doc_id}" }}
-                }},
-                order: {{ started_at: ASC }}
-            ) {{
+            "#,
+    ))
+    .filter(
+        session_scope(&request.node_did, &request.session_id, requester_did)
+            .and(Filter::eq(agent_request::DOC_ID, request_doc_id)),
+    )
+    .limit(2);
+    let tool_calls = Query::select(Selection::owned(
+        r#"
                 _docID
                 tool_call_key
                 tool_name
                 status
                 started_at
                 completed_at
-            }}
-        }}"#,
-        request_doc_id = escape_graphql_string(request_doc_id),
+            "#,
+    ))
+    .filter(
+        session_scope(&request.node_did, &request.session_id, requester_did).and(Filter::eq(
+            agent_tool_call::REQUEST_DOC_ID,
+            request_doc_id,
+        )),
     )
+    .order_by(agent_tool_call::STARTED_AT, Direction::Asc);
+    QuerySet::new().plain(&requests).plain(&tool_calls).render()
 }
 
 pub(crate) async fn load_existing_tool_call_keys(
     graphql: &GraphqlEndpoint,
     session_id: &str,
 ) -> Result<std::collections::BTreeMap<String, String>> {
-    let query = format!(
-        r#"{{
-            AgentToolCall(
-                filter: {{ session_id: {{ _eq: "{session_id}" }} }}
-            ) {{
-                tool_call_key
-                status
-            }}
-        }}"#,
-        session_id = escape_graphql_string(session_id),
-    );
-    let response = post_graphql(graphql, &query).await?;
+    let rendered = {
+        use gents_protocol::document_query::{
+            fields::agent_tool_call as fields, Filter, Query, Selection,
+        };
+        Query::select(
+            Selection::new()
+                .field(fields::TOOL_CALL_KEY)
+                .field(fields::STATUS),
+        )
+        .filter(Filter::eq(fields::SESSION_ID, session_id))
+        .render()
+    };
+    let response = gents_store::config_client::post_graphql_with_variables(
+        graphql,
+        &rendered.document,
+        &rendered.variables,
+    )
+    .await?;
     let rows = response
         .pointer("/data/AgentToolCall")
         .and_then(Value::as_array)
@@ -177,8 +187,13 @@ pub(crate) async fn stream_turn_progress(
     let colors = colors_enabled();
 
     loop {
-        let query = chat_progress_query(submitted);
-        let response = post_graphql(graphql, &query).await?;
+        let rendered = chat_progress_query(submitted);
+        let response = gents_store::config_client::post_graphql_with_variables(
+            graphql,
+            &rendered.document,
+            &rendered.variables,
+        )
+        .await?;
         let rows = response
             .pointer("/data/AgentRequest")
             .and_then(Value::as_array)
@@ -868,7 +883,7 @@ mod tests {
             input: None,
         };
 
-        let query = chat_progress_query(&submitted);
+        let query = chat_progress_query(&submitted).document;
 
         assert!(!query.contains(" args"));
         assert!(!query.contains(" result"));

@@ -5,14 +5,14 @@ use anyhow::{Context, Result};
 use gents_protocol::client_protocol::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use gents_session::session::tool_call_state::CancelCause;
-use gents_store::{config_client::ConfigAccess, graphql::escape_graphql_string};
+use gents_store::config_client::ConfigAccess;
 use serde_json::{json, Value};
 use tokio::time::Instant;
 
 use crate::cli::args::RequestInterruptArgs;
 use crate::cli::output_format::OutputFormat;
 use crate::request_helpers::parse_duration_suffix;
-use crate::{post_graphql, print_json, resolve_request_id};
+use crate::{print_json, resolve_request_id};
 use gents_service::home_state::resolve_graphql_endpoint;
 
 pub(super) async fn request_interrupt(args: RequestInterruptArgs) -> Result<()> {
@@ -75,12 +75,12 @@ async fn fetch_interrupt_request_row(
     graphql: &GraphqlEndpoint,
     request_id: &str,
 ) -> Result<AgentRequestRow> {
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
-                limit: 2
-            ) {{
+    let rendered = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::owned(
+            r#"
                 _docID request_id
                 node_did requester_did
                 agent_did
@@ -94,11 +94,18 @@ async fn fetch_interrupt_request_row(
                 deadline
                 valid_until
                 interrupt_requested_at
-            }}
-        }}"#,
-        request_id = escape_graphql_string(request_id),
-    );
-    let response = post_graphql(graphql, &query).await?;
+            "#,
+        ))
+        .filter(Filter::eq(fields::REQUEST_ID, request_id))
+        .limit(2)
+        .render()
+    };
+    let response = gents_store::config_client::post_graphql_with_variables(
+        graphql,
+        &rendered.document,
+        &rendered.variables,
+    )
+    .await?;
     let rows = response
         .pointer("/data/AgentRequest")
         .and_then(Value::as_array)
