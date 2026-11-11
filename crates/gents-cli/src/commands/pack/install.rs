@@ -6,7 +6,7 @@ use super::{
 use crate::cli::*;
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
-use gents::pack::{PackKind, PackManifest};
+use gents::pack::{PackChangeError, PackKind, PackManifest};
 use serde_json::json;
 
 struct LocalPackAccess {
@@ -225,7 +225,7 @@ pub(crate) async fn install_documents_pack(
     pack: &PackSource,
     args: &PackInstallArgs,
     explicit: bool,
-) -> Result<serde_json::Value> {
+) -> Result<serde_json::Value, PackChangeError> {
     install_documents_pack_inner(access, owner, pack, args, explicit, None).await
 }
 
@@ -236,7 +236,7 @@ async fn install_documents_pack_inner(
     args: &PackInstallArgs,
     explicit: bool,
     local: Option<&LocalPackAccess>,
-) -> Result<serde_json::Value> {
+) -> Result<serde_json::Value, PackChangeError> {
     let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
     let dependencies: Vec<PackSource> =
         futures_util::stream::iter(pack.manifest().metadata.dependencies.iter())
@@ -264,7 +264,8 @@ async fn install_documents_pack_inner(
             let Some(path) = source.manifest().config.as_deref() else {
                 continue;
             };
-            let config: serde_json::Value = serde_json::from_slice(source.asset(path)?)?;
+            let config: serde_json::Value =
+                serde_json::from_slice(source.asset(path)?).map_err(anyhow::Error::from)?;
             if has_plugin_references(&config) {
                 needs_runtime_store = true;
                 break;
@@ -279,7 +280,8 @@ async fn install_documents_pack_inner(
                 args,
                 explicit,
             )
-            .await;
+            .await
+            .map_err(Into::into);
         }
         if needs_runtime_store {
             return crate::http::pack_install_client::install_remote(
@@ -290,7 +292,8 @@ async fn install_documents_pack_inner(
                 args,
                 explicit,
             )
-            .await;
+            .await
+            .map_err(Into::into);
         }
     }
     install_documents_pack_resolved_inner(access, owner, pack, args, explicit, dependencies, local)
@@ -304,7 +307,7 @@ pub(crate) async fn install_documents_pack_resolved(
     args: &PackInstallArgs,
     explicit: bool,
     dependencies: Vec<PackSource>,
-) -> Result<serde_json::Value> {
+) -> Result<serde_json::Value, PackChangeError> {
     install_documents_pack_resolved_inner(access, owner, pack, args, explicit, dependencies, None)
         .await
 }
@@ -317,10 +320,10 @@ async fn install_documents_pack_resolved_inner(
     explicit: bool,
     dependencies: Vec<PackSource>,
     local: Option<&LocalPackAccess>,
-) -> Result<serde_json::Value> {
+) -> Result<serde_json::Value, PackChangeError> {
     let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
     let requested = parse_inference_slot_bindings(&args.inference_slots)?;
-    let temp = tempfile::tempdir()?;
+    let temp = tempfile::tempdir().map_err(anyhow::Error::from)?;
     gents::pack::materialize::materialize(pack.archive(), temp.path())?;
     let origin_tag = gents::pack::pack_origin_tag(&format!(
         "{}/{}",
@@ -695,49 +698,53 @@ pub(super) async fn install_documents_command_with_local(
     pack: &PackSource,
     args: &PackInstallArgs,
     local_endpoint: Option<gents::store::config_client::GraphqlEndpoint>,
-) -> Result<()> {
+) -> Result<(), PackChangeError> {
     let result = async {
-        let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
-        let bind_mode = if args.scope.graphql.is_some() {
-            Some(ManifestNodeDidBindingArg::Live)
-        } else {
-            Some(ManifestNodeDidBindingArg::Home)
-        };
-        let owner = super::super::config::binding::resolve_target_node_did(
-            args.scope.node_did.as_deref(),
-            if args.scope.node_did.is_some() {
-                None
+        let (home, owner, local) = async {
+            let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
+            let bind_mode = if args.scope.graphql.is_some() {
+                Some(ManifestNodeDidBindingArg::Live)
             } else {
-                bind_mode
-            },
-            args.scope.home.as_deref(),
-            args.scope.graphql.as_deref(),
-            Some(&access),
-        )
+                Some(ManifestNodeDidBindingArg::Home)
+            };
+            let owner = super::super::config::binding::resolve_target_node_did(
+                args.scope.node_did.as_deref(),
+                if args.scope.node_did.is_some() {
+                    None
+                } else {
+                    bind_mode
+                },
+                args.scope.home.as_deref(),
+                args.scope.graphql.as_deref(),
+                Some(&access),
+            )
+            .await?;
+            let local = if let Some(endpoint) = local_endpoint {
+                let config = crate::home_state::read_init_config(&home)?
+                    .context("home is not initialized")?;
+                let runtime = crate::home_state::load_initialized_home_identity(&home, &config)?;
+                anyhow::ensure!(
+                    runtime.did() == owner,
+                    "selected Node does not match the held runtime"
+                );
+                let node = access
+                    .local_node()
+                    .context("local pack install requires the owned Node")?
+                    .clone();
+                Some(LocalPackAccess {
+                    writer: gents::store::config_client::ConfigAccess::Graphql(endpoint),
+                    schema: gents::store::config_client::ConfigAccess::local_as(
+                        node,
+                        identity::Did::new(&owner)?,
+                    ),
+                    runtime,
+                })
+            } else {
+                None
+            };
+            anyhow::Ok((home, owner, local))
+        }
         .await?;
-        let local = if let Some(endpoint) = local_endpoint {
-            let config =
-                crate::home_state::read_init_config(&home)?.context("home is not initialized")?;
-            let runtime = crate::home_state::load_initialized_home_identity(&home, &config)?;
-            anyhow::ensure!(
-                runtime.did() == owner,
-                "selected Node does not match the held runtime"
-            );
-            let node = access
-                .local_node()
-                .context("local pack install requires the owned Node")?
-                .clone();
-            Some(LocalPackAccess {
-                writer: gents::store::config_client::ConfigAccess::Graphql(endpoint),
-                schema: gents::store::config_client::ConfigAccess::local_as(
-                    node,
-                    identity::Did::new(&owner)?,
-                ),
-                runtime,
-            })
-        } else {
-            None
-        };
         let mut output = install_documents_pack_inner(
             &access,
             &owner,
@@ -752,7 +759,7 @@ pub(super) async fn install_documents_command_with_local(
                 .await?
                 .into();
         }
-        Ok::<_, anyhow::Error>(output)
+        Ok::<_, PackChangeError>(output)
     }
     .await;
     if let Some(node) = access.local_node() {
@@ -760,10 +767,10 @@ pub(super) async fn install_documents_command_with_local(
             tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
         }
     }
-    crate::print_json(&result?)
+    Ok(crate::print_json(&result?)?)
 }
 
-pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
+pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError> {
     let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
     let pack = resolve_pack_source(&args.package, args.registry.as_deref(), &home).await?;
     tracing::info!(package = %args.package, source = %pack.describe(), "resolved pack");
@@ -783,17 +790,22 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
             install_documents_command_with_local(access, &pack, &args, local_endpoint).await
         }
         PackKind::Assets | PackKind::Plugins => {
-            anyhow::ensure!(
-                args.dependency_variables.is_empty(),
-                "--dependency-variable applies only to document packs with dependencies"
-            );
+            if !args.dependency_variables.is_empty() {
+                return Err(anyhow::anyhow!(
+                    "--dependency-variable applies only to document packs with dependencies"
+                )
+                .into());
+            }
             let requested = parse_inference_slot_bindings(&args.inference_slots)?;
-            anyhow::ensure!(
-                args.scope.graphql.is_none()
-                    && (args.scope.node_did.is_none() || !requested.is_empty())
-                    && !args.force_rebind_concrete_did,
-                "asset and plugins packs install locally with --home; identity flags do not apply"
-            );
+            if args.scope.graphql.is_some()
+                || (args.scope.node_did.is_some() && requested.is_empty())
+                || args.force_rebind_concrete_did
+            {
+                return Err(anyhow::anyhow!(
+                    "asset and plugins packs install locally with --home; identity flags do not apply"
+                )
+                .into());
+            }
             if args.preview {
                 let mut preview = json!({
                     "pack": pack.manifest().name,
@@ -812,7 +824,7 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                 {
                     preview["inference_needs"] = needs;
                 }
-                return crate::print_json(&preview);
+                return Ok(crate::print_json(&preview)?);
             }
             let slot_owner =
                 resolve_plugin_slot_owner(&args.scope, pack.manifest(), &requested).await?;
@@ -842,7 +854,7 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                     true,
                 )
                 .await?;
-                return crate::print_json(&result);
+                return Ok(crate::print_json(&result)?);
             }
             let notify_scope = notification_scope.clone();
             let notify_home = home.clone();
@@ -896,7 +908,7 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                     .await?
                     .into();
             }
-            crate::print_json(&output)
+            Ok(crate::print_json(&output)?)
         }
     }
 }

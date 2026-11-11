@@ -44,6 +44,70 @@ pub async fn load_session_live_store_on(
     live_store(&data, request)
 }
 
+/// The live rows of `request_id` when `observed` holds exactly one such
+/// request of `session_id` on `node_did` and the session's requester made it;
+/// an empty store otherwise.
+pub async fn load_session_request_live_store_on(
+    access: &gents::store::config_client::ConfigAccess,
+    observed: &ClientStore,
+    session_id: &str,
+    node_did: &str,
+    request_id: &str,
+) -> Result<ClientStore> {
+    let matches = observed
+        .requests
+        .iter()
+        .filter(|row| {
+            row.request_id == request_id
+                && row.session_id.as_deref() == Some(session_id)
+                && row.node_did.as_deref() == Some(node_did)
+        })
+        .collect::<Vec<_>>();
+    let [request] = matches.as_slice() else {
+        return Ok(ClientStore::default());
+    };
+    let requester = observed
+        .sessions
+        .iter()
+        .find(|row| row.session_id == session_id && row.node_did == node_did)
+        .and_then(|session| session.requester_did.as_deref());
+    if request.requester_did.as_deref() != requester {
+        return Ok(ClientStore::default());
+    }
+    load_session_live_store_on(access, request).await
+}
+
+/// The live content and reasoning of the session's turn request on
+/// `node_did` in `observed`, read over `access`; `None` once that request is
+/// terminal or while it has no live output.
+pub async fn load_session_live_text_on(
+    access: &gents::store::config_client::ConfigAccess,
+    observed: &ClientStore,
+    session_id: &str,
+    node_did: &str,
+) -> Result<Option<crate::client::canonical_output::CanonicalLiveText>> {
+    let Some(request_id) = observed.turn_request_id_for_session_for_node(session_id, node_did)
+    else {
+        return Ok(None);
+    };
+    let live =
+        load_session_request_live_store_on(access, observed, session_id, node_did, &request_id)
+            .await?;
+    if live
+        .derive_turn_for_request_for_node(&request_id, node_did)
+        .is_none_or(|state| state.is_terminal())
+    {
+        return Ok(None);
+    }
+    Ok(crate::client::canonical_output::canonical_live_text(
+        observed,
+        &live,
+        session_id,
+        Some(node_did),
+        &request_id,
+    ))
+}
+
 fn live_store(data: &Value, expected: &AgentRequestRow) -> Result<ClientStore> {
     let requests: Vec<AgentRequestRow> = parse_query_rows(data, AGENT_REQUEST_NAME)?;
     let [request] = requests.as_slice() else {

@@ -34,6 +34,7 @@ path = "tests/cli_live_suite.rs"
 required-features = ["live-e2e"]
 
 [dependencies]
+gents-eval.workspace = true
 base64.workspace = true
 rapidhash = { workspace = true }
 ts-rs = { version = "10.1", optional = true, default-features = false, features = ["serde-compat"] }
@@ -47,17 +48,17 @@ ciborium = "0.2"
 clap.workspace = true
 gents-chatgpt-login.workspace = true
 gents-claude-login.workspace = true
-gents-codex-protocol.workspace = true
 gents-desktop-core.workspace = true
 gents = { path = "../gents" }
 gents-fs-runner = { path = "../gents-fs-runner" }
 gents-protocol.workspace = true
+gents-shell.workspace = true
 defra-node = { workspace = true, features = ["http"] }
 defra-http.workspace = true
 defra-p2p-adapter.workspace = true
-events.workspace = true
 futures-util = "0.3"
 flate2 = "1"
+iana-time-zone = "0.1"
 include_dir = "0.7"
 identity.workspace = true
 iroh.workspace = true
@@ -92,6 +93,7 @@ tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
 url = "2"
+webbrowser = "1"
 semver = "1"
 tempfile = "3"
 # `gents __docs-bundle --archive` packs the reference bundle itself so its
@@ -153,6 +155,8 @@ defra-core.workspace = true
 futures = "0.3"
 gents-lean-contract.workspace = true
 portable-pty = "0.9"
+ratatui = { version = "0.30", default-features = false }
+tui-test-rs = "0.1.1"
 
 [target.'cfg(unix)'.dev-dependencies]
 libc = "0.2"

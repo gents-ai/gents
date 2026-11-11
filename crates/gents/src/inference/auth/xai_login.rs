@@ -232,25 +232,6 @@ async fn wait_poll_interval(interval: Duration, cancel: Option<&AtomicBool>) -> 
     }
 }
 
-pub async fn run_device_code_login(
-    http: &reqwest::Client,
-    _open_browser: bool,
-) -> Result<XaiLoginTokens> {
-    let challenge = request_device_code(http).await?;
-    let open_url = challenge
-        .verification_uri_complete
-        .as_deref()
-        .unwrap_or(challenge.verification_uri.as_str());
-
-    eprintln!("Open this URL to sign in with Grok / xAI:");
-    eprintln!("{open_url}");
-    if challenge.verification_uri_complete.is_none() {
-        eprintln!("When prompted, enter code: {}", challenge.user_code);
-    }
-
-    poll_device_token(http, &challenge, None).await
-}
-
 pub async fn run_device_code_login_with_url_callback<F>(
     http: &reqwest::Client,
     cancel: Option<Arc<AtomicBool>>,

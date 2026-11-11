@@ -17,38 +17,6 @@ pub use gents_protocol::process_control::ProcessControlOutcome as CancelBackgrou
 
 /// `agent` is the owning Agent's managed access: ACP hides the Agent's tool
 /// calls from every other actor and their writes require its signer.
-pub async fn cancel_session_background_process(
-    agent: &ConfigAccess,
-    executions: &BackgroundExecutionRegistry,
-    node_did: &str,
-    requester_did: Option<&str>,
-    session_id: &str,
-    tool_call_id: &str,
-) -> Result<CancelBackgroundToolCallOutcome> {
-    let Some((node, lifecycle)) =
-        load_owned_background_call(agent, session_id, tool_call_id).await?
-    else {
-        return Ok(CancelBackgroundToolCallOutcome::NotFound);
-    };
-    let scope = crate::tools::background::status::ProcessControlScope {
-        request_id: String::new(),
-        session_id: session_id.into(),
-        node_did: node_did.into(),
-        requester_did: requester_did.map(str::to_owned),
-    };
-    if !scope.authorizes(
-        lifecycle.session_id(),
-        lifecycle.node_did(),
-        lifecycle.requester_did(),
-    ) || lifecycle.kind() == crate::tools::call::lifecycle::ToolRowKind::SessionMessage
-    {
-        return Ok(CancelBackgroundToolCallOutcome::NotFound);
-    }
-    cancel_loaded_background_tool_call(node, executions, lifecycle, "explicit_cancel").await
-}
-
-/// `agent` is the owning Agent's managed access; see
-/// [`cancel_session_background_process`].
 pub async fn cancel_background_tool_call(
     agent: &ConfigAccess,
     background_executions: &BackgroundExecutionRegistry,
@@ -785,22 +753,6 @@ mod tests {
                 drop(reservation);
             })
         };
-
-        let denied = cancel_session_background_process(
-            &agent_access,
-            &registry,
-            node_did,
-            Some("foreign"),
-            "session-1",
-            "cancel-native-tool",
-        )
-        .await
-        .unwrap();
-        assert_eq!(denied, CancelBackgroundToolCallOutcome::NotFound);
-        assert!(
-            !token.is_cancelled(),
-            "unauthorized UI cancellation must not signal the worker"
-        );
 
         let requester_did = request.request().requester_did.clone();
         let stop = |session_id: &'static str, tool_call_id: &'static str, doc: String| {

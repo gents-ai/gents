@@ -7,7 +7,9 @@ use gents_protocol::enrollment::{RenewalIntent, RenewalOfferResponse};
 use serde::Deserialize;
 
 use crate::store::config_client::ConfigAccess;
-use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
+use crate::store::graphql::{
+    escape_graphql_string, graphql_with_transaction_retry, read_rendered, rows,
+};
 use crate::store::identity::NodeIdentity;
 
 use super::enrollment_candidate::push_enrollment_document;
@@ -167,12 +169,17 @@ pub(super) async fn prune_expired_offers(
         if !may_prune_renewal(owned, verified, expires.with_timezone(&Utc), now) {
             continue;
         }
-        let id = escape_graphql_string(&row.doc_id);
-        let mutation = format!(
-            r#"mutation {{ delete_EnrollmentRenewalOffer(filter: {{ _docID: {{ _eq: "{id}" }}, admin_did: {{ _eq: "{admin}" }}, expires_at: {{ _lt: "{cutoff}" }} }}) {{ _docID }} }}"#
-        );
+        use gents_protocol::document_query::{
+            fields::enrollment_renewal_offer as fields, Delete, Filter,
+        };
+        let mutation = Delete::matching(
+            Filter::eq(fields::DOC_ID, &row.doc_id)
+                .and(Filter::eq(fields::ADMIN_DID, identity.did()))
+                .and(Filter::lt(fields::EXPIRES_AT, &cutoff)),
+        )
+        .render();
         ConfigAccess::local_as(node.clone(), ::identity::Did::new(identity.did())?)
-            .write("enrollment.prune_expired_offer", &mutation)
+            .write_rendered("enrollment.prune_expired_offer", &mutation)
             .await?;
     }
     Ok(())
@@ -183,12 +190,21 @@ async fn existing_response(
     intent: &RenewalIntent,
     identity: &dyn NodeIdentity,
 ) -> Result<Option<(String, RenewalOfferResponse)>> {
-    let id = escape_graphql_string(&intent.intent_id());
-    let query = format!(
-        r#"{{ EnrollmentRenewalOffer(filter: {{ intent_id: {{ _eq: "{id}" }} }}) {{ _docID intent_id member_did offer_token expires_at admin_did admin_sig }} }}"#
-    );
-    let response =
-        graphql_with_transaction_retry(node, &query, "read renewal offer response").await?;
+    use gents_protocol::document_query::{
+        fields::enrollment_renewal_offer as fields, Filter, Query, Selection,
+    };
+    let query = Query::select(
+        Selection::doc_id()
+            .field(fields::INTENT_ID)
+            .field(fields::MEMBER_DID)
+            .field(fields::OFFER_TOKEN)
+            .field(fields::EXPIRES_AT)
+            .field(fields::ADMIN_DID)
+            .field(fields::ADMIN_SIG),
+    )
+    .filter(Filter::eq(fields::INTENT_ID, intent.intent_id()))
+    .render();
+    let response = read_rendered(node, &query, "read renewal offer response").await?;
     let found = rows::<OfferRow>(&response, "EnrollmentRenewalOffer")?;
     let [row] = found.as_slice() else {
         anyhow::ensure!(found.is_empty(), "conflicting renewal offer responses");

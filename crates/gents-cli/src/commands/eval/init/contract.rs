@@ -1,6 +1,6 @@
 use std::fmt::Write as _;
 
-use gents::eval::checks::CheckDescription;
+use gents_eval::checks::CheckDescription;
 
 use super::dossier::Dossier;
 use super::validate::Floors;
@@ -43,7 +43,7 @@ pub(crate) fn first_turn(
 
 #[cfg(test)]
 mod tests {
-    use gents::eval::checks::CheckRegistry;
+    use gents_eval::checks::CheckRegistry;
 
     use super::*;
     use crate::commands::eval::init::validate::{case_catalog_conformance, tests::dossier};

@@ -1,6 +1,6 @@
 use crate::store::config_client::session_children::output_segment_bound_variables;
 use crate::store::config_client::{ConfigAccess, IdempotentTransactionRetry};
-use crate::store::graphql::{created_doc_id, escape_graphql_string};
+use crate::store::graphql::created_doc_id;
 use crate::tools::call::lifecycle::{ToolCallLifecycle, ToolCallState};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -159,29 +159,26 @@ async fn append_tool_output_with_time(
                 let binding = binding.clone();
                 Box::pin(async move {
                     let now = fixture_now.unwrap_or_else(Utc::now);
-                    let tool = escape_graphql_string(&binding.tool_call_doc_id);
-                    let request = escape_graphql_string(&binding.request_doc_id);
-                    let agent = escape_graphql_string(&binding.node_did);
-                    let session = escape_graphql_string(&binding.session_id);
-                    let requester_filter = binding
-                        .requester_did
-                        .as_deref()
-                        .map(|value| {
-                            format!(
-                                r#"requester_did: {{ _eq: "{}" }}"#,
-                                escape_graphql_string(value)
-                            )
-                        })
-                        .unwrap_or_else(|| "requester_did: { _eq: null }".to_owned());
-                    let row = txn
-                        .execute(&format!(
-                            r#"{{ AgentToolCall(filter: {{
-                _docID: {{ _eq: "{tool}" }}, request_doc_id: {{ _eq: "{request}" }},
-                node_did: {{ _eq: "{agent}" }}, session_id: {{ _eq: "{session}" }},
-                {requester_filter}
-            }}, limit: 2) {{ _docID lifecycle_state deadline_at }} }}"#
-                        ))
-                        .await?;
+                    use gents_protocol::document_query::{
+                        fields::agent_tool_call as fields, Filter, Query, Selection,
+                    };
+                    let requester_filter = match binding.requester_did.as_deref() {
+                        Some(value) => Filter::eq(fields::REQUESTER_DID, value),
+                        None => Filter::is_null(fields::REQUESTER_DID),
+                    };
+                    let query = Query::select(
+                        Selection::doc_id()
+                            .field(fields::LIFECYCLE_STATE)
+                            .field(fields::DEADLINE_AT),
+                    )
+                    .filter(Filter::eq(fields::DOC_ID, &binding.tool_call_doc_id))
+                    .filter(Filter::eq(fields::REQUEST_DOC_ID, &binding.request_doc_id))
+                    .filter(Filter::eq(fields::NODE_DID, &binding.node_did))
+                    .filter(Filter::eq(fields::SESSION_ID, &binding.session_id))
+                    .filter(requester_filter)
+                    .limit(2)
+                    .render();
+                    let row = txn.run(&query).await?;
                     let tools = row["data"]["AgentToolCall"]
                         .as_array()
                         .context("tool output append query omitted physical rows")?;

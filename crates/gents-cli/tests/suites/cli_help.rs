@@ -71,22 +71,3 @@ fn status_without_runtime_suggests_init_and_server() -> Result<()> {
 
     Ok(())
 }
-
-#[test]
-fn server_help_requires_authentication_for_remote_app_server_bind() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
-    let home_dir = tempdir.path().join("home");
-    fs::create_dir_all(&home_dir)?;
-
-    let output = run_cli_text(&home_dir, &["runtime", "server", "--help"])?;
-    assert!(
-        output.contains("--codex-shim-auth-token-env"),
-        "expected authenticated remote-bind guidance in server help, got:\n{output}"
-    );
-    assert!(
-        !output.contains("0.0.0.0"),
-        "server help must not suggest an unspecified unauthenticated Codex shim bind, got:\n{output}"
-    );
-
-    Ok(())
-}

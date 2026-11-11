@@ -8,7 +8,6 @@ use gents_protocol::output::{
 use gents_protocol::row::AgentRequestRow;
 
 use crate::store::config_client::ConfigApplyTxn;
-use crate::store::graphql::escape_graphql_string;
 use gents_protocol::output::rows::OutputSegmentRow;
 
 pub(crate) fn retained_partial_blocks(
@@ -150,17 +149,28 @@ pub(super) async fn load_request_in_txn(
     txn: &ConfigApplyTxn<'_>,
     prepared: &OutputSegment,
 ) -> Result<AgentRequestRow> {
-    let id = escape_graphql_string(&prepared.request_doc_id);
-    let response = txn
-        .execute_local_response(&format!(
-            r#"{{ AgentRequest(
-        filter: {{ _docID: {{ _eq: "{id}" }} }}) {{
-        _docID request_id purpose node_did requester_did session_id lifecycle_state
-        execution_generation execution_lease_expires_at request_hop
-        workspace_id workspace_owner_node_did workspace_authority workspace_seal_hash
-    }} }}"#
-        ))
-        .await?;
+    use gents_protocol::document_query::{
+        fields::agent_request as fields, Filter, Query, Selection,
+    };
+    let rendered = Query::select(
+        Selection::doc_id()
+            .field(fields::REQUEST_ID)
+            .field(fields::PURPOSE)
+            .field(fields::NODE_DID)
+            .field(fields::REQUESTER_DID)
+            .field(fields::SESSION_ID)
+            .field(fields::LIFECYCLE_STATE)
+            .field(fields::EXECUTION_GENERATION)
+            .field(fields::EXECUTION_LEASE_EXPIRES_AT)
+            .field(fields::REQUEST_HOP)
+            .field(fields::WORKSPACE_ID)
+            .field(fields::WORKSPACE_OWNER_NODE_DID)
+            .field(fields::WORKSPACE_AUTHORITY)
+            .field(fields::WORKSPACE_SEAL_HASH),
+    )
+    .filter(Filter::eq(fields::DOC_ID, &prepared.request_doc_id))
+    .render();
+    let response = txn.run_local_response(&rendered).await?;
     let mut rows: Vec<AgentRequestRow> = crate::store::graphql::rows(&response, "AgentRequest")?;
     anyhow::ensure!(
         rows.len() == 1,

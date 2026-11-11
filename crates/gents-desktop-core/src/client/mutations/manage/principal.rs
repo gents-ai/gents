@@ -75,6 +75,28 @@ pub async fn apply_config_components(
         .await
 }
 
+/// Applies components that include no Agent: a new Agent's grants need
+/// `apply_config_components_with_publication_on` and its observer.
+pub async fn apply_config_components_on(
+    access: &ConfigAccess,
+    document: &gents::documents::PackConfig,
+) -> Result<()> {
+    let (owner, plan) = config_components_plan(document)?;
+    anyhow::ensure!(
+        plan.documents()
+            .iter()
+            .all(|entry| entry.collection != Collection::Agent),
+        "an Agent is applied with its publication observer, not as a plain component"
+    );
+    access
+        .transact_write("desktop.config.components", |txn| {
+            let plan = &plan;
+            let owner = &owner;
+            Box::pin(async move { apply_config_components_in_txn(txn, owner, plan).await })
+        })
+        .await
+}
+
 pub(crate) async fn apply_config_components_with_publication_on(
     access: &ConfigAccess,
     document: &gents::documents::PackConfig,

@@ -161,14 +161,6 @@ pub fn spawn_server(home_dir: &Path, port: u16) -> Result<ServeProcess> {
     spawn_server_with_env(home_dir, port, &[], &[])
 }
 
-fn codex_shim_opt_out(extra_args: &[&str]) -> &'static [&'static str] {
-    if extra_args.iter().any(|arg| arg.starts_with("--codex-shim")) {
-        &[]
-    } else {
-        &["--no-codex-shim"]
-    }
-}
-
 /// Spawn a `gents runtime server` and wait for its readiness JSON. Never replaces a
 /// raced-away port: a caller holding this signature cannot observe a port
 /// change, so moving the server would strand it on a dead port.
@@ -226,7 +218,6 @@ fn spawn_server_with_ready_json_inner(
             .arg("server")
             .arg("--http-port")
             .arg(port.to_string())
-            .args(codex_shim_opt_out(extra_args))
             .args(extra_args)
             .stdout(Stdio::from(stdout))
             .stderr(Stdio::from(stderr));
@@ -313,7 +304,6 @@ pub fn spawn_server_with_env(
         .arg("server")
         .arg("--http-port")
         .arg(port.to_string())
-        .args(codex_shim_opt_out(extra_args))
         .args(extra_args)
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));

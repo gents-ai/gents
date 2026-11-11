@@ -865,7 +865,6 @@ mod tests {
             request_doc_id: "doc-one".to_string(),
             requester_did: Some("did:key:requester".to_string()),
             input: None,
-            created_at: None,
         };
 
         let query = chat_progress_query(&submitted);

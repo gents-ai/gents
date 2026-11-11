@@ -564,7 +564,7 @@ pub struct RequestLifecycle {
 }
 
 impl RequestLifecycle {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub(crate) fn managed_agent_signer(
         &self,
     ) -> Option<crate::store::identity::ManagedAgentSigner> {
