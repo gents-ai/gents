@@ -544,6 +544,154 @@
         ]
       }
     },
+    "pack_operations_digest_admission": {
+      "input": {
+        "fields": [
+          [
+            "actor",
+            {
+              "enum": "Actor",
+              "values": [
+                "user",
+                "agent"
+              ]
+            }
+          ],
+          [
+            "commit",
+            "bool"
+          ],
+          [
+            "digest",
+            {
+              "enum": "Digest",
+              "values": [
+                "absent",
+                "matching",
+                "differing"
+              ]
+            }
+          ]
+        ],
+        "struct": "Input"
+      },
+      "output": {
+        "enum": "DigestAdmission",
+        "values": [
+          "admitted",
+          "preview_required",
+          "changed"
+        ]
+      }
+    },
+    "pack_operations_edited_admission": {
+      "input": {
+        "fields": [
+          [
+            "commit",
+            "bool"
+          ],
+          [
+            "edited_present",
+            "bool"
+          ],
+          [
+            "decision",
+            {
+              "enum": "Edited",
+              "values": [
+                "refuse",
+                "overwrite",
+                "keep"
+              ]
+            }
+          ]
+        ],
+        "struct": "Input"
+      },
+      "output": {
+        "enum": "EditedAdmission",
+        "values": [
+          "admitted",
+          "decision_required"
+        ]
+      }
+    },
+    "pack_operations_reader_action": {
+      "input": {
+        "fields": [
+          [
+            "actor",
+            {
+              "enum": "Actor",
+              "values": [
+                "user",
+                "agent"
+              ]
+            }
+          ],
+          [
+            "root_reader",
+            {
+              "enum": "RootReader",
+              "values": [
+                "not_needed",
+                "published",
+                "unpublished"
+              ]
+            }
+          ]
+        ],
+        "struct": "Input"
+      },
+      "output": {
+        "enum": "ReaderAction",
+        "values": [
+          "none",
+          "grant",
+          "report_grant_step",
+          "report_publish_step"
+        ]
+      }
+    },
+    "pack_operations_variable_source": {
+      "input": {
+        "fields": [
+          [
+            "actor",
+            {
+              "enum": "Actor",
+              "values": [
+                "user",
+                "agent"
+              ]
+            }
+          ],
+          [
+            "for_pack",
+            "bool"
+          ],
+          [
+            "for_install",
+            "bool"
+          ],
+          [
+            "in_environment",
+            "bool"
+          ]
+        ],
+        "struct": "Input"
+      },
+      "output": {
+        "enum": "VariableSource",
+        "values": [
+          "scoped",
+          "shared",
+          "environment",
+          "unset"
+        ]
+      }
+    },
     "plugin_job_consented_dynamic": {
       "input": {
         "fields": [
