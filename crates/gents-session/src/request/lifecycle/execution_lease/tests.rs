@@ -1,7 +1,7 @@
 use super::*;
 use crate::request::lifecycle::test_support::{
-    agent_access, agent_identity, agent_signer, claimed_owner, claimed_owner_caused_by,
-    agent_write_value, expire_observed_execution, observed_case_request, observed_execution,
+    agent_access, agent_identity, agent_signer, agent_write_value, claimed_owner,
+    claimed_owner_caused_by, expire_observed_execution, observed_case_request, observed_execution,
     output_segment_snapshot, owner, request_row, test_node,
 };
 use anyhow::Result;
@@ -2108,4 +2108,3 @@ async fn backend_wait_parks_once_and_fences_the_execution_generation() {
     );
     assert!(!lifecycle.owns_execution().await.unwrap());
 }
-

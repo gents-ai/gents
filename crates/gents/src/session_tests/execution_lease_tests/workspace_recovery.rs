@@ -1,3 +1,4 @@
+use super::*;
 use defra_node::Node as EmbeddedNode;
 use gents_automation::triggers::engine::goal_source::GoalSource;
 use gents_automation::triggers::engine::TriggerSource as _;
@@ -9,7 +10,6 @@ use gents_session::request::lifecycle::test_support::{
     expire_observed_execution, output_segment_snapshot, request_row,
 };
 use gents_session::request::lifecycle::RequestLifecycle;
-use super::*;
 use gents_store::identity::NodeIdentity;
 
 #[tokio::test]
@@ -114,7 +114,8 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
     )
     .unwrap();
     let workspace = gents_session::workspace::IsolatedWorkspaceDoc {
-        path_capability: gents_session::workspace::WorkspacePathCapability::exact_paths(vec![]).unwrap(),
+        path_capability: gents_session::workspace::WorkspacePathCapability::exact_paths(vec![])
+            .unwrap(),
         workspace_id: "recovery-workspace".into(),
         work_unit_id: "work-unit".into(),
         repository_id: "repository".into(),
@@ -160,9 +161,9 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
             let placement = &placement;
             Box::pin(async move {
                 let response = txn
-                    .execute(&gents_session::workspace::isolated_workspace_upsert_mutation(
-                        workspace,
-                    ))
+                    .execute(
+                        &gents_session::workspace::isolated_workspace_upsert_mutation(workspace),
+                    )
                     .await?;
                 let workspace_doc = upserted_doc_id(&response, "upsert_IsolatedWorkspace")?;
                 txn.add_actor_relationship(
@@ -173,10 +174,12 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
                 )
                 .await?;
                 let response = txn
-                    .execute(&gents_session::workspace::workspace_placement_upsert_mutation(
-                        placement,
-                        "2026-09-01T00:00:00Z",
-                    ))
+                    .execute(
+                        &gents_session::workspace::workspace_placement_upsert_mutation(
+                            placement,
+                            "2026-09-01T00:00:00Z",
+                        ),
+                    )
                     .await?;
                 let placement_doc = upserted_doc_id(&response, "upsert_WorkspacePlacement")?;
                 txn.add_resource_relationship(

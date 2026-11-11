@@ -143,3 +143,23 @@ pub fn subject_causable(kind: OutcomeKind, reason: Option<ProviderReason>) -> bo
         ) => false,
     }
 }
+
+#[cfg(test)]
+mod conformance {
+    use super::{EvidenceClass, OutcomeKind, ProviderReason};
+
+    #[test]
+    fn outcome_kinds_are_the_lean_outcome_kinds() {
+        gents_lean_vocab::families::eval_outcome_kind_vocabulary::replay(&OutcomeKind::ALL);
+    }
+
+    #[test]
+    fn provider_reasons_are_the_lean_provider_reasons() {
+        gents_lean_vocab::families::eval_provider_reason_vocabulary::replay(&ProviderReason::ALL);
+    }
+
+    #[test]
+    fn evidence_classes_are_the_lean_evidence_classes() {
+        gents_lean_vocab::families::eval_evidence_class_vocabulary::replay(&EvidenceClass::ALL);
+    }
+}

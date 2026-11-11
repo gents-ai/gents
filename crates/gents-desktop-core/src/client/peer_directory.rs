@@ -17,7 +17,8 @@ use enrollment_endpoints::EnrollmentEndpoint;
 
 /// Why a saved route refuses a chat write: the Lean
 /// `ClientChatReadiness.Cause`, with its `causeToken` and `nextAction`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ChatRouteCause {
     NoRoute,
     NoEndpoint,
@@ -26,7 +27,8 @@ pub enum ChatRouteCause {
 
 /// What a refused send tells the user to do: the Lean
 /// `ClientChatReadiness.NextAction`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ChatNextAction {
     ConnectRuntime,
     AwaitEndpointAdvertisement,
@@ -1728,5 +1730,17 @@ pub(crate) mod tests {
             reloaded[0].graphql.as_deref(),
             Some("http://127.0.0.1:9192/api/v0/graphql")
         );
+    }
+}
+
+#[cfg(test)]
+mod conformance {
+    use super::*;
+
+    #[test]
+    fn chat_route_cause_next_action_matches_lean() {
+        gents_lean_vocab::families::client_chat_readiness_next_action::replay(|i| {
+            ChatRouteCause::next_action(i.cause)
+        });
     }
 }

@@ -4443,6 +4443,7 @@ dependencies = [
  "crc32fast",
  "flate2",
  "gents-lean-contract",
+ "gents-lean-vocab",
  "hmac 0.12.1",
  "httparse",
  "kovan-map",

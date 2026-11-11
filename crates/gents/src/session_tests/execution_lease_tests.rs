@@ -128,7 +128,6 @@ async fn commit_signer_identities(
 
 #[tokio::test]
 async fn dead_revocation_accounts_tools_without_reading_corrupt_delivery_payload() {
-    use gents_toolcalls::call::lifecycle::ToolCallLifecycle;
     use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
     use gents_protocol::output::rows::{
         output_segment_create_variables, transcript_message_create_variables, AGENT_MESSAGE_FIELDS,
@@ -141,6 +140,7 @@ async fn dead_revocation_accounts_tools_without_reading_corrupt_delivery_payload
         StreamDeclaration, StreamPayload, ToolResultPart, TranscriptMessage,
     };
     use gents_protocol::tool_call::AwaitMode;
+    use gents_toolcalls::call::lifecycle::ToolCallLifecycle;
 
     let (node, _dir, identity, agent) = test_node().await;
 
@@ -357,8 +357,14 @@ struct NativeCompletionRenewalObservation {
 
 #[tokio::test]
 async fn lean_periodic_renewal_waits_for_abandoned_native_operation_before_next_attempt() {
-    let cases: Vec<NativeCompletionRenewalCase> = serde_json::from_str(include_str!(
-        "../../tests/fixtures/native_completion.json"
+    let cases: Vec<NativeCompletionRenewalCase> = serde_json::from_value(serde_json::Value::from(
+        tokio::task::spawn_blocking(|| {
+            gents_lean_vocab::lean_contract_snapshot()
+                .native_completion_cases
+                .clone()
+        })
+        .await
+        .expect("Lean snapshot load"),
     ))
     .unwrap();
     let cases: Vec<_> = cases

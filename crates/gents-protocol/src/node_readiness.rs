@@ -467,7 +467,8 @@ pub fn project_node_readiness<'a>(
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ReconcilePhase {
     Idle,
     Debouncing,
@@ -510,3 +511,19 @@ impl ReconcileResult {
 #[cfg(test)]
 #[path = "node_readiness/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod conformance {
+    use super::ReconcilePhase;
+
+    #[test]
+    fn reconcile_phases_are_the_lean_reconcile_phases() {
+        gents_lean_vocab::families::reconcile_phase_vocabulary::replay(&[
+            ReconcilePhase::Idle,
+            ReconcilePhase::Debouncing,
+            ReconcilePhase::Resolving,
+            ReconcilePhase::Diffing,
+            ReconcilePhase::Applying,
+        ]);
+    }
+}

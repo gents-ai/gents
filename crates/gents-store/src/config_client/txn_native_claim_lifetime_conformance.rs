@@ -71,9 +71,15 @@ struct Case {
     observations: Vec<Observation>,
 }
 
-fn model_case(name: &str) -> Case {
-    let cases: Vec<Case> = serde_json::from_str(include_str!(
-        "../../../gents/tests/fixtures/native_claim_lifetime.json"
+async fn model_case(name: &str) -> Case {
+    let cases: Vec<Case> = serde_json::from_value(serde_json::Value::from(
+        tokio::task::spawn_blocking(|| {
+            gents_lean_vocab::lean_contract_snapshot()
+                .native_claim_lifetime_cases
+                .clone()
+        })
+        .await
+        .expect("Lean snapshot load"),
     ))
     .expect("Lean native claim-lifetime fixture");
     cases
@@ -227,7 +233,7 @@ async fn run_paused_owned_schema(
 
 #[tokio::test]
 async fn lean_claimed_access_retains_real_store_lock_after_cancelled_signed_write() {
-    let case = model_case("auto_commit_cancel_retains_claim");
+    let case = model_case("auto_commit_cancel_retains_claim").await;
     assert_eq!(case.events.len(), case.observations.len());
     assert_eq!(case.events[1], "caller_cancelled");
     assert_eq!(case.events[2], "access_released");
@@ -298,7 +304,7 @@ async fn lean_claimed_access_retains_real_store_lock_after_cancelled_signed_writ
 
 #[tokio::test]
 async fn lean_claimed_read_owner_retains_store_lock_after_caller_timeout() {
-    let case = model_case("claimed_read_timeout_retains_claim");
+    let case = model_case("claimed_read_timeout_retains_claim").await;
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     let data = temp.path().join("data");
@@ -366,7 +372,7 @@ async fn lean_claimed_read_owner_retains_store_lock_after_caller_timeout() {
 
 #[tokio::test]
 async fn lean_claimed_schema_owner_retains_store_lock_after_caller_timeout() {
-    let case = model_case("schema_future_timeout_retains_claim_until_return");
+    let case = model_case("schema_future_timeout_retains_claim_until_return").await;
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     let data = temp.path().join("data");
@@ -445,7 +451,7 @@ async fn lean_claimed_schema_owner_retains_store_lock_after_caller_timeout() {
 
 #[tokio::test]
 async fn lean_readonly_transaction_retains_claim_until_native_cleanup_returns() {
-    let case = model_case("readonly_transaction_cleanup_retains_claim");
+    let case = model_case("readonly_transaction_cleanup_retains_claim").await;
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     let data = temp.path().join("data");
@@ -528,7 +534,7 @@ async fn lean_readonly_transaction_retains_claim_until_native_cleanup_returns() 
 
 #[tokio::test]
 async fn lean_mutation_transaction_cleanup_retains_claim_around_real_signed_worker() {
-    let case = model_case("mutation_transaction_cleanup_retains_claim");
+    let case = model_case("mutation_transaction_cleanup_retains_claim").await;
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     let data = temp.path().join("data");
@@ -605,7 +611,7 @@ async fn lean_mutation_transaction_cleanup_retains_claim_around_real_signed_work
 
 #[tokio::test]
 async fn lean_renewal_transaction_retains_claim_without_mutation_gate() {
-    let case = model_case("periodic_renewal_retains_claim_without_mutex");
+    let case = model_case("periodic_renewal_retains_claim_without_mutex").await;
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     let data = temp.path().join("data");
@@ -690,7 +696,7 @@ async fn lean_renewal_transaction_retains_claim_without_mutation_gate() {
 
 #[tokio::test]
 async fn lean_committed_readonly_transaction_leaves_claim_with_live_access() {
-    let case = model_case("committed_transaction_keeps_live_access_claim");
+    let case = model_case("committed_transaction_keeps_live_access_claim").await;
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     let data = temp.path().join("data");
@@ -724,7 +730,7 @@ async fn lean_committed_readonly_transaction_leaves_claim_with_live_access() {
 
 #[tokio::test]
 async fn poisoned_transaction_drop_from_std_thread_keeps_claim_until_native_cleanup() {
-    let case = model_case("mutation_transaction_cleanup_retains_claim");
+    let case = model_case("mutation_transaction_cleanup_retains_claim").await;
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     let data = temp.path().join("data");

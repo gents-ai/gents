@@ -328,3 +328,15 @@ pub async fn observe_goal_agent(
         reason,
     })
 }
+
+#[cfg(test)]
+mod conformance {
+    use super::*;
+
+    #[test]
+    fn readiness_gate_publishes_matches_lean() {
+        gents_lean_vocab::families::goal_automation_readiness_gate_publishes::replay(|i| {
+            publishes(i.decision)
+        });
+    }
+}

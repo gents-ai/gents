@@ -45,7 +45,8 @@ impl Default for BackendProberOptions {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum BackendHealthState {
     Unknown,
     Healthy,
@@ -327,5 +328,17 @@ pub(crate) fn step_backend(
                 (BackendHealthState::Degraded, n)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod conformance {
+    use super::*;
+
+    #[test]
+    fn health_state_blocks_routing_matches_lean() {
+        gents_lean_vocab::families::proofs_backend_health_health_state_blocks_routing::replay(
+            |i| BackendHealthState::blocks_routing(i.health_state),
+        );
     }
 }

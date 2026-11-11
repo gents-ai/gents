@@ -693,3 +693,15 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod conformance {
+    use super::*;
+
+    #[test]
+    fn saved_projection_adoption_matches_lean() {
+        gents_lean_vocab::families::client_shell_settings_adopt_saved_projection::replay(|i| {
+            adopt_saved_projection(i.read_succeeded, i.physical_matches, i.content_matches)
+        });
+    }
+}

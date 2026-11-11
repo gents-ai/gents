@@ -19,7 +19,8 @@ use tokio::sync::watch;
 
 use crate::http::access::{failure, HttpAuthority};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ScrapeBind {
     Loopback,
     Interface,
@@ -46,7 +47,8 @@ impl ScrapeBind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ScrapeDecision {
     Misdirected,
     Unauthorized,
@@ -194,3 +196,19 @@ impl MetricsScrapeListener {
 #[cfg(test)]
 #[path = "metrics_scrape_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod conformance {
+    use super::*;
+
+    #[test]
+    fn metrics_scrape_access_matches_lean() {
+        use gents_lean_vocab::families;
+        families::runtime_reconcile_metrics_scrape_access_decide::replay(|i| {
+            decide(i.authority_matches, i.token_configured, i.token_presented)
+        });
+        families::runtime_reconcile_metrics_scrape_access_bind_allowed::replay(|i| {
+            ScrapeBind::allowed(i.bind, i.token_configured)
+        });
+    }
+}

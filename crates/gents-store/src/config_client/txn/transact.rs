@@ -499,3 +499,15 @@ pub(super) fn expect_committed<T>(outcome: TransactionOutcome<T>) -> T {
         }
     }
 }
+
+#[cfg(test)]
+mod conformance {
+    use super::client_signed_write_may_retry;
+
+    #[test]
+    fn client_signed_write_retries_match_the_lean_model() {
+        gents_lean_vocab::families::identity_configuration_client_signed_write_may_retry::replay(
+            |i| client_signed_write_may_retry(i.dispatched, i.confirmed_abort, i.replay_authorized),
+        );
+    }
+}

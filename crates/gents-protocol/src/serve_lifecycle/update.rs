@@ -91,3 +91,15 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod conformance {
+    use super::*;
+
+    #[test]
+    fn update_handoff_restore_matches_lean() {
+        gents_lean_vocab::families::runtime_reconcile_update_handoff_can_restore::replay(|i| {
+            Phase::can_restore_prior(i.phase, i.candidate_may_have_opened, i.same_build)
+        });
+    }
+}

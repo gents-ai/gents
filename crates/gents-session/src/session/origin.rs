@@ -1473,3 +1473,20 @@ where
         requester_did: parent.requester_did,
     }))
 }
+
+#[cfg(test)]
+mod conformance {
+    use super::*;
+
+    #[test]
+    fn deferred_creation_allowed_matches_lean() {
+        gents_lean_vocab::families::durable_lineage_deferred_creation_allowed::replay(|i| {
+            deferred_creation_allowed(
+                i.signed_kind,
+                i.target_receipt,
+                i.exact_opening,
+                i.cause_visible,
+            )
+        });
+    }
+}

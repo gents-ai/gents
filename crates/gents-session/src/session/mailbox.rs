@@ -1235,3 +1235,25 @@ async fn sweep_open_mailbox_items_with_clock(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod conformance {
+    use super::*;
+
+    #[test]
+    fn mailbox_statuses_are_the_lean_mailbox_statuses() {
+        gents_lean_vocab::families::mailbox_status_vocabulary::replay(&MailboxStatus::ALL);
+    }
+
+    #[test]
+    fn mailbox_source_kinds_are_the_lean_mailbox_source_kinds() {
+        gents_lean_vocab::families::mailbox_source_kind_vocabulary::replay(&MailboxSourceKind::ALL);
+    }
+
+    #[test]
+    fn mailbox_status_terminal_matches_lean() {
+        gents_lean_vocab::families::mailbox_status_terminal::replay(|i| {
+            MailboxStatus::is_terminal(i.status)
+        });
+    }
+}

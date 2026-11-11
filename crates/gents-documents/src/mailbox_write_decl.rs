@@ -217,3 +217,18 @@ pub fn validate_mailbox_write_decl(decl: &WriteToolDecl) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod conformance {
+    use super::{MailboxAction, MailboxKind};
+
+    #[test]
+    fn mailbox_kinds_are_the_lean_mailbox_kinds() {
+        gents_lean_vocab::families::mailbox_kind_vocabulary::replay(&MailboxKind::ALL);
+    }
+
+    #[test]
+    fn mailbox_actions_are_the_lean_mailbox_handlings() {
+        gents_lean_vocab::families::mailbox_handling_vocabulary::replay(&MailboxAction::ALL);
+    }
+}

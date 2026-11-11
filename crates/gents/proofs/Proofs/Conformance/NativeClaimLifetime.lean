@@ -156,5 +156,3 @@ fixture keeps its wire format until the local shutdown owner consumes them. -/
 def shutdownCasesJson : String := jsonArray (shutdownCases.map shutdownCaseJson)
 
 end Conformance.NativeClaimLifetime
-
-def main : IO Unit := IO.println Conformance.NativeClaimLifetime.casesJson

@@ -945,3 +945,15 @@ mod tests {
         panic!("row {row} never reached revision {revision}");
     }
 }
+
+#[cfg(test)]
+mod conformance {
+    use super::*;
+
+    #[test]
+    fn plugin_job_step_invocation_matches_lean() {
+        gents_lean_vocab::families::recovery_plugin_job_step_invocation_allowed::replay(|i| {
+            step_invocation_allowed(i.row_running, i.session_stopped)
+        });
+    }
+}

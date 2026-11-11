@@ -2271,3 +2271,15 @@ pub async fn install_documents_with_plugins(
         plugins,
     ))
 }
+
+#[cfg(test)]
+mod conformance {
+    use super::*;
+
+    #[test]
+    fn document_ux_allowed_matches_lean() {
+        gents_lean_vocab::families::plugin_job_document_ux_allowed::replay(|i| {
+            document_ux_install_allowed(i.has_ux, i.has_local_home)
+        });
+    }
+}
