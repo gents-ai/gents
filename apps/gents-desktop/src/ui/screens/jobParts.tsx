@@ -3,6 +3,16 @@
 
 import type { JobProgress } from "@source-inc/gents-desktop-client/generated/JobProgress";
 import type { JobState } from "@source-inc/gents-desktop-client/generated/JobState";
+import {
+  Ban,
+  Check,
+  ChevronRight,
+  CircleCheck,
+  CircleX,
+  MessageCircleQuestion,
+  Pause,
+} from "lucide-react";
+import { AsciiLoader, AsciiProgress } from "@gents/ui/components/ascii-loader";
 import { cn } from "@gents/ui/lib/utils";
 import { focusDraft, writeDraft } from "../../hooks/draftStore";
 import { sessionDraftKey } from "../../hooks/shellView";
@@ -40,44 +50,87 @@ export function JobProgressBody({
   state: JobState | null | undefined;
   progress: JobProgress;
 }) {
+  const { spent, total } = progress.budget;
   return (
-    <>
-      <ol data-testid="job-phases" className="flex flex-wrap gap-x-3 text-xs">
+    <div className="grid gap-1.5">
+      <ol
+        data-testid="job-phases"
+        className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs"
+      >
         {progress.phases.map((phase, i) => (
-          <li
-            key={i}
-            data-phase={phase.state}
-            className={cn(
-              phase.state === "pending" && "text-muted-foreground",
-              phase.state === "active" && "font-medium",
-              phase.state === "failed" && "text-destructive",
+          <li key={i} data-phase={phase.state} className="flex items-center gap-1.5">
+            {i > 0 && (
+              <ChevronRight aria-hidden className="size-3 text-muted-foreground/50" />
             )}
-          >
-            {phase.title}
+            <span
+              className={cn(
+                "inline-flex items-center gap-1",
+                (phase.state === "pending" || phase.state === "done") &&
+                  "text-muted-foreground",
+                phase.state === "active" && "font-medium text-foreground",
+                phase.state === "failed" && "text-destructive",
+              )}
+            >
+              {phase.state === "done" && <Check aria-hidden className="size-3" />}
+              {phase.title}
+            </span>
           </li>
         ))}
       </ol>
-      <div className="grid gap-1">
-        <span data-testid="job-agents" className="text-xs text-muted-foreground">
-          {progress.budget.spent} of {progress.budget.total} agents
-        </span>
-        <progress
-          className="h-1 w-full"
-          value={progress.budget.spent}
-          max={progress.budget.total}
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <AsciiProgress
+          aria-label="Agents used of the budget"
+          value={total > 0 ? (Math.min(spent, total) / total) * 100 : 0}
+          cells={16}
+          className="text-[11px] text-foreground/80"
         />
+        <span data-testid="job-agents" className="tabular-nums">
+          {spent} of {total} agents
+        </span>
       </div>
       {progress.last_event && (
-        <p data-testid="job-last-event" className="text-xs text-muted-foreground">
+        <p
+          data-testid="job-last-event"
+          className="truncate text-xs text-muted-foreground"
+        >
           {progress.last_event}
         </p>
       )}
       {state === "paused" && progress.pause_reason && (
         <p data-testid="job-pause-reason" className="text-xs">
-          {words(progress.pause_reason)}
+          Paused: {words(progress.pause_reason)}
         </p>
       )}
-    </>
+    </div>
+  );
+}
+
+/** What a run's state looks like at the start of its row: the kit's loader
+    while it runs, an icon otherwise. */
+export function JobStateMark({ state }: { state: JobState | null | undefined }) {
+  return (
+    <span
+      role="img"
+      aria-label={state ? words(state) : "unknown"}
+      data-testid="job-state-mark"
+      className="grid size-4 shrink-0 place-items-center text-muted-foreground"
+    >
+      {state === "running" ? (
+        <AsciiLoader className="text-foreground" />
+      ) : state === "paused" ? (
+        <Pause className="size-3.5" />
+      ) : state === "awaiting_user" ? (
+        <MessageCircleQuestion className="size-3.5 text-foreground" />
+      ) : state === "completed" ? (
+        <CircleCheck className="size-3.5" />
+      ) : state === "failed" || state === "timed_out" ? (
+        <CircleX className="size-3.5 text-destructive" />
+      ) : state === "cancelled" ? (
+        <Ban className="size-3.5" />
+      ) : (
+        <span className="size-1.5 rounded-full bg-border" />
+      )}
+    </span>
   );
 }
 

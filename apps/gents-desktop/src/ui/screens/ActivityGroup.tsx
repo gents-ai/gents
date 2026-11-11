@@ -13,6 +13,8 @@ import {
 } from "@gents/ui/components/collapsible";
 
 import { BackgroundToolButton } from "./BackgroundToolButton";
+import { JobProgressCell } from "./JobProgressCell";
+import { isTerminalJob } from "./jobParts";
 import { ToolIcon } from "./tool-icon";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { Spinner } from "@gents/ui/components/spinner";
@@ -52,9 +54,24 @@ function Step({
 }) {
   if (isWorkerStep(tool) && tool.reconstruction.state === "ready")
     return <WorkerStep tool={tool} workers={workers} />;
+  const job = !!(tool.jobProgress || tool.jobState);
+  /* a workflow that hasn't ended shows where it stands, with its controls
+     and its question, in place of a row whose body opens only once it ends */
+  if (job && !isTerminalJob(tool.jobState))
+    return (
+      <div
+        data-step-key={tool.itemKey}
+        data-testid="job-step"
+        className={cn("-mx-2 rounded-lg px-2 py-1", shown && "bg-accent duration-500")}
+      >
+        <JobProgressCell tool={tool} />
+      </div>
+    );
   const summary =
     tool.reconstruction.state === "ready"
-      ? toolSummary(tool)
+      ? job && tool.jobProgress?.title
+        ? { kind: "", primary: tool.jobProgress.title, secondary: null }
+        : toolSummary(tool)
       : { kind: "", primary: tool.toolName, secondary: null };
   const open = tool.statusKind !== "running";
   const p = tool.presentation;

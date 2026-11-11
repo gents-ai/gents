@@ -6,7 +6,11 @@
 import { useEffect, useRef, useState } from "react";
 import type { JobControlKind } from "@source-inc/gents-desktop-client/generated/JobControlKind";
 import type { JobView } from "@source-inc/gents-desktop-client/generated/JobView";
+import { CircleCheck, CircleX, History, Pause, Square } from "lucide-react";
+import type { JobChildState } from "@source-inc/gents-desktop-client/generated/JobChildState";
+import { AsciiLoader } from "@gents/ui/components/ascii-loader";
 import { Button } from "@gents/ui/components/button";
+import { cn } from "@gents/ui/lib/utils";
 import { useApp } from "@/app/AppContext";
 import { duration } from "@/lib/duration";
 import { href } from "@/lib/router";
@@ -18,7 +22,13 @@ import { useHomeDid } from "../hooks/useClient";
 import { isLocalNode } from "../lib/firstRun";
 import { toastFailure } from "../lib/failure";
 import { EditorSheet } from "./agent/EditorSheet";
-import { JobProgressBody, JobStatePill, useAnswerJob, words } from "./jobParts";
+import {
+  JobProgressBody,
+  JobStateMark,
+  JobStatePill,
+  useAnswerJob,
+  words,
+} from "./jobParts";
 import { PromoteWorkflowDialog } from "./PromoteWorkflowDialog";
 
 export const runAt = (ms: number) =>
@@ -152,10 +162,26 @@ export function WorkflowRunSheet({
           <>
             <div className="grid gap-2">
               <div className="flex flex-wrap items-center gap-2">
+                <JobStateMark state={view.state} />
                 <JobStatePill state={view.state} />
-                <span data-testid="run-what" className="font-mono text-xs">
+                <span
+                  data-testid="run-what"
+                  className="font-mono text-xs text-muted-foreground"
+                >
                   {whatRan(view)}
                 </span>
+                {view.state === "running" && (
+                  <span className="ml-auto flex gap-0.5">
+                    <Button size="xs" variant="quiet" onClick={() => control("pause")}>
+                      <Pause />
+                      Pause
+                    </Button>
+                    <Button size="xs" variant="quiet" onClick={() => control("stop")}>
+                      <Square />
+                      Stop
+                    </Button>
+                  </span>
+                )}
               </div>
               <dl
                 data-testid="run-times"
@@ -175,15 +201,15 @@ export function WorkflowRunSheet({
                 )}
               </dl>
               {view.pin.resume_of && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="justify-self-start"
+                <button
+                  type="button"
                   data-testid="run-resumed-from"
+                  className="inline-flex items-center gap-1 justify-self-start text-xs text-muted-foreground underline decoration-border underline-offset-4 hover:text-foreground hover:decoration-foreground"
                   onClick={() => setTrail([...trail, view.pin.resume_of!])}
                 >
+                  <History className="size-3" />
                   Resumed from an earlier run
-                </Button>
+                </button>
               )}
             </div>
             {progress && (
@@ -210,8 +236,13 @@ export function WorkflowRunSheet({
               )}
             {children.length > 0 && (
               <section className="grid gap-2">
-                <h3 className="text-xs font-medium text-muted-foreground">Agents</h3>
-                <ul data-testid="run-children" className="grid gap-1">
+                <h3 className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+                  Agents
+                </h3>
+                <ul
+                  data-testid="run-children"
+                  className="grid divide-y divide-border/60"
+                >
                   {children.map((child) => {
                     const name = child.title || child.slot;
                     return (
@@ -219,8 +250,9 @@ export function WorkflowRunSheet({
                         key={child.slot}
                         data-testid="run-child"
                         data-state={child.state}
-                        className="flex items-center gap-3 rounded-md bg-surface px-2 py-1.5"
+                        className="flex items-center gap-3 py-2"
                       >
+                        <ChildMark state={child.state} />
                         <span className="min-w-0 flex-1 truncate">
                           {child.session_id ? (
                             <a
@@ -237,7 +269,14 @@ export function WorkflowRunSheet({
                             name
                           )}
                         </span>
-                        <span className="text-xs">{words(child.state)}</span>
+                        <span
+                          className={cn(
+                            "text-xs",
+                            child.state !== "live" && "text-muted-foreground",
+                          )}
+                        >
+                          {words(child.state)}
+                        </span>
                         <span className="text-xs text-muted-foreground tabular-nums">
                           {compactTokens(child.usage.total)} tokens
                         </span>
@@ -250,32 +289,15 @@ export function WorkflowRunSheet({
                 </ul>
               </section>
             )}
-            {(view.state === "running" || promotable) && (
-              <div className="flex gap-1">
-                {view.state === "running" && (
-                  <>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => control("pause")}
-                    >
-                      Pause
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => control("stop")}>
-                      Stop
-                    </Button>
-                  </>
-                )}
-                {promotable && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setPromoting(true)}
-                  >
-                    Promote
-                  </Button>
-                )}
-              </div>
+            {promotable && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="justify-self-start"
+                onClick={() => setPromoting(true)}
+              >
+                Promote
+              </Button>
             )}
             {promoting && promotable && (
               <PromoteWorkflowDialog
@@ -288,5 +310,21 @@ export function WorkflowRunSheet({
         )}
       </div>
     </EditorSheet>
+  );
+}
+
+function ChildMark({ state }: { state: JobChildState }) {
+  return (
+    <span className="grid size-4 shrink-0 place-items-center text-muted-foreground">
+      {state === "live" ? (
+        <AsciiLoader className="text-foreground" />
+      ) : state === "completed" ? (
+        <CircleCheck className="size-3.5" />
+      ) : state === "failed" ? (
+        <CircleX className="size-3.5 text-destructive" />
+      ) : (
+        <span className="size-1.5 rounded-full bg-border" />
+      )}
+    </span>
   );
 }
