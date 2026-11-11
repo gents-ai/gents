@@ -228,10 +228,7 @@ impl ConfigReferences {
     /// The retained documents that name application collection `name`: each
     /// `DatastoreToolSurface` holding an entry on it, with those entries' tool
     /// names, and each `EventSource` reading it.
-    pub fn application_collection_users(
-        &self,
-        name: &str,
-    ) -> Result<(SurfaceTools, Vec<String>)> {
+    pub fn application_collection_users(&self, name: &str) -> Result<(SurfaceTools, Vec<String>)> {
         let mut surfaces = BTreeMap::new();
         let mut sources = Vec::new();
         for ((collection, id), value) in &self.documents {
@@ -288,6 +285,31 @@ impl ConfigReferences {
         value: &Value,
     ) -> Result<Vec<RequiredReference>> {
         references_of(collection, value, &self.node_did)
+    }
+
+    /// The first retained document that requires one of `removed`.
+    pub fn referrer_of_removed(
+        &self,
+        removed: &BTreeSet<(Collection, String)>,
+    ) -> Result<Option<MissingReference>> {
+        for ((collection, id), document) in &self.documents {
+            if removed.contains(&(*collection, id.clone())) {
+                continue;
+            }
+            for reference in self.required_references(*collection, document)? {
+                if removed.contains(&(reference.collection, reference.id.clone())) {
+                    return Ok(Some(MissingReference {
+                        collection: *collection,
+                        id: id.clone(),
+                        field: reference.field.to_owned(),
+                        target: reference.collection,
+                        target_id: reference.id,
+                        node_did: self.node_did.clone(),
+                    }));
+                }
+            }
+        }
+        Ok(None)
     }
 
     pub fn validate_removal(&self, collection: Collection, id: &str) -> Result<()> {

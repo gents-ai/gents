@@ -1,4 +1,8 @@
 use super::*;
+use gents_documents::operations::delete;
+use gents_protocol::operations::document::{
+    DocumentActor, DocumentDeleteError, DocumentDeletePreview,
+};
 use gents_session::session::output_render::ordered;
 
 impl ConfigCommandTool {
@@ -89,47 +93,66 @@ impl ConfigCommandTool {
         let owner = self.node_did.clone();
         let removals = targets
             .iter()
-            .map(|(_, target, id)| (target.collection(), owner.clone(), id.clone()))
+            .map(|(_, target, id)| (target.collection(), id.clone()))
             .collect::<Vec<_>>();
-        let plan =
-            gents_documents::DesiredStateApplyPlan::new(Vec::new())?.with_removals(removals)?;
         let preview = verb == "preview";
         if !preview {
             self.execution.enter_mutation();
         }
-        let operation = if preview {
-            "self_config.cleanup_preview"
-        } else {
-            "self_config.cleanup_remove"
-        };
         let access = self.core.access()?;
-        let (receipt_targets, plan_digest) = if preview {
-            access
-                .transact_readonly(operation, |txn| {
-                    Box::pin(cleanup_in_txn(
-                        txn,
-                        &owner,
-                        &targets,
-                        expected_digest.as_deref(),
-                        &plan,
-                        preview,
-                    ))
-                })
-                .await?
+        let policy = gents_inference::resolved::ProviderProfilePolicy;
+        let receipt = if preview {
+            match delete::preview_delete(
+                &access,
+                "self_config.cleanup_preview",
+                &owner,
+                &removals,
+                DocumentActor::Agent,
+                &policy,
+            )
+            .await
+            .map_err(|error| delete_failure(error, &targets))?
+            {
+                DocumentDeletePreview::Admitted(receipt) => receipt,
+                DocumentDeletePreview::Refused { refusal, error } => {
+                    let guidance = delete_guidance(&error, &targets);
+                    return ordered! {
+                        "admitted": false,
+                        "committed": false,
+                        "refusal": refusal.as_str(),
+                        "message": guidance.message,
+                        "next_call": guidance.next_call,
+                    }
+                    .pretty();
+                }
+            }
         } else {
-            access
-                .transact_write(operation, |txn| {
-                    Box::pin(cleanup_in_txn(
-                        txn,
-                        &owner,
-                        &targets,
-                        expected_digest.as_deref(),
-                        &plan,
-                        preview,
-                    ))
-                })
-                .await?
+            delete::delete(
+                &access,
+                "self_config.cleanup_remove",
+                &owner,
+                &removals,
+                DocumentActor::Agent,
+                expected_digest.as_deref(),
+                &policy,
+            )
+            .await
+            .map_err(|error| delete_failure(error, &targets))?
         };
+        let receipt_targets = receipt
+            .targets
+            .iter()
+            .zip(&targets)
+            .map(|(deleted, (resource, _, _))| {
+                json!({
+                    "resource": resource,
+                    "collection": deleted.collection,
+                    "id": deleted.id,
+                    "content_digest": deleted.content_digest,
+                })
+            })
+            .collect::<Vec<_>>();
+        let plan_digest = receipt.plan_digest;
         ordered! {
             "committed": !preview,
             "operation": if preview { "preview cleanup" } else { "cleanup" },
@@ -150,74 +173,49 @@ impl ConfigCommandTool {
     }
 }
 
-fn cleanup_plan_digest(owner: &str, targets: &[Value]) -> Result<String> {
-    use sha2::{Digest, Sha256};
-    Ok(format!(
-        "sha256:{:x}",
-        Sha256::digest(serde_json::to_vec(&json!({
-            "owner": owner,
-            "targets": targets,
-        }))?)
-    ))
+fn delete_guidance(
+    error: &DocumentDeleteError,
+    targets: &[(String, SelfConfigTarget, String)],
+) -> CommandGuidance {
+    let message = match error {
+        DocumentDeleteError::StillReferenced {
+            target, target_id, ..
+        } => format!(
+            "Deletion would leave a broken reference to {target} {target_id:?}. Update the referring document to remove or redirect the reference, then retry deletion. Cause: {error}"
+        ),
+        error => gents_protocol::error_chain::ErrorChain(error).to_string(),
+    };
+    let requested = |collection: &str| {
+        targets
+            .iter()
+            .find(|(_, target, _)| target.collection().graphql_type() == collection)
+            .map(|(resource, _, _)| resource.as_str())
+    };
+    let next_call = match error {
+        DocumentDeleteError::TargetMissing { collection, .. } => {
+            requested(collection).map(|resource| json!({"argv":[resource,"list"]}))
+        }
+        DocumentDeleteError::StillReferenced { collection, id, .. } => HELP_INDEX
+            .iter()
+            .find(|(resource, _)| {
+                cleanup_target(resource)
+                    .is_ok_and(|target| target.collection().graphql_type() == *collection)
+            })
+            .map(|(resource, _)| json!({"argv":[resource,"get"],"target_id":id})),
+        _ => None,
+    }
+    .unwrap_or_else(|| json!({"argv":["help","cleanup"]}));
+    CommandGuidance { message, next_call }
 }
 
-async fn cleanup_in_txn(
-    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
-    owner: &str,
+fn delete_failure(
+    error: DocumentDeleteError,
     targets: &[(String, SelfConfigTarget, String)],
-    expected_digest: Option<&str>,
-    plan: &gents_documents::DesiredStateApplyPlan,
-    preview: bool,
-) -> Result<(Vec<Value>, String)> {
-    let mut receipt = Vec::with_capacity(targets.len());
-    for (resource, target, id) in targets {
-        let document = ops::read_owned_doc(txn, *target, owner, id)
-            .await?
-            .map(|(_, document)| document)
-            .with_context(|| {
-                format!(
-                    "no owned {} with ID {id:?}; list or inspect exact IDs before cleanup",
-                    target.collection_name()
-                )
-            })?;
-        receipt.push(json!({
-            "resource": resource,
-            "collection": target.collection_name(),
-            "id": id,
-            "content_digest": gents_documents::desired_state_document_digest(&Value::Object(document))?,
-        }));
+) -> anyhow::Error {
+    match error {
+        DocumentDeleteError::Passthrough(error) => anyhow::anyhow!(error),
+        error => delete_guidance(&error, targets).into(),
     }
-    let plan_digest = cleanup_plan_digest(owner, &receipt)?;
-    if let Some(expected) = expected_digest {
-        anyhow::ensure!(
-            expected == plan_digest,
-            "cleanup target content changed: preview authorized {expected:?}, current plan is {plan_digest:?}; preview again"
-        );
-    }
-    gents_documents::validate_desired_state_plan(
-        txn,
-        plan,
-        &gents_inference::resolved::ProviderProfilePolicy,
-    )
-    .await?;
-    if !preview {
-        gents_documents::apply_desired_state_plan(
-            txn,
-            plan,
-            &gents_inference::resolved::ProviderProfilePolicy,
-        )
-        .await?;
-        for (_, target, id) in targets {
-            anyhow::ensure!(
-                ops::read_owned_doc(txn, *target, owner, id)
-                    .await?
-                    .is_none(),
-                "cleanup did not remove {} {id:?}",
-                target.collection_name()
-            );
-        }
-    }
-    Ok((receipt, plan_digest))
 }
 
 pub(super) fn cleanup_target(name: &str) -> Result<SelfConfigTarget> {

@@ -17,6 +17,7 @@ mod installation_validation;
 mod lsp_catalog;
 mod lsp_config;
 pub mod mailbox_write_decl;
+pub mod operations;
 mod projection_acp;
 pub use projection_acp::parse_projection_resource_map;
 mod agent_target;
