@@ -118,17 +118,17 @@ pub fn message_body<'a>(
 }
 
 impl AgentNewArgs {
-    pub(crate) fn body(&self) -> Result<MessageBody<'_>, String> {
+    pub fn body(&self) -> Result<MessageBody<'_>, String> {
         message_body("prompt", self.prompt.as_ref(), self.task.as_ref())
     }
 }
 
 impl AgentMessageArgs {
-    pub(crate) fn body(&self) -> Result<MessageBody<'_>, String> {
+    pub fn body(&self) -> Result<MessageBody<'_>, String> {
         message_body("message", self.message.as_ref(), self.task.as_ref())
     }
 
-    pub(crate) fn delivery(&self) -> Result<AgentMessageDelivery, String> {
+    pub fn delivery(&self) -> Result<AgentMessageDelivery, String> {
         match (self.delivery, self.interrupt) {
             (None, None | Some(false)) => Ok(AgentMessageDelivery::Queue),
             (None, Some(true)) | (Some(AgentMessageDelivery::Interrupt), Some(true)) => {

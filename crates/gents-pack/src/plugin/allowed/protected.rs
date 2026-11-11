@@ -39,11 +39,11 @@ pub struct CommandProtection {
 }
 
 impl CommandProtection {
-    pub(crate) fn home(&self) -> &Path {
+    pub fn home(&self) -> &Path {
         &self.home
     }
 
-    pub(crate) fn capture(home: &Path, supported: bool) -> anyhow::Result<Self> {
+    pub fn capture(home: &Path, supported: bool) -> anyhow::Result<Self> {
         use gents_loop::tool_policy::operator_paths::command_guard_allows;
 
         anyhow::ensure!(
@@ -71,19 +71,19 @@ impl CommandProtection {
     }
 
     #[cfg(target_os = "macos")]
-    pub(crate) fn paths(&self) -> &[PathBuf] {
+    pub fn paths(&self) -> &[PathBuf] {
         &self.paths
     }
 
     #[cfg(target_os = "macos")]
-    pub(crate) fn ancestors(&self) -> std::collections::BTreeSet<PathBuf> {
+    pub fn ancestors(&self) -> std::collections::BTreeSet<PathBuf> {
         self.paths
             .iter()
             .flat_map(|path| path.ancestors().skip(1).map(Path::to_owned))
             .collect()
     }
 
-    pub(crate) fn revalidate(&self) -> anyhow::Result<()> {
+    pub fn revalidate(&self) -> anyhow::Result<()> {
         Self::capture(&self.home, true).map(|_| ())
     }
 }

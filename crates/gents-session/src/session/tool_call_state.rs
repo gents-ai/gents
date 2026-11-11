@@ -42,7 +42,7 @@ impl ToolCallState {
         }
     }
 
-    pub(crate) const fn is_terminal(self) -> bool {
+    pub const fn is_terminal(self) -> bool {
         matches!(
             self,
             Self::Completed | Self::Failed | Self::TimedOut | Self::Cancelled

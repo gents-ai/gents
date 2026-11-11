@@ -37,7 +37,7 @@ pub struct SessionFilter {
 }
 
 impl AgentSessionListArgs {
-    pub(crate) fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         if let Some(limit) = self.limit {
             anyhow::ensure!(
                 (1..=100).contains(&limit),

@@ -22,12 +22,12 @@ pub struct CollectionSchema {
 }
 
 impl CollectionSchema {
-    pub(crate) fn field_names(&self) -> BTreeSet<&str> {
+    pub fn field_names(&self) -> BTreeSet<&str> {
         self.fields.iter().map(|f| f.name.as_str()).collect()
     }
 
     /// Fields a reader may name: `restricted` is the caller's field policy.
-    pub(crate) fn visible_fields<F>(&self, restricted: F) -> Vec<&SchemaField>
+    pub fn visible_fields<F>(&self, restricted: F) -> Vec<&SchemaField>
     where
         F: Fn(&str) -> bool,
     {

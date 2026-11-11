@@ -67,7 +67,7 @@ pub fn add(home: &Path, path: &Path, access: BindAccess) -> Result<AllowedDir> {
 /// An approval may widen a grant, but never downgrade a concurrent grant.
 /// The path is the canonical target captured by the question before waiting.
 /// All allowed-folder mutations share the same native exclusive lock.
-pub(super) fn grant_at_least(home: &Path, path: &Path, access: BindAccess) -> Result<AllowedDir> {
+pub fn grant_at_least(home: &Path, path: &Path, access: BindAccess) -> Result<AllowedDir> {
     put(home, path, access, true)
 }
 
@@ -99,7 +99,7 @@ pub(super) fn prepare_grant(home: &Path, path: &Path, access: BindAccess) -> Res
 
 #[derive(Debug, thiserror::Error)]
 #[error("The requested path changed or is unavailable: {}. Retry the action with its current path.", .0.display())]
-pub(super) struct PathChanged(pub PathBuf);
+pub struct PathChanged(pub PathBuf);
 
 /// Consent records hold canonical targets; a later alias cannot select a
 /// different target under an existing grant.
@@ -245,7 +245,7 @@ impl Scope {
         Self::from_entries(gents_home, list(gents_home)?, workdir, user_home)
     }
 
-    pub(super) fn from_entries(
+    pub fn from_entries(
         gents_home: &Path,
         mut entries: Vec<AllowedDir>,
         workdir: Option<&Path>,

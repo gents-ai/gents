@@ -79,10 +79,10 @@ pub async fn grant_selected_self_configuration(
 /// grant. It is passed with the agent operation; it never changes the actor.
 #[derive(Clone)]
 pub struct ConfigurationNodeBinding {
-    pub(crate) node_did: identity::Did,
-    pub(crate) doc_id: String,
+    pub node_did: identity::Did,
+    pub doc_id: String,
     pub enabled: bool,
-    pub(crate) default_agent_did: Option<String>,
+    pub default_agent_did: Option<String>,
 }
 
 pub async fn configuration_node_doc(

@@ -228,7 +228,7 @@ impl ConfigReferences {
     /// The retained documents that name application collection `name`: each
     /// `DatastoreToolSurface` holding an entry on it, with those entries' tool
     /// names, and each `EventSource` reading it.
-    pub(crate) fn application_collection_users(
+    pub fn application_collection_users(
         &self,
         name: &str,
     ) -> Result<(SurfaceTools, Vec<String>)> {

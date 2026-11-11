@@ -34,7 +34,7 @@ tokio::task_local! {
 }
 
 #[derive(Clone)]
-pub(crate) struct CurrentToolRuntimeContext {
+pub struct CurrentToolRuntimeContext {
     pub(crate) runtime_home: Option<PathBuf>,
     pub(crate) deadline_at: Option<DateTime<Utc>>,
     pub(crate) cancellation_token: CancellationToken,

@@ -31,7 +31,7 @@ impl FileToolMode {
         }
     }
 
-    pub(crate) fn rank(self) -> u8 {
+    pub fn rank(self) -> u8 {
         match self {
             Self::Off => 0,
             Self::ReadOnly => 1,
@@ -39,7 +39,7 @@ impl FileToolMode {
         }
     }
 
-    pub(crate) fn meet(self, other: Self) -> Self {
+    pub fn meet(self, other: Self) -> Self {
         if self.rank() <= other.rank() {
             self
         } else {
@@ -79,7 +79,7 @@ impl BashMode {
         }
     }
 
-    pub(crate) fn rank(self) -> u8 {
+    pub fn rank(self) -> u8 {
         match self {
             Self::Off => 0,
             Self::ReadOnly => 1,
@@ -87,7 +87,7 @@ impl BashMode {
         }
     }
 
-    pub(crate) fn meet(self, other: Self) -> Self {
+    pub fn meet(self, other: Self) -> Self {
         if self.rank() <= other.rank() {
             self
         } else {

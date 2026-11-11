@@ -18,7 +18,7 @@ use super::content_hash;
 pub struct VerifiedUnchanged(());
 
 impl VerifiedUnchanged {
-    pub(crate) fn witness() -> Self {
+    pub fn witness() -> Self {
         Self(())
     }
 }
@@ -36,7 +36,7 @@ impl Serialize for FileChanges {
 }
 
 impl FileChanges {
-    pub(crate) fn new(batch: ChangeBatch) -> Self {
+    pub fn new(batch: ChangeBatch) -> Self {
         Self(Arc::new(batch))
     }
 

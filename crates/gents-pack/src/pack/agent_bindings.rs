@@ -13,7 +13,7 @@ pub struct AgentProvisioner<'a> {
     pub runtime: &'a dyn gents_store::identity::NodeIdentity,
     pub actor: Option<&'a dyn gents_store::identity::NodeIdentity>,
     pub selected_agent_did: Option<&'a str>,
-    pub(crate) node_binding: Option<&'a gents_documents::ConfigurationNodeBinding>,
+    pub node_binding: Option<&'a gents_documents::ConfigurationNodeBinding>,
 }
 
 impl<'a> AgentProvisioner<'a> {

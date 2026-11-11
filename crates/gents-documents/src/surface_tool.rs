@@ -93,7 +93,7 @@ pub enum DatastoreSurfaceScope {
 }
 
 impl DatastoreSurfaceScope {
-    pub(crate) async fn revalidate(
+    pub async fn revalidate(
         &self,
         txn: &gents_store::config_client::ConfigApplyTxn<'_>,
         surface_id: &str,
@@ -221,9 +221,9 @@ pub async fn revalidate_datastore_tool_in_txn(
 
 #[derive(Clone)]
 pub struct DatastoreToolSource {
-    pub(crate) owner: String,
-    pub(crate) surface_id: String,
-    pub(crate) declaration: SurfaceToolDecl,
+    pub owner: String,
+    pub surface_id: String,
+    pub declaration: SurfaceToolDecl,
 }
 
 impl DatastoreToolSource {

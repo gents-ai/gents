@@ -39,7 +39,7 @@ pub enum ReadView {
 }
 
 impl AgentSessionReadArgs {
-    pub(crate) fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         anyhow::ensure!(
             !self.session_id.trim().is_empty(),
             "session_id is required; discover it with agent_session_list"

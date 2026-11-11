@@ -124,7 +124,7 @@ impl Settings {
     rename_all_fields = "camelCase",
     deny_unknown_fields
 )]
-pub(crate) enum BindingAction {
+pub enum BindingAction {
     Plugin {
         plugin: String,
         artifact_digest: String,

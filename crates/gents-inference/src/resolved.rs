@@ -43,9 +43,9 @@ pub struct SelectedConfigurationDocument {
 
 #[derive(Clone)]
 pub struct SelectedConfiguration {
-    pub(crate) node: Arc<defra_node::Node>,
-    pub(crate) actor: identity::Did,
-    pub(crate) documents: Vec<SelectedConfigurationDocument>,
+    pub node: Arc<defra_node::Node>,
+    pub actor: identity::Did,
+    pub documents: Vec<SelectedConfigurationDocument>,
 }
 
 impl std::fmt::Debug for SelectedConfiguration {

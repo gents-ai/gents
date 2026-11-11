@@ -68,7 +68,7 @@ impl<'a, 'txn> TxnCanonicalReader<'a, 'txn> {
         }
     }
 
-    pub(crate) fn new(
+    pub fn new(
         txn: &'a ConfigApplyTxn<'txn>,
         node_did: &'a str,
         requester_did: Option<&'a str>,
@@ -84,7 +84,7 @@ impl<'a, 'txn> TxnCanonicalReader<'a, 'txn> {
         }
     }
 
-    pub(crate) fn observe_headers(
+    pub fn observe_headers(
         &mut self,
         headers: &[gents_protocol::output::rows::TranscriptMessageRow],
     ) {
@@ -214,7 +214,7 @@ impl<'a, 'txn> TxnCanonicalReader<'a, 'txn> {
         Ok((reconstructed.header.message, reconstructed.segments))
     }
 
-    pub(crate) async fn load_message(
+    pub async fn load_message(
         &mut self,
         header_doc_id: &str,
     ) -> Result<(

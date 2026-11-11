@@ -28,7 +28,7 @@ impl std::fmt::Display for RootDenialReason {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedToolRoot {
-    pub(crate) path: PathBuf,
+    pub path: PathBuf,
     observed_parent: bool,
     observed_symlinks: Vec<PathBuf>,
     nonexistent_suffix: bool,
@@ -44,14 +44,14 @@ pub enum RootAdmission {
 }
 
 impl RootAdmission {
-    pub(crate) fn admitted(self) -> Option<PathBuf> {
+    pub fn admitted(self) -> Option<PathBuf> {
         match self {
             Self::Admitted(path) => Some(path),
             Self::Denied { .. } => None,
         }
     }
 
-    pub(crate) fn denial_reason(&self) -> Option<RootDenialReason> {
+    pub fn denial_reason(&self) -> Option<RootDenialReason> {
         match self {
             Self::Admitted(_) => None,
             Self::Denied { reason, .. } => Some(*reason),

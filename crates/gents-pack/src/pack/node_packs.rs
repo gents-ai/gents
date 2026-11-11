@@ -22,7 +22,7 @@ use gents_store::config_client::{ConfigAccess, SchemaInstallPlan};
 
 pub use super::registry::split_pack_coordinate;
 pub use super::wiring::PluginWiring;
-pub(crate) use super::AgentProvisioner;
+pub use super::AgentProvisioner;
 pub use super::{
     agent_binding_variable, installed_pack_documents, read_home_install, visible_plugin_selections,
 };
@@ -410,7 +410,7 @@ impl NodePacks<'_> {
     }
 
     /// The pack's slots and the owner's profiles, checking only `requested`.
-    pub(crate) async fn inference(
+    pub async fn inference(
         &self,
         manifest: &PackManifest,
         requested: &PackInferenceBindings,
@@ -461,7 +461,7 @@ impl NodePacks<'_> {
 
     /// Resolves a documents pack's dependencies and inspects every slot the
     /// pack and they declare against `change`'s bindings.
-    pub(crate) async fn plan_documents(
+    pub async fn plan_documents(
         &self,
         operation: &str,
         change: &PackChange,
@@ -540,7 +540,7 @@ impl NodePacks<'_> {
 
     /// Binds and materializes a documents pack and its dependencies for this
     /// node, recording where each archive came from. Nothing is written.
-    pub(crate) async fn prepare_documents(
+    pub async fn prepare_documents(
         &self,
         change: &PackChange,
         distribution: &Distribution,
@@ -637,7 +637,7 @@ impl NodePacks<'_> {
 
     /// What installing or updating a plugins or assets pack will do, and
     /// what blocks it.
-    pub(crate) async fn plan_plugins(
+    pub async fn plan_plugins(
         &self,
         operation: &str,
         change: &PackChange,
@@ -701,7 +701,7 @@ impl NodePacks<'_> {
 
     /// The bindings a plugins or assets install applies: every required slot
     /// bound, or refused.
-    pub(crate) async fn bound_inference(
+    pub async fn bound_inference(
         &self,
         manifest: &PackManifest,
         requested: &PackInferenceBindings,
@@ -721,7 +721,7 @@ impl NodePacks<'_> {
     /// Installs a plugins or assets pack into the home and tells the node as
     /// `actor`. Local plugin records are the publication boundary; later
     /// failures do not roll them back.
-    pub(crate) async fn install_plugins(
+    pub async fn install_plugins(
         &self,
         distribution: &Distribution,
         bindings: &PackInferenceBindings,

@@ -115,11 +115,11 @@ pub struct CanonicalToolCallRead {
     pub(crate) accepted_header_doc_id: String,
     pub(crate) execution_generation: String,
     pub(crate) request_doc_id: String,
-    pub(crate) tool_name: String,
-    pub(crate) lifecycle_state: ToolCallState,
+    pub tool_name: String,
+    pub lifecycle_state: ToolCallState,
     pub(crate) arguments: String,
-    pub(crate) result: Option<Message>,
-    pub(crate) raw_result: Option<String>,
+    pub result: Option<Message>,
+    pub raw_result: Option<String>,
 }
 
 #[derive(Debug)]

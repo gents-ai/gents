@@ -636,12 +636,12 @@ impl MailboxCreateTool {
         }
     }
 
-    pub(crate) fn with_access(mut self, access: gents_store::config_client::ConfigAccess) -> Self {
+    pub fn with_access(mut self, access: gents_store::config_client::ConfigAccess) -> Self {
         self.access = Some(access);
         self
     }
 
-    pub(crate) fn with_surface_source(
+    pub fn with_surface_source(
         mut self,
         source: gents_documents::DatastoreToolSource,
     ) -> Self {

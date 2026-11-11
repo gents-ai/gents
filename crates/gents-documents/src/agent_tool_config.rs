@@ -9,7 +9,7 @@ pub struct AgentToolConfig {
 }
 
 impl AgentToolConfig {
-    pub(crate) fn from_document(tools: &super::Tools) -> Result<Self> {
+    pub fn from_document(tools: &super::Tools) -> Result<Self> {
         tools.validate()?;
         Ok(Self {
             targets: Vec::new(),
@@ -68,11 +68,11 @@ impl AgentToolConfig {
     /// The agents group follows `AgentTools.enabled` alone (Lean
     /// `ToolPolicy.Surface.sessionMessages`): `agent_message`, `agent_list`, `agent_session_list`, `agent_session_read` and
     /// `agent_interrupt` address sessions on this node and need no target.
-    pub(crate) fn tools_enabled(&self) -> bool {
+    pub fn tools_enabled(&self) -> bool {
         self.enabled
     }
 
-    pub(crate) fn agent_new_enabled(&self) -> bool {
+    pub fn agent_new_enabled(&self) -> bool {
         self.enabled && !self.targets.is_empty()
     }
 

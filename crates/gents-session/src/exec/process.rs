@@ -43,15 +43,15 @@ pub use registry::ManagedExecKind;
 
 #[derive(Debug)]
 pub struct ManagedExecRequest {
-    pub(crate) argv: Vec<String>,
-    pub(crate) cwd: PathBuf,
-    pub(crate) deadline_at: Option<DateTime<Utc>>,
-    pub(crate) cancellation_token: CancellationToken,
-    pub(crate) max_output_bytes: usize,
-    pub(crate) stdin: Vec<u8>,
-    pub(crate) environment: Option<RapidHashMap<String, String>>,
-    pub(crate) tool_name: Option<String>,
-    pub(crate) live_output: Option<LiveToolOutputWriter>,
+    pub argv: Vec<String>,
+    pub cwd: PathBuf,
+    pub deadline_at: Option<DateTime<Utc>>,
+    pub cancellation_token: CancellationToken,
+    pub max_output_bytes: usize,
+    pub stdin: Vec<u8>,
+    pub environment: Option<RapidHashMap<String, String>>,
+    pub tool_name: Option<String>,
+    pub live_output: Option<LiveToolOutputWriter>,
 }
 
 #[cfg(unix)]
@@ -422,11 +422,11 @@ enum OutcomeKind {
 
 #[derive(Debug)]
 pub struct SpawnManagedProcessRequest {
-    pub(crate) argv: Vec<String>,
-    pub(crate) cwd: PathBuf,
-    pub(crate) environment: Option<RapidHashMap<String, String>>,
-    pub(crate) tool_name: Option<String>,
-    pub(crate) kind: ManagedExecKind,
+    pub argv: Vec<String>,
+    pub cwd: PathBuf,
+    pub environment: Option<RapidHashMap<String, String>>,
+    pub tool_name: Option<String>,
+    pub kind: ManagedExecKind,
 }
 
 pub struct ManagedProcess {
@@ -434,9 +434,9 @@ pub struct ManagedProcess {
     child: ManagedChild,
     #[cfg(windows)]
     child: ManagedChildJob,
-    pub(crate) stdin: Option<tokio::process::ChildStdin>,
-    pub(crate) stdout: Option<tokio::process::ChildStdout>,
-    pub(crate) stderr: Option<tokio::process::ChildStderr>,
+    pub stdin: Option<tokio::process::ChildStdin>,
+    pub stdout: Option<tokio::process::ChildStdout>,
+    pub stderr: Option<tokio::process::ChildStderr>,
     _guard: Option<ActiveExecGuard>,
 }
 
@@ -455,7 +455,7 @@ impl ManagedProcess {
         }
     }
 
-    pub(crate) async fn terminate(&mut self) {
+    pub async fn terminate(&mut self) {
         #[cfg(unix)]
         {
             self.child.terminate_service().await;

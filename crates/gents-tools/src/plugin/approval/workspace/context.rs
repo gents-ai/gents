@@ -22,7 +22,7 @@ pub type Reviewer = Arc<
 >;
 
 #[derive(Clone)]
-pub(crate) struct Context {
+pub struct Context {
     home: PathBuf,
     workspace: WorkspaceKey,
     review_history: Arc<Mutex<History>>,
