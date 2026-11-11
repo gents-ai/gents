@@ -58,7 +58,7 @@ narrowing without changing its statement.
 Decision 2026-11-11, maintainer-approved: both are core operations registered
 by triggers (`trigger.goal_assignment.apply`, `trigger.goal_outcomes.settle`).
 The native plugin additionally asks core to supersede the session's pending
-continuations the new assignment makes stale (`Hooks.supersedeAll`), creates
+continuations the new assignment makes stale (`Hooks.supersedeMatching`), creates
 the first Goal with its session-child grants (`Hooks.sessionChildGrants`), and
 reads the session token-usage baseline as a named core read
 (`Hooks.Read.core`). The Durable model has no pending continuations, request
