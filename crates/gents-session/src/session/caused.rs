@@ -8,7 +8,6 @@ use anyhow::{Context, Result};
 use gents_protocol::row::AgentRequestRow;
 use gents_protocol::session::SessionScope;
 use gents_store::config_client::ConfigAccess;
-use gents_store::graphql::escape_graphql_string;
 use serde_json::Value;
 
 #[derive(Clone, Debug)]
@@ -124,18 +123,26 @@ async fn load_session_head_as(
     let Some(head) = head else {
         return Ok(None);
     };
-    let query = format!(
-        r#"{{AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ {REQUEST_FIELDS} }}}}"#,
-        escape_graphql_string(&head.observed.request_doc_id)
-    );
-    let mut heads = request_rows(access, &query).await?;
+    let rendered = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::owned(REQUEST_FIELDS))
+            .filter(Filter::eq(fields::DOC_ID, &head.observed.request_doc_id))
+            .limit(2)
+            .render()
+    };
+    let mut heads = request_rows(access, &rendered).await?;
     anyhow::ensure!(heads.len() <= 1, "ambiguous caused session head");
     Ok(heads.pop())
 }
 
-async fn request_rows(access: &ConfigAccess, query: &str) -> Result<Vec<AgentRequestRow>> {
+async fn request_rows(
+    access: &ConfigAccess,
+    query: &gents_protocol::document_query::Rendered,
+) -> Result<Vec<AgentRequestRow>> {
     access
-        .execute(query)
+        .read(query)
         .await?
         .pointer("/data/AgentRequest")
         .and_then(Value::as_array)

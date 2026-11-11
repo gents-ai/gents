@@ -149,7 +149,13 @@ pub(crate) async fn load_self_view(
     let mut context_budget = if session_ids.is_empty() {
         ContextBudget::default()
     } else {
-        let response = post_graphql(graphql, &compaction_query(node_did, &session_ids)).await?;
+        let rendered = compaction_query(node_did, &session_ids);
+        let response = gents_store::config_client::post_graphql_with_variables(
+            graphql,
+            &rendered.document,
+            &rendered.variables,
+        )
+        .await?;
         let envelope = decode::<CompactionEnvelope>(response, "context budget")?;
         aggregate_compaction(envelope.compactions)
     };
@@ -198,25 +204,23 @@ fn self_view_query(node_did: &str) -> String {
     )
 }
 
-fn compaction_query(node_did: &str, session_ids: &[String]) -> String {
-    let node_did = escape_graphql_string(node_did);
-    let list = session_ids
-        .iter()
-        .map(|id| format!(r#""{}""#, escape_graphql_string(id)))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!(
-        r#"{{
-        CompactionEntry(filter: {{ _and: [
-            {{ node_did: {{ _eq: "{node_did}" }} }},
-            {{ session_id: {{ _in: [{list}] }} }}
-        ] }}, order: {{ created_at: DESC }}) {{
-            created_at
-            original_tokens
-            compacted_tokens
-        }}
-    }}"#
+fn compaction_query(
+    node_did: &str,
+    session_ids: &[String],
+) -> gents_protocol::document_query::Rendered {
+    use gents_protocol::document_query::{
+        fields::compaction_entry as fields, Direction, Filter, Query, Selection,
+    };
+    Query::select(
+        Selection::new()
+            .field(fields::CREATED_AT)
+            .field(fields::ORIGINAL_TOKENS)
+            .field(fields::COMPACTED_TOKENS),
     )
+    .filter(Filter::eq(fields::NODE_DID, node_did))
+    .filter(Filter::any_of(fields::SESSION_ID, session_ids))
+    .order_by(fields::CREATED_AT, Direction::Desc)
+    .render()
 }
 
 fn decode<T>(response: Value, label: &str) -> Result<T>

@@ -70,10 +70,19 @@ pub async fn consume_operator_nonce(
     {
         Ok(_) => Ok(()),
         Err(write_error) => {
-            let query = format!(
-                r#"{{ EnrollmentOperatorNonce(filter: {{ nonce_key: {{ _eq: "{nonce_key_escaped}" }} }}) {{ nonce_key expires_at }} }}"#
-            );
-            let consumed = access.execute(&query).await.is_ok_and(|response| {
+            let rendered = {
+                use gents_protocol::document_query::{
+                    fields::enrollment_operator_nonce as fields, Filter, Query, Selection,
+                };
+                Query::select(
+                    Selection::new()
+                        .field(fields::NONCE_KEY)
+                        .field(fields::EXPIRES_AT),
+                )
+                .filter(Filter::eq(fields::NONCE_KEY, &nonce_key))
+                .render()
+            };
+            let consumed = access.read(&rendered).await.is_ok_and(|response| {
                 gents_protocol::graphql::graphql_rows_from_response(
                     &response,
                     "EnrollmentOperatorNonce",

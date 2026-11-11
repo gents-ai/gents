@@ -114,12 +114,13 @@ impl EnrollmentDecisionService {
             self.node.clone(),
             identity::Did::new(signer_did)?,
         );
-        let response = access
-            .execute(&format!(
-                "{{ Node(filter: {{ node_did: {{ _eq: \"{}\" }} }}) {{ _docID }} }}",
-                gents_store::graphql::escape_graphql_string(self.identity.did()),
-            ))
-            .await?;
+        let rendered = {
+            use gents_protocol::document_query::{fields::node as fields, Filter, Query, Selection};
+            Query::select(Selection::doc_id())
+                .filter(Filter::eq(fields::NODE_DID, self.identity.did()))
+                .render()
+        };
+        let response = access.read(&rendered).await?;
         anyhow::ensure!(
             response["data"]["Node"]
                 .as_array()

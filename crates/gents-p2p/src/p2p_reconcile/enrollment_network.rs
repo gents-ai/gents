@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
 use defra_node::Node as EmbeddedNode;
 use gents_protocol::network_token::{derive_network_id, NetworkRecord};
-use gents_store::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
+use gents_store::graphql::{graphql_with_transaction_retry, rows};
 use gents_store::identity::NodeIdentity;
 use serde::Deserialize;
 
@@ -70,29 +70,24 @@ pub async fn ensure_enrollment_network(
                 .sign(&record.signing_payload())
                 .await
                 .context("signing enrollment Network")?;
-            let network_id = escape_graphql_string(&record.network_id);
-            let admin_did = escape_graphql_string(&record.admin_did);
-            let display_name = escape_graphql_string(&record.display_name);
-            let default_template = escape_graphql_string(&record.default_template);
-            let created_at = escape_graphql_string(&record.created_at);
-            let admin_sig = escape_graphql_string(&bs58::encode(&record.sig).into_string());
-            let mutation = format!(
-                r#"mutation {{
-                    create_Network(input: {{
-                        network_id: "{network_id}",
-                        admin_did: "{admin_did}",
-                        display_name: "{display_name}",
-                        default_template: "{default_template}",
-                        created_at: "{created_at}",
-                        admin_sig: "{admin_sig}"
-                    }}) {{ _docID }}
-                }}"#
-            );
+            let mutation = {
+                use gents_protocol::document_query::{fields::network as fields, Create, Input};
+                Create::new(
+                    Input::new()
+                        .set(fields::NETWORK_ID, &record.network_id)
+                        .set(fields::ADMIN_DID, &record.admin_did)
+                        .set(fields::DISPLAY_NAME, &record.display_name)
+                        .set(fields::DEFAULT_TEMPLATE, &record.default_template)
+                        .set(fields::CREATED_AT, &record.created_at)
+                        .set(fields::ADMIN_SIG, bs58::encode(&record.sig).into_string()),
+                )
+                .render()
+            };
             anyhow::ensure!(
                 node.node_identity_did() == Some(identity.did()),
                 "enrollment Network author must be the local runtime Node"
             );
-            gents_store::config_client::ConfigAccess::write_local(
+            gents_store::config_client::ConfigAccess::write_local_rendered(
                 node,
                 "cli.enrollment.create_agent_network",
                 &mutation,
