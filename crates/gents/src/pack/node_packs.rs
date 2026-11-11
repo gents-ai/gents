@@ -905,7 +905,9 @@ impl NodePacks<'_> {
         }
         // The node drops the plugins from its record before their bytes go:
         // a retirement that is not recorded leaves the bytes the node still
-        // lists, and a repeated removal releases them.
+        // lists. The home record is released by then, so a repeated removal
+        // finds no pack here; the bytes are content-addressed, and installing
+        // the pack again takes them back for its own removal to release.
         super::record_plugin_retirement_as(self.access, self.node_did, actor, home, coordinate)
             .await
             .map_err(anyhow::Error::from)?;

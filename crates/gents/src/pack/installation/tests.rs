@@ -5125,7 +5125,8 @@ async fn pack_install_applies_exactly_the_declared_placement_readers() {
 }
 
 /// A plugin pack's bytes go only after the node recorded the retirement: a
-/// retirement the node did not record keeps the bytes it still lists.
+/// retirement the node did not record keeps the bytes it still lists. The
+/// home record is gone by then, so a repeated removal has no pack to remove.
 #[tokio::test]
 async fn a_retirement_the_node_did_not_record_keeps_the_plugin_bytes() {
     let access = access().await;
@@ -5159,6 +5160,11 @@ async fn a_retirement_the_node_did_not_record_keeps_the_plugin_bytes() {
         .remove_home_pack(&coordinate, record, Some(stranger))
         .await;
     assert!(failed.is_err(), "the retirement was recorded");
+    assert_eq!(
+        crate::pack::read_home_install(home.path(), &coordinate).unwrap(),
+        None,
+        "the home record a repeated removal would need was kept"
+    );
     assert_eq!(
         crate::plugin::store::release_unreferenced_bytes(home.path(), &digests)
             .unwrap()
