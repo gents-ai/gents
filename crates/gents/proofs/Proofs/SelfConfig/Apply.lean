@@ -147,18 +147,21 @@ def chainKeepsGrants (decode : Doc → Option Grants) (held : Grants)
   reselectionKeepsGrants decode held (resolve stored) (resolve candidate)
 
 /-- The invoker's reachability, projected from its own agent document:
-`enabled` (absent is true) and whether its tags carry the Engineer tag. -/
+`enabled` (absent is true). -/
 structure Reach where
   enabled : Bool
-  engineerTag : Bool
   deriving DecidableEq, Repr
 
-/-- The agent half of no lockout: the invoker stays enabled and keeps the
-Engineer tag it had; dropping the tag first would make self-disable a
-two-step edit. Other tags and fields stay editable. -/
+/-- The agent half of no lockout: the invoker stays enabled. Tags and every
+other field stay editable.
+
+Decision (maintainer, 2026-11-11, #3656): protect only against lockout. The
+Engineer tag no longer has to be retained: it guarded the protected-agent rule,
+which is gone, and it confers no grant (`SelfConfig.admission_ignores_catalog_tags`),
+so dropping it removes nobody's access. -/
 def keepsReach (decode : Doc → Option Reach) (stored candidate : Doc) : Bool :=
   match decode stored, decode candidate with
-  | some old, some new => new.enabled && retained old.engineerTag new.engineerTag
+  | some _, some new => new.enabled
   | _, _ => false
 
 end SelfConfig

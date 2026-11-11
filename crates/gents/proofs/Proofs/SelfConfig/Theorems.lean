@@ -191,12 +191,12 @@ theorem self_disable_refused (decode : Doc → Option Reach)
     keepsReach decode stored candidate = false := by
   simp [keepsReach, ho, hn, hoff]
 
-theorem engineer_tag_removal_refused (decode : Doc → Option Reach)
+theorem enabled_candidate_keeps_reach (decode : Doc → Option Reach)
     (stored candidate : Doc) (old new : Reach)
     (ho : decode stored = some old) (hn : decode candidate = some new)
-    (had : old.engineerTag = true) (removed : new.engineerTag = false) :
-    keepsReach decode stored candidate = false := by
-  simp [keepsReach, retained, ho, hn, had, removed]
+    (hon : new.enabled = true) :
+    keepsReach decode stored candidate = true := by
+  simp [keepsReach, ho, hn, hon]
 
 theorem retained_control_allowed (decode : Doc → Option Control)
     (stored candidate : Doc) (old new : Control)

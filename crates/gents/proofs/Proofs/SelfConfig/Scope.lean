@@ -12,6 +12,13 @@ that manages Agents on the node.
 
 Rust owner: `crates/gents/src/tools/builtin/self_config/command/grants.rs`
 (`may_edit`, `ensure_edit_scope`).
+
+The category lists here are the ones an Agent's Tools document selects. A
+category is a grouping of ACP grants (`SelfConfig.categoryGroupings`), and agent
+operations are admitted over the acting actor's ACP grants, person or Agent
+alike (`SelfConfig.agentAdmission`). Where a grouping is not issued to Agents
+today (`SelfConfig.category_gaps`) this Tools field is the category's only
+source, which the policy and grant writers must replace.
 -/
 
 namespace SelfConfig
@@ -79,7 +86,9 @@ def engineerGroup : SelfConfigGroup :=
   ⟨true, some selfConfigCategories⟩
 
 /-- Creating or cloning an Agent adds an Agent to the node, which is catalog
-management. -/
+management. Admission reads the catalog from ACP (`ActorGrants.catalog`,
+`AgentRequest.needsCatalog`); this predicate over the Tools field is the tool's
+exposure of the command. -/
 def mayCreateAgent (categories : List String) : Bool :=
   categories.contains catalogCategory
 
