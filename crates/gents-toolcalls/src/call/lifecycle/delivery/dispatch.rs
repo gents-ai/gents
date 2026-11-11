@@ -78,7 +78,7 @@ impl ToolCallLifecycle {
 }
 
 #[derive(Clone)]
-pub(crate) struct DispatchStart {
+pub struct DispatchStart {
     header: String,
     request: String,
     generation: String,

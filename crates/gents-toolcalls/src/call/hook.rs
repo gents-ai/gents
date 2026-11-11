@@ -6,7 +6,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use defra_node::Node as EmbeddedNode;
 use gents_inference::llm::message::Message;
-use gents_inference::llm::{HookAction, ToolCallHookAction};
+pub use gents_inference::llm::{HookAction, ToolCallHookAction};
 use gents_loop::tool::ToolDyn;
 use tokio::sync::{watch, Mutex};
 use tokio_util::sync::CancellationToken;

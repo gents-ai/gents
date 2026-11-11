@@ -153,7 +153,7 @@ pub(super) async fn ensure_background_receipt_before_bridge_close(
 }
 
 #[derive(Clone)]
-pub(crate) struct BackgroundReceiptBinding {
+pub struct BackgroundReceiptBinding {
     pub(crate) tool_doc_id: String,
     pub(crate) request_doc_id: String,
     pub(crate) accepted_header_doc_id: String,

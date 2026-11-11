@@ -8,8 +8,8 @@ use tokio::sync::Mutex;
 type BackgroundCompletionGate = Mutex<()>;
 
 pub struct ToolNotificationPublication {
-    pub(crate) tool_call_doc_id: String,
-    pub(crate) presentation: Vec<gents_protocol::output::PresentationPart>,
+    pub tool_call_doc_id: String,
+    pub presentation: Vec<gents_protocol::output::PresentationPart>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
