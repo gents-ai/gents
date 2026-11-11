@@ -991,8 +991,8 @@ pub async fn pending_spawn_parent(name: &str) -> (Arc<EmbeddedNode>, PathBuf, To
 #[cfg(test)]
 mod lifecycle_tests {
     use super::*;
-    use crate::tools::call::lifecycle::FailureClass;
     use crate::session::tool_call_state::CancelCause;
+    use crate::tools::call::lifecycle::FailureClass;
 
     /// Reads the admitted row through the owning Agent's access; ACP hides it from the node.
     async fn row(access: &crate::ConfigAccess, session_id: &str) -> serde_json::Value {

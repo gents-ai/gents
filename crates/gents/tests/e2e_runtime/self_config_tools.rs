@@ -8,8 +8,8 @@ use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::escape_graphql_string;
 use gents::tools::builtin::self_config::build_runtime_self_config_tools;
 use gents::tools::surface::{SelfConfigProcessCeiling, SelfConfigToolConfig};
-use gents::{BashMode, FileToolMode};
 use gents::Collection;
+use gents::{BashMode, FileToolMode};
 use serde_json::{json, Value};
 
 use crate::support::agent_requests::RequestActors;

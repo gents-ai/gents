@@ -1,10 +1,10 @@
 use super::admission::SESSION_COLLECTIONS;
 use super::{selection::load_canonical_selection_in_txn, *};
 use crate::file_inventory::SessionCollection;
+use crate::session::tool_call_state::ToolCallState;
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::store::graphql::required_rows;
 use crate::tools::call::lifecycle::query::load_tool_call_read_in_txn;
-use crate::session::tool_call_state::ToolCallState;
 use gents_protocol::enrollment::canonical_domain_payload;
 use gents_protocol::file_inventory::{
     coherent_inventory_entries, FileChangeMetadata, FileImageScope, FileInventoryAdmission,

@@ -109,11 +109,7 @@ fn parse_authoring_args(verb: &str, argv: &[String]) -> Result<AuthoringCall> {
     }
 }
 
-fn ensure_mode(
-    mode: crate::documents::FileToolMode,
-    write: bool,
-    operation: &str,
-) -> Result<()> {
+fn ensure_mode(mode: crate::documents::FileToolMode, write: bool, operation: &str) -> Result<()> {
     use crate::documents::FileToolMode;
     match (write, mode) {
         (_, FileToolMode::Off) => bail!(

@@ -3069,25 +3069,24 @@ async fn overlay_read_write_meets_unrestricted_lsp_sandbox_to_workspace_write() 
         deny_all_argv: false,
         deny_git_metadata_writes: false,
     };
-    let met =
-        crate::tools::runtime_context::scope_request_tool_execution_with_workspace_overlay(
-            None,
-            tokio_util::sync::CancellationToken::new(),
-            crate::tools::runtime_context::ToolWorkspaceScope {
-                runtime_home: None,
-                workspace_cwd: None,
-                workspace_root: Some(std::env::temp_dir()),
-                workspace_authority: Some(crate::tools::native::WorkspaceAuthority::ReadWrite),
-                workspace_artifact: None,
-            },
-            None,
-            None,
-            None,
-            Default::default(),
-            false,
-            async { super::overlay_lsp_constraints(&constraints) },
-        )
-        .await;
+    let met = crate::tools::runtime_context::scope_request_tool_execution_with_workspace_overlay(
+        None,
+        tokio_util::sync::CancellationToken::new(),
+        crate::tools::runtime_context::ToolWorkspaceScope {
+            runtime_home: None,
+            workspace_cwd: None,
+            workspace_root: Some(std::env::temp_dir()),
+            workspace_authority: Some(crate::tools::native::WorkspaceAuthority::ReadWrite),
+            workspace_artifact: None,
+        },
+        None,
+        None,
+        None,
+        Default::default(),
+        false,
+        async { super::overlay_lsp_constraints(&constraints) },
+    )
+    .await;
     assert_eq!(met.execution_mode, CommandExecutionMode::WorkspaceWrite);
     assert_eq!(met.sandbox, CommandExecutionMode::WorkspaceWrite);
 }

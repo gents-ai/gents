@@ -7,11 +7,9 @@ use gents::observe::adapter_projection::{
     adapter_projection_json_schema, adapter_projection_jsonl_record_schema,
     adapter_projection_jsonl_records, adapter_projection_native_json,
     adapter_projection_native_json_schema, build_adapter_projection,
-    validate_adapter_projection_contract, ProjectionContext,
-    ProjectionRedactionMode,
+    validate_adapter_projection_contract, ProjectionContext, ProjectionRedactionMode,
 };
 use gents::observe::run_timeline::{build_run_timeline, RunTimelineRows, TimelineToolCallRow};
-use gents_protocol::adapter_projection_kind::AdapterProjectionKind;
 use gents::observe::run_timeline_fetch::{
     load_run_timeline, load_settled_run_timeline_rows, RUN_TIMELINE_SETTLE_BOUND,
 };
@@ -19,8 +17,9 @@ use gents::observe::trace_export::{
     analyze_request_failure, analyze_tool_call_with_persisted_outcome, extract_raw_tool_call_json,
     latency_ms, raw_message_json, AmyToolCallTraceRecord,
 };
-use gents::store::graphql::escape_graphql_string;
 use gents::session::tool_call_state::ToolCallState;
+use gents::store::graphql::escape_graphql_string;
+use gents_protocol::adapter_projection_kind::AdapterProjectionKind;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};

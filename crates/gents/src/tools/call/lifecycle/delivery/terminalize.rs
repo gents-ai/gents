@@ -6,9 +6,9 @@ use super::{
     plugin_writes_failed, PluginWritesFailed, RawPresentation, TerminalFields, TerminalJobProgress,
     TerminalizeOptions,
 };
+use crate::session::tool_call_state::ToolCallState;
 use crate::store::config_client::{ConfigApplyTxn, IdempotentTransactionRetry};
 use crate::tools::call::lifecycle::{FailureClass, ToolCallLifecycle, ToolRowKind};
-use crate::session::tool_call_state::ToolCallState;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use gents_protocol::output::PayloadPresentation;

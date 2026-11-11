@@ -1,10 +1,10 @@
 use super::*;
 use gents::documents::apply_desired_state_plan;
 use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-use gents_protocol::goal_status::GoalStatus;
 use gents::goal::{resume_goal_request, set_goal_from_access};
 use gents::store::config_client::ConfigAccess;
 use gents::{Collection, NodeIdentity, Tools};
+use gents_protocol::goal_status::GoalStatus;
 use serde_json::json;
 use std::sync::Arc;
 

@@ -26,12 +26,12 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::documents::FileToolMode;
 use crate::documents::{apply_overrides, builtin_catalog, CatalogServer, LspConfigDocument};
 use crate::inference::llm::tool::{Tool, ToolDefinition};
 use crate::tools::call::lifecycle::FailureClass;
 use crate::tools::native::shared::{ToolContext, ToolError};
 use crate::tools::native::{lsp_sandbox_for_effective, CommandConstraints, CommandNetworkMode};
-use crate::documents::FileToolMode;
 use crate::tools::surface::{ToolPolicyBash, ToolPolicySurface};
 
 use actions::ActionRequest;
@@ -350,15 +350,13 @@ impl Tool for LspTool {
                 None => catalog::primary_for_workspace(&detected).cloned(),
             };
             if let Some(server) = server {
-                let session_id =
-                    crate::tools::runtime_context::current_tool_runtime_context()
-                        .and_then(|scope| scope.session_id)
-                        .filter(|id| !id.is_empty())
-                        .unwrap_or_else(|| self.config.session_id.clone());
+                let session_id = crate::tools::runtime_context::current_tool_runtime_context()
+                    .and_then(|scope| scope.session_id)
+                    .filter(|id| !id.is_empty())
+                    .unwrap_or_else(|| self.config.session_id.clone());
                 let key = PoolKey {
-                    runtime_home:
-                        crate::tools::runtime_context::current_tool_runtime_context()
-                            .and_then(|context| context.runtime_home),
+                    runtime_home: crate::tools::runtime_context::current_tool_runtime_context()
+                        .and_then(|context| context.runtime_home),
                     session_id,
                     agent_did: self.config.agent_did.clone(),
                     workspace_root: workspace.clone(),

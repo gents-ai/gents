@@ -183,7 +183,10 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     );
     candidate_admin.connect(&addresses).await?;
     wait_for_active_peer(&candidate_admin).await;
-    let mut arrivals = crate::store::subscription_source::subscribe_collections(admin_node, ["NetworkEnrollmentRequest"])?;
+    let mut arrivals = crate::store::subscription_source::subscribe_collections(
+        admin_node,
+        ["NetworkEnrollmentRequest"],
+    )?;
     let filters = [(
         "NetworkEnrollmentRequest".to_owned(),
         equality_filter("request_id", &request.request_id),
@@ -396,7 +399,8 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
             })
         })
         .await?;
-    let mut public_arrivals = crate::store::subscription_source::subscribe_collections(admin_node, ["PeerRegistry"])?;
+    let mut public_arrivals =
+        crate::store::subscription_source::subscribe_collections(admin_node, ["PeerRegistry"])?;
     candidate_admin
         .add_replicator(
             &addresses,

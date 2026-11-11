@@ -16,8 +16,8 @@ use super::{
     embedded_phase_timeout, graphql, retry, ConfigClientError, GraphqlEndpoint, Result,
     EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT, EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
 };
-use crate::store::drop_cleanup::DropCleanup;
 use crate::store::config_client::write_telemetry::{record_slow_native_phase, WriteOperation};
+use crate::store::drop_cleanup::DropCleanup;
 
 pub(super) async fn cleanup_while_holding_write_gate<G, F, T>(
     write_guard: Option<G>,

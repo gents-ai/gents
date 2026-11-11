@@ -27,7 +27,9 @@ fn openrouter_and_vllm_catalogs_preserve_advertised_limits() {
 
 #[test]
 fn xai_api_catalog_records_effort_lists_and_context_length() {
-    use crate::documents::inference_defaults::ReasoningEffort::{High, Low, Medium, None as Off, XHigh};
+    use crate::documents::inference_defaults::ReasoningEffort::{
+        High, Low, Medium, None as Off, XHigh,
+    };
     let record = |value| serde_json::from_value::<OpenAiModelRecord>(value).unwrap();
     let grok_4_3 = || {
         record(serde_json::json!({

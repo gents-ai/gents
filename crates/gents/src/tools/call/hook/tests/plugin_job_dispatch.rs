@@ -958,9 +958,7 @@ async fn host_facts_overwrite_guest_pin_fields() {
     assert!(pin.adopted_at > 1_700_000_000_000, "{}", pin.adopted_at);
     assert_eq!(
         pin.ceiling_at_pin,
-        gents_protocol::job_settings::effective_ceiling(Some(&worker_settings(
-            running_policy()
-        )))
+        gents_protocol::job_settings::effective_ceiling(Some(&worker_settings(running_policy())))
     );
     assert_eq!(
         (

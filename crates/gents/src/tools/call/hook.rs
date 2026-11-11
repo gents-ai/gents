@@ -12,9 +12,9 @@ use tokio::sync::{watch, Mutex};
 use tokio_util::sync::CancellationToken;
 
 use crate::session;
+use crate::session::tool_call_state::CancelCause;
 use crate::tools::background::status::LiveToolOutputRegistry;
 use crate::tools::call::lifecycle::{InterruptDisposition, ToolCallLifecycle};
-use crate::session::tool_call_state::CancelCause;
 use crate::tools::mcp::meta::selected_remote_identity;
 use crate::truncation::TruncationLimits;
 use gents_protocol::tool_call::AwaitMode;

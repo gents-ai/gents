@@ -1,4 +1,3 @@
-use gents_protocol::goal_status::GoalStatus;
 use gents::goal::{
     decide_goal_continuation, decide_model_goal_create, gate_goal_continuation,
     goal_continuation_materialization_step, goal_creation_fingerprint, goal_submission_step,
@@ -8,6 +7,7 @@ use gents::goal::{
     GoalCreationFingerprint, GoalDecision, GoalFailureCause, GoalGatedDecision,
     GoalRequestTerminal, GoalState, GoalSubmissionAction, GoalSubmissionState,
 };
+use gents_protocol::goal_status::GoalStatus;
 
 use crate::lean_vocab_test::{
     assert_state_machine_contract_is_complete, lean_goal_continuation_materialization_cases,

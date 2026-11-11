@@ -282,20 +282,16 @@ async fn a_review_that_cancels_the_caller_cannot_release_the_command() {
     });
     scope(
         Some(fixture.context(reviewer)),
-        crate::tools::runtime_context::scope_request_tool_execution(
-            None,
-            cancellation,
-            async {
-                let error =
-                    workspace::consent_binding(&fixture.home, fixture.decision(false), true, None)
-                        .await
-                        .unwrap_err();
-                assert!(error.to_string().contains("cancelled"));
-                assert!(approval::pending_requests(&fixture.home)
-                    .unwrap()
-                    .is_empty());
-            },
-        ),
+        crate::tools::runtime_context::scope_request_tool_execution(None, cancellation, async {
+            let error =
+                workspace::consent_binding(&fixture.home, fixture.decision(false), true, None)
+                    .await
+                    .unwrap_err();
+            assert!(error.to_string().contains("cancelled"));
+            assert!(approval::pending_requests(&fixture.home)
+                .unwrap()
+                .is_empty());
+        }),
     )
     .await;
 }

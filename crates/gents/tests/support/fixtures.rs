@@ -182,25 +182,24 @@ pub async fn session_command_agent_snapshot(
     );
     let default_agent_did = agents.keys().next().unwrap().clone();
     let runtime_node = test_node_for(db.node_identity.clone(), &default_agent_did);
-    let snapshot =
-        gents::runtime::agent::session_commands::SessionCommandAgentSnapshot {
-            generation: 1,
-            node: Some(runtime_node),
-            local_did: db.node_identity.did().into(),
-            default_agent_did,
-            agents,
-            tool_surfaces: Default::default(),
-            backend_admission_configs: Default::default(),
-            unavailable_agents: Default::default(),
-            active_schedules: Default::default(),
-            unavailable_schedules: Default::default(),
-            active_event_triggers: Default::default(),
-            unavailable_event_triggers: Default::default(),
-            active_tasks: Default::default(),
-            dispatchers: Default::default(),
-            agent_executor_capacities: Default::default(),
-            agent_executor_queue_capacities: Default::default(),
-        };
+    let snapshot = gents::runtime::agent::session_commands::SessionCommandAgentSnapshot {
+        generation: 1,
+        node: Some(runtime_node),
+        local_did: db.node_identity.did().into(),
+        default_agent_did,
+        agents,
+        tool_surfaces: Default::default(),
+        backend_admission_configs: Default::default(),
+        unavailable_agents: Default::default(),
+        active_schedules: Default::default(),
+        unavailable_schedules: Default::default(),
+        active_event_triggers: Default::default(),
+        unavailable_event_triggers: Default::default(),
+        active_tasks: Default::default(),
+        dispatchers: Default::default(),
+        agent_executor_capacities: Default::default(),
+        agent_executor_queue_capacities: Default::default(),
+    };
     let (_sender, receiver) = tokio::sync::watch::channel(Arc::new(snapshot));
     receiver
 }

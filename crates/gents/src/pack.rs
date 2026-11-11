@@ -23,9 +23,9 @@ pub mod local;
 mod manifest_validation;
 pub mod materialize;
 mod plugin;
-mod plugin_wiring;
 pub mod plugin_lifecycle;
 mod plugin_validation;
+mod plugin_wiring;
 mod provenance;
 #[cfg(test)]
 mod publication_contract_tests;

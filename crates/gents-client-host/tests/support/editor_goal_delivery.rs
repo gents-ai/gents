@@ -49,9 +49,9 @@ impl Provider {
             .any(|row| row["role"] == "tool" && row["tool_call_id"] == COMPLETE_CALL);
         if !completed
             && !request["tools"].as_array().is_some_and(|tools| {
-                tools
-                    .iter()
-                    .any(|tool| tool["function"]["name"] == gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME)
+                tools.iter().any(|tool| {
+                    tool["function"]["name"] == gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME
+                })
             })
         {
             return None;

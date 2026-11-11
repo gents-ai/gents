@@ -221,8 +221,7 @@ impl DefraSessionHook {
         let live_output_writer = live_outputs
             .canonical_writer_for(lifecycle.tool_output_binding()?)
             .await;
-        let runtime_context =
-            crate::tools::runtime_context::current_tool_runtime_context();
+        let runtime_context = crate::tools::runtime_context::current_tool_runtime_context();
         let workspace = crate::tools::runtime_context::ToolWorkspaceScope {
             runtime_home: runtime_context
                 .as_ref()

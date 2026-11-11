@@ -12,7 +12,6 @@ use tokio_util::sync::CancellationToken;
 use crate::documents::automation::ResolvedTask;
 use crate::documents::ConcurrencyMode;
 use crate::goal::blocked_turn::last_failed_call_in_txn;
-use gents_protocol::goal_status::GoalStatus;
 use crate::goal::{
     claim_continuation_from_access, claim_retry_continuation_from_access,
     gate_claimed_goal_continuation, gate_goal_continuation, goal_continuation_materialization_step,
@@ -24,11 +23,12 @@ use crate::goal::{
     GOAL_READINESS_WAIT_PREFIX, MAX_INFRASTRUCTURE_RETRIES,
 };
 use crate::goal::{publish_claimed_continuation_with_identity, resume_at_reset};
-use gents_protocol::goal_names::GOAL_TRIGGER_KIND;
 use crate::runtime::snapshot::ActiveRuntimeSnapshot;
 use crate::store::config_client::ConfigAccess;
 use crate::store::graphql::escape_graphql_string;
 use crate::store::subscription_source::UpdateSubscriptionSource;
+use gents_protocol::goal_names::GOAL_TRIGGER_KIND;
+use gents_protocol::goal_status::GoalStatus;
 use gents_protocol::row::AgentRequest;
 
 use super::{FireIntent, FireResult, TriggerSource};
@@ -124,12 +124,14 @@ impl GoalSource {
 
     fn ensure_subscription(&mut self) {
         if self.subscription.is_none() {
-            let collection_ids =
-                crate::store::subscription_source::collection_ids(&self.node, GOAL_OBSERVED_COLLECTIONS.iter().copied())
-                    .unwrap_or_else(|error| {
-                        tracing::warn!(%error, "goal source rescans on its interval only");
-                        Vec::new()
-                    });
+            let collection_ids = crate::store::subscription_source::collection_ids(
+                &self.node,
+                GOAL_OBSERVED_COLLECTIONS.iter().copied(),
+            )
+            .unwrap_or_else(|error| {
+                tracing::warn!(%error, "goal source rescans on its interval only");
+                Vec::new()
+            });
             self.subscription = Some(
                 self.subscription_source
                     .subscribe_collection_changes(collection_ids),

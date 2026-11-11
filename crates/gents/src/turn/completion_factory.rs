@@ -3,11 +3,11 @@ use chrono::{DateTime, Utc};
 use defra_node::Node as EmbeddedNode;
 use serde::Deserialize;
 
+use crate::documents::inference_defaults::ReasoningEffort;
 use crate::inference::admission::{AdmissionRegistry, AdmittedCompletionModel};
 use crate::inference::backends::provider::BackendProviderKind;
 use crate::inference::connection_fingerprint::agent_connection_fingerprint;
 use crate::inference::rendered_request::CaptureScopeKind;
-use crate::documents::inference_defaults::ReasoningEffort;
 use crate::inference::resolved::ResolvedAgent;
 use crate::openai_wire::OpenAiWireApi;
 use crate::provider_usage;

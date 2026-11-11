@@ -9,11 +9,11 @@ use gents_protocol::session_input_edit::{
 
 #[cfg(test)]
 use super::session_commands::run_session_command_reconciler_with_agents;
-use gents_protocol::session_command_row::{CommandRow, FIELDS};
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
 #[cfg(test)]
 use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::NodeIdentity;
+use gents_protocol::session_command_row::{CommandRow, FIELDS};
 
 pub(super) async fn verified_receipt(
     identity: &dyn NodeIdentity,

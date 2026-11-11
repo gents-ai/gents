@@ -11,9 +11,9 @@ use super::command_output::{
 };
 use super::command_validation::validate_command_policy;
 use super::{effective_command_policy, CommandExecutionPolicy};
-use crate::tools::runtime_context::tool_execution_bounds;
 use crate::tools::call::lifecycle::FailureClass;
 use crate::tools::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
+use crate::tools::runtime_context::tool_execution_bounds;
 
 #[expect(
     clippy::too_many_arguments,

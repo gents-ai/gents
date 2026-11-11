@@ -97,7 +97,8 @@ pub use session_history::{
     build_session_history_tool, load_latest_session_context_calls, load_session_context_details,
     load_session_history_snapshot, load_session_history_snapshot_with_access,
     load_session_investigation, SessionCompactionEvent, SessionContextDetails, SessionHistoryRow,
-    SessionHistorySnapshot, SessionInvestigationSnapshot, SessionRequestEvent, SessionToolCallStats,
+    SessionHistorySnapshot, SessionInvestigationSnapshot, SessionRequestEvent,
+    SessionToolCallStats,
 };
 #[cfg(test)]
 pub(crate) use shared::apply_workspace_authority;

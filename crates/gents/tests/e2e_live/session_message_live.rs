@@ -10,14 +10,14 @@ use std::time::Duration;
 
 use anyhow::Result;
 use gents::documents::{AgentTools, BashTools, HostTools, Tools};
-use gents_protocol::goal_status::GoalStatus;
-use gents::goal::{set_goal_from_access};
+use gents::goal::set_goal_from_access;
 use gents::observe::run_timeline_fetch::load_run_timeline_rows;
 use gents::store::graphql::escape_graphql_string;
 use gents::{
     AgentTargetDocument, BashMode, Collection, DocumentRuntimeOptions, Gents, NodeIdentity,
     ToolCeiling,
 };
+use gents_protocol::goal_status::GoalStatus;
 use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::Deserialize;

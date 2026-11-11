@@ -2,10 +2,10 @@ use anyhow::{Context, Result};
 use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole};
 use serde_json::Value;
 
+use crate::session::tool_call_state::ToolCallState;
 use crate::store::config_client::ConfigApplyTxn;
 use crate::tools::background::status::WaitToolArgs;
 use crate::tools::call::lifecycle::query;
-use crate::session::tool_call_state::ToolCallState;
 
 pub(super) enum WaitEvidence {
     Absent,

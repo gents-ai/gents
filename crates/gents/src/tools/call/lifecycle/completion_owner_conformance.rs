@@ -2,7 +2,6 @@ use super::{
     admission_fixture::{published_admission, PublishedAdmission, PublishedAdmissionOptions},
     AwaitMode, ToolCallLifecycle,
 };
-use gents_protocol::goal_status::GoalStatus;
 use crate::goal::{load_canonical_goal_in_txn, set_goal_from_access};
 use crate::lean_vocab_test::{
     lean_r6_backgrounding_case, lean_r6_backgrounding_cases, LeanR6BackgroundingCase,
@@ -10,6 +9,7 @@ use crate::lean_vocab_test::{
 use crate::store::config_client::ConfigAccess;
 use crate::store::graphql::escape_graphql_string;
 use anyhow::Context;
+use gents_protocol::goal_status::GoalStatus;
 use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};
 use serde_json::{json, Value};
 

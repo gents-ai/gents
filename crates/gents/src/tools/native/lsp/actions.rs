@@ -7,7 +7,6 @@ use crate::tools::native::shared::{ToolContext, ToolError};
 
 use super::auth::LspAction;
 use super::catalog::primary_for_file;
-use crate::documents::CatalogServer;
 use super::client::LspClient;
 use super::edits::{
     apply_prepared_edits, prepare_rename, prepare_workspace_edit, resolve_inbound_path,
@@ -15,6 +14,7 @@ use super::edits::{
 };
 use super::encoding::position_for_symbol;
 use super::pool::LspLease;
+use crate::documents::CatalogServer;
 
 pub(super) mod diagnostics;
 pub(super) mod format;

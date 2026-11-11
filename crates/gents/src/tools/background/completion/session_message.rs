@@ -174,7 +174,9 @@ impl TurnAssignmentHandoff {
         match self.assignment {
             AssignmentObservation::None => Some("assignment_absent"),
             AssignmentObservation::Unknown => Some("assignment_unknown"),
-            AssignmentObservation::Assigned(gents_protocol::goal_status::GoalStatus::Complete) => None,
+            AssignmentObservation::Assigned(gents_protocol::goal_status::GoalStatus::Complete) => {
+                None
+            }
             AssignmentObservation::Assigned(status) => Some(assignment_status_reason(status)),
         }
     }
@@ -262,33 +264,34 @@ pub(crate) async fn settle_session_message_row(
         .context("session-message row lacks physical identity")?
         .to_owned();
     let calling_request_id = lifecycle.calling_request_id().await?;
-    let caused = match crate::tools::background::caused::observe_caused_request(node, lifecycle).await? {
-        crate::tools::background::caused::CausedObservation::Bound(caused) => caused,
-        crate::tools::background::caused::CausedObservation::NotVisible => return Ok(false),
-        crate::tools::background::caused::CausedObservation::Unbound(reason) => {
-            const REASON: &str = "caused_request_unbound";
-            if !lifecycle
-                .fail_owned_with_completion_reason(reason, FailureClass::External, REASON)
-                .await?
-            {
-                return Ok(false);
+    let caused =
+        match crate::tools::background::caused::observe_caused_request(node, lifecycle).await? {
+            crate::tools::background::caused::CausedObservation::Bound(caused) => caused,
+            crate::tools::background::caused::CausedObservation::NotVisible => return Ok(false),
+            crate::tools::background::caused::CausedObservation::Unbound(reason) => {
+                const REASON: &str = "caused_request_unbound";
+                if !lifecycle
+                    .fail_owned_with_completion_reason(reason, FailureClass::External, REASON)
+                    .await?
+                {
+                    return Ok(false);
+                }
+                append_background_tool_completion(
+                    node,
+                    &lifecycle.access()?,
+                    lifecycle.session_id(),
+                    &calling_request_id,
+                    &doc_id,
+                    lifecycle.tool_name(),
+                    "failed",
+                    reason,
+                    Some(REASON),
+                    gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+                )
+                .await?;
+                return Ok(true);
             }
-            append_background_tool_completion(
-                node,
-                &lifecycle.access()?,
-                lifecycle.session_id(),
-                &calling_request_id,
-                &doc_id,
-                lifecycle.tool_name(),
-                "failed",
-                reason,
-                Some(REASON),
-                gents_protocol::request_lifecycle::RequestHopCause::Continuation,
-            )
-            .await?;
-            return Ok(true);
-        }
-    };
+        };
     let caused_doc_id = caused
         .doc_id
         .as_deref()
@@ -367,8 +370,8 @@ mod folded_outcome_conformance {
 #[cfg(test)]
 mod turn_assignment_tests {
     use super::*;
-    use gents_protocol::background_completion::background_completion_notification_message_key;
     use crate::tools::call::lifecycle::admission_fixture::PublishedSessionMessage;
+    use gents_protocol::background_completion::background_completion_notification_message_key;
     use gents_protocol::tool_call::AwaitMode;
 
     fn recovery_identities(
@@ -1249,18 +1252,19 @@ mod turn_assignment_tests {
             .await
             .unwrap()
             .expect("rehydrated session-message row");
-        let caused = match crate::tools::background::caused::observe_caused_request(node, &lifecycle)
-            .await
-            .unwrap()
-        {
-            crate::tools::background::caused::CausedObservation::Bound(caused) => caused,
-            crate::tools::background::caused::CausedObservation::Unbound(reason) => {
-                panic!("expected a bound caused request, got Unbound({reason})")
-            }
-            crate::tools::background::caused::CausedObservation::NotVisible => {
-                panic!("expected a bound caused request, got NotVisible")
-            }
-        };
+        let caused =
+            match crate::tools::background::caused::observe_caused_request(node, &lifecycle)
+                .await
+                .unwrap()
+            {
+                crate::tools::background::caused::CausedObservation::Bound(caused) => caused,
+                crate::tools::background::caused::CausedObservation::Unbound(reason) => {
+                    panic!("expected a bound caused request, got Unbound({reason})")
+                }
+                crate::tools::background::caused::CausedObservation::NotVisible => {
+                    panic!("expected a bound caused request, got NotVisible")
+                }
+            };
         let caused_doc_id = caused.doc_id.as_deref().unwrap().to_owned();
         let Some(terminal) = crate::tools::background::status::load_caused_request_terminals(
             &agent_access,

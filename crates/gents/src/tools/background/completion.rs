@@ -12,7 +12,6 @@ use crate::request::lifecycle::queue::{QueuePolicy, QueueSource, RequestQueue};
 use crate::store::graphql::escape_graphql_string;
 use crate::tools::call::lifecycle::{FailureClass, ToolCallLifecycle};
 
-
 pub(crate) fn notification_receipt_keys(encoded: &str) -> Result<Vec<String>> {
     let keys: Vec<String> =
         serde_json::from_str(encoded).context("invalid wake notification receipt")?;

@@ -202,7 +202,10 @@ pub async fn run_directory_projection(
     cancel: CancellationToken,
 ) -> Result<()> {
     let store = GraphqlDirectoryStore::new(node.clone());
-    let mut subscription = crate::store::subscription_source::subscribe_collections(&node, DIRECTORY_SOURCE_COLLECTIONS)?;
+    let mut subscription = crate::store::subscription_source::subscribe_collections(
+        &node,
+        DIRECTORY_SOURCE_COLLECTIONS,
+    )?;
     let mut subscription_open = true;
     let mut interval =
         tokio::time::interval(crate::runtime::agent::p2p_reconcile::intervals::sweep_interval());

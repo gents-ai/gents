@@ -1,4 +1,3 @@
-
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -49,7 +48,10 @@ impl BackgroundCompletionObserver {
         agents: Box<dyn AgentIdentityWatch>,
         cancel: CancellationToken,
     ) -> Result<Self> {
-        let subscription = crate::store::subscription_source::subscribe_collections(&node, [AGENT_REQUEST_COLLECTION])?;
+        let subscription = crate::store::subscription_source::subscribe_collections(
+            &node,
+            [AGENT_REQUEST_COLLECTION],
+        )?;
         Ok(Self {
             node,
             local_did,
@@ -97,13 +99,14 @@ impl BackgroundCompletionObserver {
 
             for change in batch.changes {
                 for (actor, access) in self.selected_agents() {
-                    if let Err(error) = crate::tools::background::completion::settle_rows_after_request_update(
-                        &self.node,
-                        &access,
-                        &self.local_did,
-                        &change.doc_id,
-                    )
-                    .await
+                    if let Err(error) =
+                        crate::tools::background::completion::settle_rows_after_request_update(
+                            &self.node,
+                            &access,
+                            &self.local_did,
+                            &change.doc_id,
+                        )
+                        .await
                     {
                         tracing::warn!(request_doc_id = %change.doc_id, agent_did = %actor, %error, "session-message settlement failed; the periodic scan retries");
                     }

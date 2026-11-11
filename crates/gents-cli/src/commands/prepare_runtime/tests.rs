@@ -276,9 +276,7 @@ async fn preparation_busy_refusal_leaves_identity_store_and_saved_route_unchange
 
 #[tokio::test]
 async fn changing_root_does_not_modify_a_busy_runtime() {
-    let build = gents::store::service::executable_build_id()
-        .await
-        .unwrap();
+    let build = gents::store::service::executable_build_id().await.unwrap();
     let node = control_node_with_build(false, build).await;
     let home = tempfile::tempdir().unwrap();
     let root = tempfile::tempdir().unwrap();

@@ -1,9 +1,9 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+use crate::documents::inference_defaults::ReasoningEffort;
 use crate::documents::AdvertisedModel;
 use crate::inference::backends::provider::BackendProviderKind;
-use crate::documents::inference_defaults::ReasoningEffort;
 use crate::openai_wire::OpenAiWireApi;
 
 pub const INFERENCE_SETUP_CONTRACT_VERSION: u32 = 1;
@@ -153,7 +153,10 @@ pub fn inference_setup_catalog() -> InferenceSetupCatalog {
             ),
             (
                 "streamLivenessSecs",
-                Some(crate::documents::inference_defaults::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS as i64),
+                Some(
+                    crate::documents::inference_defaults::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS
+                        as i64,
+                ),
             ),
             (
                 "providerIdleSecs",

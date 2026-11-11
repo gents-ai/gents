@@ -4,12 +4,12 @@ use anyhow::{Context, Result};
 use defra_node::Node as EmbeddedNode;
 use gents_protocol::job::{JobControlKind, JobControlOutcome, JobReadError};
 
+use crate::session::tool_call_state::CancelCause;
 use crate::store::config_client::{ConfigAccess, ConfigClientError};
 use crate::tools::background::job::control::control_by_doc_id;
 use crate::tools::background::status::ProcessControlScope;
 use crate::tools::call::hook::BackgroundExecutionRegistry;
 use crate::tools::call::lifecycle::{ToolCallLifecycle, ToolRowKind};
-use crate::session::tool_call_state::CancelCause;
 use gents_protocol::tool_call::AwaitMode;
 
 pub mod client;

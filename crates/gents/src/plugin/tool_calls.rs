@@ -155,7 +155,10 @@ mod tests {
         assert!(!supported("workflow_run", &job_tools));
         assert!(supported("bash", &job_tools));
         assert!(supported("workflow_run", &BTreeSet::new()));
-        assert!(!supported(gents_protocol::goal_names::GET_GOAL_TOOL_NAME, &job_tools));
+        assert!(!supported(
+            gents_protocol::goal_names::GET_GOAL_TOOL_NAME,
+            &job_tools
+        ));
         assert!(!supported(
             gents_protocol::goal_names::GET_GOAL_TOOL_NAME,
             &BTreeSet::new()

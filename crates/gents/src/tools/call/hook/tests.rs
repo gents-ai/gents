@@ -426,10 +426,22 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
             r#"{"status":"complete","objective":"other"}"#,
         ),
     ] {
-        accept_hook_tool_call(&hook, id, gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME, args, None).await;
+        accept_hook_tool_call(
+            &hook,
+            id,
+            gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME,
+            args,
+            None,
+        )
+        .await;
         assert!(matches!(
-            hook.on_tool_call(gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME, None, id, args)
-                .await,
+            hook.on_tool_call(
+                gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME,
+                None,
+                id,
+                args
+            )
+            .await,
             ToolCallHookAction::Skip { .. }
         ));
         let updated = access
@@ -2208,7 +2220,12 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
         let ToolCallHookAction::Skip {
             reason: tool_result,
         } = hook
-            .on_tool_call(gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME, None, call_id, args)
+            .on_tool_call(
+                gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME,
+                None,
+                call_id,
+                args,
+            )
             .await
         else {
             panic!("expected hook-managed skip for {call_id}");
@@ -2942,8 +2959,8 @@ async fn interruption_leaves_background_workers_running() {
 
 #[tokio::test]
 async fn generated_interrupt_dispositions_drive_in_flight_interrupt() {
-    use crate::tools::call::lifecycle::InterruptDisposition;
     use crate::session::tool_call_state::ToolCallState;
+    use crate::tools::call::lifecycle::InterruptDisposition;
     use gents_protocol::tool_call::AwaitMode;
     let cases = crate::lean_vocab_test::lean_interrupt_disposition_cases();
     assert!(!cases.is_empty());
@@ -4162,9 +4179,9 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
     let identity =
         KeyIdentity::load_or_create(identity_dir.path().join("owner.key"), None).unwrap();
     use crate::documents::{WriteToolOutputObligation, WriteToolOutputObligationScope};
-    use gents_protocol::goal_status::GoalStatus;
-    use crate::goal::{load_canonical_goal};
+    use crate::goal::load_canonical_goal;
     use crate::runtime::agent::output_obligation::{ActiveOutputObligation, OutputObligationGate};
+    use gents_protocol::goal_status::GoalStatus;
 
     // The hook's session is signed by the runtime it runs as.
     let node = Arc::new(

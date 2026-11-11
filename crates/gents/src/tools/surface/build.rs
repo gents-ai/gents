@@ -11,10 +11,10 @@ use crate::tools::native::{
 };
 
 use super::modes::ToolCeiling;
-use crate::documents::{BashMode, FileToolMode};
 use super::policy::{meet_execution_mode, meet_network_mode, EndpointScope, ToolPolicyBash};
 use super::selection::CommandOutputLimits;
 use super::timeouts::{effective_bash_foreground, effective_cli_timeout_secs, ToolTimeouts};
+use crate::documents::{BashMode, FileToolMode};
 
 pub(super) fn downgrade_file_tools(
     agent_name: &str,

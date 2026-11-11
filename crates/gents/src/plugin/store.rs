@@ -110,14 +110,11 @@ impl InstalledPlugin {
     /// The data grant this record carries, or `None` when the plugin declares
     /// no data.
     pub fn data_grant(&self) -> Option<PluginData> {
-        self.declaration
-            .data
-            .clone()
-            .map(|declaration| PluginData {
-                declaration,
-                collection_fields: self.data_collection_fields.clone(),
-                unique_keys: self.data_unique_keys.clone(),
-            })
+        self.declaration.data.clone().map(|declaration| PluginData {
+            declaration,
+            collection_fields: self.data_collection_fields.clone(),
+            unique_keys: self.data_unique_keys.clone(),
+        })
     }
 
     pub fn ceiling(&self) -> crate::plugin::Manifold {

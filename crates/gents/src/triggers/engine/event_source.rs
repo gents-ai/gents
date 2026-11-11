@@ -13,8 +13,8 @@ use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 
 use crate::runtime::snapshot::ActiveRuntimeSnapshot;
-use crate::triggers::event_delivery::{EventDeliveryRuntimeContract, EventDeliverySourceContract};
 use crate::store::subscription_source::UpdateSubscriptionSource;
+use crate::triggers::event_delivery::{EventDeliveryRuntimeContract, EventDeliverySourceContract};
 
 use super::{FireIntent, TriggerSource};
 use crate::documents::task_delivery::TriggerKind;

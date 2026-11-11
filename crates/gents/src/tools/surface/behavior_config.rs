@@ -10,11 +10,11 @@ use super::build::{
     enabled_mcp_service_ids, measured_available_mcp_service_ids,
 };
 use super::modes::ToolCeiling;
-use crate::documents::{BashMode, FileToolMode};
 use super::policy::{EndpointScope, RuntimeToolAvailability, ToolPolicySurface};
 use super::selection::{BackgroundToolConfig, CustomToolFactory, ResolvedToolSelection};
 use super::ToolSurface;
 use crate::documents::{AgentToolConfig, QueryToolDecl, WriteToolDecl};
+use crate::documents::{BashMode, FileToolMode};
 
 #[derive(Clone)]
 pub struct AgentToolSurfaceConfig {
@@ -169,10 +169,8 @@ impl AgentToolSurfaceConfig {
             &custom_tool_names,
         )?;
         if selection.enable_lsp {
-            crate::documents::LspConfigDocument::parse_operator(
-                selection.lsp_config.as_deref(),
-            )
-            .map_err(|err| anyhow::anyhow!("invalid lsp_config: {err}"))?;
+            crate::documents::LspConfigDocument::parse_operator(selection.lsp_config.as_deref())
+                .map_err(|err| anyhow::anyhow!("invalid lsp_config: {err}"))?;
         }
         let agent_policy = ToolPolicySurface::from_selection(&selection, &agent_tools);
         let ceiling_policy = ceiling.policy().clone();
@@ -535,10 +533,9 @@ impl AgentToolSurfaceConfig {
                 ..self.self_config.clone()
             },
             lsp: effective_policy.lsp.then(|| {
-                let doc = crate::documents::LspConfigDocument::parse_operator(
-                    self.lsp_config.as_deref(),
-                )
-                .unwrap_or_default();
+                let doc =
+                    crate::documents::LspConfigDocument::parse_operator(self.lsp_config.as_deref())
+                        .unwrap_or_default();
                 let servers = crate::tools::native::lsp::merge_catalog(self.lsp_config.as_deref());
                 let workspace = self
                     .host_tools

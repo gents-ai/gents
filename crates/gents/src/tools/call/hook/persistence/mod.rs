@@ -6,12 +6,12 @@ use serde::Deserialize;
 use serde_json::json;
 use tracing::Instrument;
 
+use crate::session::tool_call_state::CancelCause;
 use crate::tools::background::status::r4c_args::{ListBackgroundToolsArgs, ReadToolOutputArgs};
 use crate::tools::background::status::{
     BackgroundToolArgs, CancelToolArgs, ProcessControlScope, ReadToolOutputOutcome, WaitToolArgs,
 };
 use crate::tools::call::lifecycle::query::load_tool_call_result;
-use crate::session::tool_call_state::CancelCause;
 use crate::tools::call::lifecycle::{FailureClass, ToolCallLifecycle};
 use crate::truncation::{truncate_text, TruncationMode};
 use gents_protocol::tool_call::AwaitMode;

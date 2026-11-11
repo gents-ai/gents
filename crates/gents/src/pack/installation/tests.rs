@@ -3721,9 +3721,9 @@ async fn pinned_plugin_references_match_executable_model_before_install_or_updat
     .await
     .unwrap();
     assert_eq!(cases.len(), 5);
-    let bytes = crate::plugin::test_fixtures::build_plugin_afb(&crate::plugin::test_fixtures::constant_output_wat(
-        br#"{"ok":true}"#,
-    ));
+    let bytes = crate::plugin::test_fixtures::build_plugin_afb(
+        &crate::plugin::test_fixtures::constant_output_wat(br#"{"ok":true}"#),
+    );
     let digest = format!(
         "sha256:{}",
         crate::plugin::store::content_digest_hex(&bytes)
@@ -3835,12 +3835,12 @@ async fn failed_transaction_begin_restores_the_previous_plugin_record() {
     let home = tempfile::tempdir().unwrap();
     let (node, access) = dependency_fixture().await;
     let manifest = plugin_pack_manifest("begin_failure", "documents", &["web_search"]);
-    let old = crate::plugin::test_fixtures::build_plugin_afb(&crate::plugin::test_fixtures::constant_output_wat(
-        br#"{"version":1}"#,
-    ));
-    let new = crate::plugin::test_fixtures::build_plugin_afb(&crate::plugin::test_fixtures::constant_output_wat(
-        br#"{"version":2}"#,
-    ));
+    let old = crate::plugin::test_fixtures::build_plugin_afb(
+        &crate::plugin::test_fixtures::constant_output_wat(br#"{"version":1}"#),
+    );
+    let new = crate::plugin::test_fixtures::build_plugin_afb(
+        &crate::plugin::test_fixtures::constant_output_wat(br#"{"version":2}"#),
+    );
     let config: PackConfig = serde_json::from_value(json!({"node": {"node_did": OWNER}})).unwrap();
     let bindings = crate::pack::PackInferenceBindings::new();
     let assets = |bytes| BTreeMap::from([("plugins/web_search.afb".to_owned(), bytes)]);
@@ -4035,9 +4035,9 @@ async fn cancelling_pack_install_caller_does_not_cancel_owned_commit() {
     let home = tempfile::tempdir().unwrap();
     let (node, access) = dependency_fixture().await;
     let manifest = plugin_pack_manifest("cancelled_caller", "documents", &["web_search"]);
-    let bytes = crate::plugin::test_fixtures::build_plugin_afb(&crate::plugin::test_fixtures::constant_output_wat(
-        br#"{"ok":true}"#,
-    ));
+    let bytes = crate::plugin::test_fixtures::build_plugin_afb(
+        &crate::plugin::test_fixtures::constant_output_wat(br#"{"ok":true}"#),
+    );
     let expected = format!(
         "sha256:{}",
         crate::plugin::store::content_digest_hex(&bytes)
@@ -4230,9 +4230,9 @@ async fn installed_plugin_pin_is_rechecked_at_graph_commit() {
     let (updated_dir, _, _) = crate::pack::plugin_lifecycle::tests::fixture("2.0.0", false);
     std::fs::write(
         updated_dir.path().join("source/plugins/native_echo.afb"),
-        crate::plugin::test_fixtures::build_plugin_afb(&crate::plugin::test_fixtures::constant_output_wat(
-            br#"{"changed":true}"#,
-        )),
+        crate::plugin::test_fixtures::build_plugin_afb(
+            &crate::plugin::test_fixtures::constant_output_wat(br#"{"changed":true}"#),
+        ),
     )
     .unwrap();
     let (packed, _) = crate::pack::archive::pack_dir(&updated_dir.path().join("source")).unwrap();
@@ -4358,9 +4358,9 @@ async fn installed_plugin_pin_stays_locked_through_document_commit() {
     let (updated_dir, _, _) = crate::pack::plugin_lifecycle::tests::fixture("2.0.0", false);
     std::fs::write(
         updated_dir.path().join("source/plugins/native_echo.afb"),
-        crate::plugin::test_fixtures::build_plugin_afb(&crate::plugin::test_fixtures::constant_output_wat(
-            br#"{"changed":true}"#,
-        )),
+        crate::plugin::test_fixtures::build_plugin_afb(
+            &crate::plugin::test_fixtures::constant_output_wat(br#"{"changed":true}"#),
+        ),
     )
     .unwrap();
     let (packed, _) = crate::pack::archive::pack_dir(&updated_dir.path().join("source")).unwrap();
@@ -4666,9 +4666,9 @@ async fn committed_ack_timeout_retains_staged_plugin_records() {
     let home = tempfile::tempdir().unwrap();
     let manifest = plugin_pack_manifest("ack_timeout", "documents", &["web_search"]);
     let bytes = tokio::task::spawn_blocking(|| {
-        crate::plugin::test_fixtures::build_plugin_afb(&crate::plugin::test_fixtures::constant_output_wat(
-            br#"{"version":2}"#,
-        ))
+        crate::plugin::test_fixtures::build_plugin_afb(
+            &crate::plugin::test_fixtures::constant_output_wat(br#"{"version":2}"#),
+        )
     })
     .await
     .unwrap();

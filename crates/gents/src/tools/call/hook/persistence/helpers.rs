@@ -604,8 +604,7 @@ mod tests {
             let (bounded, presentation) = bounded_tool_result_with_presentation(tool, raw, &limits);
             let presentation = presentation.expect("CRLF input should truncate");
             assert_eq!(
-                crate::session::tool_presentation::render_presentation(raw, &presentation)
-                    .unwrap(),
+                crate::session::tool_presentation::render_presentation(raw, &presentation).unwrap(),
                 bounded
             );
         }
@@ -660,8 +659,7 @@ mod tests {
             bounded_tool_result_with_presentation("wait_process", raw, &limits);
         let presentation = presentation.expect("zero budget should truncate");
         assert_eq!(
-            crate::session::tool_presentation::render_presentation(raw, &presentation)
-                .unwrap(),
+            crate::session::tool_presentation::render_presentation(raw, &presentation).unwrap(),
             bounded
         );
     }

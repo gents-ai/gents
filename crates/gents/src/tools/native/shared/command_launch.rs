@@ -112,8 +112,8 @@ pub(super) async fn prepare_command_launch(
         }
     }
     let artifact = if policy.mode == CommandExecutionMode::ArtifactWrite {
-        let scope = crate::tools::runtime_context::current_tool_runtime_context()
-            .ok_or_else(|| {
+        let scope =
+            crate::tools::runtime_context::current_tool_runtime_context().ok_or_else(|| {
                 artifact_policy_denial("artifact_write requires a live sealed workspace request")
             })?;
         if scope.workspace_authority != Some(WorkspaceAuthority::ReadOnly) {

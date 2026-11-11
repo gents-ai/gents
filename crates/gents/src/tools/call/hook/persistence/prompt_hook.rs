@@ -2,8 +2,8 @@ use super::*;
 use crate::tools::call::hook::RetainedStopReceipt;
 use crate::tools::call::hook::{decide_persistence_outcome, FailurePolicy, PolicyDecision};
 use gents_protocol::tool_names::{
-    AGENT_NEW_TOOL_NAME, CANCEL_PROCESS_TOOL_NAME, LIST_PROCESSES_TOOL_NAME, READ_PROCESS_TOOL_NAME,
-    SPAWN_PROCESS_TOOL_NAME, WAIT_PROCESS_TOOL_NAME,
+    AGENT_NEW_TOOL_NAME, CANCEL_PROCESS_TOOL_NAME, LIST_PROCESSES_TOOL_NAME,
+    READ_PROCESS_TOOL_NAME, SPAWN_PROCESS_TOOL_NAME, WAIT_PROCESS_TOOL_NAME,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,9 +22,18 @@ pub(crate) enum HookOwnedTool {
 
 impl HookOwnedTool {
     pub(crate) const ROUTES: [(&'static str, Self); 14] = [
-        (gents_protocol::goal_names::GET_GOAL_TOOL_NAME, Self::GetGoal),
-        (gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME, Self::UpdateGoal),
-        (gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME, Self::CreateGoal),
+        (
+            gents_protocol::goal_names::GET_GOAL_TOOL_NAME,
+            Self::GetGoal,
+        ),
+        (
+            gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME,
+            Self::UpdateGoal,
+        ),
+        (
+            gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME,
+            Self::CreateGoal,
+        ),
         (
             gents_protocol::tool_names::AGENT_INTERRUPT_TOOL_NAME,
             Self::AgentControl,

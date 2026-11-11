@@ -7,12 +7,12 @@ use crate::lean_vocab_test::{
     lean_recovery_sweep_cases, lean_task_hook_recovery_cases, LeanCommandResult, LeanTaskHook,
 };
 use crate::request::lifecycle::{ExecutionOrigin, RequestLifecycle, TriggerLineage};
+use crate::store::identity::{KeyIdentity, NodeIdentity};
+use crate::tools::call::hook::BackgroundExecutionRegistry;
 use crate::tools::call::task_hooks::{
     recover_task_hook_records, HookCommandResult, RecordedHookAttempt, TaskHookRecord,
     TaskHookRecordStore,
 };
-use crate::store::identity::{KeyIdentity, NodeIdentity};
-use crate::tools::call::hook::BackgroundExecutionRegistry;
 
 pub(super) struct Fixture {
     pub(super) node: Arc<defra_node::Node>,

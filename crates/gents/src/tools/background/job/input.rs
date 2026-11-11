@@ -20,6 +20,7 @@ use crate::plugin::job_calls::job_state;
 use crate::provider_usage::{sum_charged_from_persisted_parts, sum_persisted_usage_columns};
 use crate::request::admission::load_request_context;
 use crate::request::binding::load_agent_request_by_doc_id_with_access;
+use crate::session::tool_call_state::ToolCallState;
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn, ConfigRead};
 use crate::store::graphql::{escape_graphql_string, graphql_string_list_literal};
 use crate::tools::background::job::admit::{meet, StepChild};
@@ -29,12 +30,11 @@ use crate::tools::background::job::driver::JobRuntime;
 use crate::tools::background::job::effects::scratch_name;
 use crate::tools::background::job::keys::decode_job_retry_key;
 use crate::tools::background::job::records::{read_pin, read_progress, read_step_state};
-use gents_protocol::job_settings::effective_ceiling;
 use crate::tools::background::job::JobBinding;
 use crate::tools::background::status::caused_request_terminals_in_txn;
 use crate::tools::call::lifecycle::{load_tool_call_arguments, CausedRequestTerminal};
-use crate::session::tool_call_state::ToolCallState;
 use crate::tools::workspace::request_workspace_cwd;
+use gents_protocol::job_settings::effective_ceiling;
 use gents_protocol::row::AgentRequest;
 
 #[cfg(test)]

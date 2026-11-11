@@ -35,14 +35,14 @@ use super::records::{
     read_step_state, write_pin_in_txn, write_progress_in_txn, write_step_state_in_txn,
     HostProgressFacts,
 };
-use gents_protocol::job_settings::effective_ceiling;
 use super::JobBinding;
-use crate::plugin::data::StampContext;
 use crate::plugin::data::DataCaller;
-use crate::plugin::store::PluginData;
+use crate::plugin::data::StampContext;
 use crate::plugin::job_calls::JobCaller;
 use crate::plugin::store::InstalledPlugin;
+use crate::plugin::store::PluginData;
 use crate::plugin::PluginVerdict;
+use crate::session::tool_call_state::ToolCallState;
 use crate::store::config_client::ConfigAccess;
 use crate::tools::background::status::ProcessControlScope;
 use crate::tools::call::hook::persistence::count_live_backgrounded_rows_in;
@@ -51,10 +51,10 @@ use crate::tools::call::lifecycle::delivery::PluginToolWrites;
 use crate::tools::call::lifecycle::plugin_receipt::decide;
 use crate::tools::call::lifecycle::PluginJobTerminal;
 use crate::tools::call::lifecycle::{FailureClass, ToolCallLifecycle};
-use crate::session::tool_call_state::ToolCallState;
 use crate::tools::call::lifecycle::{ReceiptDecision, ToolRowKind};
 use crate::tools::surface::EndpointScope;
 use gents_protocol::job::MAX_BACKGROUNDED_TOOLS_PER_PARENT;
+use gents_protocol::job_settings::effective_ceiling;
 use gents_protocol::request_lifecycle::SessionMessageCause;
 use gents_protocol::tool_call::AwaitMode;
 

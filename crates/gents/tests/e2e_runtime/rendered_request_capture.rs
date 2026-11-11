@@ -3377,7 +3377,11 @@ impl OwnedCaptureFixture {
     }
 
     async fn wait_for_goal_observation(&self, session_id: &str) {
-        let mut changes = gents::store::subscription_source::subscribe_collections(&self.node, ["GoalObservation"]).unwrap();
+        let mut changes = gents::store::subscription_source::subscribe_collections(
+            &self.node,
+            ["GoalObservation"],
+        )
+        .unwrap();
         let query = format!(
             r#"{{ GoalObservation(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
             escape_graphql_string(session_id)

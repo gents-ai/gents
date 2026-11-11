@@ -1,12 +1,12 @@
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
+use gents::documents::inference_defaults::ReasoningEffort;
 use gents::inference::auth::credential::{resolve_oauth_credential, AccountPick};
 use gents::inference::backends::setup::{
     connection_spec, model_option, InferenceModelOption, InferenceProviderId,
     RecommendedNumberControl, RecommendedReasoningControl,
 };
-use gents::documents::inference_defaults::ReasoningEffort;
 
 use crate::config_writes::ConfigAccess;
 use crate::interactive_backend::{prompt_line, prompt_line_default, PickedConnection};

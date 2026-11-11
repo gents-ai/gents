@@ -1,9 +1,9 @@
 use super::*;
 use crate::goal::continuation::{goal_continuation_identity, prepare_goal_continuation};
-use gents_protocol::goal_names::GOAL_TRIGGER_KIND;
 use crate::store::identity::request_receipt::{
     verify_request_receipt_signature, verify_runtime_local_control_receipt,
 };
+use gents_protocol::goal_names::GOAL_TRIGGER_KIND;
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
 use gents_protocol::row::AgentRequestRow;
 

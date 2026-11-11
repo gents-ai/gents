@@ -42,9 +42,9 @@ pub mod task_delivery;
 pub mod task_goal_declaration;
 mod task_validation;
 pub mod template;
+pub(crate) mod tool_limits;
 mod tool_modes;
 mod tools;
-pub(crate) mod tool_limits;
 
 pub use tool_modes::{BashMode, FileToolMode};
 mod trigger;
@@ -83,11 +83,11 @@ pub use eval_definition::{
     EvalFixtureFile, EvalFixtures, EvalReducer, EvalSplit, EvalStage, EvalSubject, EvalSubjectKind,
     EvalTier, LLM_JUDGE_CHECK,
 };
-pub use lsp_catalog::{builtin_catalog, CatalogServer};
-pub use lsp_config::{apply_overrides, LspConfigDocument};
 pub use installation::{
     ProjectionAcpBinding, ProjectionAcpObservation, RepositoryPlacement, ToolServiceRegistry,
 };
+pub use lsp_catalog::{builtin_catalog, CatalogServer};
+pub use lsp_config::{apply_overrides, LspConfigDocument};
 pub use node_document_publication::publish_node_child_in_txn;
 pub(crate) use node_document_publication::publish_secret_configuration_in_txn;
 pub use pack_config::PackConfig;
@@ -137,8 +137,8 @@ pub use surface_tool::{
 pub(crate) use surface_tool::{
     validate_datastore_surface, DatastoreSurfaceScope, DatastoreToolSource,
 };
-pub use tools::{load_agent_context_and_tools_in_txn, load_agent_tools_in_txn};
 pub use tools::write_tools_document;
+pub use tools::{load_agent_context_and_tools_in_txn, load_agent_tools_in_txn};
 pub use tools::{
     AgentTools, BashTools, BuiltInTools, CliTool, DatastoreTools, FileTools, HostTools,
     IntegrationTools, LspTools, PluginToolRef, RemoteServiceTools, RemoteToolStyle, RemoteTools,

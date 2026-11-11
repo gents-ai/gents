@@ -764,38 +764,37 @@ async fn read_only_workspace_authority_denies_file_writes() {
     let root = temp_root("gents-workspace-ro-write");
     std::fs::write(root.join("file.txt"), "hello").unwrap();
     let writer = WriteFileTool::new(ToolContext::new(root.clone(), true).unwrap());
-    let error =
-        crate::tools::runtime_context::scope_request_tool_execution_with_workspace_overlay(
-            None,
-            tokio_util::sync::CancellationToken::new(),
-            crate::tools::runtime_context::ToolWorkspaceScope {
-                runtime_home: None,
-                workspace_cwd: Some(root.clone()),
-                workspace_root: Some(std::fs::canonicalize(&root).unwrap()),
-                workspace_authority: Some(WorkspaceAuthority::ReadOnly),
-                workspace_artifact: None,
-            },
-            None,
-            None,
-            None,
-            Default::default(),
-            false,
-            async {
-                crate::inference::llm::tool::Tool::call(
-                    &writer,
-                    WriteFileArgs {
-                        path: "file.txt".to_string(),
-                        content: "nope".to_string(),
-                        raw_json: false,
-                        expected_content_hash: None,
-                        overwrite: true,
-                    },
-                )
-                .await
-            },
-        )
-        .await
-        .expect_err("ReadOnly workspace authority must deny write_file");
+    let error = crate::tools::runtime_context::scope_request_tool_execution_with_workspace_overlay(
+        None,
+        tokio_util::sync::CancellationToken::new(),
+        crate::tools::runtime_context::ToolWorkspaceScope {
+            runtime_home: None,
+            workspace_cwd: Some(root.clone()),
+            workspace_root: Some(std::fs::canonicalize(&root).unwrap()),
+            workspace_authority: Some(WorkspaceAuthority::ReadOnly),
+            workspace_artifact: None,
+        },
+        None,
+        None,
+        None,
+        Default::default(),
+        false,
+        async {
+            crate::inference::llm::tool::Tool::call(
+                &writer,
+                WriteFileArgs {
+                    path: "file.txt".to_string(),
+                    content: "nope".to_string(),
+                    raw_json: false,
+                    expected_content_hash: None,
+                    overwrite: true,
+                },
+            )
+            .await
+        },
+    )
+    .await
+    .expect_err("ReadOnly workspace authority must deny write_file");
     assert!(
         error.to_string().contains("does not allow file writes"),
         "{error}"
@@ -818,19 +817,25 @@ async fn command_definition_uses_the_current_workspace_policy() {
     );
     let describe = || crate::inference::llm::tool::Tool::definition(&tool, String::new());
     assert!(describe().await.description.contains("unrestricted policy"));
-    let description = crate::tools::runtime_context::scope_request_tool_execution_with_workspace_overlay(
-        None,
-        tokio_util::sync::CancellationToken::new(),
-        crate::tools::runtime_context::ToolWorkspaceScope {
-            runtime_home: None,
-            workspace_cwd: Some(root.clone()),
-            workspace_root: Some(std::fs::canonicalize(&root).unwrap()),
-            workspace_authority: Some(WorkspaceAuthority::ReadWrite),
-            workspace_artifact: None,
-        },
-        None, None, None, Default::default(), false,
-        async { describe().await.description },
-    ).await;
+    let description =
+        crate::tools::runtime_context::scope_request_tool_execution_with_workspace_overlay(
+            None,
+            tokio_util::sync::CancellationToken::new(),
+            crate::tools::runtime_context::ToolWorkspaceScope {
+                runtime_home: None,
+                workspace_cwd: Some(root.clone()),
+                workspace_root: Some(std::fs::canonicalize(&root).unwrap()),
+                workspace_authority: Some(WorkspaceAuthority::ReadWrite),
+                workspace_artifact: None,
+            },
+            None,
+            None,
+            None,
+            Default::default(),
+            false,
+            async { describe().await.description },
+        )
+        .await;
     assert!(
         description.contains("workspace_write policy"),
         "{description}"
@@ -2735,21 +2740,40 @@ async fn generated_artifact_spawn_cases_drive_live_foreground_and_background_lau
         );
         let operation = async move {
             crate::tools::runtime_context::scope_request_tool_execution_with_workspace_overlay(
-                None, tokio_util::sync::CancellationToken::new(),
+                None,
+                tokio_util::sync::CancellationToken::new(),
                 crate::tools::runtime_context::ToolWorkspaceScope {
                     runtime_home: None,
-                    workspace_cwd: Some(root.clone()), workspace_root: Some(root.clone()),
-                    workspace_authority: Some(WorkspaceAuthority::ReadOnly), workspace_artifact: grant,
-                }, None, None, None, Default::default(), background,
+                    workspace_cwd: Some(root.clone()),
+                    workspace_root: Some(root.clone()),
+                    workspace_authority: Some(WorkspaceAuthority::ReadOnly),
+                    workspace_artifact: grant,
+                },
+                None,
+                None,
+                None,
+                Default::default(),
+                background,
                 async move {
                     let context = ToolContext::new(root, false).unwrap();
                     let policy = CommandExecutionPolicy::write_capable()
                         .with_mode(CommandExecutionMode::ArtifactWrite)
                         .with_network_mode(CommandNetworkMode::Disabled);
-                    super::shared::run_command(&context, "bash", "/bin/sh", &["-c".into(), script],
-                        None, Duration::from_secs(10), &policy, false, DEFAULT_MAX_COMMAND_CHARS).await
+                    super::shared::run_command(
+                        &context,
+                        "bash",
+                        "/bin/sh",
+                        &["-c".into(), script],
+                        None,
+                        Duration::from_secs(10),
+                        &policy,
+                        false,
+                        DEFAULT_MAX_COMMAND_CHARS,
+                    )
+                    .await
                 },
-            ).await
+            )
+            .await
         };
         let result = if background {
             tokio::spawn(operation).await.unwrap()
@@ -2936,16 +2960,34 @@ async fn run_artifact_compiler_fixture(build_script: Option<&str>) {
     );
     let mut outputs = Vec::new();
     for subcommand in ["check", "test"] {
-        let result = crate::tools::runtime_context::scope_request_tool_execution_with_workspace_overlay(
-            None, tokio_util::sync::CancellationToken::new(),
-            crate::tools::runtime_context::ToolWorkspaceScope {
-                runtime_home: None,
-                workspace_cwd: Some(root.clone()), workspace_root: Some(root.clone()),
-                workspace_authority: Some(WorkspaceAuthority::ReadOnly), workspace_artifact: Some(fx.grant.clone()),
-            }, None, None, None, Default::default(), false,
-            crate::inference::llm::tool::Tool::call(&tool, BashArgs { command: "cargo".into(), args: vec![subcommand.into(), "--locked".into(), "--offline".into()],
-                cwd: None, timeout_secs: Some(120), raw_json: true }),
-        ).await;
+        let result =
+            crate::tools::runtime_context::scope_request_tool_execution_with_workspace_overlay(
+                None,
+                tokio_util::sync::CancellationToken::new(),
+                crate::tools::runtime_context::ToolWorkspaceScope {
+                    runtime_home: None,
+                    workspace_cwd: Some(root.clone()),
+                    workspace_root: Some(root.clone()),
+                    workspace_authority: Some(WorkspaceAuthority::ReadOnly),
+                    workspace_artifact: Some(fx.grant.clone()),
+                },
+                None,
+                None,
+                None,
+                Default::default(),
+                false,
+                crate::inference::llm::tool::Tool::call(
+                    &tool,
+                    BashArgs {
+                        command: "cargo".into(),
+                        args: vec![subcommand.into(), "--locked".into(), "--offline".into()],
+                        cwd: None,
+                        timeout_secs: Some(120),
+                        raw_json: true,
+                    },
+                ),
+            )
+            .await;
         outputs.push(
             serde_json::json!({"command": ["cargo", subcommand, "--locked", "--offline"],
             "result": result.as_ref().map(String::as_str).map_err(ToString::to_string)}),

@@ -1046,7 +1046,9 @@ async fn first_seen_source_create_materializes_owner_invocation() {
 }
 
 fn artifact_bytes_for_id() -> Vec<u8> {
-    crate::plugin::test_fixtures::build_plugin_afb(&crate::plugin::test_fixtures::constant_output_wat(b"{}"))
+    crate::plugin::test_fixtures::build_plugin_afb(
+        &crate::plugin::test_fixtures::constant_output_wat(b"{}"),
+    )
 }
 
 fn module_doc(wasm: &[u8], args: &serde_json::Value, signer: &str) -> CallbackModuleDoc {
@@ -1075,9 +1077,9 @@ fn trusted(signer: &str) -> BTreeSet<String> {
 }
 
 fn wat_returns_json(json: &str) -> Vec<u8> {
-    crate::plugin::test_fixtures::build_plugin_afb(&crate::plugin::test_fixtures::constant_output_wat(
-        json.as_bytes(),
-    ))
+    crate::plugin::test_fixtures::build_plugin_afb(
+        &crate::plugin::test_fixtures::constant_output_wat(json.as_bytes()),
+    )
 }
 
 fn tight_limits(fuel: u64, pages: u32, max_in: usize, max_out: usize) -> CallbackModuleLimits {

@@ -220,7 +220,8 @@ pub(crate) async fn select_fold_in_claim_txn(
                 .context("pending AgentRequest row is missing _docID")?,
         );
     }
-    let order = crate::request::lifecycle::arrival_order::request_arrival_order(txn, &doc_ids).await?;
+    let order =
+        crate::request::lifecycle::arrival_order::request_arrival_order(txn, &doc_ids).await?;
     let Some(head_position) = order.iter().position(|doc| doc == &head.doc_id) else {
         return Ok(Vec::new());
     };
@@ -501,7 +502,8 @@ pub(crate) async fn load_consumed_folded_inputs(
                 }
                 let docs = by_doc.keys().cloned().collect::<Vec<_>>();
                 let order =
-                    crate::request::lifecycle::arrival_order::request_arrival_order(txn, &docs).await?;
+                    crate::request::lifecycle::arrival_order::request_arrival_order(txn, &docs)
+                        .await?;
                 anyhow::ensure!(
                     order.len() == docs.len(),
                     "folded requests of {} lack a queue arrival",

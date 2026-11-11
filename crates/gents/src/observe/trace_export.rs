@@ -5,8 +5,8 @@ use gents_protocol::transcript::{present_message, PersistedMessagePresentation};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::session::SequencedMessage;
 use crate::session::tool_call_state::ToolCallState;
+use crate::session::SequencedMessage;
 
 pub use crate::tools::call::lifecycle::FailureClass as ToolFailureClass;
 

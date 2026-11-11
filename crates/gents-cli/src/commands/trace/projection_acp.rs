@@ -2,12 +2,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents_protocol::adapter_projection_kind::AdapterProjectionKind;
 use gents::observe::run_timeline::{
     RunTimeline, RunTimelineEvent, RunTimelineRows, TimelineRequestEvent, TimelineRequestRow,
     TimelineToolCallEvent,
 };
 use gents::store::graphql::escape_graphql_string;
+use gents_protocol::adapter_projection_kind::AdapterProjectionKind;
 use serde::Deserialize;
 use serde_json::json;
 

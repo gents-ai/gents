@@ -82,7 +82,9 @@ impl OutputObligationGate {
         let access = crate::ConfigAccess::local_as(node, identity::Did::new(&request.agent_did)?);
         let mut request_doc_ids = vec![request.doc_id.clone()];
         let mut triggered = request.has_automated_trigger_lineage();
-        if request.caused_by_trigger_kind.as_deref() == Some(gents_protocol::goal_names::GOAL_TRIGGER_KIND) {
+        if request.caused_by_trigger_kind.as_deref()
+            == Some(gents_protocol::goal_names::GOAL_TRIGGER_KIND)
+        {
             use gents_protocol::document_query::{
                 fields::agent_request as fields, Filter, Query, Selection,
             };

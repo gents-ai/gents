@@ -136,7 +136,9 @@ fn next_sweep_interval(
 
 pub async fn run_client_member_renewals(node: Arc<EmbeddedNode>, identity: Arc<dyn NodeIdentity>) {
     let mut state = MemberRenewalState::default();
-    let mut changes = crate::store::subscription_source::subscribe_collections(&node, ["EnrollmentRenewalOffer"]).ok();
+    let mut changes =
+        crate::store::subscription_source::subscribe_collections(&node, ["EnrollmentRenewalOffer"])
+            .ok();
     loop {
         if state.due() {
             if let Err(error) = sweep_member_renewals(&node, identity.as_ref(), &mut state).await {

@@ -2,8 +2,8 @@ use super::super::background_receipt::{
     ensure_background_receipt_before_bridge_close, BackgroundReceiptKey,
 };
 use super::Terminalization;
-use crate::store::graphql::escape_graphql_string;
 use crate::session::tool_call_state::ToolCallState;
+use crate::store::graphql::escape_graphql_string;
 use anyhow::{Context, Result};
 use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole, OutputOutcome};
 

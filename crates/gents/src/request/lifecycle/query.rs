@@ -218,12 +218,14 @@ pub(super) async fn claim_queue_allows(
     else {
         return Ok(false);
     };
-    observations.retain(|row| crate::request::lifecycle::arrival_order::claim_conflict(&candidate, row));
+    observations
+        .retain(|row| crate::request::lifecycle::arrival_order::claim_conflict(&candidate, row));
     let doc_ids = observations
         .iter()
         .map(|row| row.document.clone())
         .collect::<Vec<_>>();
-    let order = crate::request::lifecycle::arrival_order::request_arrival_order(txn, &doc_ids).await?;
+    let order =
+        crate::request::lifecycle::arrival_order::request_arrival_order(txn, &doc_ids).await?;
     let positions = order
         .iter()
         .enumerate()
@@ -236,10 +238,7 @@ pub(super) async fn claim_queue_allows(
         .iter()
         .find(|row| row.document == request.doc_id)
         .unwrap();
-    Ok(crate::request::lifecycle::arrival_order::observed_claim_allowed(
-        candidate,
-        &observations,
-    ))
+    Ok(crate::request::lifecycle::arrival_order::observed_claim_allowed(candidate, &observations))
 }
 
 async fn claim_receipts_for_request_ids(

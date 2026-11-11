@@ -192,7 +192,8 @@ fn durable_delivery_predicates_match_executable_lean_owners() {
     }
     for case in cases["queues"].as_array().unwrap() {
         let identity: FireIdentity = decode(&case["identity"]);
-        let rows: Vec<crate::request::lifecycle::arrival_order::ClaimObservation> = decode(&case["observations"]);
+        let rows: Vec<crate::request::lifecycle::arrival_order::ClaimObservation> =
+            decode(&case["observations"]);
         let candidate = rows
             .iter()
             .find(|row| row.document == identity.fire_key())

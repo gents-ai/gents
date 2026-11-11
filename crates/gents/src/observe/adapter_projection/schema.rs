@@ -3,8 +3,8 @@ use serde_json::{json, Value};
 use gents_protocol::adapter_projection_kind::AdapterProjectionKind;
 
 use super::{
-    atif, ADAPTER_PROJECTION_VERSION,
-    EXTERNAL_ADAPTER_CAPTURE_PROJECTION_ID, RUN_TIMELINE_PROJECTION_ID,
+    atif, ADAPTER_PROJECTION_VERSION, EXTERNAL_ADAPTER_CAPTURE_PROJECTION_ID,
+    RUN_TIMELINE_PROJECTION_ID,
 };
 
 mod native;

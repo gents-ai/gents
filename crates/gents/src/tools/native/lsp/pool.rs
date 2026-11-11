@@ -9,9 +9,9 @@ use crate::store::drop_cleanup::DropCleanup;
 use crate::tools::exec::{spawn_managed_process, ManagedExecKind, SpawnManagedProcessRequest};
 use crate::tools::native::prepare_managed_command;
 
-use crate::documents::CatalogServer;
 use super::client::LspClient;
 use super::LspToolConfig;
+use crate::documents::CatalogServer;
 
 const MAX_PER_SESSION: usize = 4;
 const MAX_GLOBAL: usize = 16;

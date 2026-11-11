@@ -122,7 +122,9 @@ impl DefraSessionHook {
                         ("interrupting", Some(request_id))
                     }
                     crate::tools::background::caused::KillOutcome::Cancelled => ("cancelled", None),
-                    crate::tools::background::caused::KillOutcome::Settled => ("already_terminal", None),
+                    crate::tools::background::caused::KillOutcome::Settled => {
+                        ("already_terminal", None)
+                    }
                 };
             let result = json_string(json!({
                 "ok": true,

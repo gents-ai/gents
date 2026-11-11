@@ -23,8 +23,8 @@ use super::control::{
 };
 use crate::plugin::executor::PluginExecutor;
 use crate::plugin::PluginVerdict;
-use crate::store::config_client::ConfigAccess;
 use crate::store::agent_identity_watch::AgentIdentityWatch;
+use crate::store::config_client::ConfigAccess;
 
 pub(super) use context::step_context_for;
 pub(super) use output::{guest_state_of, progress_of, scratch_of, settlement_of, writes_of};

@@ -7,10 +7,11 @@ use anyhow::Context as _;
 use defra_node::Node as EmbeddedNode;
 use tokio::sync::watch;
 
-use crate::inference::backends::health::{BackendHealthMap, BackendProberOptions};
 use crate::documents::inference_defaults::{
     DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
+use crate::documents::AgentToolConfig;
+use crate::inference::backends::health::{BackendHealthMap, BackendProberOptions};
 use crate::inference::resolved::{
     ResolvedAgent, DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS, DEFAULT_STREAM_BATCH_MS,
 };
@@ -21,24 +22,23 @@ use crate::store::schema::migration;
 use crate::tools::call::hook::{BackgroundExecutionRegistry, FailurePolicy};
 use crate::tools::mcp::health::HealthCheckerOptions;
 use crate::tools::mcp::pool::McpPool;
-use crate::documents::AgentToolConfig;
 use crate::tools::surface::{AgentToolSurfaceConfig, ResolvedToolSelection, ToolCeiling};
 
 mod builder;
 pub mod completion_retry;
 pub(crate) mod daemon;
 pub mod directory_projection;
-pub mod inference_read;
 pub(crate) mod document_view;
+pub mod inference_read;
 pub(crate) mod loop_stream;
 pub(crate) mod output_obligation;
 pub mod p2p_reconcile;
-pub mod session_commands;
-pub mod session_input_edit;
 pub(crate) mod principal_assembly;
 mod reconcile;
 pub mod retry;
 mod runtime;
+pub mod session_commands;
+pub mod session_input_edit;
 pub(crate) mod stream_processor;
 #[cfg(test)]
 mod supervision;

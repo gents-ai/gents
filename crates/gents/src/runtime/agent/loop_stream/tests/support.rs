@@ -574,8 +574,7 @@ where
     let node_did = request.node_did.clone();
     let agent_did = request.agent_did.clone();
     let request_id = request.request_id.clone();
-    let inherited =
-        crate::tools::runtime_context::current_tool_runtime_context().is_some();
+    let inherited = crate::tools::runtime_context::current_tool_runtime_context().is_some();
     let collection = crate::inference::rendered_request::scope::scope_request(scope, async move {
         futures::pin_mut!(stream);
         let doc_id = lifecycle.request().doc_id.clone();

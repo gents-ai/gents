@@ -219,7 +219,9 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
     ));
     assert!(process_alive(workers[0].1));
     assert!(process_alive(workers[1].1));
-    let mut changes = gents::store::subscription_source::subscribe_collections(&node, ["AgentToolControl"]).unwrap();
+    let mut changes =
+        gents::store::subscription_source::subscribe_collections(&node, ["AgentToolControl"])
+            .unwrap();
     let intent_doc_id = submit(&owner_access, &target)
         .await
         .expect("control must save a durable intent");

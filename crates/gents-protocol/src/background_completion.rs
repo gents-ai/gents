@@ -3,10 +3,7 @@ pub const BACKGROUND_COMPLETION_WAKE_PROMPT: &str =
 const BACKGROUND_COMPLETION_NOTIFICATION_MESSAGE_PREFIX: &str =
     "background-completion-notification:";
 
-pub fn background_completion_notification_message_key(
-    stable_id: &str,
-    kind: &str,
-) -> String {
+pub fn background_completion_notification_message_key(stable_id: &str, kind: &str) -> String {
     format!("{BACKGROUND_COMPLETION_NOTIFICATION_MESSAGE_PREFIX}{stable_id}:{kind}")
 }
 

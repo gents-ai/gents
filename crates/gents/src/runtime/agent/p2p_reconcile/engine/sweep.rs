@@ -34,7 +34,8 @@ pub async fn run_pairing_reconciler(
     let admin = EmbeddedRemoteP2pAdmin::new(node.clone());
     let store =
         GraphqlPairingStateStore::with_enrollment_authority(node.clone(), identity, enrollment);
-    let subscription = crate::store::subscription_source::subscribe_collections(&node, PAIRING_STATE_COLLECTIONS)?;
+    let subscription =
+        crate::store::subscription_source::subscribe_collections(&node, PAIRING_STATE_COLLECTIONS)?;
     let connections = node.subscribe(&[events::EventName::PeerConnection]);
 
     run_pairing_reconciler_loop(&admin, &store, subscription, connections, &cancel).await;

@@ -16,6 +16,7 @@ use serde_json::{Map, Value};
 
 use super::data::{Invocation, Stamp, StampContext};
 use crate::defra_node::Node as EmbeddedNode;
+use crate::session::tool_call_state::ToolCallState;
 use crate::store::config_client::ConfigAccess;
 use crate::store::graphql::graphql_string_list_literal;
 use crate::tools::background::job::input::derive_children;
@@ -24,7 +25,6 @@ use crate::tools::background::status::{
     ProcessControlScope, ReadToolOutputOutcome,
 };
 use crate::tools::call::lifecycle::CausedRequestTerminal;
-use crate::session::tool_call_state::ToolCallState;
 
 const MAX_REQUESTS_PER_ROUND: usize = 16;
 

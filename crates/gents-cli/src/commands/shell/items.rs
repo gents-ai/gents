@@ -14,8 +14,8 @@ use gents_protocol::message::{AssistantContent, Message, ToolResultContent, User
 use gents_protocol::output::rows::authored_message_key;
 use gents_protocol::output::{MessageBlock, MessageRole};
 use gents_protocol::row::{AgentToolCallRow, CompactionEntryRow};
-use gents_protocol::transcript::present_message;
 use gents_protocol::tool_names::{AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME};
+use gents_protocol::transcript::present_message;
 use gents_shell::app::ChatLine;
 use gents_shell::sample::{Opens, RunState, Running, Tone};
 use gents_shell::source::{Agent, Change, ChangeKind, Day, Session, SessionState};

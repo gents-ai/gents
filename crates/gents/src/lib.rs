@@ -590,8 +590,11 @@ pub mod test_support {
                 let wat = crate::plugin::test_fixtures::constant_output_wat(
                     &serde_json::to_vec(plugin_output).expect("encode plugin output"),
                 );
-                std::fs::write(&target, crate::plugin::test_fixtures::build_plugin_afb(&wat))
-                    .expect("write artifact");
+                std::fs::write(
+                    &target,
+                    crate::plugin::test_fixtures::build_plugin_afb(&wat),
+                )
+                .expect("write artifact");
             } else {
                 std::fs::copy(source.join(&path), &target)
                     .unwrap_or_else(|error| panic!("fixture {name:?} file {path:?}: {error}"));
@@ -711,6 +714,9 @@ pub use documents::automation::{
     MAX_EVENT_TRIGGER_GROUP_DOCS,
 };
 pub use documents::callback_secret_fields::reject_secret_bearing_callback_fields;
+pub use documents::inference_defaults::{
+    ReasoningEffort, DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+};
 pub use documents::task_delivery::TriggerKind;
 pub use documents::template::{
     check_template_vocabulary, parse_template_for_validation, render_template, TemplateError,
@@ -750,9 +756,6 @@ pub use inference::backends::registry::{
     HEALTHY_PROBE_STATUS, UNKNOWN_PROBE_STATUS,
 };
 pub use inference::compaction::CompactionStrategy;
-pub use documents::inference_defaults::{
-    ReasoningEffort, DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
-};
 pub use inference::resolved::{
     ResolvedAgent, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
     DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS, DEFAULT_MODEL_NAME,
@@ -765,9 +768,8 @@ pub use observe::adapter_projection::{
     adapter_projection_native_json_schema, build_adapter_projection,
     validate_adapter_projection_contract, AdapterProjection, AdapterProjectionContractError,
     AdapterProjectionEnvelope, AdapterProjectionEvalJsonlRecord, AdapterProjectionJsonlRecord,
-    AtifAgent, AtifFinalMetrics, AtifObservation, AtifObservationResult,
-    AtifStep, AtifStepSource, AtifToolCall, AtifTrajectory, ProjectionContext,
-    ProjectionRedactionMode, ATIF_SCHEMA_VERSION,
+    AtifAgent, AtifFinalMetrics, AtifObservation, AtifObservationResult, AtifStep, AtifStepSource,
+    AtifToolCall, AtifTrajectory, ProjectionContext, ProjectionRedactionMode, ATIF_SCHEMA_VERSION,
 };
 pub use observe::external_adapter_capture::{
     import_external_adapter_capture_to_derived_view, ExternalAdapterCapture, ExternalAdapterImport,

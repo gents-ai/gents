@@ -6,8 +6,8 @@ use self::langgraph::import_langgraph_capture;
 use self::multi_agent::import_multi_agent_capture;
 use self::validation::validate_external_adapter_capture_mapping;
 use crate::observe::adapter_projection::AdapterProjectionEnvelope;
-use gents_protocol::adapter_projection_kind::AdapterProjectionKind;
 use crate::observe::run_timeline::{TimelineRequestRow, TimelineSessionRow, TimelineToolCallRow};
+use gents_protocol::adapter_projection_kind::AdapterProjectionKind;
 
 pub(crate) mod langgraph;
 mod multi_agent;

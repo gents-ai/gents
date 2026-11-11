@@ -78,8 +78,8 @@ pub use root_publication::{
     set_workspace_root, set_workspace_root_with_readers, WorkspaceRootWriteError,
 };
 pub use runtime_context::ToolRuntimeContext;
-pub use selection::{resolve_goal_capabilities, CustomToolFactory, ResolvedToolSelection};
 pub(crate) use selection::BackgroundToolConfig;
+pub use selection::{resolve_goal_capabilities, CustomToolFactory, ResolvedToolSelection};
 pub use timeouts::{BackgroundTimeoutPolicy, BackgroundTimeouts, BoundedTimeout, ToolTimeouts};
 
 use rapidhash::{HashMapExt, RapidHashMap, RapidHashSet};
@@ -90,12 +90,15 @@ use crate::inference::llm::tool::ToolDyn;
 use anyhow::{Context, Result};
 
 use crate::documents::{AgentTargetDocument, AgentToolConfig, QueryToolDecl, WriteToolDecl};
-use crate::tools::builtin::defra_query::{build_defra_query_tool, BoundedQueryTool, CollectionScope};
+use crate::tools::builtin::defra_query::{
+    build_defra_query_tool, BoundedQueryTool, CollectionScope,
+};
 use crate::tools::builtin::defra_write::BoundedWriteTool;
 use crate::tools::mcp::meta::build_meta_tools;
 use crate::tools::native::{
     agent_tool_names, background_tool_names, build_agent_tools, build_background_tools,
-    build_context_budget_tool, build_goal_tools, build_session_history_tool, CliToolConfig, ToolSet,
+    build_context_budget_tool, build_goal_tools, build_session_history_tool, CliToolConfig,
+    ToolSet,
 };
 
 const DEFAULT_CLI_TIMEOUT_SECS: u64 = 10;

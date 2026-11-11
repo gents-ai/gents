@@ -371,7 +371,9 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
             .await;
             let args = match tool {
                 gents_protocol::goal_names::GET_GOAL_TOOL_NAME => "{}",
-                gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME => r#"{"objective":"Changed caller goal"}"#,
+                gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME => {
+                    r#"{"objective":"Changed caller goal"}"#
+                }
                 _ => r#"{"objective":"Original caller goal"}"#,
             };
             accept_hook_tool_call(&hook, "goal-context-call", tool, args, None).await;

@@ -2469,9 +2469,8 @@ fn explain_default_surface_calls_out_builtin_reads_and_defra_query_scope() {
         .policy
         .effective
         .get("built_in_read")
-        .is_some_and(
-            |names| names.contains(&gents_protocol::tool_names::CONTEXT_BUDGET_TOOL_NAME.to_string())
-        ));
+        .is_some_and(|names| names
+            .contains(&gents_protocol::tool_names::CONTEXT_BUDGET_TOOL_NAME.to_string())));
     assert!(explanation
         .unavailable
         .get("meta_mcp")
@@ -2502,9 +2501,11 @@ fn category_complete_ceiling_clamps_builtin_reads() {
     assert!(!explanation
         .tool_names
         .contains(&gents_protocol::tool_names::DEFRA_QUERY_TOOL_NAME.to_string()));
-    assert!(explanation.excluded.get("built_in_read").is_some_and(
-        |names| names.contains(&gents_protocol::tool_names::CONTEXT_BUDGET_TOOL_NAME.to_string())
-    ));
+    assert!(explanation
+        .excluded
+        .get("built_in_read")
+        .is_some_and(|names| names
+            .contains(&gents_protocol::tool_names::CONTEXT_BUDGET_TOOL_NAME.to_string())));
 }
 
 #[test]

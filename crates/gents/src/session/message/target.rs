@@ -3,8 +3,8 @@ use defra_node::Node as EmbeddedNode;
 
 use std::sync::Arc;
 
-use crate::store::config_client::ConfigAccess;
 use crate::documents::AgentToolConfig;
+use crate::store::config_client::ConfigAccess;
 use gents_protocol::request_lifecycle::SessionMessageTarget;
 use gents_protocol::session::SessionScope;
 

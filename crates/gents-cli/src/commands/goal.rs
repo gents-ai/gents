@@ -1,10 +1,10 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
-use gents_protocol::goal_status::GoalStatus;
 use gents::goal::{set_goal_from_access, GoalDocument};
 use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::escape_graphql_string;
 use gents_protocol::goal::GOAL_FIELDS;
+use gents_protocol::goal_status::GoalStatus;
 
 use crate::cli::args::{
     GoalCommand, GoalResumeArgs, GoalResumeOnArgs, GoalScopeArgs, GoalSetArgs, GoalShowArgs,

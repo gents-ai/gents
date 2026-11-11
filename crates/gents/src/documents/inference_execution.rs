@@ -125,9 +125,9 @@ impl InferenceExecution {
                 "InferenceExecution {execution_id} deadline_duration_secs must be at most {MAX_DEADLINE_DURATION_SECS} (100 years)"
             ));
         }
-        let liveness = self
-            .stream_liveness_timeout_secs
-            .unwrap_or(crate::documents::inference_defaults::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS as i64);
+        let liveness = self.stream_liveness_timeout_secs.unwrap_or(
+            crate::documents::inference_defaults::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS as i64,
+        );
         let deadline = self
             .deadline_duration_secs
             .unwrap_or(crate::documents::inference_defaults::DEFAULT_DEADLINE_DURATION_SECS as i64);

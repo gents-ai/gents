@@ -312,7 +312,10 @@ fn explain_goals(
         }
     }
     if surface.includes_goal_creation() {
-        builder.include_many("goal", [gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME.to_string()]);
+        builder.include_many(
+            "goal",
+            [gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME.to_string()],
+        );
     } else if config.goal_creation_requested() {
         builder.unavailable("goal", gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME);
     } else {
@@ -378,10 +381,7 @@ fn explain_builtin_reads(
             [gents_protocol::tool_names::SCHEMA_TOOL_NAME.to_string()],
         );
     } else {
-        builder.exclude(
-            "schema",
-            gents_protocol::tool_names::SCHEMA_TOOL_NAME,
-        );
+        builder.exclude("schema", gents_protocol::tool_names::SCHEMA_TOOL_NAME);
     }
     if surface.enable_p2p_tool {
         builder.include_many(
@@ -417,15 +417,9 @@ fn explain_builtin_reads(
             crate::tools::builtin::self_config::self_config_tool_names(&surface.self_config),
         );
     } else if config.self_config_requested() {
-        builder.unavailable(
-            "self_config",
-            gents_protocol::tool_names::CONFIG_TOOL_NAME,
-        );
+        builder.unavailable("self_config", gents_protocol::tool_names::CONFIG_TOOL_NAME);
     } else {
-        builder.exclude(
-            "self_config",
-            gents_protocol::tool_names::CONFIG_TOOL_NAME,
-        );
+        builder.exclude("self_config", gents_protocol::tool_names::CONFIG_TOOL_NAME);
     }
 
     if surface.lsp.is_some() {

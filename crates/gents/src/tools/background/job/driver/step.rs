@@ -29,10 +29,10 @@ use crate::plugin::store::{
     parse_coordinate, read_published_record, InstalledPlugin, PublishedPluginReadError,
 };
 use crate::plugin::GuestTrap;
+use crate::session::tool_call_state::ToolCallState;
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::tools::background::status::ProcessControlScope;
 use crate::tools::call::lifecycle::{PluginJobTerminal, ToolCallLifecycle};
-use crate::session::tool_call_state::ToolCallState;
 use gents_protocol::request_lifecycle::SessionMessageCause;
 use gents_protocol::session::SessionScope;
 

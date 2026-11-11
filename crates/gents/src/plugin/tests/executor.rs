@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use crate::plugin::test_fixtures::{build_plugin_pack, ECHO_WAT};
 use crate::documents::PluginToolRef;
 use crate::inference::llm::tool::ToolDyn;
 use crate::plugin::executor::PluginExecutor;
 use crate::plugin::store::{self, InstalledPlugin};
+use crate::plugin::test_fixtures::{build_plugin_pack, ECHO_WAT};
 use crate::plugin::tool::PluginTool;
 
 pub(crate) fn installed_echo() -> (tempfile::TempDir, InstalledPlugin) {

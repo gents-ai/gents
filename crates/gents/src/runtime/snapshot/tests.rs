@@ -4,8 +4,8 @@ use std::sync::Arc;
 use super::*;
 use crate::documents::{AgentToolConfig, ConcurrencyMode, ScheduleCadence};
 use crate::tools::surface::{
-    AgentToolSurfaceConfig, FileToolMode, ResolvedToolSelection,
-    RuntimeToolAvailability, ToolCeiling,
+    AgentToolSurfaceConfig, FileToolMode, ResolvedToolSelection, RuntimeToolAvailability,
+    ToolCeiling,
 };
 
 fn fingerprint_tool_surface(lsp_config: Option<String>) -> Arc<ToolSurface> {

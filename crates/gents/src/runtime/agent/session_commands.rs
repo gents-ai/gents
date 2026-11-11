@@ -183,8 +183,12 @@ pub(crate) async fn unanswered_goal_commands(
             .unwrap_or((None, false));
         let answered = match row["intent_json"].as_str() {
             Some(intent) => {
-                crate::goal::session_goal_control::has_verified_receipt(runtime, intent, raw_receipt)
-                    .await?
+                crate::goal::session_goal_control::has_verified_receipt(
+                    runtime,
+                    intent,
+                    raw_receipt,
+                )
+                .await?
             }
             None => raw_receipt.is_some(),
         };

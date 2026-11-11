@@ -9,10 +9,10 @@ use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::documents::AgentToolConfig;
 use crate::session::TxnCanonicalReader;
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::store::graphql::escape_graphql_string;
-use crate::documents::AgentToolConfig;
 use gents_protocol::session::SessionScope;
 
 const TEXT_CHARS: usize = 8_000;

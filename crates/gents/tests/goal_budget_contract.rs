@@ -24,11 +24,9 @@
 
 use gents::documents::task_goal_declaration::validate_task_goal_declaration;
 use gents::documents::{InferenceExecution, Task};
-use gents_protocol::goal_status::GoalStatus;
-use gents::goal::{
-    decide_goal_continuation, GoalDecision, GoalDocument, GoalRequestTerminal,
-};
+use gents::goal::{decide_goal_continuation, GoalDecision, GoalDocument, GoalRequestTerminal};
 use gents::{GOAL_SCHEMA, TASK_SCHEMA};
+use gents_protocol::goal_status::GoalStatus;
 
 const UNCAPPED_GOAL_JSON: &str = r#"{
     "_docID": "bafyrei_contract_goal_uncapped",

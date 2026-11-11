@@ -2,9 +2,9 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
-use gents_protocol::goal_status::GoalStatus;
-use gents::goal::{SessionGoalObservationState};
+use gents::goal::SessionGoalObservationState;
 use gents::NodeIdentity as _;
+use gents_protocol::goal_status::GoalStatus;
 use serde_json::{json, Value};
 use tokio_util::codec::LengthDelimitedCodec;
 use tokio_util::sync::CancellationToken;

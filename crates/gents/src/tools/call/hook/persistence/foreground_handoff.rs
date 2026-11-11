@@ -90,7 +90,10 @@ impl DefraSessionHook {
                 ),
             );
         };
-        let changes = match crate::store::subscription_source::subscribe_collections(&self.node, ["AgentToolCall"]) {
+        let changes = match crate::store::subscription_source::subscribe_collections(
+            &self.node,
+            ["AgentToolCall"],
+        ) {
             Ok(changes) => changes,
             Err(error) => {
                 tracing::warn!(%error, "foreground handoff observation unavailable");

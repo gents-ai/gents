@@ -5,9 +5,9 @@ use anyhow::{anyhow, Context as _};
 use gents_fs_runner::protocol::{NativeFsRunnerRequest, NativeFsRunnerResponse};
 
 use super::shared::{ToolContext, ToolError};
-use crate::tools::runtime_context::current_tool_runtime_context;
 use crate::tools::call::lifecycle::FailureClass;
 use crate::tools::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
+use crate::tools::runtime_context::current_tool_runtime_context;
 
 const MAX_NATIVE_RUNNER_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 // The runner truncates its own results; an oversized response fails to decode.
@@ -452,11 +452,20 @@ printf '{"ok":true,"output":"sandboxed read","error":null}'"#
             ],
             cwd: source.clone(),
         };
-        let output = crate::tools::runtime_context::scope_request_tool_execution_with_workspace_overlay(
-            None, tokio_util::sync::CancellationToken::new(), scope.clone(),
-            None, None, None, Default::default(), false,
-            runner.run_resolved(request(), "glob", command()),
-        ).await.unwrap();
+        let output =
+            crate::tools::runtime_context::scope_request_tool_execution_with_workspace_overlay(
+                None,
+                tokio_util::sync::CancellationToken::new(),
+                scope.clone(),
+                None,
+                None,
+                None,
+                Default::default(),
+                false,
+                runner.run_resolved(request(), "glob", command()),
+            )
+            .await
+            .unwrap();
         assert_eq!(output, "sandboxed read");
         assert_eq!(std::fs::read(source.join("README.md")).unwrap(), original);
         assert_eq!(
@@ -473,11 +482,20 @@ printf '{"ok":true,"output":"sandboxed read","error":null}'"#
             )
             .await
             .unwrap();
-        let error = crate::tools::runtime_context::scope_request_tool_execution_with_workspace_overlay(
-            None, tokio_util::sync::CancellationToken::new(), scope,
-            None, None, None, Default::default(), false,
-            runner.run_resolved(request(), "glob", command()),
-        ).await.unwrap_err();
+        let error =
+            crate::tools::runtime_context::scope_request_tool_execution_with_workspace_overlay(
+                None,
+                tokio_util::sync::CancellationToken::new(),
+                scope,
+                None,
+                None,
+                None,
+                Default::default(),
+                false,
+                runner.run_resolved(request(), "glob", command()),
+            )
+            .await
+            .unwrap_err();
         assert!(!error.to_string().is_empty());
         assert!(!fixture.grant.root().join("target/native-readback").exists());
         assert_eq!(std::fs::read(source.join("README.md")).unwrap(), original);

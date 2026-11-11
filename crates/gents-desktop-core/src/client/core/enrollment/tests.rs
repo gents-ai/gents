@@ -2829,8 +2829,10 @@ async fn thin_client_automatically_publishes_received_decision_reader() -> Resul
             })
         })
         .await?;
-    let mut arrivals =
-        gents::store::subscription_source::subscribe_collections(receiver.node.as_ref(), ["NetworkEnrollmentDecision"])?;
+    let mut arrivals = gents::store::subscription_source::subscribe_collections(
+        receiver.node.as_ref(),
+        ["NetworkEnrollmentDecision"],
+    )?;
     sender
         .p2p
         .connect_peer(&receiver_ticket)

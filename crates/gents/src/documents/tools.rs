@@ -9,8 +9,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::tools::native::{CommandExecutionMode, CommandNetworkMode};
 use super::{BashMode, FileToolMode};
+use crate::tools::native::{CommandExecutionMode, CommandNetworkMode};
 pub use gents_protocol::row::RetiredKey;
 
 mod persistence;
@@ -940,9 +940,9 @@ impl Tools {
                     crate::documents::tool_limits::DEFAULT_ACTION_TIMEOUT_SECS as i64,
                     Some(crate::documents::tool_limits::MAX_ACTION_TIMEOUT_SECS as i64),
                 );
-                if let Err(error) = crate::documents::LspConfigDocument::parse_operator(
-                    lsp.config.as_deref(),
-                ) {
+                if let Err(error) =
+                    crate::documents::LspConfigDocument::parse_operator(lsp.config.as_deref())
+                {
                     errors.push(format!("invalid integrations.lsp.config: {error}"));
                 }
             }

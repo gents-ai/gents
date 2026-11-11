@@ -52,7 +52,6 @@ pub(crate) struct BackgroundToolArgs {
     pub args: serde_json::Map<String, serde_json::Value>,
 }
 
-
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct WaitToolArgs {
     pub tool_call_id: String,

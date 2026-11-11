@@ -255,8 +255,8 @@ mod tests {
 
     #[test]
     fn update_goal_cannot_resume_from_budget_limited() {
-        use gents_protocol::goal_status::GoalStatus;
         use crate::goal::{GoalAction, GoalState};
+        use gents_protocol::goal_status::GoalStatus;
 
         // The state machine itself must have no Resume edge out of
         // budget_limited, independent of any help text.

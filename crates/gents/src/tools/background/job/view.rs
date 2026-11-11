@@ -10,6 +10,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::plugin::job_calls::job_state;
+use crate::session::tool_call_state::ToolCallState;
 use crate::store::config_client::ConfigAccess;
 use crate::tools::background::job::admit::StepChild;
 use crate::tools::background::job::input::{chain_of, derive_children, derive_children_for_jobs};
@@ -17,7 +18,6 @@ use crate::tools::background::job::keys::job_spawn_key;
 use crate::tools::background::status::{
     observe_canonical_tool_output_with_access, CanonicalToolOutputObservation, ProcessControlScope,
 };
-use crate::session::tool_call_state::ToolCallState;
 
 /// Which job row a view reads: by physical doc id, or by its address.
 #[derive(Debug, Clone, PartialEq, Eq)]

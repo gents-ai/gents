@@ -3,15 +3,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gents::defra_node::Node as EmbeddedNode;
-use gents_protocol::goal_status::GoalStatus;
 use gents::goal::{
     session_token_usage, set_goal_from_access, CreateGoalForSessionError,
-    CreateGoalForSessionOutcome, };
-use gents::store::graphql::escape_graphql_string;
-use gents::{
-    ActiveRuntimeSnapshot, ConfigAccess, GoalSource, NodeIdentity, TriggerSource,
+    CreateGoalForSessionOutcome,
 };
+use gents::store::graphql::escape_graphql_string;
 use gents::store::subscription_source::UpdateSubscriptionSource;
+use gents::{ActiveRuntimeSnapshot, ConfigAccess, GoalSource, NodeIdentity, TriggerSource};
+use gents_protocol::goal_status::GoalStatus;
 use serde::Deserialize;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -3063,7 +3062,9 @@ async fn a_database_update_leaves_a_passed_reset_to_the_rescan_tick() {
         goal_and_children(&db, &access).await,
         (Some(GoalStatus::UsageLimited), 0)
     );
-    let goal_collection_id = gents::store::subscription_source::collection_ids(&db.node, ["Goal"]).unwrap().remove(0);
+    let goal_collection_id = gents::store::subscription_source::collection_ids(&db.node, ["Goal"])
+        .unwrap()
+        .remove(0);
     updates.publish_update(goal_collection_id, "goal-doc");
     assert!(tokio::time::timeout(pass, source.next_fire())
         .await

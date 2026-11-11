@@ -815,23 +815,22 @@ mod tests {
     async fn queries_only_the_correlated_run() {
         let node = node_with_findings().await;
         let tool = BoundedQueryTool::new(ConfigAccess::local(Arc::clone(&node)), decl());
-        let out =
-            crate::tools::runtime_context::scope_request_tool_execution_with_trigger_context(
-                None,
-                tokio_util::sync::CancellationToken::new(),
-                None,
-                None,
-                None,
-                Some("run-42".to_string()),
-                Default::default(),
-                false,
-                async {
-                    Tool::call(&tool, BoundedQueryParams(Map::new()))
-                        .await
-                        .expect("query")
-                },
-            )
-            .await;
+        let out = crate::tools::runtime_context::scope_request_tool_execution_with_trigger_context(
+            None,
+            tokio_util::sync::CancellationToken::new(),
+            None,
+            None,
+            None,
+            Some("run-42".to_string()),
+            Default::default(),
+            false,
+            async {
+                Tool::call(&tool, BoundedQueryParams(Map::new()))
+                    .await
+                    .expect("query")
+            },
+        )
+        .await;
         assert!(out.contains("f1"));
         assert!(!out.contains("other-run"));
         assert!(out.contains("\"count\": 1"));
@@ -1072,23 +1071,22 @@ mod tests {
         let tool = BoundedQueryTool::new(ConfigAccess::local(node), decl());
         let mut args = Map::new();
         args.insert("limit".into(), json!(0));
-        let err =
-            crate::tools::runtime_context::scope_request_tool_execution_with_trigger_context(
-                None,
-                tokio_util::sync::CancellationToken::new(),
-                None,
-                None,
-                None,
-                Some("run-42".to_string()),
-                Default::default(),
-                false,
-                async {
-                    Tool::call(&tool, BoundedQueryParams(args))
-                        .await
-                        .unwrap_err()
-                },
-            )
-            .await;
+        let err = crate::tools::runtime_context::scope_request_tool_execution_with_trigger_context(
+            None,
+            tokio_util::sync::CancellationToken::new(),
+            None,
+            None,
+            None,
+            Some("run-42".to_string()),
+            Default::default(),
+            false,
+            async {
+                Tool::call(&tool, BoundedQueryParams(args))
+                    .await
+                    .unwrap_err()
+            },
+        )
+        .await;
         assert!(err.to_string().contains("positive integer"));
     }
 }

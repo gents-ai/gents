@@ -2,12 +2,12 @@ use super::*;
 use anyhow::Context;
 use gents_protocol::tool_names::{AGENT_NEW_TOOL_NAME, AGENT_SESSION_LIST_TOOL_NAME};
 
+use crate::documents::AgentToolConfig;
 use crate::session::message::{
     AgentMessageArgs, AgentMessageDelivery, AgentNewArgs, Plan, RenderedBody,
 };
 use crate::store::config_client::{ConfigAccess, TransactionFailure};
 use crate::tools::call::lifecycle::ToolCallLifecycle;
-use crate::documents::AgentToolConfig;
 use gents_protocol::request_lifecycle::{SessionMessageCause, SessionMessageTarget};
 use gents_protocol::row::AgentRequest;
 
@@ -884,10 +884,7 @@ mod unreachable_session_tests {
         }
     }
 
-    fn refusal(
-        session_id: &str,
-        tools: &crate::documents::AgentToolConfig,
-    ) -> serde_json::Value {
+    fn refusal(session_id: &str, tools: &crate::documents::AgentToolConfig) -> serde_json::Value {
         let args: AgentMessageArgs = serde_json::from_value(
             json!({"session_id": session_id, "message": "Reply with exactly TRAIN-111"}),
         )

@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::documents::{AgentTargetDocument, AgentToolConfig, QueryToolDecl, WriteToolDecl, WriteToolField};
+use crate::documents::{
+    AgentTargetDocument, AgentToolConfig, QueryToolDecl, WriteToolDecl, WriteToolField,
+};
 use crate::tools::builtin::defra_query::CollectionScope;
 use crate::tools::native::{CommandExecutionMode, CommandNetworkMode};
 
