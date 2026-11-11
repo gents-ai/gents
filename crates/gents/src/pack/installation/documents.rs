@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 use crate::documents::PackConfig;
 use crate::pack::archive::PackArchive;
 use crate::store::config_client::{ConfigAccess, SchemaInstallPlan};
-use crate::tools::surface::ResolvedToolSelection;
 
 use super::super::home_install::materialize_asset_pack;
 use super::super::{
@@ -773,7 +772,10 @@ async fn default_host_tool_roots(
                 .as_deref()
                 .is_none_or(|root| root.trim().is_empty())
         });
-        if unset && ResolvedToolSelection::from_document(tools)?.requires_filesystem_root() {
+        if unset && {
+            tools.validate()?;
+            tools.requires_filesystem_root()
+        } {
             rootless.push(index);
         }
     }

@@ -644,6 +644,22 @@ pub struct SelfConfigTools {
 }
 
 impl Tools {
+    /// Whether any selected tool works on the host filesystem and so needs
+    /// `host.root`: file tools, bash, a host CLI tool, or LSP.
+    pub fn requires_filesystem_root(&self) -> bool {
+        let host = self.host.as_ref();
+        host.and_then(|host| host.files.as_ref())
+            .is_some_and(|files| files.mode != FileToolMode::Off)
+            || host
+                .and_then(|host| host.bash.as_ref())
+                .is_some_and(|bash| bash.mode != BashMode::Off)
+            || host.is_some_and(|host| !host.cli.is_empty())
+            || self
+                .integrations
+                .as_ref()
+                .is_some_and(|group| group.lsp.is_some())
+    }
+
     /// Validate this document's local settings. Referenced documents and runtime
     /// availability are checked by their scoped resolution owners.
     pub fn validation_violations(&self) -> Vec<String> {
