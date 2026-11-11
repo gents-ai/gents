@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use gents_eval::checks::CheckRegistry;
+use gents_eval::optimization::Proposer;
 use gents_eval::runner::embedded::EmbeddedExecutor;
 use gents_eval::runner::{RunOptions, TrialExecutor};
 use serde::Serialize;
@@ -89,6 +90,9 @@ pub(crate) struct Deps<'a> {
     pub(crate) registry: &'a CheckRegistry,
     pub(crate) cancel: CancellationToken,
     pub(crate) options: RunOptions,
+    /// A proposer supplied by the caller in place of `--proposer`; only
+    /// optimization reads it, and only tests supply one.
+    pub(crate) proposer: Option<&'a dyn Proposer>,
 }
 
 pub(crate) fn usage_error(command: &EvalCommand) -> Option<String> {
@@ -148,6 +152,7 @@ pub(crate) async fn dispatch(command: EvalCommand, runtime: tokio::runtime::Hand
         registry: &registry,
         cancel,
         options: RunOptions::default(),
+        proposer: None,
     };
     let stdout = std::io::stdout();
     let mut out = stdout.lock();

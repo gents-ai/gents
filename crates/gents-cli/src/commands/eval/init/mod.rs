@@ -333,6 +333,7 @@ pub(crate) async fn run(
                 "interrupt: the pilot stops launching; the pack stays as written",
             ),
             options: deps.options.clone(),
+            proposer: None,
         };
         let piloted = pilot::pilot(
             ctx,
