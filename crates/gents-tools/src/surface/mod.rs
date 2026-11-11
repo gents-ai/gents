@@ -538,6 +538,7 @@ impl ToolSurface {
                     ..self.self_config.clone()
                 },
                 runtime.plugins.clone(),
+                runtime.tasks.clone(),
                 node_binding,
             ),
         );

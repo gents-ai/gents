@@ -5,12 +5,13 @@ use anyhow::{anyhow, Context, Result};
 use gents_protocol::request_input::RequestInput;
 #[cfg(test)]
 use gents_protocol::row::AgentRequestRow;
-pub(crate) use gents_session::request::task_run::TaskRunOutput;
-use gents_session::request::task_run::{
-    enqueue_task_run as enqueue_task_run_owner, read_runnable_task, TaskRunOptions,
+pub(crate) use gents_tools::task_run::TaskRunOutput;
+use gents_automation::triggers::task_run::{
+    enqueue_task_run as enqueue_task_run_owner, read_runnable_task,
 };
+use gents_tools::task_run::TaskRunOptions;
 #[cfg(test)]
-use gents_session::request::task_run::{
+use gents_automation::triggers::task_run::{
     lookup_request_by_retry_key, prepare_task_run_goal_id, prepare_task_run_input,
     resolve_invocation_key,
 };

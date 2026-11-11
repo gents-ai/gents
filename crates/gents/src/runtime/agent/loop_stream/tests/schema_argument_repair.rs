@@ -177,6 +177,7 @@ async fn config_container_repairs_preserve_native_validation_and_the_invalid_bud
         Some(identity),
         &grants,
         Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::default()),
+        Arc::new(gents_automation::triggers::task_run::TaskRuns),
     );
     let mut calls = (0..10)
         .map(|index| {

@@ -138,6 +138,7 @@ impl PolicyFixture {
             Some(self.db.node_identity.clone()),
             &config,
             Arc::new(crate::plugin::executor::PluginExecutor::default()),
+            Arc::new(crate::task_run::NoTaskRunService),
             Some(self.node_binding.clone()),
         )
     }

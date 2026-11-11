@@ -1,5 +1,5 @@
 use super::*;
-use gents_session::request::task_run;
+use crate::task_run::TaskRunOptions;
 use gents_session::session::output_render::ordered;
 
 impl ConfigCommandTool {
@@ -52,20 +52,25 @@ impl ConfigCommandTool {
         };
         let signer = self.core.agent_signer()?;
         let access = self.core.access()?;
-        let task = task_run::read_runnable_task(&access, &self.node_did, task_id).await?;
+        let task = self
+            .tasks
+            .read_runnable_task(&access, &self.node_did, task_id)
+            .await?;
         self.execution.enter_mutation();
-        let output = task_run::enqueue_task_run(
-            &access,
-            &self.node_did,
-            &signer,
-            task,
-            &task_run::TaskRunOptions {
-                args,
-                session_id: parsed.one("session-id")?.map(ToOwned::to_owned),
-                continue_session: parsed.one("continue-session")?.map(ToOwned::to_owned),
-            },
-        )
-        .await?;
+        let output = self
+            .tasks
+            .enqueue_task_run(
+                &access,
+                &self.node_did,
+                &signer,
+                task,
+                &TaskRunOptions {
+                    args,
+                    session_id: parsed.one("session-id")?.map(ToOwned::to_owned),
+                    continue_session: parsed.one("continue-session")?.map(ToOwned::to_owned),
+                },
+            )
+            .await?;
         ordered! {
             "task_id": output.task_id,
             "agent_did": output.agent_did,
