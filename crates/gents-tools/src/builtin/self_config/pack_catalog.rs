@@ -232,8 +232,7 @@ impl PackInstaller {
         edited: Option<&str>,
         words: &[String],
     ) -> anyhow::Result<String> {
-        let refusal =
-            |error| Self::refusal(PackOperation::Remove, package, words, error);
+        let refusal = |error| Self::refusal(PackOperation::Remove, package, words, error);
         let edited = EditedDocuments::decision(edited).map_err(refusal)?;
         gents_pack::operations::pack::admit_input(&PackChangeInput::of(package))
             .map_err(refusal)?;

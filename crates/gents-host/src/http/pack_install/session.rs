@@ -381,12 +381,11 @@ async fn run_inner(
         let received =
             tokio::task::spawn_blocking(move || decode_install_request(request, &node_did))
                 .await??;
-        let requested = gents_pack::pack::install_flow::parse_inference_slot_bindings(
-            &received.request.inference_slots,
-        )?;
-        let overrides = gents_pack::pack::install_flow::parse_dependency_variables(
-            &received.request.dependency_variables,
-        )?;
+        let requested =
+            gents_pack::operations::pack::parse_inference_slots(&received.request.inference_slots)?;
+        let supplied =
+            gents_pack::operations::pack::parse_variables(&received.request.dependency_variables)?;
+        let overrides = gents_pack::operations::pack::dependency_overrides(&supplied);
         let mut prepared = gents_pack::pack::prepare_document_pack_archive(
             &access,
             &state.node_did,
@@ -399,7 +398,13 @@ async fn run_inner(
                 .collect::<Vec<_>>(),
             gents_pack::pack::InstalledVia::Operator,
             Some(&home),
-            &|name| std::env::var(name).ok(),
+            &|name| {
+                gents_pack::operations::pack::install_value(
+                    gents_protocol::operations::pack::PackActor::User,
+                    &supplied,
+                    name,
+                )
+            },
             &overrides,
         )
         .await?;

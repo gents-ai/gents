@@ -250,7 +250,9 @@ impl PackOperationError {
     /// The call that lets the caller correct this failure of `operation`.
     pub fn recovery(&self, operation: PackOperation) -> NextCall {
         match self {
-            Self::PreviewRequired(_) | Self::DigestChanged { .. } | Self::EditedUndecided { .. } => NextCall::Preview {
+            Self::PreviewRequired(_)
+            | Self::DigestChanged { .. }
+            | Self::EditedUndecided { .. } => NextCall::Preview {
                 resource: "pack",
                 verb: operation.as_str(),
             },

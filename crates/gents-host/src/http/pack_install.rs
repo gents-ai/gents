@@ -15,7 +15,7 @@ use gents_pack::pack::PackKind;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::router::RuntimeHttpState;
-use gents_pack::pack::install_flow::{DocumentsInstallRequest, InstallDrift};
+use gents_pack::pack::install_flow::DocumentsInstallRequest;
 use gents_pack::pack::resolved_pack::ResolvedPack;
 
 pub mod session;
@@ -190,8 +190,8 @@ pub async fn encode_install_request(
     let dependency_variables = args.dependency_variables.clone();
     let wire = args.wire.clone();
     let (overwrite, keep, preview, force_rebind, grant_authority) = (
-        args.drift.overwrite,
-        args.drift.keep,
+        args.edited == gents_protocol::operations::pack::EditedDocuments::Overwrite,
+        args.edited == gents_protocol::operations::pack::EditedDocuments::Keep,
         args.preview,
         args.force_rebind_concrete_did,
         args.grant_authority,
@@ -419,9 +419,10 @@ async fn install_owned(
         dependency_variables: request.dependency_variables,
         preview: request.preview,
         force_rebind_concrete_did: request.force_rebind,
-        drift: InstallDrift {
-            overwrite: request.overwrite,
-            keep: request.keep,
+        edited: match (request.overwrite, request.keep) {
+            (true, _) => gents_protocol::operations::pack::EditedDocuments::Overwrite,
+            (false, true) => gents_protocol::operations::pack::EditedDocuments::Keep,
+            (false, false) => gents_protocol::operations::pack::EditedDocuments::Refuse,
         },
         grant_authority: request.grant_authority,
         wire: request.wire,

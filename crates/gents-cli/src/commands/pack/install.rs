@@ -3,14 +3,15 @@ use super::{plugin_notification_scope, resolve_scope_owner, wire};
 use crate::cli::*;
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
+use gents_pack::operations::pack::{admit_digest, parse_inference_slots};
 use gents_pack::pack::install_flow::{
-    check_expected_digest, check_wire_target, has_plugin_references,
-    install_documents_pack_resolved_inner, merge, parse_inference_slot_bindings,
-    DocumentsInstallRequest, InstallDrift, LocalPackAccess,
+    check_wire_target, has_plugin_references, install_documents_pack_resolved_inner, merge,
+    DocumentsInstallRequest, LocalPackAccess,
 };
 use gents_pack::pack::plugin_wire::wire_pack_plugins;
 use gents_pack::pack::resolved_pack::{resolve_pack_source, ResolvedPack};
 use gents_pack::pack::{PackChangeError, PackKind, PackManifest};
+use gents_protocol::operations::pack::{PackActor, PackOperation};
 use serde_json::json;
 
 /// The engine's request for `args`, with its home resolved.
@@ -22,10 +23,7 @@ pub(crate) fn install_request(args: &PackInstallArgs) -> DocumentsInstallRequest
         dependency_variables: args.dependency_variables.clone(),
         preview: args.preview,
         force_rebind_concrete_did: args.force_rebind_concrete_did,
-        drift: InstallDrift {
-            overwrite: args.drift.overwrite,
-            keep: args.drift.keep,
-        },
+        edited: args.drift.edited(),
         grant_authority: args.grant_authority,
         wire: args.wire.clone(),
     }
@@ -261,7 +259,14 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError
     let home = gents_service::home_state::resolve_home_dir(args.scope.home.as_deref());
     let pack = resolve_pack_source(&args.package, args.registry.as_deref(), &home).await?;
     tracing::info!(package = %args.package, source = %pack.describe(), "resolved pack");
-    check_expected_digest(args.expect_digest.as_deref(), pack.digest())?;
+    admit_digest(
+        PackActor::User,
+        PackOperation::Install,
+        !args.preview,
+        args.expect_digest.as_deref(),
+        pack.digest(),
+    )
+    .map_err(|error| super::refusal(PackOperation::Install, &args.package, error))?;
     check_wire_target(pack.manifest(), &args.wire)?;
     args.output.ensure_supported(
         "config pack install",
@@ -283,7 +288,8 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError
                 )
                 .into());
             }
-            let requested = parse_inference_slot_bindings(&args.inference_slots)?;
+            let requested = parse_inference_slots(&args.inference_slots)
+                .map_err(|error| super::refusal(PackOperation::Install, &args.package, error))?;
             if args.scope.graphql.is_some()
                 || (args.scope.node_did.is_some() && requested.is_empty())
                 || args.force_rebind_concrete_did

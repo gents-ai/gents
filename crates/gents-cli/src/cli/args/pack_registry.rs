@@ -355,12 +355,17 @@ pub(crate) struct PackDriftArgs {
 }
 
 impl PackDriftArgs {
-    pub(crate) fn policy(self) -> gents_pack::pack::DriftPolicy {
-        gents_pack::pack::install_flow::InstallDrift {
-            overwrite: self.overwrite,
-            keep: self.keep,
+    pub(crate) fn edited(self) -> gents_protocol::operations::pack::EditedDocuments {
+        use gents_protocol::operations::pack::EditedDocuments;
+        match (self.overwrite, self.keep) {
+            (true, _) => EditedDocuments::Overwrite,
+            (false, true) => EditedDocuments::Keep,
+            (false, false) => EditedDocuments::Refuse,
         }
-        .policy()
+    }
+
+    pub(crate) fn policy(self) -> gents_pack::pack::DriftPolicy {
+        gents_pack::operations::pack::drift_policy(self.edited())
     }
 }
 

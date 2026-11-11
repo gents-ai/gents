@@ -1,16 +1,12 @@
 //! `gents config pack wire`: the command over the plugin wiring writer, and
 //! the host tool roots an installed pack's agents read.
 
-use anyhow::{Context, Result};
-use gents_pack::pack::installed_pack_documents;
+use anyhow::Result;
 use gents_pack::pack::plugin_wire::{wire_in, WireRequest};
-use gents_store::collection::Collection;
 use gents_store::config_client::ConfigAccess;
 use serde_json::{json, Value};
 
 use crate::cli::PackWireArgs;
-#[cfg(test)]
-use gents_pack::pack::registry::split_pack_coordinate;
 
 pub(crate) async fn wire(args: PackWireArgs) -> Result<()> {
     let (access, owner) = super::resolve_scope_owner(&args.scope).await?;
@@ -42,42 +38,29 @@ fn publish_root_command(node_did: &str, root: &str, agent: &str) -> String {
     )
 }
 
-/// Grants each agent the installed pack `coordinate` ships with host tools
-/// reader on the published WorkspaceRoot covering its tool root, as the User
-/// holding `access`: a new agent lacks that grant, only a User makes it, and
-/// without it the runtime reports the agent unavailable. Returns what each
-/// agent was granted, or the root nothing published covers.
+/// What a User's install did for each agent the installed pack `coordinate`
+/// ships with host tools: the root it was granted reader on, or the root
+/// nothing published covers.
 pub(crate) async fn grant_pack_root_readers(
     access: &ConfigAccess,
     owner: &str,
     coordinate: &str,
 ) -> Result<Vec<Value>> {
-    use gents_tools::surface::ToolRootReader;
-    let mut granted = Vec::new();
-    let agents: Vec<String> = installed_pack_documents(access, owner, coordinate)
-        .await?
+    use gents_protocol::operations::pack::{PackActor, ReaderAction};
+    let readers =
+        gents_tools::surface::pack_root_readers(access, owner, coordinate, PackActor::User).await?;
+    Ok(readers
         .into_iter()
-        .filter(|(collection, _)| *collection == Collection::Agent)
-        .map(|(_, agent)| agent)
-        .collect();
-    for (agent, reader) in
-        gents_tools::surface::agents_tool_root_readers(access, owner, &agents).await?
-    {
-        granted.push(match reader {
-            ToolRootReader::Published(root) => {
-                gents_tools::surface::grant_workspace_root_reader(access, &root, &agent)
-                    .await
-                    .with_context(|| format!("granting {agent} reader on {root}"))?;
-                json!({"agent": agent, "reader_on": root})
+        .map(|reader| match reader.action {
+            ReaderAction::ReportPublishStep => {
+                let next = publish_root_command(owner, &reader.root, &reader.agent);
+                json!({"agent": reader.agent, "unpublished_root": reader.root, "next": next})
             }
-            ToolRootReader::Unpublished(root) => {
-                let next = publish_root_command(owner, &root, &agent);
-                json!({"agent": agent, "unpublished_root": root, "next": next})
+            ReaderAction::Grant | ReaderAction::ReportGrantStep | ReaderAction::None => {
+                json!({"agent": reader.agent, "reader_on": reader.root})
             }
-            ToolRootReader::NotNeeded => continue,
-        });
-    }
-    Ok(granted)
+        })
+        .collect())
 }
 
 #[cfg(test)]

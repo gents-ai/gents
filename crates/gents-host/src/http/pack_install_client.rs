@@ -437,10 +437,9 @@ pub async fn install_remote(
     let mut session = PackInstallSession::start(endpoint, request, owner, &digests).await?;
     let preparation = session.preparation().clone();
     let access = gents_store::config_client::ConfigAccess::Graphql(endpoint.clone());
-    let requested =
-        gents_pack::pack::install_flow::parse_inference_slot_bindings(&args.inference_slots)?;
-    let overrides =
-        gents_pack::pack::install_flow::parse_dependency_variables(&args.dependency_variables)?;
+    let requested = gents_pack::operations::pack::parse_inference_slots(&args.inference_slots)?;
+    let supplied = gents_pack::operations::pack::parse_variables(&args.dependency_variables)?;
+    let overrides = gents_pack::operations::pack::dependency_overrides(&supplied);
     let mut prepared = gents_pack::pack::prepare_hosted_document_pack_archive(
         &access,
         owner,
@@ -450,7 +449,13 @@ pub async fn install_remote(
             .iter()
             .map(gents_pack::pack::resolved_pack::ResolvedPack::archive)
             .collect::<Vec<_>>(),
-        &|name| std::env::var(name).ok(),
+        &|name| {
+            gents_pack::operations::pack::install_value(
+                gents_protocol::operations::pack::PackActor::User,
+                &supplied,
+                name,
+            )
+        },
         &preparation,
         &overrides,
     )
@@ -478,7 +483,7 @@ pub async fn install_remote(
     let access = gents_store::config_client::ConfigAccess::Graphql(
         endpoint.clone().with_pack_replay(replay.clone())?,
     );
-    let policy = args.drift.policy();
+    let policy = gents_pack::operations::pack::drift_policy(args.edited);
     access
         .transact_write("pack.hosted_document_graph.replay", |txn| {
             let graph = &graph;

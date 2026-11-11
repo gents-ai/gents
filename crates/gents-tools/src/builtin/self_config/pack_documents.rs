@@ -115,29 +115,19 @@ impl PackInstaller {
             .await?;
         // Reader on a published root is the User's to grant, so an agent the
         // pack ships with host tools waits for it; the receipt names the step.
-        let shipped_agents: Vec<String> = node_packs::installed_pack_documents(
+        let host_root_access = crate::surface::pack_root_readers(
             &access,
             self.core.node_did(),
             &distribution.coordinate(),
+            PackActor::Agent,
         )
         .await?
         .into_iter()
-        .filter(|(collection, _)| *collection == gents_store::collection::Collection::Agent)
-        .map(|(_, agent)| agent)
-        .collect();
-        let host_root_access = crate::surface::agents_tool_root_readers(
-            &access,
-            self.core.node_did(),
-            &shipped_agents,
-        )
-        .await?
-        .into_iter()
-        .map(|(agent, reader)| {
-            let published = match &reader {
-                crate::surface::ToolRootReader::Published(root) => Some(root.as_str()),
-                _ => None,
-            };
-            crate::surface::reader_grant_step(&agent, published, prior.is_none())
+        .map(|reader| {
+            let published = (reader.action
+                == gents_protocol::operations::pack::ReaderAction::ReportGrantStep)
+                .then_some(reader.root.as_str());
+            crate::surface::reader_grant_step(&reader.agent, published, prior.is_none())
         })
         .collect::<Vec<_>>();
         ordered! {

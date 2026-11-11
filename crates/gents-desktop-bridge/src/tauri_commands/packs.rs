@@ -8,7 +8,8 @@ use ts_rs::TS;
 
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::{current_core, DesktopAppState};
-use gents_server::packs::{self, EditedDocuments};
+use gents_protocol::operations::pack::EditedDocuments;
+use gents_server::packs;
 
 pub(super) fn home(state: &DesktopAppState) -> Result<std::path::PathBuf, BridgeError> {
     state.policy.node_home.clone().ok_or_else(|| {

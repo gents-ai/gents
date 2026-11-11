@@ -896,3 +896,26 @@ impl NodePacks<'_> {
         Ok(report)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_removal_names_a_coordinate_and_a_path_is_admitted_before_it_opens() {
+        assert_eq!(coordinate_of(" acme/demo ", true).unwrap(), "acme/demo");
+        assert_eq!(
+            coordinate_of("acme/demo@1.2.0", false).unwrap(),
+            "acme/demo"
+        );
+        let versioned = coordinate_of("acme/demo@1.2.0", true).unwrap_err();
+        assert!(format!("{versioned:#}").contains("remove acme/demo"));
+
+        assert_eq!(
+            local_path(&PackChangeInput::of("./demo")),
+            Some(Path::new("./demo"))
+        );
+        assert_eq!(local_path(&PackChangeInput::of("acme/demo")), None);
+        assert_eq!(local_path(&PackChangeInput::of("sha256:00")), None);
+    }
+}

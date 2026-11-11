@@ -588,3 +588,18 @@ pub fn check_wire_target(manifest: &PackManifest, wire: &[String]) -> Result<()>
     );
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remote_plugin_routing_does_not_resolve_install_variables() {
+        let config =
+            json!({"tools": [{"integrations": {"plugins": [{"plugin": "${UNSET_PLUGIN}"}]}}]});
+        assert!(has_plugin_references(&config));
+        assert!(!has_plugin_references(
+            &json!({"tools": [{"integrations": {"plugins": []}}]})
+        ));
+    }
+}

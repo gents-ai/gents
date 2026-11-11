@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use gents_pack::pack::PackChangeError;
+use gents_protocol::operations::pack::EditedDocuments;
 use gents_store::config_client::ConfigAccess;
 use serde_json::Value;
 
@@ -13,16 +14,6 @@ use crate::cli::{
 use crate::commands::pack as command;
 use crate::output_format::OutputFormat;
 use crate::request_helpers::capture_report;
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
-#[serde(rename_all = "snake_case")]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-pub enum EditedDocuments {
-    #[default]
-    Refuse,
-    Overwrite,
-    Keep,
-}
 
 fn drift(edited: EditedDocuments) -> PackDriftArgs {
     PackDriftArgs {
